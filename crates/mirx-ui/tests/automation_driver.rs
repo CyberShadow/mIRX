@@ -30,8 +30,8 @@ use mirx_core::{
 use mirx_testkit::{
     ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult, FindActiveViewResult, FrameSize,
     LaunchOptions, MdiArrangement, MdiView, MdiWindowPlacement, MdiWindowState,
-    MemberModerationAction, MemberPowerRole, MembershipCommandAction, MirxApp, Model,
-    NavigationNode, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
+    MemberModerationAction, MemberPowerRole, MembershipCommandAction, MircFormatKey, MirxApp,
+    Model, NavigationNode, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
     RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
     RoomImageMediaState, RoomMediaSource, RoomMemberChange, RoomMessageActivity,
@@ -39,16 +39,16 @@ use mirx_testkit::{
     RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
     RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand, SubmittedEditCommand,
     SubmittedFileCommand, SubmittedHistoryCommand, SubmittedMemberModerationCommand,
-    SubmittedMembershipCommand, SubmittedNotificationCommand, SubmittedPowerLevelCommand,
-    SubmittedProfileCommand, SubmittedReactionCommand, SubmittedRecoveryCommand,
-    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
-    SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
-    SubmittedUserCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
-    UiActiveTimeline, UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState,
-    UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState, UiRoomReadState,
-    UiRoomState, UiState, UiTimelineLineKind, UiTimestamp, UnsupportedRoomMessageActivity,
-    UserCommandAction, Verification, VerificationActionKind, VerificationState, ViewActivityLevel,
-    ViewIdentity,
+    SubmittedMembershipCommand, SubmittedMessageCommand, SubmittedNotificationCommand,
+    SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
+    SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
+    SubmittedReplyThreadTarget, SubmittedRoomListRequest, SubmittedRoomTopicCommand,
+    SubmittedSetupRecoveryCommand, SubmittedUserCommand, SubmittedVerificationAction,
+    SwitchbarItem, TestkitError, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind, UiError,
+    UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState,
+    UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind, UiTimestamp,
+    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionKind,
+    VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -14805,6 +14805,7 @@ fn automation_driver_slash_reply_records_submitted_reply_without_appending_text(
             target_event_id: "$react-normal".to_owned(),
             sender_user_id: "@normal:example".to_owned(),
             body: "thanks for the detail".to_owned(),
+            styles: Vec::new(),
             thread: None,
         }]
     );
@@ -14850,6 +14851,7 @@ fn automation_driver_slash_edit_records_submitted_edit_without_appending_text()
             room_id: "!reactions:example".to_owned(),
             target_event_id: "$react-normal".to_owned(),
             body: "replacement text".to_owned(),
+            styles: Vec::new(),
         }]
     );
     assert!(model.submitted_reaction_commands.is_empty());
@@ -15354,6 +15356,7 @@ fn automation_driver_slash_reply_from_thread_uses_compose_thread_destination()
             target_event_id: "$react-thread-reply".to_owned(),
             sender_user_id: "@reply:example".to_owned(),
             body: "threaded acknowledgement".to_owned(),
+            styles: Vec::new(),
             thread: Some(SubmittedReplyThreadTarget {
                 thread_root_event_id: "$react-thread-root".to_owned(),
                 latest_event_id: "$react-thread-reply".to_owned(),
@@ -15400,6 +15403,7 @@ fn automation_driver_slash_edit_from_thread_targets_parent_room()
             room_id: "!reactions:example".to_owned(),
             target_event_id: "$react-thread-reply".to_owned(),
             body: "replacement text".to_owned(),
+            styles: Vec::new(),
         }]
     );
     assert!(model.submitted_reaction_commands.is_empty());
@@ -16068,6 +16072,7 @@ fn automation_driver_reply_menu_arms_and_sends_reply() -> Result<(), Box<dyn std
             target_event_id: "$replies-question".to_owned(),
             sender_user_id: "@alice:example".to_owned(),
             body: "yes, at 14:00".to_owned(),
+            styles: Vec::new(),
             thread: None,
         }]
     );
@@ -16142,6 +16147,7 @@ fn automation_driver_edit_menu_prefills_own_message_and_escape_cancels()
             room_id: "!reactions:example".to_owned(),
             target_event_id: "$react-normal".to_owned(),
             body: "normal reaction target, fixed".to_owned(),
+            styles: Vec::new(),
         }]
     );
 
@@ -17659,6 +17665,84 @@ fn formatted_messages_render_styled_lines() -> Result<(), Box<dyn std::error::Er
     assert_eq!(styled_texts(&edited), ["text"]);
     assert!(edited[0].styles[0].style.bold);
     assert!(!edited[0].styles[0].style.italic);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn editbox_format_keys_insert_mirc_codes() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_replies_app()?;
+    let edit = unsafe { compose_edit_hwnd(&app) };
+    let type_text = |text: &str| {
+        for unit in text.encode_utf16() {
+            unsafe { SendMessageW(edit, WM_CHAR, WPARAM::from(unit), 0) };
+        }
+    };
+    let format = |key: MircFormatKey| app.send_compose_key(ComposeKey::Format { key });
+
+    for key in [
+        MircFormatKey::Bold,
+        MircFormatKey::Color,
+        MircFormatKey::Underline,
+        MircFormatKey::Italic,
+        MircFormatKey::Reset,
+        MircFormatKey::Reverse,
+    ] {
+        format(key)?;
+    }
+    assert_eq!(app.compose_text()?, "\x02\x03\x1f\x1d\x0f\x16");
+
+    app.set_compose_text("")?;
+    format(MircFormatKey::Bold)?;
+    type_text("hi");
+    format(MircFormatKey::Bold)?;
+    type_text(" ");
+    format(MircFormatKey::Color)?;
+    type_text("4,1red");
+    assert_eq!(app.compose_text()?, "\x02hi\x02 \x034,1red");
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let style = |bold: bool, colors: Option<(u32, u32)>| {
+        let color = |hex: u32| mirx_core::TextColor {
+            red: (hex >> 16) as u8,
+            green: (hex >> 8) as u8,
+            blue: hex as u8,
+        };
+        mirx_core::TextStyle {
+            bold,
+            foreground: colors.map(|(foreground, _)| color(foreground)),
+            background: colors.map(|(_, background)| color(background)),
+            ..mirx_core::TextStyle::default()
+        }
+    };
+    assert_eq!(
+        app.dump_model()?.submitted_message_commands,
+        vec![SubmittedMessageCommand {
+            room_id: "!replies:example".to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
+            body: "hi red".to_owned(),
+            styles: vec![
+                mirx_core::TextStyleSpan {
+                    start: 0,
+                    end: 2,
+                    style: style(true, None),
+                },
+                mirx_core::TextStyleSpan {
+                    start: 3,
+                    end: 6,
+                    style: style(false, Some((0xff0000, 0x000000))),
+                },
+            ],
+            thread: None,
+        }]
+    );
+    // History recalls the line as typed, codes and all.
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "\x02hi\x02 \x034,1red");
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

@@ -392,6 +392,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_reply_commands: Vec<SubmittedReplyCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_message_commands: Vec<SubmittedMessageCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_file_commands: Vec<SubmittedFileCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_notification_commands: Vec<SubmittedNotificationCommand>,
@@ -512,6 +514,7 @@ pub struct SubmittedEditCommand {
     pub room_id: String,
     pub target_event_id: String,
     pub body: String,
+    pub styles: Vec<mirx_core::TextStyleSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -521,6 +524,20 @@ pub struct SubmittedReplyCommand {
     pub target_event_id: String,
     pub sender_user_id: String,
     pub body: String,
+    pub styles: Vec<mirx_core::TextStyleSpan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<SubmittedReplyThreadTarget>,
+}
+
+/// A message the UI sent that replies to nothing; replies are in
+/// `submitted_reply_commands`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedMessageCommand {
+    pub room_id: String,
+    pub presentation: RoomMessagePresentationKind,
+    pub body: String,
+    pub styles: Vec<mirx_core::TextStyleSpan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<SubmittedReplyThreadTarget>,
 }
@@ -1699,6 +1716,22 @@ pub enum ComposeKey {
     Tab,
     ShiftTab,
     Escape,
+    /// The mIRC formatting code a Ctrl chord types.
+    Format {
+        key: MircFormatKey,
+    },
+}
+
+/// The mIRC formatting chords: Ctrl+B, K, U, I, O and R.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MircFormatKey {
+    Bold,
+    Color,
+    Underline,
+    Italic,
+    Reset,
+    Reverse,
 }
 
 impl<'de> Deserialize<'de> for ComposeKey {
@@ -1706,39 +1739,29 @@ impl<'de> Deserialize<'de> for ComposeKey {
     where
         D: serde::Deserializer<'de>,
     {
+        // Struct variants, so that serde rejects unknown fields on every
+        // key; it does not for unit variants of a tagged enum.
         #[derive(Deserialize)]
-        #[serde(rename_all = "snake_case")]
-        enum Kind {
-            Return,
-            Up,
-            Down,
-            Tab,
-            ShiftTab,
-            Escape,
+        #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+        enum Wire {
+            Return {},
+            Up {},
+            Down {},
+            Tab {},
+            ShiftTab {},
+            Escape {},
+            Format { key: MircFormatKey },
         }
 
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct ComposeKeyPayload {
-            #[serde(rename = "kind")]
-            kind: Kind,
-        }
-
-        let value = serde_json::Value::deserialize(deserializer)?;
-        if value.get("kind").is_none() {
-            return Err(serde::de::Error::missing_field("kind"));
-        }
-
-        serde_json::from_value::<ComposeKeyPayload>(value)
-            .map(|payload| match payload.kind {
-                Kind::Return => Self::Return,
-                Kind::Up => Self::Up,
-                Kind::Down => Self::Down,
-                Kind::Tab => Self::Tab,
-                Kind::ShiftTab => Self::ShiftTab,
-                Kind::Escape => Self::Escape,
-            })
-            .map_err(serde::de::Error::custom)
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Return {} => Self::Return,
+            Wire::Up {} => Self::Up,
+            Wire::Down {} => Self::Down,
+            Wire::Tab {} => Self::Tab,
+            Wire::ShiftTab {} => Self::ShiftTab,
+            Wire::Escape {} => Self::Escape,
+            Wire::Format { key } => Self::Format { key },
+        })
     }
 }
 

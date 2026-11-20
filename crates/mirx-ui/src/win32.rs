@@ -93,7 +93,7 @@ use windows_sys::Win32::UI::Controls::{
     TVN_SELCHANGEDW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetKeyState, SetFocus, VK_SHIFT,
+    EnableWindow, GetKeyState, SetFocus, VK_CONTROL, VK_MENU, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     ACCEL, CreateAcceleratorTableW, DestroyAcceleratorTable, FALT, FCONTROL, FVIRTKEY, GetMenu,
@@ -144,11 +144,12 @@ use crate::{
         DumpRoomMessageActivityLine, DumpRoomPreviewMediaState, DumpRoomReactionSummary,
         DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand, DumpSubmittedFileCommand,
         DumpSubmittedHistoryCommand, DumpSubmittedMemberModerationCommand,
-        DumpSubmittedMembershipCommand, DumpSubmittedNotificationCommand,
-        DumpSubmittedPowerLevelCommand, DumpSubmittedProfileCommand, DumpSubmittedReactionCommand,
-        DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
-        DumpSubmittedReplyThreadTarget, DumpSubmittedRoomListRequest,
-        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand, DumpSubmittedUserCommand,
+        DumpSubmittedMembershipCommand, DumpSubmittedMessageCommand,
+        DumpSubmittedNotificationCommand, DumpSubmittedPowerLevelCommand,
+        DumpSubmittedProfileCommand, DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand,
+        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
+        DumpSubmittedRoomListRequest, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedSetupRecoveryCommand, DumpSubmittedUserCommand,
         DumpSubmittedVerificationAction, DumpUserCommandAction, DumpVerificationActionKind,
         DumpVerificationMenuState, FailureEnvelope, FindActiveViewResponse, GetVersionResponse,
         LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiArrangement, MdiState, MdiView,
@@ -176,6 +177,7 @@ mod glyph_runs;
 mod ignore;
 mod mdi;
 mod menus;
+mod mirc_format;
 mod nick_completion;
 mod notifications;
 mod options;
@@ -14422,13 +14424,13 @@ unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> {
             let target = state_ref(hwnd).views[&view].compose().target.clone();
             match &target {
                 None => {
-                    submit_compose(state_mut(hwnd), presentation, body.into_owned(), None)?;
+                    submit_compose(state_mut(hwnd), presentation, &body, None)?;
                 }
                 Some(ComposeTarget::Reply { event_id }) => {
-                    send_reply(state_mut(hwnd), event_id, presentation, body.into_owned())?;
+                    send_reply(state_mut(hwnd), event_id, presentation, &body)?;
                 }
                 Some(ComposeTarget::Edit { event_id }) => {
-                    send_edit(state_mut(hwnd), event_id, presentation, body.into_owned())?;
+                    send_edit(state_mut(hwnd), event_id, presentation, &body)?;
                 }
             }
             record(input.clone());
@@ -14502,9 +14504,22 @@ unsafe fn send_compose_key(hwnd: HWND, key: ComposeKey) -> Result<(), String> {
         // A sent key carries no Shift state, so Shift+Tab goes straight to
         // the completion the edit box runs for it.
         ComposeKey::ShiftTab => return complete_compose_nick(hwnd, true),
+        // Nor Ctrl state, for the format chords.
+        ComposeKey::Format { key } => {
+            insert_mirc_format_code(hwnd, edit, mirc_format::mirc_format_code(key));
+            return Ok(());
+        }
     };
     SendMessageW(edit, WM_KEYDOWN, virtual_key, 0);
     Ok(())
+}
+
+/// Types a formatting code at the editbox's caret, as one undoable edit.
+unsafe fn insert_mirc_format_code(frame: HWND, edit: HWND, code: char) {
+    active_compose_history(state_mut(frame)).reset_navigation();
+    let text = wide_null(code.encode_utf8(&mut [0; 4]));
+    // wParam TRUE: the replacement can be undone.
+    SendMessageW(edit, EM_REPLACESEL, 1, text.as_ptr() as LPARAM);
 }
 
 unsafe fn submit_compose_from_control(
@@ -14512,11 +14527,11 @@ unsafe fn submit_compose_from_control(
     explicit_room_id: Option<&str>,
 ) -> Result<String, String> {
     let edit = compose_edit(hwnd);
-    let body = read_window_text(edit);
+    let input = read_window_text(edit);
     let room_id = submit_compose(
         state_mut(hwnd),
         RoomMessagePresentationKind::Text,
-        body,
+        &input,
         explicit_room_id,
     )?;
     let empty = wide_null("");
@@ -14524,16 +14539,23 @@ unsafe fn submit_compose_from_control(
     Ok(room_id)
 }
 
-fn submit_compose(
-    state: &mut WindowState,
-    presentation: RoomMessagePresentationKind,
-    body: String,
-    explicit_room_id: Option<&str>,
-) -> Result<String, String> {
+/// The message an editbox line sends: its text without mIRC codes, in the
+/// styles they set. Codes alone send nothing.
+fn message_text_from_input(input: &str) -> Result<(String, Vec<TextStyleSpan>), String> {
+    let (body, styles) = mirc_format::parse_mirc_input(input);
     if body.is_empty() {
         return Err("message body must not be empty".to_owned());
     }
+    Ok((body, styles))
+}
 
+fn submit_compose(
+    state: &mut WindowState,
+    presentation: RoomMessagePresentationKind,
+    input: &str,
+    explicit_room_id: Option<&str>,
+) -> Result<String, String> {
+    let (body, styles) = message_text_from_input(input)?;
     let destination = resolve_compose_destination(state, explicit_room_id)?;
 
     let clears_active_thread_marker = explicit_room_id.is_none() && destination.thread.is_some();
@@ -14543,7 +14565,7 @@ fn submit_compose(
             room_id: destination.room_id.clone(),
             presentation,
             body,
-            styles: Vec::new(),
+            styles,
             thread: destination.thread,
             reply: None,
         },
@@ -14555,27 +14577,30 @@ fn submit_compose(
     Ok(destination.room_id)
 }
 
-/// Sends to a joined room's main timeline, from a command naming the room.
+/// Sends `input` to a joined room's main timeline, from a command naming
+/// the room; returns the text sent.
 fn send_room_message(
     state: &mut WindowState,
     room_id: String,
     presentation: RoomMessagePresentationKind,
-    body: String,
-) -> Result<(), String> {
+    input: &str,
+) -> Result<String, String> {
     if sendable_room_by_id(&state.model.rooms, &room_id).is_none() {
         return Err(format!("room is not joined: {room_id}"));
     }
+    let (body, styles) = message_text_from_input(input)?;
     enqueue_send_message(
         state,
         SendMessageRequest {
             room_id,
             presentation,
-            body,
-            styles: Vec::new(),
+            body: body.clone(),
+            styles,
             thread: None,
             reply: None,
         },
-    )
+    )?;
+    Ok(body)
 }
 
 fn enqueue_send_message(
@@ -14784,12 +14809,12 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
             match resolve_direct_room_query_target(&state_ref(hwnd).model, &user_id) {
                 QueryTargetResolution::Single(room_id) => {
                     activate_view(hwnd, &ViewId::Room(room_id.clone()), None)?;
-                    if let Some(body) = message {
+                    if let Some(input) = message {
                         send_room_message(
                             state_mut(hwnd),
                             room_id,
                             RoomMessagePresentationKind::Text,
-                            body,
+                            &input,
                         )?;
                     }
                     Ok(Some(format!("query opened: {user_id}")))
@@ -14817,8 +14842,8 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
             presentation,
         } => {
             let room_id = msg_target_room_id(&state_ref(hwnd).model, &target)?;
-            send_room_message(state_mut(hwnd), room_id, presentation, body.clone())?;
-            echo_in_active_view(hwnd, [commands::msg_echo(presentation, &target, &body)])?;
+            let sent = send_room_message(state_mut(hwnd), room_id, presentation, &body)?;
+            echo_in_active_view(hwnd, [commands::msg_echo(presentation, &target, &sent)])?;
             Ok(None)
         }
         SlashCommand::Names { target } => {
@@ -15021,7 +15046,7 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
                 state_mut(hwnd),
                 &target_event_id,
                 RoomMessagePresentationKind::Text,
-                body,
+                &body,
             )?;
             Ok(Some(format!("Reply queued for {target_event_id}")))
         }
@@ -15059,7 +15084,7 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
                 replies::editable_message(activity, state.model.own_user_id.as_deref())?
                     .presentation
             };
-            send_edit(state_mut(hwnd), &target_event_id, presentation, body)?;
+            send_edit(state_mut(hwnd), &target_event_id, presentation, &body)?;
             Ok(Some(format!("Edit queued for {target_event_id}")))
         }
         SlashCommand::Redact { event_id } => {
@@ -15633,19 +15658,20 @@ fn submit_react_slash_command(
 }
 
 /// Replaces the user's message `target_event_id` in the active window with
-/// `presentation` and `body`; sends nothing when that is what it says.
+/// `presentation` and `input`; sends nothing when that is what it says.
 fn send_edit(
     state: &mut WindowState,
     target_event_id: &str,
     presentation: RoomMessagePresentationKind,
-    body: String,
+    input: &str,
 ) -> Result<(), String> {
     let message = replies::editable_message(
         window_message(&state.model, &state.active_view, target_event_id)
             .ok_or_else(|| "no such message in this window".to_owned())?,
         state.model.own_user_id.as_deref(),
     )?;
-    if message.presentation == presentation && message.body == body {
+    let (body, styles) = message_text_from_input(input)?;
+    if message.presentation == presentation && message.body == body && message.styles == styles {
         return Ok(());
     }
     let room_id = resolve_joined_room_target(state, None)?;
@@ -15656,7 +15682,7 @@ fn send_edit(
             target_event_id: target_event_id.to_owned(),
             presentation,
             body,
-            styles: Vec::new(),
+            styles,
         }),
     )
 }
@@ -15667,8 +15693,9 @@ fn send_reply(
     state: &mut WindowState,
     target_event_id: &str,
     presentation: RoomMessagePresentationKind,
-    body: String,
+    input: &str,
 ) -> Result<(), String> {
+    let (body, styles) = message_text_from_input(input)?;
     let destination = resolve_compose_destination(state, None)?;
     let sender_user_id = room_activity_sender_user_id(
         window_message(&state.model, &state.active_view, target_event_id)
@@ -15683,7 +15710,7 @@ fn send_reply(
             room_id: destination.room_id,
             presentation,
             body,
-            styles: Vec::new(),
+            styles,
             thread: destination.thread,
             reply: Some(SendMessageReplyTarget {
                 event_id: target_event_id.to_owned(),
@@ -16020,10 +16047,32 @@ unsafe extern "system" fn edit_window_proc(
         return 0;
     }
 
-    // TranslateMessage also turns the Tab and Esc keys into these
-    // characters. The key down already acted, so the edit box must not see
-    // them: a single-line edit box rejects them, with a beep on Windows.
-    if message == WM_CHAR && matches!(wparam, VK_TAB_KEY | VK_ESCAPE_KEY) {
+    if message == WM_KEYDOWN
+        && let Some(key) = mirc_format::mirc_format_key(
+            GetKeyState(VK_CONTROL as i32) < 0,
+            GetKeyState(VK_MENU as i32) < 0,
+            wparam,
+        )
+    {
+        assert_eq!(
+            compose_edit(parent),
+            hwnd,
+            "format keys must arrive at the active window's editbox"
+        );
+        insert_mirc_format_code(parent, hwnd, mirc_format::mirc_format_code(key));
+        return 0;
+    }
+
+    // TranslateMessage also turns the Tab and Esc keys, and the format
+    // chords, into these characters: Ctrl+B, K, U, O and R, and Ctrl+I is
+    // Tab's. The key down already acted, so the edit box must not see them:
+    // a single-line edit box rejects them, with a beep on Windows.
+    if message == WM_CHAR
+        && matches!(
+            wparam,
+            VK_TAB_KEY | VK_ESCAPE_KEY | 0x02 | 0x0b | 0x15 | 0x0f | 0x12
+        )
+    {
         return 0;
     }
 
@@ -16268,6 +16317,7 @@ fn dump_submitted_edit_command(command: &Command) -> Option<DumpSubmittedEditCom
             room_id: request.room_id.clone(),
             target_event_id: request.target_event_id.clone(),
             body: request.body.clone(),
+            styles: request.styles.clone(),
         }),
         _ => None,
     }
@@ -16284,14 +16334,33 @@ fn dump_submitted_reply_command(command: &Command) -> Option<DumpSubmittedReplyC
                     target_event_id: reply.event_id.clone(),
                     sender_user_id: reply.sender_user_id.clone(),
                     body: request.body.clone(),
-                    thread: request
-                        .thread
-                        .as_ref()
-                        .map(|thread| DumpSubmittedReplyThreadTarget {
-                            thread_root_event_id: thread.thread_root_event_id.clone(),
-                            latest_event_id: thread.latest_event_id.clone(),
-                        }),
+                    styles: request.styles.clone(),
+                    thread: request.thread.as_ref().map(dump_submitted_thread_target),
                 })
+        }
+        _ => None,
+    }
+}
+
+fn dump_submitted_thread_target(
+    thread: &SendMessageThreadTarget,
+) -> DumpSubmittedReplyThreadTarget {
+    DumpSubmittedReplyThreadTarget {
+        thread_root_event_id: thread.thread_root_event_id.clone(),
+        latest_event_id: thread.latest_event_id.clone(),
+    }
+}
+
+fn dump_submitted_message_command(command: &Command) -> Option<DumpSubmittedMessageCommand> {
+    match command {
+        Command::SendMessage(request) if request.reply.is_none() => {
+            Some(DumpSubmittedMessageCommand {
+                room_id: request.room_id.clone(),
+                presentation: request.presentation,
+                body: request.body.clone(),
+                styles: request.styles.clone(),
+                thread: request.thread.as_ref().map(dump_submitted_thread_target),
+            })
         }
         _ => None,
     }
@@ -16403,6 +16472,14 @@ fn submitted_reply_commands_from_state(state: &WindowState) -> Vec<DumpSubmitted
         .recorded_commands
         .iter()
         .filter_map(dump_submitted_reply_command)
+        .collect()
+}
+
+fn submitted_message_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedMessageCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(dump_submitted_message_command)
         .collect()
 }
 
@@ -16554,6 +16631,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_reaction_commands: submitted_reaction_commands_from_state(state),
         submitted_edit_commands: submitted_edit_commands_from_state(state),
         submitted_reply_commands: submitted_reply_commands_from_state(state),
+        submitted_message_commands: submitted_message_commands_from_state(state),
         submitted_file_commands: submitted_file_commands_from_state(state),
         submitted_notification_commands: submitted_notification_commands_from_state(state),
         submitted_redaction_commands: submitted_redaction_commands_from_state(state),
@@ -18464,7 +18542,9 @@ mod tests {
         };
         let frame = create(STATIC_CLASS_NAME, 0, null_mut());
         let child = create(STATIC_CLASS_NAME, WS_CHILD, frame);
-        let compose = create(EDIT_CLASS_NAME, WS_CHILD, child);
+        // The real editbox's style: without ES_AUTOHSCROLL, an edit box drops
+        // what does not fit its (here empty) width.
+        let compose = create(EDIT_CLASS_NAME, COMPOSE_EDIT_STYLE, child);
 
         let status_bar = CreateWindowExW(
             0,
@@ -28210,6 +28290,42 @@ mod tests {
     }
 
     #[test]
+    fn msg_sends_formatting_codes_as_styles_and_echoes_the_text() {
+        let (state, handle) = irc_command_state();
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                type_compose_line(hwnd, "/msg alice \x034red\x03 alert");
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![Command::SendMessage(SendMessageRequest {
+                        room_id: "!dm:example".to_owned(),
+                        presentation: RoomMessagePresentationKind::Text,
+                        body: "red alert".to_owned(),
+                        styles: vec![TextStyleSpan {
+                            start: 0,
+                            end: 3,
+                            style: mirx_core::TextStyle {
+                                foreground: Some(mirx_core::TextColor {
+                                    red: 0xff,
+                                    green: 0,
+                                    blue: 0
+                                }),
+                                ..mirx_core::TextStyle::default()
+                            },
+                        }],
+                        thread: None,
+                        reply: None,
+                    })]
+                );
+                let lines = render_room_lines(state_ref(hwnd), "!ops:example");
+                assert_eq!(lines.last().unwrap(), "[22:12] -> *alice* red alert");
+            });
+        }
+        stop_test_core(handle);
+    }
+
+    #[test]
     fn names_and_whois_print_member_data_in_the_active_window() {
         let (state, handle) = irc_command_state();
         unsafe {
@@ -29900,6 +30016,199 @@ mod tests {
         }
     }
 
+    fn bold_span(start: usize, end: usize) -> TextStyleSpan {
+        TextStyleSpan {
+            start,
+            end,
+            style: bold_style(),
+        }
+    }
+
+    #[test]
+    fn formatting_codes_send_as_styles_and_codes_alone_send_nothing() {
+        unsafe {
+            with_compose_target_window(|hwnd| {
+                type_compose_line(hwnd, "\x02hi\x02 there");
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![Command::SendMessage(SendMessageRequest {
+                        room_id: "!ops:example".to_owned(),
+                        presentation: RoomMessagePresentationKind::Text,
+                        body: "hi there".to_owned(),
+                        styles: vec![bold_span(0, 2)],
+                        thread: None,
+                        reply: None,
+                    })]
+                );
+                assert_eq!(
+                    dump_model_from_state(state_ref(hwnd)).submitted_message_commands,
+                    vec![DumpSubmittedMessageCommand {
+                        room_id: "!ops:example".to_owned(),
+                        presentation: RoomMessagePresentationKind::Text,
+                        body: "hi there".to_owned(),
+                        styles: vec![bold_span(0, 2)],
+                        thread: None,
+                    }]
+                );
+
+                set_compose_text(hwnd, "\x02\x02").unwrap();
+                assert_eq!(
+                    submit_compose_from_edit(hwnd),
+                    Err("message body must not be empty".to_owned())
+                );
+                type_compose_line(hwnd, "/me \x1fwaves\x0f");
+                type_compose_line(hwnd, "/reply $q \x02yes");
+                let styled = |command: &Command| match command {
+                    Command::SendMessage(request) => (request.body.clone(), request.styles.clone()),
+                    other => panic!("unexpected command {other:?}"),
+                };
+                let underline = TextStyleSpan {
+                    start: 0,
+                    end: 5,
+                    style: mirx_core::TextStyle {
+                        underline: true,
+                        ..mirx_core::TextStyle::default()
+                    },
+                };
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands[1..]
+                        .iter()
+                        .map(styled)
+                        .collect::<Vec<_>>(),
+                    [
+                        ("waves".to_owned(), vec![underline]),
+                        ("yes".to_owned(), vec![bold_span(0, 3)]),
+                    ]
+                );
+                assert_eq!(
+                    dump_model_from_state(state_ref(hwnd)).submitted_reply_commands[0].styles,
+                    [bold_span(0, 3)]
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn editing_a_formatted_message_prefills_its_codes() {
+        let mut state = compose_target_state();
+        let mut activity = sent_message_activity_with_presentation(
+            "!ops:example",
+            "$styled",
+            None,
+            RoomMessagePresentationKind::Text,
+            "deploy now",
+            1_700_000_180_000,
+        );
+        let RoomActivityKind::Message(message) = &mut activity.kind else {
+            unreachable!()
+        };
+        message.sender = user_profile("@me:example");
+        message.styles = vec![bold_span(7, 10)];
+        apply_core_event(&mut state, Event::RoomActivity(Box::new(activity))).unwrap();
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                refresh_view_content(hwnd, &room_view_id("!ops:example")).unwrap();
+                type_compose_line(hwnd, "/edit $styled");
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "deploy \x02now");
+                // The same text in other codes is the same message.
+                set_compose_text(hwnd, "deploy \x02now\x02").unwrap();
+                submit_compose_from_edit(hwnd).unwrap();
+                assert!(state_ref(hwnd).recorded_commands.is_empty());
+
+                type_compose_line(hwnd, "/edit $styled");
+                set_compose_text(hwnd, "deploy now").unwrap();
+                submit_compose_from_edit(hwnd).unwrap();
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![Command::EditMessage(EditMessageRequest {
+                        room_id: "!ops:example".to_owned(),
+                        target_event_id: "$styled".to_owned(),
+                        presentation: RoomMessagePresentationKind::Text,
+                        body: "deploy now".to_owned(),
+                        styles: Vec::new(),
+                    })]
+                );
+                type_compose_line(hwnd, "/edit $styled \x02deploy\x02 now");
+                assert_eq!(
+                    dump_model_from_state(state_ref(hwnd)).submitted_edit_commands[1].styles,
+                    [bold_span(0, 6)]
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn format_chords_type_codes_and_the_edit_box_never_sees_their_characters() {
+        use windows_sys::Win32::UI::Controls::EM_UNDO;
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardState, SetKeyboardState};
+        unsafe {
+            with_compose_target_window(|hwnd| {
+                let edit = compose_edit(hwnd);
+                subclass_compose_edit(hwnd, edit).unwrap();
+                let mut keys = [0u8; 256];
+                assert_ne!(GetKeyboardState(keys.as_mut_ptr()), 0);
+                let saved = keys;
+                // What TranslateMessage makes of each chord, after its key.
+                let chord = |letter: u8, ch: usize| {
+                    SendMessageW(edit, WM_KEYDOWN, usize::from(letter), 0);
+                    SendMessageW(edit, WM_CHAR, ch, 0);
+                };
+
+                keys[VK_CONTROL as usize] = 0x80;
+                assert_ne!(SetKeyboardState(keys.as_ptr()), 0);
+                for (letter, ch) in [
+                    (b'B', 0x02),
+                    (b'K', 0x0b),
+                    (b'U', 0x15),
+                    (b'I', 0x09),
+                    (b'O', 0x0f),
+                    (b'R', 0x12),
+                ] {
+                    chord(letter, ch);
+                }
+                assert_eq!(read_window_text(edit), "\x02\x03\x1f\x1d\x0f\x16");
+                // The codes undo as typing does: a run of them at once.
+                SendMessageW(edit, EM_UNDO, 0, 0);
+                assert_eq!(read_window_text(edit), "");
+                chord(b'B', 0x02);
+
+                // AltGr is Ctrl+Alt: it types, it does not format.
+                keys[VK_MENU as usize] = 0x80;
+                assert_ne!(SetKeyboardState(keys.as_ptr()), 0);
+                SendMessageW(edit, WM_KEYDOWN, usize::from(b'B'), 0);
+                assert_eq!(read_window_text(edit), "\x02");
+
+                keys = saved;
+                keys[VK_CONTROL as usize] = 0;
+                keys[VK_MENU as usize] = 0;
+                assert_ne!(SetKeyboardState(keys.as_ptr()), 0);
+                chord(b'B', usize::from(b'b'));
+                assert_eq!(read_window_text(edit), "\x02b");
+                assert_ne!(SetKeyboardState(saved.as_ptr()), 0);
+            });
+        }
+    }
+
+    #[test]
+    fn the_automation_format_key_types_its_code() {
+        unsafe {
+            with_compose_target_window(|hwnd| {
+                set_compose_text(hwnd, "a").unwrap();
+                let edit = compose_edit(hwnd);
+                SendMessageW(edit, EM_SETSEL, 1, 1);
+                send_compose_key(
+                    hwnd,
+                    ComposeKey::Format {
+                        key: crate::automation::MircFormatKey::Color,
+                    },
+                )
+                .unwrap();
+                assert_eq!(read_window_text(edit), "a\x03");
+            });
+        }
+    }
+
     #[test]
     fn escape_cancels_an_edit_with_its_text_but_keeps_a_replys_text() {
         unsafe {
@@ -30137,7 +30446,7 @@ mod tests {
             &mut state,
             "$q",
             RoomMessagePresentationKind::Text,
-            "hello there".to_owned(),
+            "hello there",
         )
         .unwrap();
 
@@ -30155,6 +30464,7 @@ mod tests {
                 target_event_id: "$q".to_owned(),
                 sender_user_id: "@alice:example".to_owned(),
                 body: "hello there".to_owned(),
+                styles: Vec::new(),
                 thread: None,
             }]
         );
@@ -30204,7 +30514,7 @@ mod tests {
             &mut state,
             "$thread-1:example",
             RoomMessagePresentationKind::Text,
-            "threaded acknowledgement".to_owned(),
+            "threaded acknowledgement",
         )
         .unwrap();
 
@@ -30242,6 +30552,7 @@ mod tests {
                 target_event_id: "$thread-1:example".to_owned(),
                 sender_user_id: "@alice:example".to_owned(),
                 body: "threaded acknowledgement".to_owned(),
+                styles: Vec::new(),
                 thread: Some(DumpSubmittedReplyThreadTarget {
                     thread_root_event_id: "$thread-root:example".to_owned(),
                     latest_event_id: "$thread-1:example".to_owned(),
@@ -30258,7 +30569,7 @@ mod tests {
                 &mut state,
                 "$elsewhere",
                 RoomMessagePresentationKind::Text,
-                "hello".to_owned()
+                "hello"
             ),
             Err("no such message in this window".to_owned())
         );
@@ -30267,7 +30578,7 @@ mod tests {
                 &mut state,
                 "$elsewhere",
                 RoomMessagePresentationKind::Text,
-                "hello".to_owned()
+                "hello"
             ),
             Err("no such message in this window".to_owned())
         );
@@ -30279,17 +30590,12 @@ mod tests {
         let mut state = compose_target_state();
         state.command_sender = None;
         for result in [
-            send_reply(
-                &mut state,
-                "$q",
-                RoomMessagePresentationKind::Text,
-                "hello".to_owned(),
-            ),
+            send_reply(&mut state, "$q", RoomMessagePresentationKind::Text, "hello"),
             send_edit(
                 &mut state,
                 "$mine",
                 RoomMessagePresentationKind::Text,
-                "hello".to_owned(),
+                "hello",
             ),
         ] {
             assert_eq!(
@@ -30308,7 +30614,7 @@ mod tests {
             &mut state,
             "$mine",
             RoomMessagePresentationKind::Text,
-            "replacement text".to_owned(),
+            "replacement text",
         )
         .unwrap();
 
@@ -30328,6 +30634,7 @@ mod tests {
                 room_id: "!ops:example".to_owned(),
                 target_event_id: "$mine".to_owned(),
                 body: "replacement text".to_owned(),
+                styles: Vec::new(),
             }]
         );
     }
@@ -30355,7 +30662,7 @@ mod tests {
             &mut state,
             "$mine-in-thread",
             RoomMessagePresentationKind::Text,
-            "thread final".to_owned(),
+            "thread final",
         )
         .unwrap();
 
@@ -30694,18 +31001,13 @@ mod tests {
         state.model.selected_room = Some("!selected:example".to_owned());
         state.active_view = ViewId::Room("!selected:example".to_owned());
 
-        let selected_room_id = submit_compose(
-            &mut state,
-            RoomMessagePresentationKind::Text,
-            "hello".to_owned(),
-            None,
-        )
-        .unwrap();
+        let selected_room_id =
+            submit_compose(&mut state, RoomMessagePresentationKind::Text, "hello", None).unwrap();
         assert_eq!(selected_room_id, "!selected:example");
         let emote_room_id = submit_compose(
             &mut state,
             RoomMessagePresentationKind::Emote,
-            "waves".to_owned(),
+            "waves",
             None,
         )
         .unwrap();
@@ -30751,7 +31053,7 @@ mod tests {
         let room_id = submit_compose(
             &mut state,
             RoomMessagePresentationKind::Text,
-            "/status".to_owned(),
+            "/status",
             None,
         )
         .unwrap();
@@ -30818,13 +31120,8 @@ mod tests {
             "$thread-1:example".to_owned(),
         );
 
-        let room_id = submit_compose(
-            &mut state,
-            RoomMessagePresentationKind::Text,
-            "hello".to_owned(),
-            None,
-        )
-        .unwrap();
+        let room_id =
+            submit_compose(&mut state, RoomMessagePresentationKind::Text, "hello", None).unwrap();
         assert_eq!(room_id, "!ops:example");
         assert!(
             !state
@@ -30839,7 +31136,7 @@ mod tests {
         let emote_room_id = submit_compose(
             &mut state,
             RoomMessagePresentationKind::Emote,
-            "waves".to_owned(),
+            "waves",
             None,
         )
         .unwrap();
@@ -30906,7 +31203,7 @@ mod tests {
         let room_id = submit_compose(
             &mut state,
             RoomMessagePresentationKind::Text,
-            "hello".to_owned(),
+            "hello",
             Some("!ops:example"),
         )
         .unwrap();
@@ -30943,7 +31240,7 @@ mod tests {
             submit_compose(
                 &mut state,
                 RoomMessagePresentationKind::Text,
-                String::new(),
+                "",
                 Some("!room:example"),
             ),
             Err("message body must not be empty".to_owned())
@@ -30953,7 +31250,7 @@ mod tests {
             submit_compose(
                 &mut state,
                 RoomMessagePresentationKind::Emote,
-                "waves".to_owned(),
+                "waves",
                 Some("!missing:example"),
             ),
             Err("unknown room id: !missing:example".to_owned())
@@ -30962,7 +31259,7 @@ mod tests {
             submit_compose(
                 &mut state,
                 RoomMessagePresentationKind::Emote,
-                "waves".to_owned(),
+                "waves",
                 Some("!invite:example"),
             ),
             Err("room is not joined: !invite:example".to_owned())
@@ -30971,7 +31268,7 @@ mod tests {
             submit_compose(
                 &mut state,
                 RoomMessagePresentationKind::Emote,
-                "waves".to_owned(),
+                "waves",
                 Some("!space:example"),
             ),
             Err("unknown room id: !space:example".to_owned())
@@ -30980,7 +31277,7 @@ mod tests {
             submit_compose(
                 &mut state,
                 RoomMessagePresentationKind::Emote,
-                "waves".to_owned(),
+                "waves",
                 None,
             ),
             Err("no room selected".to_owned())
@@ -31409,12 +31706,7 @@ mod tests {
         state.active_view = ViewId::Room("!room:example".to_owned());
 
         assert_eq!(
-            submit_compose(
-                &mut state,
-                RoomMessagePresentationKind::Text,
-                "hello".to_owned(),
-                None,
-            ),
+            submit_compose(&mut state, RoomMessagePresentationKind::Text, "hello", None,),
             Err("core command sender is not available".to_owned())
         );
     }

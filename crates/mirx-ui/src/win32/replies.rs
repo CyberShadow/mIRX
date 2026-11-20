@@ -18,6 +18,7 @@ use mirx_core::{
 };
 
 use super::ViewId;
+use super::mirc_format::mirc_input_from_styled;
 
 /// How many characters of the quoted line a quote shows.
 const QUOTE_EXCERPT_CHARS: usize = 60;
@@ -113,15 +114,15 @@ pub(super) fn editable_message<'a>(
     }
 }
 
-/// The editbox text that would send `message` as it is: `/me` for an emote,
-/// and `//` escaping a text's leading `/`.
+/// The editbox text that would send `message` as it is: its styles as mIRC
+/// codes, `/me` for an emote, and `//` escaping a text's leading `/`.
 pub(super) fn compose_text_for_edit(message: &RoomMessageActivity) -> String {
+    let input = mirc_input_from_styled(&message.body, &message.styles);
     match message.presentation {
-        RoomMessagePresentationKind::Text if message.body.starts_with('/') => {
-            format!("/{}", message.body)
-        }
-        RoomMessagePresentationKind::Text => message.body.clone(),
-        RoomMessagePresentationKind::Emote => format!("/me {}", message.body),
+        // Codes before a `/` already keep it from reading as a command.
+        RoomMessagePresentationKind::Text if input.starts_with('/') => format!("/{input}"),
+        RoomMessagePresentationKind::Text => input,
+        RoomMessagePresentationKind::Emote => format!("/me {input}"),
         RoomMessagePresentationKind::Notice => {
             panic!("notices are not editable; editable_message rejects them")
         }
@@ -254,6 +255,51 @@ mod tests {
         assert_eq!(
             edit_text(&message("@me:example", Emote, "waves")),
             Ok("/me waves".to_owned())
+        );
+    }
+
+    fn bolded(mut activity: RoomActivity, start: usize, end: usize) -> RoomActivity {
+        let RoomActivityKind::Message(message) = &mut activity.kind else {
+            unreachable!("message() makes messages")
+        };
+        message.styles = vec![mirx_core::TextStyleSpan {
+            start,
+            end,
+            style: mirx_core::TextStyle {
+                bold: true,
+                ..mirx_core::TextStyle::default()
+            },
+        }];
+        activity
+    }
+
+    #[test]
+    fn styled_messages_edit_as_their_mirc_codes() {
+        use RoomMessagePresentationKind::{Emote, Text};
+        assert_eq!(
+            edit_text(&bolded(message("@me:example", Text, "hi there"), 0, 2)),
+            Ok("\x02hi\x0f there".to_owned())
+        );
+        assert_eq!(
+            edit_text(&bolded(message("@me:example", Emote, "waves hard"), 6, 10)),
+            Ok("/me waves \x02hard".to_owned())
+        );
+        // A code before the `/` keeps it from being a command already.
+        assert_eq!(
+            edit_text(&bolded(
+                message("@me:example", Text, "/not a command"),
+                0,
+                4
+            )),
+            Ok("\x02/not\x0f a command".to_owned())
+        );
+        assert_eq!(
+            edit_text(&bolded(
+                message("@me:example", Text, "/not a command"),
+                5,
+                6
+            )),
+            Ok("//not \x02a\x0f command".to_owned())
         );
     }
 

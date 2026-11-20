@@ -6,6 +6,7 @@ use std::ops::Range;
 use mirx_core::{TextColor, TextStyle, TextStyleSpan};
 use windows_sys::Win32::Graphics::Gdi::HDC;
 
+use super::mirc_format::MIRC_PALETTE;
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -466,7 +467,7 @@ unsafe fn fill_clipped(hdc: HDC, clip: &RECT, x: i32, y: i32, width: i32, height
 }
 
 /// A style colour as GDI takes it.
-fn colorref(color: TextColor) -> u32 {
+const fn colorref(color: TextColor) -> u32 {
     rgb(color.red, color.green, color.blue)
 }
 
@@ -474,12 +475,13 @@ pub(super) const fn rgb(r: u8, g: u8, b: u8) -> u32 {
     r as u32 | ((g as u32) << 8) | ((b as u32) << 16)
 }
 
-pub(super) const MIRC_MAROON: u32 = rgb(127, 0, 0);
-pub(super) const MIRC_RED: u32 = rgb(255, 0, 0);
-pub(super) const MIRC_BLUE: u32 = rgb(0, 0, 252);
-const MIRC_PURPLE: u32 = rgb(156, 0, 156);
-const MIRC_GREEN: u32 = rgb(0, 147, 0);
-const MIRC_NAVY: u32 = rgb(0, 0, 127);
+// The colours of mIRC's own text, by their colour code index.
+pub(super) const MIRC_MAROON: u32 = colorref(MIRC_PALETTE[5]);
+pub(super) const MIRC_RED: u32 = colorref(MIRC_PALETTE[4]);
+pub(super) const MIRC_BLUE: u32 = colorref(MIRC_PALETTE[12]);
+const MIRC_PURPLE: u32 = colorref(MIRC_PALETTE[6]);
+const MIRC_GREEN: u32 = colorref(MIRC_PALETTE[3]);
+const MIRC_NAVY: u32 = colorref(MIRC_PALETTE[2]);
 
 // mIRC's switchbar/treebar activity colours (Options > Display > Event,
 // Message, Highlight): an inactive window's button text takes the colour of

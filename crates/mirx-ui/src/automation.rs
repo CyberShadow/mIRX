@@ -1328,6 +1328,22 @@ pub(crate) enum ComposeKey {
     Tab,
     ShiftTab,
     Escape,
+    /// The mIRC formatting code a Ctrl chord types.
+    Format {
+        key: MircFormatKey,
+    },
+}
+
+/// The mIRC formatting chords: Ctrl+B, K, U, I, O and R.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MircFormatKey {
+    Bold,
+    Color,
+    Underline,
+    Italic,
+    Reset,
+    Reverse,
 }
 
 impl<'de> Deserialize<'de> for ComposeKey {
@@ -1335,39 +1351,29 @@ impl<'de> Deserialize<'de> for ComposeKey {
     where
         D: serde::Deserializer<'de>,
     {
+        // Struct variants, so that serde rejects unknown fields on every
+        // key; it does not for unit variants of a tagged enum.
         #[derive(Deserialize)]
-        #[serde(rename_all = "snake_case")]
-        enum Kind {
-            Return,
-            Up,
-            Down,
-            Tab,
-            ShiftTab,
-            Escape,
+        #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+        enum Wire {
+            Return {},
+            Up {},
+            Down {},
+            Tab {},
+            ShiftTab {},
+            Escape {},
+            Format { key: MircFormatKey },
         }
 
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct ComposeKeyPayload {
-            #[serde(rename = "kind")]
-            kind: Kind,
-        }
-
-        let value = Value::deserialize(deserializer)?;
-        if value.get("kind").is_none() {
-            return Err(serde::de::Error::missing_field("kind"));
-        }
-
-        serde_json::from_value::<ComposeKeyPayload>(value)
-            .map(|payload| match payload.kind {
-                Kind::Return => Self::Return,
-                Kind::Up => Self::Up,
-                Kind::Down => Self::Down,
-                Kind::Tab => Self::Tab,
-                Kind::ShiftTab => Self::ShiftTab,
-                Kind::Escape => Self::Escape,
-            })
-            .map_err(serde::de::Error::custom)
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Return {} => Self::Return,
+            Wire::Up {} => Self::Up,
+            Wire::Down {} => Self::Down,
+            Wire::Tab {} => Self::Tab,
+            Wire::ShiftTab {} => Self::ShiftTab,
+            Wire::Escape {} => Self::Escape,
+            Wire::Format { key } => Self::Format { key },
+        })
     }
 }
 
@@ -1497,6 +1503,8 @@ pub(crate) struct DumpModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_reply_commands: Vec<DumpSubmittedReplyCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_message_commands: Vec<DumpSubmittedMessageCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_file_commands: Vec<DumpSubmittedFileCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_notification_commands: Vec<DumpSubmittedNotificationCommand>,
@@ -1617,6 +1625,7 @@ pub(crate) struct DumpSubmittedEditCommand {
     pub(crate) room_id: String,
     pub(crate) target_event_id: String,
     pub(crate) body: String,
+    pub(crate) styles: Vec<mirx_core::TextStyleSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1626,6 +1635,20 @@ pub(crate) struct DumpSubmittedReplyCommand {
     pub(crate) target_event_id: String,
     pub(crate) sender_user_id: String,
     pub(crate) body: String,
+    pub(crate) styles: Vec<mirx_core::TextStyleSpan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) thread: Option<DumpSubmittedReplyThreadTarget>,
+}
+
+/// A message the UI sent that replies to nothing; replies are in
+/// `submitted_reply_commands`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedMessageCommand {
+    pub(crate) room_id: String,
+    pub(crate) presentation: RoomMessagePresentationKind,
+    pub(crate) body: String,
+    pub(crate) styles: Vec<mirx_core::TextStyleSpan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) thread: Option<DumpSubmittedReplyThreadTarget>,
 }
@@ -2933,17 +2956,17 @@ mod tests {
         DumpUnsupportedRoomMessageActivity, DumpUserCommandAction, FindActiveViewArgs,
         FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
         LoadEventsArgs, LoginArgs, MdiArrangement, MdiState, MdiView, MdiWindowPlacement,
-        MdiWindowState, NavigationNode, NavigationPathSegment, NoArgs, OpenMemberContextMenuArgs,
-        OpenSelectedMemberContextMenuArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse,
-        RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView, SelectMemberArgs,
-        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs,
-        SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
-        SendFileArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, SetViewWindowStateArgs,
-        SetupE2eeRecoveryArgs, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiFindHistorySearchState, UiFindState, UiFrameLayout, UiRect, UiRoomHistoryBackfillState,
-        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewActivityLevel,
-        ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
-        success_response,
+        MdiWindowState, MircFormatKey, NavigationNode, NavigationPathSegment, NoArgs,
+        OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs, PROTOCOL_VERSION,
+        ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
+        RoomMemberView, SelectMemberArgs, SelectNavigationPathArgs, SelectRoomArgs,
+        SelectRoomResponse, SelectTimelineEventArgs, SelectViewArgs, SelectViewResponse,
+        SelectedNavigationPathResponse, SendComposeKeyArgs, SendFileArgs, SendTextArgs,
+        SendTextResponse, SetComposeTextArgs, SetViewWindowStateArgs, SetupE2eeRecoveryArgs,
+        StatusBarState, SwitchbarItem, SwitchbarState, UiFindHistorySearchState, UiFindState,
+        UiFrameLayout, UiRect, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+        VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
+        failure_response, parse_command_request, success_response,
     };
 
     fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -3862,6 +3885,19 @@ mod tests {
                 br#"{"id":"compose-key","args":{"key":{"kind":"escape"}}}"#.as_slice(),
                 ComposeKey::Escape,
             ),
+            (
+                br#"{"id":"compose-key","args":{"key":{"kind":"format","key":"bold"}}}"#.as_slice(),
+                ComposeKey::Format {
+                    key: MircFormatKey::Bold,
+                },
+            ),
+            (
+                br#"{"id":"compose-key","args":{"key":{"kind":"format","key":"reverse"}}}"#
+                    .as_slice(),
+                ComposeKey::Format {
+                    key: MircFormatKey::Reverse,
+                },
+            ),
         ] {
             assert_eq!(
                 parse_command_request(COMMAND_ID_SEND_COMPOSE_KEY, request_json).unwrap(),
@@ -4385,6 +4421,11 @@ mod tests {
             br#"{"id":"compose-key","args":{"key":{"kind":"return","unexpected":true}}}"#
                 .as_slice(),
             br#"{"id":"compose-key","args":{"key":{"kind":"return"},"unexpected":true}}"#
+                .as_slice(),
+            br#"{"id":"compose-key","args":{"key":{"kind":"return","key":"bold"}}}"#.as_slice(),
+            br#"{"id":"compose-key","args":{"key":{"kind":"format"}}}"#.as_slice(),
+            br#"{"id":"compose-key","args":{"key":{"kind":"format","key":"blink"}}}"#.as_slice(),
+            br#"{"id":"compose-key","args":{"key":{"kind":"format","key":"bold","x":1}}}"#
                 .as_slice(),
         ] {
             let error = parse_command_request(COMMAND_ID_SEND_COMPOSE_KEY, request).unwrap_err();
@@ -4990,6 +5031,7 @@ mod tests {
                     submitted_reaction_commands: Vec::new(),
                     submitted_edit_commands: Vec::new(),
                     submitted_reply_commands: Vec::new(),
+                    submitted_message_commands: Vec::new(),
                     submitted_file_commands: Vec::new(),
                     submitted_notification_commands: Vec::new(),
                     submitted_redaction_commands: Vec::new(),
@@ -5764,6 +5806,7 @@ mod tests {
             submitted_reaction_commands: Vec::new(),
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
+            submitted_message_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
             submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
@@ -5853,6 +5896,7 @@ mod tests {
             submitted_reaction_commands: Vec::new(),
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
+            submitted_message_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
             submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
@@ -5912,6 +5956,7 @@ mod tests {
             submitted_reaction_commands: Vec::new(),
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
+            submitted_message_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
             submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
@@ -5976,8 +6021,10 @@ mod tests {
                 room_id: "!ops:example".to_owned(),
                 target_event_id: "$target:example".to_owned(),
                 body: "replacement text".to_owned(),
+                styles: Vec::new(),
             }],
             submitted_reply_commands: Vec::new(),
+            submitted_message_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
             submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
@@ -6004,7 +6051,8 @@ mod tests {
                     {
                         "room_id":"!ops:example",
                         "target_event_id":"$target:example",
-                        "body":"replacement text"
+                        "body":"replacement text",
+                        "styles":[]
                     }
                 ],
                 "last_error":null,
@@ -6030,6 +6078,7 @@ mod tests {
                     "room_id":"!ops:example",
                     "target_event_id":"$target:example",
                     "body":"replacement text",
+                    "styles":[],
                     "unexpected":true
                 }
             ],
@@ -6067,8 +6116,10 @@ mod tests {
                 target_event_id: "$target:example".to_owned(),
                 sender_user_id: "@alice:example".to_owned(),
                 body: "reply text".to_owned(),
+                styles: Vec::new(),
                 thread: None,
             }],
+            submitted_message_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
             submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
@@ -6096,7 +6147,8 @@ mod tests {
                         "room_id":"!ops:example",
                         "target_event_id":"$target:example",
                         "sender_user_id":"@alice:example",
-                        "body":"reply text"
+                        "body":"reply text",
+                        "styles":[]
                     }
                 ],
                 "last_error":null,
@@ -6124,6 +6176,7 @@ mod tests {
                     "target_event_id":"$target:example",
                     "sender_user_id":"@alice:example",
                     "body":"reply text",
+                    "styles":[],
                     "unexpected":true
                 }
             ],
@@ -6162,11 +6215,13 @@ mod tests {
                 target_event_id: "$target:example".to_owned(),
                 sender_user_id: "@alice:example".to_owned(),
                 body: "reply text".to_owned(),
+                styles: Vec::new(),
                 thread: Some(DumpSubmittedReplyThreadTarget {
                     thread_root_event_id: "$thread-root:example".to_owned(),
                     latest_event_id: "$latest:example".to_owned(),
                 }),
             }],
+            submitted_message_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
             submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
@@ -6195,6 +6250,7 @@ mod tests {
                         "target_event_id":"$target:example",
                         "sender_user_id":"@alice:example",
                         "body":"reply text",
+                        "styles":[],
                         "thread":{
                             "thread_root_event_id":"$thread-root:example",
                             "latest_event_id":"$latest:example"
@@ -6226,6 +6282,7 @@ mod tests {
                     "target_event_id":"$target:example",
                     "sender_user_id":"@alice:example",
                     "body":"reply text",
+                    "styles":[],
                     "thread":{
                         "thread_root_event_id":"$thread-root:example",
                         "latest_event_id":"$latest:example",
@@ -6267,6 +6324,7 @@ mod tests {
             }],
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
+            submitted_message_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
             submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: vec![DumpSubmittedRedactionCommand {
@@ -6392,6 +6450,7 @@ mod tests {
             submitted_reaction_commands: Vec::new(),
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
+            submitted_message_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
             submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
@@ -6480,6 +6539,7 @@ mod tests {
                 submitted_reaction_commands: Vec::new(),
                 submitted_edit_commands: Vec::new(),
                 submitted_reply_commands: Vec::new(),
+                submitted_message_commands: Vec::new(),
                 submitted_file_commands: Vec::new(),
                 submitted_notification_commands: Vec::new(),
                 submitted_redaction_commands: Vec::new(),

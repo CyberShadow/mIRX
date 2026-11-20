@@ -34,13 +34,14 @@ use mirx_testkit::{
     RoomUnableToDecryptReason, RoomVideoActivity, RoomVideoInfo, SendFileArgs,
     SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession, SubmittedDirectRoomCommand,
     SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
-    SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
-    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
-    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SubmittedUserCommand, SwitchbarItem,
-    SwitchbarState, TestkitError, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind, UiError,
-    UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiOptionsDialog,
-    UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState, UiState,
-    UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimestamp, UnsupportedRoomMessageActivity,
+    SubmittedMessageCommand, SubmittedPowerLevelCommand, SubmittedProfileCommand,
+    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
+    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
+    SubmittedUserCommand, SwitchbarItem, SwitchbarState, TestkitError, UiActiveTimeline,
+    UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState,
+    UiFrameLayout, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRect,
+    UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState, UiState, UiTextFont,
+    UiTimelineLine, UiTimelineLineKind, UiTimestamp, UnsupportedRoomMessageActivity,
     UserCommandAction, Verification, VerificationActionArgs, VerificationDecimals,
     VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
 };
@@ -693,6 +694,7 @@ fn data_models_round_trip_through_json() {
         submitted_reaction_commands: Vec::new(),
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
+        submitted_message_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
         submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
@@ -4294,6 +4296,7 @@ fn model_last_activity_round_trips_through_json() {
         submitted_reaction_commands: Vec::new(),
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
+        submitted_message_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
         submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
@@ -4369,6 +4372,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
         submitted_reaction_commands: Vec::new(),
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
+        submitted_message_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
         submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
@@ -4593,6 +4597,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
         submitted_reaction_commands: Vec::new(),
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
+        submitted_message_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
         submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
@@ -4687,6 +4692,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
         submitted_reaction_commands: Vec::new(),
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
+        submitted_message_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
         submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
@@ -4789,6 +4795,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
         }],
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
+        submitted_message_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
         submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
@@ -4847,6 +4854,92 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
 }
 
 #[test]
+fn model_submitted_message_commands_round_trip_with_their_styles() {
+    let model = Model {
+        status: "synced".to_owned(),
+        lifecycle_state: "ready".to_owned(),
+        connection: "syncing".to_owned(),
+        rooms: vec![],
+        last_activity: None,
+        e2ee_status: None,
+        last_e2ee_recovery_setup_result: None,
+        last_verification: None,
+        submitted_membership_commands: Vec::new(),
+        submitted_member_moderation_commands: Vec::new(),
+        submitted_power_level_commands: Vec::new(),
+        submitted_profile_commands: Vec::new(),
+        submitted_user_commands: Vec::new(),
+        submitted_direct_room_commands: Vec::new(),
+        submitted_room_topic_commands: Vec::new(),
+        submitted_reaction_commands: Vec::new(),
+        submitted_edit_commands: Vec::new(),
+        submitted_reply_commands: Vec::new(),
+        submitted_message_commands: vec![SubmittedMessageCommand {
+            room_id: "!ops:example.org".to_owned(),
+            presentation: RoomMessagePresentationKind::Emote,
+            body: "waves hard".to_owned(),
+            styles: vec![mirx_core::TextStyleSpan {
+                start: 6,
+                end: 10,
+                style: mirx_core::TextStyle {
+                    bold: true,
+                    ..mirx_core::TextStyle::default()
+                },
+            }],
+            thread: None,
+        }],
+        submitted_file_commands: Vec::new(),
+        submitted_notification_commands: Vec::new(),
+        submitted_redaction_commands: Vec::new(),
+        submitted_history_commands: Vec::new(),
+        submitted_verification_actions: Vec::new(),
+        submitted_recovery_commands: Vec::new(),
+        submitted_setup_recovery_commands: Vec::new(),
+        submitted_room_list_requests: Vec::new(),
+        last_error: None,
+        selected_room: None,
+    };
+    let json = serde_json::json!({
+        "status": "synced",
+        "lifecycle_state": "ready",
+        "connection": "syncing",
+        "rooms": [],
+        "last_activity": null,
+        "e2ee_status": null,
+        "last_verification": null,
+        "submitted_message_commands": [
+            {
+                "room_id": "!ops:example.org",
+                "presentation": "emote",
+                "body": "waves hard",
+                "styles": [
+                    {
+                        "start": 6,
+                        "end": 10,
+                        "style": {
+                            "bold": true,
+                            "italic": false,
+                            "underline": false,
+                            "strikethrough": false,
+                            "foreground": null,
+                            "background": null
+                        }
+                    }
+                ]
+            }
+        ],
+        "last_error": null,
+        "selected_room": null
+    });
+
+    assert_eq!(serde_json::to_value(&model).expect("serialize model"), json);
+    assert_eq!(
+        serde_json::from_value::<Model>(json).expect("deserialize model"),
+        model
+    );
+}
+
+#[test]
 fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
     let model = Model {
         status: "synced".to_owned(),
@@ -4871,8 +4964,10 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
             target_event_id: "$target:example.org".to_owned(),
             sender_user_id: "@alice:example.org".to_owned(),
             body: "follow-up".to_owned(),
+            styles: Vec::new(),
             thread: None,
         }],
+        submitted_message_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
         submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
@@ -4900,7 +4995,8 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
                     "room_id": "!ops:example.org",
                     "target_event_id": "$target:example.org",
                     "sender_user_id": "@alice:example.org",
-                    "body": "follow-up"
+                    "body": "follow-up",
+                    "styles": []
                 }
             ],
             "last_error": null,
@@ -4921,7 +5017,8 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
                     "room_id": "!ops:example.org",
                     "target_event_id": "$target:example.org",
                     "sender_user_id": "@alice:example.org",
-                    "body": "follow-up"
+                    "body": "follow-up",
+                    "styles": []
                 }
             ],
             "last_error": null,
@@ -4957,11 +5054,13 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
             target_event_id: "$target:example.org".to_owned(),
             sender_user_id: "@alice:example.org".to_owned(),
             body: "thread follow-up".to_owned(),
+            styles: Vec::new(),
             thread: Some(SubmittedReplyThreadTarget {
                 thread_root_event_id: "$root:example.org".to_owned(),
                 latest_event_id: "$latest:example.org".to_owned(),
             }),
         }],
+        submitted_message_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
         submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
@@ -4990,6 +5089,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
                     "target_event_id": "$target:example.org",
                     "sender_user_id": "@alice:example.org",
                     "body": "thread follow-up",
+                    "styles": [],
                     "thread": {
                         "thread_root_event_id": "$root:example.org",
                         "latest_event_id": "$latest:example.org"
@@ -5015,6 +5115,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
                     "target_event_id": "$target:example.org",
                     "sender_user_id": "@alice:example.org",
                     "body": "thread follow-up",
+                    "styles": [],
                     "thread": {
                         "thread_root_event_id": "$root:example.org",
                         "latest_event_id": "$latest:example.org"
@@ -5050,6 +5151,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
         submitted_reaction_commands: Vec::new(),
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
+        submitted_message_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
         submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: vec![SubmittedRedactionCommand {
@@ -5127,6 +5229,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
                 "target_event_id": "$target:example.org",
                 "sender_user_id": "@alice:example.org",
                 "body": "thread follow-up",
+                "styles": [],
                 "thread": {
                     "thread_root_event_id": "$root:example.org",
                     "latest_event_id": "$latest:example.org"
@@ -5183,11 +5286,13 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
                 target_event_id: "$target:example.org".to_owned(),
                 sender_user_id: "@alice:example.org".to_owned(),
                 body: "thread follow-up".to_owned(),
+                styles: Vec::new(),
                 thread: Some(SubmittedReplyThreadTarget {
                     thread_root_event_id: "$root:example.org".to_owned(),
                     latest_event_id: "$latest:example.org".to_owned(),
                 }),
             }],
+            submitted_message_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
             submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: vec![SubmittedRedactionCommand {
@@ -5219,6 +5324,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
                     "target_event_id": "$target:example.org",
                     "sender_user_id": "@alice:example.org",
                     "body": "thread follow-up",
+                    "styles": [],
                     "thread": {
                         "thread_root_event_id": "$root:example.org",
                         "latest_event_id": "$latest:example.org"
@@ -5265,6 +5371,7 @@ fn model_submitted_history_commands_round_trip_through_json() {
         submitted_reaction_commands: Vec::new(),
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
+        submitted_message_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
         submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
@@ -5379,6 +5486,7 @@ fn model_submitted_history_commands_default_to_empty_when_omitted() {
             submitted_reaction_commands: Vec::new(),
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
+            submitted_message_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
             submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
@@ -5439,6 +5547,7 @@ fn model_submitted_reply_commands_reject_unknown_nested_fields() {
                 "target_event_id": "$target:example.org",
                 "sender_user_id": "@alice:example.org",
                 "body": "follow-up",
+                "styles": [],
                 "unexpected": true
             }
         ],
@@ -5471,6 +5580,7 @@ fn model_submitted_reply_command_threads_reject_unknown_nested_fields() {
                 "target_event_id": "$target:example.org",
                 "sender_user_id": "@alice:example.org",
                 "body": "thread follow-up",
+                "styles": [],
                 "thread": {
                     "thread_root_event_id": "$root:example.org",
                     "latest_event_id": "$latest:example.org",
