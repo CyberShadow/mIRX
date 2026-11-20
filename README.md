@@ -29,7 +29,7 @@ nix develop -c ./scripts/measure.sh
 
 Normal checks remain offline and deterministic. They do not require network access or Matrix credentials.
 Wine/Xvfb automation and screenshot diffs are required local gates for the Win32 shell, but real Windows remains authoritative for DPI, keyboard/input behavior, DPAPI, and installer validation.
-`ui-snapshot.sh` captures each case in `tests/ui-states/` after the snapshot driver's actions; its prefix lets Wine draw window captions and stops the caret blinking. A `dialog:<name>[:<Options page>]` action (for example `dialog:select_server` or `dialog:options:IRC/Messages`) opens a dialog over the window and must be the case's last action.
+`ui-snapshot.sh` captures each case in `tests/ui-states/` after the snapshot driver's actions; its prefix lets Wine draw window captions and stops the caret blinking. A `dialog:<name>[:<Options page>]` action (for example `dialog:select_server` or `dialog:options:IRC/Messages`) opens a dialog over the window and must be the case's last action. So must a `drag:<line>,<offset>:<line>,<offset>` action, which presses the left button at a byte offset into one visible line of the active timeline and moves to another without releasing it, leaving the mark on screen.
 
 ## Live Matrix Checks
 
@@ -108,11 +108,19 @@ Every room window's window menu has `Send File...`, which opens the standard Ope
 
 Find is UI-scoped. Status and Thread Find search only loaded text, while Room Find searches loaded text first and can page older room history through backfill. `/find <text>`, every window's system-menu `Find Text...`, and `Ctrl+F` all invoke the same behavior; Find does not use Matrix server-side search.
 
+## Mouse and keys
+
+Message windows scroll as in mIRC. The mouse wheel scrolls the window; Wine sends the wheel to the focused window, so the editbox passes it on to its window's text. In the editbox, `Page Up` and `Page Down` scroll a page, `Ctrl+Page Up` and `Ctrl+Page Down` a line, and `Ctrl+Home` and `Ctrl+End` to the top or the end while the editbox is empty (with text in it they move the caret). Reaching the top of a room window, by wheel, key or scroll bar, loads older history, one request per gesture. A window at its end stays at its end as lines arrive and when it is resized.
+
+Dragging over text marks it in inverse video, and releasing the button copies it to the clipboard, as mIRC does. The copy is the text as received, with its timestamp and nick: a message wrapped over several lines is one line, and lines are separated by CRLF. Holding `Ctrl` on release copies the formatting as mIRC control codes. A click without a drag copies nothing.
+
+Links are mIRC's hotlinks: the pointer becomes a hand over them, and a double-click opens them. Web addresses (`https://`, `http://`, `ftp://`, `www.`) open in the default browser. Matrix links open in mirx: a `matrix.to` permalink, a `matrix:` URI, or a bare `#alias:server` or `!id:server`. A room you are in becomes the active window, any other room is joined through the link's servers, a link to a message opens its room, and a link to a user opens a query. Punctuation that ends a sentence, and a closing bracket the link did not open, are not part of a link; `C#` and `issue#12` are not links. `/join` of a room you are already in activates its window too.
+
 ## Release Measurement
 
 Measured artifact: `target/x86_64-pc-windows-gnu/release/mirx-ui.exe`
 
-- Size: `17147392` bytes (`16.4MiB`)
+- Size: `17177088` bytes (`16.4MiB`)
 - Target/runtime note: this is the Windows GNU release binary, with the current linked `matrix-sdk` E2EE stack and bundled SQLite stack included in the executable build.
 
 DLL imports from `scripts/measure.sh`:
@@ -132,6 +140,7 @@ kernel32.dll
 msvcrt.dll
 ntdll.dll
 ole32.dll
+shell32.dll
 user32.dll
 ws2_32.dll
 ```
