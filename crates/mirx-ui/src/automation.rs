@@ -1533,6 +1533,9 @@ pub(crate) enum ConnectionState {
     SignedOut,
     /// A login or session restore is in flight.
     SigningIn,
+    /// A browser sign-in waits for the user to finish on the homeserver's
+    /// page.
+    WaitingForBrowser,
     /// Signed in, not syncing: offline, with the session kept.
     SignedIn,
     Syncing,

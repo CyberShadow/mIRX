@@ -13,6 +13,9 @@ pub struct CoreConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Login(LoginRequest),
+    /// Stops waiting for a browser sign-in (after `Event::SignInUrl`);
+    /// answered by `Event::LoginCancelled`.
+    CancelLogin,
     RestoreSession(RestoreSessionRequest),
     StartSync,
     StopSync,
@@ -73,11 +76,29 @@ pub struct LoginRequest {
     /// A server name (`matrix.org`, `example.org:8448`) or a homeserver URL;
     /// the client URL is discovered from it. See `login_server`.
     pub server: String,
-    pub username: String,
-    pub password: String,
+    pub method: LoginMethod,
+    /// Names the new device for password and SSO sign-in; OAuth 2.0 servers
+    /// name the session after the client mirx registers ("mirx").
     pub device_display_name: String,
     /// Start continuous sync once the session is ready, as `StartSync` would.
     pub start_sync: bool,
+}
+
+/// See `login_method`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoginMethod {
+    Password {
+        username: String,
+        password: String,
+    },
+    /// Sign in on the homeserver's web page, in the user's browser: through
+    /// OAuth 2.0 if the server publishes authorization server metadata,
+    /// else through legacy SSO. `Event::SignInUrl` names the page.
+    Browser {
+        /// A full user ID, which pre-fills an OAuth 2.0 server's page
+        /// (`login_hint`); legacy SSO has no use for it.
+        user_id_hint: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +122,38 @@ pub fn login_server(server: &str, username: &str) -> Result<String, String> {
     matrix_sdk::ruma::UserId::parse(username.trim())
         .map(|user_id| user_id.server_name().to_string())
         .map_err(|_| "enter a server, or a full user ID like @alice:matrix.org".to_owned())
+}
+
+/// How to sign in with Select Server's User and Password: a password
+/// signs in with it, and needs a user; no password signs in with the
+/// browser, where User is empty or a full user ID. A bare name cannot
+/// pre-fill the page: the server field may be a URL rather than the
+/// user's server name.
+pub fn login_method(username: &str, password: &str) -> Result<LoginMethod, String> {
+    let username = username.trim();
+    if !password.is_empty() {
+        if username.is_empty() {
+            return Err(
+                "enter a user name, or leave Password empty to sign in with your browser"
+                    .to_owned(),
+            );
+        }
+        return Ok(LoginMethod::Password {
+            username: username.to_owned(),
+            password: password.to_owned(),
+        });
+    }
+    if username.is_empty() {
+        return Ok(LoginMethod::Browser { user_id_hint: None });
+    }
+    matrix_sdk::ruma::UserId::parse(username)
+        .map(|user_id| LoginMethod::Browser {
+            user_id_hint: Some(user_id.to_string()),
+        })
+        .map_err(|_| {
+            "to sign in with your browser, leave User empty or enter a full user ID like @alice:matrix.org"
+                .to_owned()
+        })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1613,6 +1666,14 @@ pub enum SyncStopReason {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Event {
     Started,
+    /// A browser sign-in waits for the user to sign in on this page, which
+    /// sends the browser back to mirx; `LoggedIn` or a `Login` error
+    /// follows, or `LoginCancelled`.
+    SignInUrl {
+        url: String,
+    },
+    /// The answer to `CancelLogin`: the core is signed out and idle.
+    LoginCancelled,
     /// `homeserver_url` is the client URL discovered from
     /// `LoginRequest.server`, which a later `RestoreSessionRequest` uses.
     LoggedIn {

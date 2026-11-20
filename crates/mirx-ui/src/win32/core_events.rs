@@ -1,5 +1,6 @@
 //! Applying core events to the window state, then refreshing the UI.
 
+use super::open_link::open_web_link;
 use super::*;
 
 fn apply_room_event_fetch(state: &mut WindowState, fetch: RoomEventFetch) {
@@ -399,6 +400,28 @@ pub(super) fn apply_core_event(state: &mut WindowState, event: Event) -> Result<
             state.model.status = "authenticated".to_owned();
             state.model.lifecycle_state = LifecycleState::Authenticated;
         }
+        Event::SignInUrl { url } => {
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::SIGN_IN_WITH_BROWSER.to_owned(),
+            );
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::sign_in_address(&url),
+            );
+            state.model.status = "waiting for browser sign-in".to_owned();
+        }
+        Event::LoginCancelled => {
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::SIGN_IN_CANCELLED.to_owned(),
+            );
+            state.model.status = "sign-in cancelled".to_owned();
+            state.model.lifecycle_state = LifecycleState::LoggedOut;
+        }
         Event::SessionUpdated { session } => {
             let homeserver_url = state
                 .current_session_homeserver_url
@@ -697,8 +720,16 @@ pub(super) unsafe fn apply_events_and_refresh(
             );
         }
         backfill_result |= backfilled_room_id.is_some();
+        // A replayed event load opens nothing.
+        let sign_in_url = match &event {
+            Event::SignInUrl { url } if !state.synthetic_load_in_progress => Some(url.clone()),
+            _ => None,
+        };
         wants_attention |= apply_core_event(state, event)?;
         state.event_generation += 1;
+        if let Some(url) = sign_in_url {
+            open_web_link(hwnd, url)?;
+        }
     }
 
     sync_views_and_tree(hwnd)?;
@@ -931,6 +962,61 @@ mod tests {
 
     use super::super::test_fixtures::*;
     use super::*;
+
+    const SIGN_IN_URL: &str = "https://account.example/oauth2/authorize?state=x";
+
+    #[test]
+    fn a_browser_sign_in_logs_its_page_and_can_be_cancelled() {
+        let mut state = test_state();
+        state.model.connection = ConnectionState::SigningIn;
+
+        apply_core_event(
+            &mut state,
+            Event::SignInUrl {
+                url: SIGN_IN_URL.to_owned(),
+            },
+        )
+        .unwrap();
+        assert_eq!(state.model.connection, ConnectionState::WaitingForBrowser);
+        assert_eq!(state.model.status, "waiting for browser sign-in");
+        assert_eq!(
+            status_log_lines(&state)[..],
+            [
+                "[22:12] * Sign in on the page your browser opened; File > Disconnect cancels"
+                    .to_owned(),
+                format!("[22:12] * If no browser opened, go to {SIGN_IN_URL}"),
+            ]
+        );
+
+        apply_core_event(&mut state, Event::LoginCancelled).unwrap();
+        assert_eq!(state.model.connection, ConnectionState::SignedOut);
+        assert_eq!(state.model.status, "sign-in cancelled");
+        assert_eq!(
+            status_log_lines(&state).last().map(String::as_str),
+            Some("[22:12] * Sign-in cancelled")
+        );
+    }
+
+    #[test]
+    fn a_replayed_sign_in_page_is_not_opened() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                apply_event_load(
+                    hwnd,
+                    vec![
+                        Event::Started,
+                        Event::SignInUrl {
+                            url: SIGN_IN_URL.to_owned(),
+                        },
+                    ],
+                )
+                .unwrap();
+                let state = state_ref(hwnd);
+                assert_eq!(state.model.connection, ConnectionState::WaitingForBrowser);
+                assert_eq!(state.opened_links, Vec::<String>::new());
+            });
+        }
+    }
 
     #[test]
     fn core_events_move_the_connection_state() {

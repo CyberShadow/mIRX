@@ -7,8 +7,8 @@ use mirx_core::{
     E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoverySetupSucceeded,
     E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus, EditMessageRequest, Event,
     FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, InviteRoomMemberRequest,
-    JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, ListPublicRoomsRequest, LoginRequest,
-    MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoom, PublicRoomsPage,
+    JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, ListPublicRoomsRequest, LoginMethod,
+    LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoom, PublicRoomsPage,
     PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX,
     RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RoomActivity,
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
@@ -141,6 +141,7 @@ fn error_room_id(command: &Command) -> Option<&str> {
         Command::FetchRoomMedia(request) => Some(&request.room_id),
         Command::FetchRoomEvent(request) => Some(&request.room_id),
         Command::Login(_)
+        | Command::CancelLogin
         | Command::RestoreSession(_)
         | Command::StartSync
         | Command::StopSync
@@ -966,8 +967,10 @@ fn login_store_initialization_failure_emits_typed_error_event() {
         .command_sender()
         .send(Command::Login(LoginRequest {
             server: "https://example.invalid".to_owned(),
-            username: "user".to_owned(),
-            password: "password".to_owned(),
+            method: LoginMethod::Password {
+                username: "user".to_owned(),
+                password: "password".to_owned(),
+            },
             device_display_name: "mirx runtime test".to_owned(),
             start_sync: false,
         }))
@@ -3667,6 +3670,37 @@ fn login_server_prefers_the_typed_server_then_the_user_id() {
     assert_eq!(
         mirx_core::login_server("", "alice"),
         Err("enter a server, or a full user ID like @alice:matrix.org".to_owned())
+    );
+}
+
+#[test]
+fn login_method_takes_a_password_else_the_browser() {
+    use mirx_core::login_method;
+
+    assert_eq!(
+        login_method(" alice ", "secret"),
+        Ok(LoginMethod::Password {
+            username: "alice".to_owned(),
+            password: "secret".to_owned(),
+        })
+    );
+    assert_eq!(
+        login_method("", "secret"),
+        Err("enter a user name, or leave Password empty to sign in with your browser".to_owned())
+    );
+    assert_eq!(
+        login_method(" ", ""),
+        Ok(LoginMethod::Browser { user_id_hint: None })
+    );
+    assert_eq!(
+        login_method("@alice:example.org", ""),
+        Ok(LoginMethod::Browser {
+            user_id_hint: Some("@alice:example.org".to_owned()),
+        })
+    );
+    assert_eq!(
+        login_method("alice", ""),
+        Err("to sign in with your browser, leave User empty or enter a full user ID like @alice:matrix.org".to_owned())
     );
 }
 

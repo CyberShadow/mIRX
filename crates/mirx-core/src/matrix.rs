@@ -14,7 +14,11 @@ use matrix_sdk::{
     authentication::{
         AuthSession,
         matrix::MatrixSession,
-        oauth::{ClientId, OAuthSession, UserSession},
+        oauth::{
+            ClientId, ClientRegistrationData, OAuthSession, UserSession,
+            error::OAuthDiscoveryError,
+            registration::{ApplicationType, ClientMetadata, Localized, OAuthGrantType},
+        },
     },
     config::SyncSettings,
     deserialized_responses::{
@@ -44,6 +48,7 @@ use matrix_sdk::{
         UserId,
         api::client::profile::DisplayName as DisplayNameField,
         api::client::push::{delete_pushrule, set_pushrule, set_pushrule_enabled},
+        api::client::session::get_login_types::v3::LoginType,
         api::client::{
             directory::get_public_rooms_filtered,
             media::get_content_thumbnail::v3::Method,
@@ -91,10 +96,12 @@ use matrix_sdk::{
             Action, HighlightTweakValue, NewPatternedPushRule, NewPushRule, RuleKind, Ruleset,
             SoundTweakValue, Tweak,
         },
+        serde::Raw,
     },
     send_queue::{LocalEcho, LocalEchoContent, RoomSendQueueUpdate, SendQueueUpdate},
     store::{RoomLoadSettings, SerializableEventContent},
     sync::{JoinedRoomUpdate, State, SyncResponse},
+    utils::UrlOrQuery,
 };
 use matrix_sdk_base::{
     RoomInfoNotableUpdateReasons, RoomState, deserialized_responses::DisplayName,
@@ -104,22 +111,23 @@ use matrix_sdk_crypto::CrossSigningStatus;
 use mime::Mime;
 use serde::Deserialize;
 use tokio::task::JoinHandle;
+use url::Url;
 
 use crate::api::{
     BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent,
     CreateRoomRequest, CreateRoomVisibility, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event,
     FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, InviteRoomMemberRequest,
-    JoinRoomRequest, KickRoomMemberRequest, ListPublicRoomsRequest, LoginRequest,
-    MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoom, PublicRoomsPage,
-    PublicRoomsResult, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
-    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomEventFetch, RoomEventFetchResult,
-    RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
-    RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
-    RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
+    JoinRoomRequest, KickRoomMemberRequest, ListPublicRoomsRequest, MarkRoomReadRequest,
+    MemberPowerRole, Operation, PublicRoom, PublicRoomsPage, PublicRoomsResult,
+    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest, RoomActivity,
+    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomEventFetch, RoomEventFetchResult, RoomFileActivity, RoomFileInfo,
+    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
+    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
+    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
     RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity,
     RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
     RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
@@ -247,17 +255,168 @@ pub(crate) async fn restore_session(
 
 pub(crate) async fn login(
     client: &Client,
-    request: &LoginRequest,
+    username: &str,
+    password: &str,
+    device_display_name: &str,
 ) -> Result<StoredSession, MatrixCoreError> {
     client
         .matrix_auth()
-        .login_username(&request.username, &request.password)
-        .initial_device_display_name(&request.device_display_name)
+        .login_username(username, password)
+        .initial_device_display_name(device_display_name)
         .request_refresh_token()
         .send()
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to log in to Matrix: {err}")))?;
 
+    Ok(stored_session(client))
+}
+
+/// The project's homepage, which an OAuth 2.0 server shows on its consent
+/// page. MAS requires https.
+const MIRX_CLIENT_URI: &str = "https://github.com/CyberShadow/mIRX";
+
+/// How the browser signs in, by what the homeserver offers.
+#[derive(Debug)]
+pub(crate) enum BrowserFlow {
+    /// The authorization code flow; the client keeps the PKCE verifier and
+    /// checks the redirect's `state`.
+    OAuth,
+    /// Legacy SSO: the redirect carries a `loginToken` for `m.login.token`.
+    Sso { device_display_name: String },
+}
+
+pub(crate) struct BrowserSignIn {
+    pub(crate) flow: BrowserFlow,
+    /// The page to open in the browser.
+    pub(crate) url: String,
+}
+
+/// Prepares a browser sign-in that ends at `redirect_uri`: registers mirx
+/// with the homeserver's OAuth 2.0 server, or falls back to legacy SSO
+/// when the homeserver has none. `server` names the homeserver in errors.
+pub(crate) async fn start_browser_login(
+    client: &Client,
+    server: &str,
+    redirect_uri: &Url,
+    user_id_hint: Option<&str>,
+    device_display_name: &str,
+) -> Result<BrowserSignIn, MatrixCoreError> {
+    let oauth = client.oauth();
+    match oauth.server_metadata().await {
+        Ok(_) => {
+            let registration = ClientRegistrationData::new(
+                Raw::new(&oauth_client_metadata(redirect_uri))
+                    .expect("OAuth client metadata serializes"),
+            );
+            let mut login = oauth.login(redirect_uri.clone(), None, Some(registration), None);
+            if let Some(user_id) = user_id_hint {
+                let user_id = UserId::parse(user_id).map_err(|err| {
+                    MatrixCoreError::new(format!("invalid user ID {user_id}: {err}"))
+                })?;
+                login = login.user_id_hint(&user_id);
+            }
+            let authorization = login.build().await.map_err(|err| {
+                MatrixCoreError::new(format!("failed to start the OAuth 2.0 sign-in: {err}"))
+            })?;
+            Ok(BrowserSignIn {
+                flow: BrowserFlow::OAuth,
+                url: authorization.url.into(),
+            })
+        }
+        // Only the homeserver saying it has no such endpoint (404
+        // M_UNRECOGNIZED) means legacy SSO; a broken OAuth 2.0 server, or a
+        // bare 404, is an error rather than a reason to sign in elsewhere.
+        Err(OAuthDiscoveryError::NotSupported) => {
+            let login_types = client
+                .matrix_auth()
+                .get_login_types()
+                .await
+                .map_err(|err| {
+                    MatrixCoreError::new(format!(
+                        "failed to read the homeserver's login types: {err}"
+                    ))
+                })?;
+            if !login_types
+                .flows
+                .iter()
+                .any(|flow| matches!(flow, LoginType::Sso(_)))
+            {
+                return Err(MatrixCoreError::new(format!(
+                    "{server} offers no browser sign-in; enter a password"
+                )));
+            }
+            // No identity provider: the homeserver shows its own picker.
+            let url = client
+                .matrix_auth()
+                .get_sso_login_url(redirect_uri.as_str(), None)
+                .await
+                .map_err(|err| {
+                    MatrixCoreError::new(format!("failed to build the SSO sign-in address: {err}"))
+                })?;
+            Ok(BrowserSignIn {
+                flow: BrowserFlow::Sso {
+                    device_display_name: device_display_name.to_owned(),
+                },
+                url,
+            })
+        }
+        Err(err) => Err(MatrixCoreError::new(format!(
+            "failed to discover the homeserver's OAuth 2.0 server: {err}"
+        ))),
+    }
+}
+
+/// mirx as an OAuth 2.0 client: a native application that receives the
+/// authorization code at the loopback `redirect_uri`, registered anew for
+/// each sign-in. No logo, policy or terms: MAS requires those to share the
+/// client URI's host.
+fn oauth_client_metadata(redirect_uri: &Url) -> ClientMetadata {
+    let mut metadata = ClientMetadata::new(
+        ApplicationType::Native,
+        vec![OAuthGrantType::AuthorizationCode {
+            redirect_uris: vec![redirect_uri.clone()],
+        }],
+        Localized::new(
+            Url::parse(MIRX_CLIENT_URI).expect("the client URI parses"),
+            [],
+        ),
+    );
+    metadata.client_name = Some(Localized::new(crate::APP_NAME.to_owned(), []));
+    metadata
+}
+
+/// Completes a browser sign-in with the `query` of the browser's request
+/// for the redirect URI, and returns the new session.
+pub(crate) async fn finish_browser_login(
+    client: &Client,
+    flow: BrowserFlow,
+    query: &str,
+) -> Result<StoredSession, MatrixCoreError> {
+    match flow {
+        // Checks the state, and reports the server's `error=`.
+        BrowserFlow::OAuth => client
+            .oauth()
+            .finish_login(UrlOrQuery::Query(query.to_owned()))
+            .await
+            .map_err(|err| MatrixCoreError::new(format!("failed to sign in: {err}")))?,
+        BrowserFlow::Sso {
+            device_display_name,
+        } => {
+            let token = url::form_urlencoded::parse(query.as_bytes())
+                .find_map(|(key, value)| (key == "loginToken").then_some(value))
+                .ok_or_else(|| MatrixCoreError::new("the sign-in page returned no login token"))?;
+            client
+                .matrix_auth()
+                .login_token(&token)
+                .initial_device_display_name(&device_display_name)
+                .request_refresh_token()
+                .send()
+                .await
+                .map_err(|err| {
+                    MatrixCoreError::new(format!("failed to log in to Matrix: {err}"))
+                })?;
+        }
+    }
     Ok(stored_session(client))
 }
 

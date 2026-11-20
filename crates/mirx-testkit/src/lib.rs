@@ -375,7 +375,7 @@ pub struct FindActiveViewResult {
 pub struct Model {
     pub status: String,
     pub lifecycle_state: String,
-    /// `signed_out`, `signing_in`, `signed_in` or `syncing`.
+    /// `signed_out`, `signing_in`, `waiting_for_browser`, `signed_in` or `syncing`.
     pub connection: String,
     pub rooms: Vec<Room>,
     pub last_activity: Option<RoomMessageActivityLine>,

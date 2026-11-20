@@ -65,6 +65,16 @@ pub(super) fn restoring(homeserver_url: &str, user_id: &str) -> String {
     format!("Restoring session for {user_id} on {homeserver_url}")
 }
 
+pub(super) const SIGN_IN_WITH_BROWSER: &str =
+    "Sign in on the page your browser opened; File > Disconnect cancels";
+
+/// The sign-in page as a hotlink, for when the shell opened no browser.
+pub(super) fn sign_in_address(url: &str) -> String {
+    format!("If no browser opened, go to {url}")
+}
+
+pub(super) const SIGN_IN_CANCELLED: &str = "Sign-in cancelled";
+
 pub(super) fn logged_in(user_id: &str, device_id: &str) -> String {
     format!("Logged in as {user_id} (device {device_id})")
 }

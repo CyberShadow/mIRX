@@ -13,13 +13,7 @@ use super::*;
 /// Follows the link `text` the user double-clicked, as `kind` says.
 pub(super) unsafe fn open_link(frame: HWND, text: &str, kind: LinkKind) -> Result<(), String> {
     match kind {
-        LinkKind::Web(url) => {
-            state_mut(frame).opened_links.push(url.clone());
-            match open_in_browser(frame, &url) {
-                Ok(()) => Ok(()),
-                Err(error) => report_error_line(frame, format!("* Unable to open {url}: {error}")),
-            }
-        }
+        LinkKind::Web(url) => open_web_link(frame, url),
         LinkKind::Matrix(
             MatrixLink::Room {
                 room_id_or_alias,
@@ -42,6 +36,16 @@ pub(super) unsafe fn open_link(frame: HWND, text: &str, kind: LinkKind) -> Resul
                 message: None,
             },
         ),
+    }
+}
+
+/// Opens the web address `url` in the default browser: a hotlink, or the
+/// homeserver's sign-in page. A failure prints where the user looks.
+pub(super) unsafe fn open_web_link(frame: HWND, url: String) -> Result<(), String> {
+    state_mut(frame).opened_links.push(url.clone());
+    match open_in_browser(frame, &url) {
+        Ok(()) => Ok(()),
+        Err(error) => report_error_line(frame, format!("* Unable to open {url}: {error}")),
     }
 }
 

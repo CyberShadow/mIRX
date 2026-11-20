@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
+use std::io;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 
@@ -13,14 +14,15 @@ use crate::api::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CoreConfig,
     CoreErrorEvent, CreateDirectRoomRequest, CreateRoomRequest, E2eeRecoveryOperation,
     E2eeRecoverySetupSucceeded, E2eeRecoverySucceeded, EditMessageRequest, Event, HighlightWord,
-    InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
+    InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, LoginMethod,
     LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RestoreSessionRequest, RoomJoined, RoomMembers, RoomMembership,
     RoomReadState, RoomSummary, SendReactionRequest, SetDisplayNameRequest,
     SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
     SetupE2eeRecoveryRequest, SyncStopReason, UnbanRoomMemberRequest, VerificationFlowId,
 };
-use crate::matrix::{self, BackupServerStatusMode, HomeserverSpec, MatrixCoreError};
+use crate::loopback::{self, LoopbackListener, LoopbackRedirect};
+use crate::matrix::{self, BackupServerStatusMode, BrowserFlow, HomeserverSpec, MatrixCoreError};
 
 pub(crate) type EventSender = mpsc::Sender<Event>;
 
@@ -108,6 +110,9 @@ impl Error for StartError {
 
 enum WorkerState {
     NoClient,
+    /// A browser sign-in waits for the browser to come back to the
+    /// loopback listener.
+    AwaitingBrowser(Box<PendingBrowserLogin>),
     Ready {
         client: Client,
         sync_task: Option<TokioJoinHandle<()>>,
@@ -119,6 +124,25 @@ enum WorkerState {
         e2ee_backup_state_task: TokioJoinHandle<()>,
         verification_tasks: HashMap<(String, String), TokioJoinHandle<()>>,
     },
+}
+
+struct PendingBrowserLogin {
+    client: Client,
+    flow: BrowserFlow,
+    /// The listener, answering until the browser's request for the
+    /// redirect URI; it closes its port when it ends.
+    redirect: TokioJoinHandle<io::Result<LoopbackRedirect>>,
+    start_sync: bool,
+}
+
+/// What the worker does next.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a value of one loop iteration, never stored"
+)]
+enum Next {
+    Command(Option<Command>),
+    Redirect(io::Result<LoopbackRedirect>),
 }
 
 pub fn start(config: CoreConfig) -> Result<CoreHandle, StartError> {
@@ -172,9 +196,29 @@ async fn run_worker(
 
     let mut state = WorkerState::NoClient;
 
-    while let Some(command) = command_rx.recv().await {
-        if handle_command(command, &config, &event_tx, &mut state).await {
-            break;
+    loop {
+        // A browser sign-in waits for its redirect and for commands at
+        // once; both are cancel-safe. The listener task reads the
+        // requests, so a command never cuts one short.
+        let next = match &mut state {
+            WorkerState::AwaitingBrowser(pending) => tokio::select! {
+                command = command_rx.recv() => Next::Command(command),
+                redirect = &mut pending.redirect => Next::Redirect(
+                    redirect.unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic())),
+                ),
+            },
+            WorkerState::NoClient | WorkerState::Ready { .. } => {
+                Next::Command(command_rx.recv().await)
+            }
+        };
+        match next {
+            Next::Command(None) => break,
+            Next::Command(Some(command)) => {
+                if handle_command(command, &config, &event_tx, &mut state).await {
+                    break;
+                }
+            }
+            Next::Redirect(redirect) => finish_browser_login(&event_tx, &mut state, redirect).await,
         }
     }
 
@@ -190,6 +234,7 @@ async fn handle_command(
 ) -> bool {
     match command {
         Command::Login(request) => handle_login(config, event_tx, state, request).await,
+        Command::CancelLogin => handle_cancel_login(event_tx, state).await,
         Command::RestoreSession(request) => {
             handle_restore_session(config, event_tx, state, request).await
         }
@@ -292,88 +337,162 @@ async fn handle_login(
         }
     };
 
+    // Before the session exists: signing in starts E2EE.
     matrix::register_event_handlers(&client, event_tx.clone());
 
-    let session = match matrix::login(&client, &request).await {
-        Ok(session) => session,
+    match request.method {
+        LoginMethod::Password { username, password } => {
+            match matrix::login(&client, &username, &password, &request.device_display_name).await {
+                Ok(session) => {
+                    let signed_in = Event::LoggedIn {
+                        session,
+                        homeserver_url: client.homeserver().to_string(),
+                    };
+                    enter_session(
+                        client,
+                        signed_in,
+                        Operation::Login,
+                        event_tx,
+                        state,
+                        request.start_sync,
+                    )
+                    .await;
+                }
+                Err(err) => emit_matrix_error(event_tx, Operation::Login, err),
+            }
+        }
+        LoginMethod::Browser { user_id_hint } => {
+            start_browser_login(
+                client,
+                &request.server,
+                user_id_hint.as_deref(),
+                &request.device_display_name,
+                event_tx,
+                state,
+                request.start_sync,
+            )
+            .await;
+        }
+    }
+    false
+}
+
+/// Opens the loopback listener, prepares the homeserver's sign-in page
+/// and waits for the browser to come back from it.
+async fn start_browser_login(
+    client: Client,
+    server: &str,
+    user_id_hint: Option<&str>,
+    device_display_name: &str,
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    start_sync: bool,
+) {
+    let listener = match LoopbackListener::bind().await {
+        Ok(listener) => listener,
         Err(err) => {
-            emit_matrix_error(event_tx, Operation::Login, err);
-            return false;
+            emit_error(
+                event_tx,
+                Operation::Login,
+                None,
+                format!("failed to listen for the browser on 127.0.0.1: {err}"),
+            );
+            return;
         }
     };
+    let sign_in = match matrix::start_browser_login(
+        &client,
+        server,
+        listener.redirect_uri(),
+        user_id_hint,
+        device_display_name,
+    )
+    .await
+    {
+        Ok(sign_in) => sign_in,
+        Err(err) => {
+            emit_matrix_error(event_tx, Operation::Login, err);
+            return;
+        }
+    };
+    let redirect = tokio::task::spawn_local(listener.next_redirect());
+    emit_event(event_tx, Event::SignInUrl { url: sign_in.url });
+    *state = WorkerState::AwaitingBrowser(Box::new(PendingBrowserLogin {
+        client,
+        flow: sign_in.flow,
+        redirect,
+        start_sync,
+    }));
+}
 
-    client
-        .send_queue()
-        .respawn_tasks_for_rooms_with_unsent_requests()
-        .await;
-    let session_update_task = matrix::start_session_update_task(client.clone(), event_tx.clone());
-    let send_queue_update_task = matrix::start_send_queue_update_task(
-        client.clone(),
-        session.user_id.clone(),
-        event_tx.clone(),
-    );
-    let rooms = matrix::initial_room_sync(&client).await;
-    let room_members = if rooms.is_ok() {
-        Some(matrix::summarize_joined_room_members(&client).await)
-    } else {
-        None
+/// The browser came back: completes the sign-in, tells the browser how it
+/// went, and brings the session online.
+async fn finish_browser_login(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    redirect: io::Result<LoopbackRedirect>,
+) {
+    let WorkerState::AwaitingBrowser(pending) = std::mem::replace(state, WorkerState::NoClient)
+    else {
+        unreachable!("only a browser sign-in waits for a redirect");
     };
-    let room_read_states = rooms
-        .as_ref()
-        .ok()
-        .map(|_| matrix::summarize_joined_room_read_states(&client));
-    let account_lists = if rooms.is_ok() {
-        Some(AccountLists::read(&client).await)
-    } else {
-        None
-    };
-    emit_event(
-        event_tx,
-        Event::LoggedIn {
-            session,
-            homeserver_url: client.homeserver().to_string(),
-        },
-    );
-    match rooms {
-        Ok(rooms) => match room_members.expect("room members exist after successful sync") {
-            Ok(room_members) => emit_initial_room_snapshot(
+    let PendingBrowserLogin {
+        client,
+        flow,
+        redirect: _,
+        start_sync,
+    } = *pending;
+    let LoopbackRedirect { mut stream, query } = match redirect {
+        Ok(redirect) => redirect,
+        Err(err) => {
+            emit_error(
                 event_tx,
-                rooms,
-                room_members,
-                room_read_states.expect("read states exist after successful sync"),
-                account_lists.expect("account lists exist after successful sync"),
-            ),
-            Err(err) => emit_matrix_error(event_tx, Operation::Login, err),
-        },
+                Operation::Login,
+                None,
+                format!("failed to receive the browser's sign-in: {err}"),
+            );
+            return;
+        }
+    };
+    let signed_in = matrix::finish_browser_login(&client, flow, &query).await;
+    let page = match &signed_in {
+        Ok(session) => format!(
+            "Signed in to mirx as {}. You can close this page.",
+            session.user_id
+        ),
+        Err(err) => format!("mirx could not sign in: {err}. Return to mirx and try again."),
+    };
+    // The page is a courtesy: a browser that went away undoes nothing.
+    let _ = loopback::respond(&mut stream, "200 OK", &loopback::result_page(&page)).await;
+    drop(stream);
+    match signed_in {
+        Ok(session) => {
+            let signed_in = Event::LoggedIn {
+                session,
+                homeserver_url: client.homeserver().to_string(),
+            };
+            enter_session(
+                client,
+                signed_in,
+                Operation::Login,
+                event_tx,
+                state,
+                start_sync,
+            )
+            .await;
+        }
         Err(err) => emit_matrix_error(event_tx, Operation::Login, err),
     }
-    let room_read_state_update_task =
-        start_room_read_state_update_task_or_placeholder(&client, event_tx);
-    let room_list_update_task = start_room_list_update_task_or_placeholder(&client, event_tx);
-    match matrix::summarize_e2ee_status(&client, BackupServerStatusMode::Fetch).await {
-        Ok(status) => emit_event(event_tx, Event::E2eeStatus(status)),
-        Err(err) => emit_matrix_error(event_tx, Operation::E2eeStatus, err),
-    }
-    let e2ee_recovery_state_task =
-        matrix::start_e2ee_recovery_state_task(client.clone(), event_tx.clone());
-    let e2ee_backup_state_task =
-        matrix::start_e2ee_backup_state_task(client.clone(), event_tx.clone());
+}
 
-    *state = WorkerState::Ready {
-        client,
-        sync_task: None,
-        session_update_task,
-        send_queue_update_task,
-        room_list_update_task,
-        room_read_state_update_task,
-        e2ee_recovery_state_task,
-        e2ee_backup_state_task,
-        verification_tasks: HashMap::new(),
-    };
-
-    if request.start_sync {
-        handle_start_sync(event_tx, state);
+async fn handle_cancel_login(event_tx: &EventSender, state: &mut WorkerState) -> bool {
+    if !matches!(state, WorkerState::AwaitingBrowser(_)) {
+        emit_invalid_state(event_tx, Operation::Login, "no sign-in to cancel");
+        return false;
     }
+    // Closes the listener's port and drops the half-signed-in client.
+    shutdown_state(state).await;
+    emit_event(event_tx, Event::LoginCancelled);
     false
 }
 
@@ -403,13 +522,39 @@ async fn handle_restore_session(
 
     matrix::register_event_handlers(&client, event_tx.clone());
 
-    let current_user_id = request.session.user_id.clone();
-
     if let Err(err) = matrix::restore_session(&client, request.session).await {
         emit_matrix_error(event_tx, Operation::RestoreSession, err);
         return false;
     }
 
+    enter_session(
+        client,
+        Event::RestoredSession,
+        Operation::RestoreSession,
+        event_tx,
+        state,
+        request.start_sync,
+    )
+    .await;
+    false
+}
+
+/// Brings a signed-in client online: the initial sync and the first room
+/// snapshot, announced by `signed_in` (`LoggedIn` or `RestoredSession`),
+/// the update tasks and the E2EE status. Initial sync failures are errors
+/// of `operation`; the session stands either way.
+async fn enter_session(
+    client: Client,
+    signed_in: Event,
+    operation: Operation,
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    start_sync: bool,
+) {
+    let current_user_id = client
+        .user_id()
+        .expect("a signed-in client knows its user")
+        .to_string();
     client
         .send_queue()
         .respawn_tasks_for_rooms_with_unsent_requests()
@@ -432,7 +577,7 @@ async fn handle_restore_session(
     } else {
         None
     };
-    emit_event(event_tx, Event::RestoredSession);
+    emit_event(event_tx, signed_in);
     match rooms {
         Ok(rooms) => match room_members.expect("room members exist after successful sync") {
             Ok(room_members) => emit_initial_room_snapshot(
@@ -442,9 +587,9 @@ async fn handle_restore_session(
                 room_read_states.expect("read states exist after successful sync"),
                 account_lists.expect("account lists exist after successful sync"),
             ),
-            Err(err) => emit_matrix_error(event_tx, Operation::RestoreSession, err),
+            Err(err) => emit_matrix_error(event_tx, operation, err),
         },
-        Err(err) => emit_matrix_error(event_tx, Operation::RestoreSession, err),
+        Err(err) => emit_matrix_error(event_tx, operation, err),
     }
     let room_read_state_update_task =
         start_room_read_state_update_task_or_placeholder(&client, event_tx);
@@ -470,10 +615,9 @@ async fn handle_restore_session(
         verification_tasks: HashMap::new(),
     };
 
-    if request.start_sync {
+    if start_sync {
         handle_start_sync(event_tx, state);
     }
-    false
 }
 
 fn handle_start_sync(event_tx: &EventSender, state: &mut WorkerState) -> bool {
@@ -1478,19 +1622,31 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
 /// would instead be dropped with the `LocalSet`, outside the runtime, where
 /// that panics.
 async fn shutdown_state(state: &mut WorkerState) {
-    if let WorkerState::Ready {
-        client: _,
-        sync_task,
-        session_update_task,
-        send_queue_update_task,
-        room_list_update_task,
-        room_read_state_update_task,
-        e2ee_recovery_state_task,
-        e2ee_backup_state_task,
-        verification_tasks,
-    } = std::mem::replace(state, WorkerState::NoClient)
-    {
-        let tasks = sync_task
+    let tasks = match std::mem::replace(state, WorkerState::NoClient) {
+        WorkerState::NoClient => return,
+        // The listener's task does not own the client, which drops here,
+        // on the runtime.
+        WorkerState::AwaitingBrowser(pending) => {
+            let PendingBrowserLogin { redirect, .. } = *pending;
+            redirect.abort();
+            if let Err(err) = redirect.await
+                && err.is_panic()
+            {
+                std::panic::resume_unwind(err.into_panic());
+            }
+            return;
+        }
+        WorkerState::Ready {
+            client: _,
+            sync_task,
+            session_update_task,
+            send_queue_update_task,
+            room_list_update_task,
+            room_read_state_update_task,
+            e2ee_recovery_state_task,
+            e2ee_backup_state_task,
+            verification_tasks,
+        } => sync_task
             .into_iter()
             .chain([
                 session_update_task,
@@ -1501,16 +1657,16 @@ async fn shutdown_state(state: &mut WorkerState) {
                 e2ee_backup_state_task,
             ])
             .chain(verification_tasks.into_values())
-            .collect::<Vec<_>>();
-        for task in &tasks {
-            task.abort();
-        }
-        for task in tasks {
-            if let Err(err) = task.await
-                && err.is_panic()
-            {
-                std::panic::resume_unwind(err.into_panic());
-            }
+            .collect::<Vec<_>>(),
+    };
+    for task in &tasks {
+        task.abort();
+    }
+    for task in tasks {
+        if let Err(err) = task.await
+            && err.is_panic()
+        {
+            std::panic::resume_unwind(err.into_panic());
         }
     }
 }
@@ -1746,7 +1902,7 @@ mod tests {
     use crate::api::{
         AcceptRoomInviteRequest, BanRoomMemberRequest, Command, CreateDirectRoomRequest,
         CreateRoomRequest, CreateRoomVisibility, Event, HighlightWord, JoinRoomRequest,
-        KickRoomMemberRequest, LoginRequest, Operation, RoomJoined, RoomMemberRank,
+        KickRoomMemberRequest, LoginMethod, LoginRequest, Operation, RoomJoined, RoomMemberRank,
         RoomMemberSummary, RoomMembers, RoomMembership, RoomNotificationMode, RoomReadState,
         RoomSummary, SyncStopReason,
     };
@@ -2772,8 +2928,10 @@ mod tests {
     fn login_request(mock_server: &MatrixMockServer, start_sync: bool) -> LoginRequest {
         LoginRequest {
             server: mock_server.uri(),
-            username: "example".to_owned(),
-            password: "wordpass".to_owned(),
+            method: LoginMethod::Password {
+                username: "example".to_owned(),
+                password: "wordpass".to_owned(),
+            },
             device_display_name: "mirx".to_owned(),
             start_sync,
         }

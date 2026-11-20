@@ -1,4 +1,5 @@
 mod api;
+mod loopback;
 mod matrix;
 mod matrix_link;
 mod rich_text;
@@ -14,8 +15,8 @@ pub use api::{
     E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus,
     EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord,
     InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
-    ListPublicRoomsRequest, LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation,
-    PublicRoom, PublicRoomsPage, PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+    ListPublicRoomsRequest, LoginMethod, LoginRequest, MarkRoomReadRequest, MemberPowerRole,
+    Operation, PublicRoom, PublicRoomsPage, PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
     ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
@@ -34,7 +35,7 @@ pub use api::{
     SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, SyncStopReason, TextColor,
     TextStyle, TextStyleSpan, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserProfile,
     VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, check_text_styles, login_server,
+    VerificationState, VerificationStateEvent, check_text_styles, login_method, login_server,
     validate_highlight_word,
 };
 pub use matrix_link::{MatrixLink, matrix_link};

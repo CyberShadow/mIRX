@@ -763,7 +763,9 @@ pub(super) fn resolve_invite_command_room_id(
 pub(super) fn own_server(model: &UiModel) -> Result<&str, String> {
     if matches!(
         model.connection,
-        ConnectionState::SignedOut | ConnectionState::SigningIn
+        ConnectionState::SignedOut
+            | ConnectionState::SigningIn
+            | ConnectionState::WaitingForBrowser
     ) {
         return Err("not connected to server".to_owned());
     }

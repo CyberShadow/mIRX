@@ -18,9 +18,10 @@ use matrix_sdk::{
 };
 use mirx_core::{
     Command, CoreConfig, CoreHandle, CreateDirectRoomRequest, EditMessageRequest, Event,
-    FetchRoomMediaRequest, LoginRequest, MarkRoomReadRequest, RedactEventRequest, RoomMediaFormat,
-    RoomMediaKind, RoomMediaSource, RoomMessagePresentationKind, RoomSummary, SendFileRequest,
-    SendMessageRequest, SendReactionRequest, SetRoomTopicRequest, StoredSession, start,
+    FetchRoomMediaRequest, LoginMethod, LoginRequest, MarkRoomReadRequest, RedactEventRequest,
+    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMessagePresentationKind, RoomSummary,
+    SendFileRequest, SendMessageRequest, SendReactionRequest, SetRoomTopicRequest, StoredSession,
+    start,
 };
 use tempfile::TempDir;
 
@@ -99,8 +100,7 @@ fn live_send_login(
         .command_sender()
         .send(Command::Login(LoginRequest {
             server: homeserver_url,
-            username,
-            password,
+            method: LoginMethod::Password { username, password },
             device_display_name: device_display_name.to_owned(),
             start_sync: false,
         }))

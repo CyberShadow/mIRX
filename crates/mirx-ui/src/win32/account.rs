@@ -313,8 +313,7 @@ pub(super) fn submit_login(
     sender
         .send(Command::Login(LoginRequest {
             server,
-            username,
-            password,
+            method: LoginMethod::Password { username, password },
             device_display_name,
             start_sync,
         }))
@@ -754,11 +753,18 @@ mod tests {
             status_log_lines(&state).last().map(String::as_str),
             Some("[22:12] * Connecting to https://matrix.example as @alice:example")
         );
-        assert!(matches!(
+        assert_eq!(
             commands.try_recv(),
-            Ok(Command::Login(LoginRequest { server, username, start_sync: false, .. }))
-                if server == "https://matrix.example" && username == "@alice:example"
-        ));
+            Ok(Command::Login(LoginRequest {
+                server: "https://matrix.example".to_owned(),
+                method: LoginMethod::Password {
+                    username: "@alice:example".to_owned(),
+                    password: "secret".to_owned(),
+                },
+                device_display_name: DEFAULT_DEVICE_DISPLAY_NAME.to_owned(),
+                start_sync: false,
+            }))
+        );
         assert_eq!(
             submit_restore_session(
                 &mut state,

@@ -12,6 +12,8 @@ use crate::automation::ConnectionState;
 /// `SigningIn` before any event.
 pub(super) fn after_event(connection: ConnectionState, event: &Event) -> ConnectionState {
     match event {
+        Event::SignInUrl { .. } => ConnectionState::WaitingForBrowser,
+        Event::LoginCancelled => ConnectionState::SignedOut,
         Event::LoggedIn { .. } | Event::RestoredSession => ConnectionState::SignedIn,
         Event::SyncStarted => ConnectionState::Syncing,
         Event::SyncStopped(_) => ConnectionState::SignedIn,
@@ -22,7 +24,10 @@ pub(super) fn after_event(connection: ConnectionState, event: &Event) -> Connect
             if matches!(
                 error.operation,
                 Operation::Login | Operation::RestoreSession
-            ) && connection == ConnectionState::SigningIn =>
+            ) && matches!(
+                connection,
+                ConnectionState::SigningIn | ConnectionState::WaitingForBrowser
+            ) =>
         {
             ConnectionState::SignedOut
         }
@@ -49,7 +54,9 @@ pub(super) fn connect_action(
     session_saved: bool,
 ) -> Result<ConnectAction, &'static str> {
     match (connection, server) {
-        (ConnectionState::SigningIn, _) => Err("already connecting"),
+        (ConnectionState::SigningIn | ConnectionState::WaitingForBrowser, _) => {
+            Err("already connecting")
+        }
         (ConnectionState::Syncing, _) => Err("already connected"),
         (ConnectionState::SignedIn, None) => Ok(ConnectAction::StartSync),
         (ConnectionState::SignedIn, Some(_)) => Err("already signed in; log out to change server"),
@@ -69,9 +76,10 @@ pub(super) fn connect_action(
 pub(super) fn check_disconnect(connection: ConnectionState) -> Result<(), &'static str> {
     match connection {
         ConnectionState::Syncing => Ok(()),
-        ConnectionState::SignedOut | ConnectionState::SigningIn | ConnectionState::SignedIn => {
-            Err("not connected")
-        }
+        ConnectionState::SignedOut
+        | ConnectionState::SigningIn
+        | ConnectionState::WaitingForBrowser
+        | ConnectionState::SignedIn => Err("not connected"),
     }
 }
 
@@ -80,7 +88,9 @@ pub(super) fn check_disconnect(connection: ConnectionState) -> Result<(), &'stat
 pub(super) fn check_sign_in(connection: ConnectionState) -> Result<(), &'static str> {
     match connection {
         ConnectionState::SignedOut => Ok(()),
-        ConnectionState::SigningIn => Err("already connecting"),
+        ConnectionState::SigningIn | ConnectionState::WaitingForBrowser => {
+            Err("already connecting")
+        }
         ConnectionState::SignedIn | ConnectionState::Syncing => {
             Err("already signed in; log out first")
         }
@@ -93,9 +103,9 @@ mod tests {
 
     use super::*;
 
-    use ConnectionState::{SignedIn, SignedOut, SigningIn, Syncing};
+    use ConnectionState::{SignedIn, SignedOut, SigningIn, Syncing, WaitingForBrowser};
 
-    const ALL: [ConnectionState; 4] = [SignedOut, SigningIn, SignedIn, Syncing];
+    const ALL: [ConnectionState; 5] = [SignedOut, SigningIn, WaitingForBrowser, SignedIn, Syncing];
 
     fn error(operation: Operation) -> Event {
         Event::Error(CoreErrorEvent {
@@ -126,6 +136,28 @@ mod tests {
         assert_eq!(
             after_event(SigningIn, &error(Operation::RestoreSession)),
             SignedOut
+        );
+    }
+
+    #[test]
+    fn a_browser_sign_in_waits_then_ends_signed_in_signed_out_or_cancelled() {
+        let sign_in_url = Event::SignInUrl {
+            url: "https://account.example/oauth2/authorize".to_owned(),
+        };
+        assert_eq!(after_event(SigningIn, &sign_in_url), WaitingForBrowser);
+        assert_eq!(after_event(WaitingForBrowser, &logged_in()), SignedIn);
+        assert_eq!(
+            after_event(WaitingForBrowser, &error(Operation::Login)),
+            SignedOut
+        );
+        assert_eq!(
+            after_event(WaitingForBrowser, &Event::LoginCancelled),
+            SignedOut
+        );
+        // The core refuses other commands meanwhile.
+        assert_eq!(
+            after_event(WaitingForBrowser, &error(Operation::StartSync)),
+            WaitingForBrowser
         );
     }
 
@@ -198,10 +230,12 @@ mod tests {
             Err("already signed in; log out to change server")
         );
         for server in [None, Some("matrix.org")] {
-            assert_eq!(
-                connect_action(SigningIn, server, true),
-                Err("already connecting")
-            );
+            for connecting in [SigningIn, WaitingForBrowser] {
+                assert_eq!(
+                    connect_action(connecting, server, true),
+                    Err("already connecting")
+                );
+            }
             assert_eq!(
                 connect_action(Syncing, server, true),
                 Err("already connected")
@@ -212,11 +246,13 @@ mod tests {
     #[test]
     fn only_a_syncing_account_disconnects_and_only_a_signed_out_one_signs_in() {
         assert_eq!(check_disconnect(Syncing), Ok(()));
-        for connection in [SignedOut, SigningIn, SignedIn] {
+        for connection in [SignedOut, SigningIn, WaitingForBrowser, SignedIn] {
             assert_eq!(check_disconnect(connection), Err("not connected"));
         }
         assert_eq!(check_sign_in(SignedOut), Ok(()));
-        assert_eq!(check_sign_in(SigningIn), Err("already connecting"));
+        for connecting in [SigningIn, WaitingForBrowser] {
+            assert_eq!(check_sign_in(connecting), Err("already connecting"));
+        }
         for connection in [SignedIn, Syncing] {
             assert_eq!(
                 check_sign_in(connection),
