@@ -2973,7 +2973,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 47);
+    assert_eq!(version.protocol_version, 48);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -16971,11 +16971,12 @@ fn new_lines_during_a_drag_keep_the_mark() -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-fn link(start: usize, end: usize, url: &str) -> UiTimelineLink {
+fn link(start: usize, end: usize, url: &str, user_id: Option<&str>) -> UiTimelineLink {
     UiTimelineLink {
         start,
         end,
         url: url.to_owned(),
+        user_id: user_id.map(str::to_owned),
     }
 }
 
@@ -16994,24 +16995,42 @@ fn timeline_dump_lists_links() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_else(|| panic!("{needle:?} is on screen"));
         line.links
             .iter()
-            .map(|link| (line.text[link.start..link.end].to_owned(), link.url.clone()))
+            .map(|link| {
+                (
+                    line.text[link.start..link.end].to_owned(),
+                    link.url.clone(),
+                    link.user_id.clone(),
+                )
+            })
             .collect::<Vec<_>>()
     };
-    let pair = |shown: &str, url: &str| (shown.to_owned(), url.to_owned());
+    let web = |shown: &str, url: &str| (shown.to_owned(), url.to_owned(), None);
+    // A message's sender nick links to them.
+    let nick =
+        |nick: &str, user_id: &str| (nick.to_owned(), nick.to_owned(), Some(user_id.to_owned()));
     assert_eq!(
         links_of("<Alice> the spec"),
-        vec![pair(
-            "https://spec.matrix.org/latest/",
-            "https://spec.matrix.org/latest/"
-        )]
+        vec![
+            nick("Alice", "@alice:example"),
+            web(
+                "https://spec.matrix.org/latest/",
+                "https://spec.matrix.org/latest/"
+            )
+        ]
     );
     assert_eq!(
         links_of("<Bob> mirror"),
-        vec![pair("www.example.org", "www.example.org")]
+        vec![
+            nick("Bob", "@bob:example"),
+            web("www.example.org", "www.example.org")
+        ]
     );
     assert_eq!(
         links_of("<Carol> see docs"),
-        vec![pair("https://example.org/docs", "https://example.org/docs")]
+        vec![
+            nick("Carol", "@carol:example"),
+            web("https://example.org/docs", "https://example.org/docs")
+        ]
     );
     // The wrapped address is in both of its lines, whole in each `url`.
     let long = "https://example.org/a/very/long/path/that/wraps/over/the/edge/of/the/window/to/the/next/line/index.html";
@@ -17027,21 +17046,43 @@ fn timeline_dump_lists_links() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Vec<_>>();
     assert!(halves.len() >= 2, "{halves:?}");
     assert_eq!(halves.concat(), long);
-    assert_eq!(links_of("C# is not a link"), vec![]);
+    assert_eq!(
+        links_of("C# is not a link"),
+        vec![nick("Carol", "@carol:example")]
+    );
+    // Pills link to their user, even over text that looks like an
+    // address.
+    assert_eq!(
+        links_of("<Carol> thanks Alice"),
+        vec![
+            nick("Carol", "@carol:example"),
+            nick("Alice", "@alice:example"),
+            (
+                "www.bob.example".to_owned(),
+                "www.bob.example".to_owned(),
+                Some("@bob:example".to_owned())
+            ),
+        ]
+    );
     // Offsets are in the line's text.
     let line = timeline
         .visible_lines
         .iter()
         .find(|line| line.text.contains("<Bob> mirror"))
         .expect("checked above");
+    let nick_start = line.text.find("Bob").expect("on the line");
     let start = line.text.find("www.").expect("on the line");
     assert_eq!(
         line.links,
-        vec![link(
-            start,
-            start + "www.example.org".len(),
-            "www.example.org"
-        )]
+        vec![
+            link(nick_start, nick_start + 3, "Bob", Some("@bob:example")),
+            link(
+                start,
+                start + "www.example.org".len(),
+                "www.example.org",
+                None
+            )
+        ]
     );
     Ok(())
 }
@@ -17135,6 +17176,29 @@ fn double_clicking_a_room_link_activates_or_joins() -> Result<(), Box<dyn std::e
         }]
     );
     assert!(app.dump_model()?.opened_links.is_empty());
+    Ok(())
+}
+
+#[test]
+fn double_clicking_a_nick_or_pill_opens_a_query() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_render_state("hotlinks.json")?;
+    // The sender of a line.
+    double_click_text(&app, "Carol> see docs")?;
+    // A pill, which wins over the address its text looks like.
+    double_click_text(&app, "www.bob.example too")?;
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_direct_room_commands,
+        vec![
+            SubmittedDirectRoomCommand {
+                user_id: "@carol:example".to_owned(),
+            },
+            SubmittedDirectRoomCommand {
+                user_id: "@bob:example".to_owned(),
+            }
+        ]
+    );
+    assert!(model.opened_links.is_empty(), "{:?}", model.opened_links);
     Ok(())
 }
 

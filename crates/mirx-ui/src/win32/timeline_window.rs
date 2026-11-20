@@ -11,7 +11,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::clipboard::copy_to_clipboard;
-use super::hotlinks::{LinkKind, link_at};
+use super::hotlinks::{LinkKind, row_link_at};
 use super::open_link::open_link;
 use super::text_selection::{
     LineGeometry, TextDrag, TextPoint, exact_point_at, left_drag_box, point_at, remap,
@@ -358,8 +358,9 @@ pub(super) unsafe fn timeline_text_hit(
 /// and what it opens.
 unsafe fn timeline_link_at(hwnd: HWND, at: (i32, i32)) -> Option<(String, LinkKind)> {
     let point = timeline_text_hit(hwnd, at, exact_point_at)?;
-    let text = &timeline_state_ref(hwnd).source_rows[point.row].logical_text;
-    let link = link_at(text, point.offset)?;
+    let row = &timeline_state_ref(hwnd).source_rows[point.row];
+    let text = &row.logical_text;
+    let link = row_link_at(text, &row.user_links, point.offset)?;
     Some((text[link.range].to_owned(), link.kind))
 }
 

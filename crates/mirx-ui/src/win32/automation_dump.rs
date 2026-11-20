@@ -2,6 +2,9 @@
 
 use std::ops::Range;
 
+use mirx_core::MatrixLink;
+
+use super::hotlinks::LinkKind;
 use super::*;
 
 pub(super) unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenuState, String> {
@@ -418,7 +421,7 @@ unsafe fn dump_active_timeline(timeline: HWND) -> UiActiveTimeline {
                     styles.clone(),
                     *indent,
                     line.source_row_index.map_or_else(Vec::new, |row| {
-                        dump_line_links(&state.source_rows[row].logical_text, range)
+                        dump_line_links(&state.source_rows[row], range)
                     }),
                 ),
                 TimelinePaintLineVisual::ImageSlot => (String::new(), Vec::new(), 0, Vec::new()),
@@ -448,16 +451,22 @@ unsafe fn dump_active_timeline(timeline: HWND) -> UiActiveTimeline {
     }
 }
 
-/// The links of a row's `text` that its line showing `range` shows, at
+/// The links of `row` that its line showing `range` of its text shows, at
 /// offsets in the line.
-fn dump_line_links(text: &str, range: &Range<usize>) -> Vec<UiTimelineLink> {
-    hotlinks::links(text)
+fn dump_line_links(row: &TimelineRow, range: &Range<usize>) -> Vec<UiTimelineLink> {
+    let text = &row.logical_text;
+    hotlinks::row_links(text, &row.user_links)
         .into_iter()
         .filter(|link| link.range.start < range.end && range.start < link.range.end)
         .map(|link| UiTimelineLink {
             start: link.range.start.max(range.start) - range.start,
             end: link.range.end.min(range.end) - range.start,
             url: text[link.range].to_owned(),
+            user_id: match link.kind {
+                LinkKind::Matrix(MatrixLink::User { user_id }) => Some(user_id),
+                LinkKind::Web(_)
+                | LinkKind::Matrix(MatrixLink::Room { .. } | MatrixLink::Event { .. }) => None,
+            },
         })
         .collect()
 }

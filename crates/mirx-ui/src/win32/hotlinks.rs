@@ -83,7 +83,7 @@ fn link_at_start(text: &str) -> Option<(usize, LinkKind)> {
 /// The links in `text`, in order. A link starts at a word: the start of the
 /// text, or after a character that is neither alphanumeric nor `/`, so
 /// `C#` and `issue#12` are not links.
-pub(super) fn links(text: &str) -> Vec<Link> {
+fn links(text: &str) -> Vec<Link> {
     let mut links = Vec::new();
     let mut previous: Option<char> = None;
     let mut next_start = 0;
@@ -104,9 +104,41 @@ pub(super) fn links(text: &str) -> Vec<Link> {
     links
 }
 
-/// The link of `text` that the byte at `offset` is in.
-pub(super) fn link_at(text: &str, offset: usize) -> Option<Link> {
-    links(text)
+/// Where a row's text links to a user: its sender's nick, or a pill in its
+/// message. `range` is in the row's text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RowUserLink {
+    pub(super) range: Range<usize>,
+    pub(super) user_id: String,
+}
+
+/// The links of a row's `text`, in order: its `user_links` (sorted and
+/// apart), and the links found in its text that overlap none of them, so
+/// a pill or nick wins over the address-like text it shows.
+pub(super) fn row_links(text: &str, user_links: &[RowUserLink]) -> Vec<Link> {
+    let overlaps_a_user_link = |range: &Range<usize>| {
+        user_links
+            .iter()
+            .any(|user| user.range.start < range.end && range.start < user.range.end)
+    };
+    let mut row_links: Vec<Link> = links(text)
+        .into_iter()
+        .filter(|link| !overlaps_a_user_link(&link.range))
+        .chain(user_links.iter().map(|user| Link {
+            range: user.range.clone(),
+            kind: LinkKind::Matrix(MatrixLink::User {
+                user_id: user.user_id.clone(),
+            }),
+        }))
+        .collect();
+    row_links.sort_by_key(|link| link.range.start);
+    row_links
+}
+
+/// The link of a row's `text` (see [`row_links`]) that the byte at
+/// `offset` is in.
+pub(super) fn row_link_at(text: &str, user_links: &[RowUserLink], offset: usize) -> Option<Link> {
+    row_links(text, user_links)
         .into_iter()
         .find(|link| link.range.contains(&offset))
 }
@@ -238,12 +270,64 @@ mod tests {
             "https://example.org/a/very/long/path"
         );
         let start = links[0].range.start;
-        assert_eq!(link_at(text, start - 1), None);
-        assert_eq!(link_at(text, start), Some(links[0].clone()));
+        assert_eq!(row_link_at(text, &[], start - 1), None);
+        assert_eq!(row_link_at(text, &[], start), Some(links[0].clone()));
         assert_eq!(
-            link_at(text, links[0].range.end - 1),
+            row_link_at(text, &[], links[0].range.end - 1),
             Some(links[0].clone())
         );
-        assert_eq!(link_at(text, links[0].range.end), None);
+        assert_eq!(row_link_at(text, &[], links[0].range.end), None);
+    }
+
+    fn user_link(text: &str, part: &str, user_id: &str) -> RowUserLink {
+        let start = text.find(part).expect("part of the text");
+        RowUserLink {
+            range: start..start + part.len(),
+            user_id: user_id.to_owned(),
+        }
+    }
+
+    fn user(user_id: &str) -> LinkKind {
+        LinkKind::Matrix(MatrixLink::User {
+            user_id: user_id.to_owned(),
+        })
+    }
+
+    #[test]
+    fn row_links_merge_user_links_with_the_text_links_they_do_not_overlap() {
+        let text = "<www.bob.example> see www.example.org, Alice and #ops:example";
+        let user_links = [
+            user_link(text, "www.bob.example", "@bob:example"),
+            user_link(text, "Alice", "@alice:example"),
+        ];
+        let found: Vec<(&str, LinkKind)> = row_links(text, &user_links)
+            .into_iter()
+            .map(|link| (&text[link.range], link.kind))
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                ("www.bob.example", user("@bob:example")),
+                ("www.example.org", web("http://www.example.org")),
+                ("Alice", user("@alice:example")),
+                ("#ops:example", room("#ops:example")),
+            ]
+        );
+    }
+
+    #[test]
+    fn row_link_at_finds_user_links() {
+        let text = "[12:00] <Alice> hi Bob";
+        let user_links = [
+            user_link(text, "Alice", "@alice:example"),
+            user_link(text, "Bob", "@bob:example"),
+        ];
+        let at = |offset| row_link_at(text, &user_links, offset).map(|link| link.kind);
+        assert_eq!(at(8), None, "the nick's < is not the nick");
+        assert_eq!(at(9), Some(user("@alice:example")));
+        assert_eq!(at(13), Some(user("@alice:example")));
+        assert_eq!(at(14), None);
+        assert_eq!(at(19), Some(user("@bob:example")));
+        assert_eq!(at(21), Some(user("@bob:example")));
     }
 }

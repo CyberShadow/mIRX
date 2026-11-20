@@ -1287,6 +1287,8 @@ pub struct UiTimelineLink {
     pub end: usize,
     /// The whole link as written.
     pub url: String,
+    /// The user a nick or pill links to; `None` for web and room links.
+    pub user_id: Option<String>,
 }
 
 /// What a timeline line shows.

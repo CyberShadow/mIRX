@@ -4,6 +4,8 @@
 //! display names are disambiguated the same way in the timeline, the nick
 //! list, and the typing indicator. Ambiguity itself is decided by mirx-core.
 
+use std::ops::Range;
+
 use mirx_core::{
     RoomMemberChange, RoomMemberRank, RoomMessagePresentationKind, RoomPowerLevelUserChange,
     RoomPowerLevelValueChange, RoomUserProfile,
@@ -54,28 +56,55 @@ fn nick_with_user_id(profile: &RoomUserProfile) -> String {
     nick_label(&profile.user_id, profile.display_name.as_deref(), true)
 }
 
-/// `[ts] <Nick> body`, `[ts] * Nick body`, or `[ts] -Nick- body`, and the
-/// byte offset of `body` in it. The timestamp `prefix` is `"[ts] "`, or
-/// empty when timestamps are off.
+/// A line a user's message or action makes: its text, where the sender's
+/// nick is in it, and where the body starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MessageLine {
+    pub(super) text: String,
+    pub(super) nick: Range<usize>,
+    pub(super) body_offset: usize,
+}
+
+/// `prefix`, then `before`, the sender's nick and `after`, then `body`.
+fn line_with_nick(
+    prefix: &str,
+    before: &str,
+    sender: &RoomUserProfile,
+    after: &str,
+    body: &str,
+) -> MessageLine {
+    let nick_start = prefix.len() + before.len();
+    let mut text = format!("{prefix}{before}{}", profile_nick(sender));
+    let nick = nick_start..text.len();
+    text.push_str(after);
+    let body_offset = text.len();
+    text.push_str(body);
+    MessageLine {
+        text,
+        nick,
+        body_offset,
+    }
+}
+
+/// `[ts] <Nick> body`, `[ts] * Nick body`, or `[ts] -Nick- body`. The
+/// timestamp `prefix` is `"[ts] "`, or empty when timestamps are off.
 pub(super) fn message_line(
     prefix: &str,
     presentation: RoomMessagePresentationKind,
     sender: &RoomUserProfile,
     body: &str,
-) -> (String, usize) {
-    let nick = profile_nick(sender);
-    let head = match presentation {
-        RoomMessagePresentationKind::Text => format!("{prefix}<{nick}> "),
-        RoomMessagePresentationKind::Emote => format!("{prefix}* {nick} "),
-        RoomMessagePresentationKind::Notice => format!("{prefix}-{nick}- "),
-    };
-    let body_offset = head.len();
-    (head + body, body_offset)
+) -> MessageLine {
+    match presentation {
+        RoomMessagePresentationKind::Text => line_with_nick(prefix, "<", sender, "> ", body),
+        RoomMessagePresentationKind::Emote => action_line(prefix, sender, body),
+        RoomMessagePresentationKind::Notice => line_with_nick(prefix, "-", sender, "- ", body),
+    }
 }
 
-/// An action-style line, as for media: `[ts] * Nick sent image: ...`.
-pub(super) fn action_line(prefix: &str, sender: &RoomUserProfile, body: &str) -> String {
-    format!("{prefix}* {} {body}", profile_nick(sender))
+/// An action-style line, as for an emote or media: `[ts] * Nick sent
+/// image: ...`.
+pub(super) fn action_line(prefix: &str, sender: &RoomUserProfile, body: &str) -> MessageLine {
+    line_with_nick(prefix, "* ", sender, " ", body)
 }
 
 /// A line reporting an event rather than something a user said.
@@ -216,38 +245,83 @@ mod tests {
         assert_eq!(nick_label("@eve:example", Some(""), false), "@eve:example");
     }
 
+    fn message_line_parts(line: MessageLine) -> (String, String, usize) {
+        let nick = line.text[line.nick.clone()].to_owned();
+        (line.text, nick, line.body_offset)
+    }
+
     #[test]
     fn message_lines_use_mirc_sender_prefixes() {
         let alice = profile("@alice:example", Some("Alice"), false);
-        let line = |presentation| message_line("[12:34] ", presentation, &alice, "hi");
+        let line =
+            |presentation| message_line_parts(message_line("[12:34] ", presentation, &alice, "hi"));
 
         // The body offset is where the body starts: message styles shift
-        // by it.
+        // by it. The nick range is the nick alone, a hotlink.
         assert_eq!(
             line(RoomMessagePresentationKind::Text),
-            ("[12:34] <Alice> hi".to_owned(), 16)
+            ("[12:34] <Alice> hi".to_owned(), "Alice".to_owned(), 16)
         );
         assert_eq!(
             line(RoomMessagePresentationKind::Emote),
-            ("[12:34] * Alice hi".to_owned(), 16)
+            ("[12:34] * Alice hi".to_owned(), "Alice".to_owned(), 16)
         );
         assert_eq!(
             line(RoomMessagePresentationKind::Notice),
-            ("[12:34] -Alice- hi".to_owned(), 16)
+            ("[12:34] -Alice- hi".to_owned(), "Alice".to_owned(), 16)
         );
         assert_eq!(
-            action_line("[12:34] ", &alice, "sent image: a.png"),
-            "[12:34] * Alice sent image: a.png"
+            message_line("[12:34] ", RoomMessagePresentationKind::Text, &alice, "hi").nick,
+            9..14
+        );
+        assert_eq!(
+            message_line_parts(action_line("[12:34] ", &alice, "sent image: a.png")),
+            (
+                "[12:34] * Alice sent image: a.png".to_owned(),
+                "Alice".to_owned(),
+                16
+            )
         );
         assert_eq!(
             event_line("[12:34] ", &topic_change_text(&alice, "release day")),
             "[12:34] * Alice changes topic to 'release day'"
         );
         assert_eq!(
-            message_line("", RoomMessagePresentationKind::Text, &alice, "hi"),
-            ("<Alice> hi".to_owned(), 8)
+            message_line_parts(message_line(
+                "",
+                RoomMessagePresentationKind::Text,
+                &alice,
+                "hi"
+            )),
+            ("<Alice> hi".to_owned(), "Alice".to_owned(), 8)
+        );
+        assert_eq!(
+            message_line("", RoomMessagePresentationKind::Notice, &alice, "hi").nick,
+            1..6
+        );
+        assert_eq!(
+            message_line("", RoomMessagePresentationKind::Emote, &alice, "hi").nick,
+            2..7
         );
         assert_eq!(event_line("", "message redacted"), "* message redacted");
+    }
+
+    #[test]
+    fn an_ambiguous_nick_spans_its_whole_label() {
+        let sam = profile("@sam1:example", Some("Sam"), true);
+        assert_eq!(
+            message_line_parts(message_line(
+                "[12:34] ",
+                RoomMessagePresentationKind::Text,
+                &sam,
+                "yo"
+            )),
+            (
+                "[12:34] <Sam (@sam1:example)> yo".to_owned(),
+                "Sam (@sam1:example)".to_owned(),
+                30
+            )
+        );
     }
 
     #[test]

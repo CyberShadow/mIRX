@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 47;
+pub(crate) const PROTOCOL_VERSION: u32 = 48;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1042,6 +1042,8 @@ pub(crate) struct UiTimelineLink {
     pub(crate) end: usize,
     /// The whole link as written.
     pub(crate) url: String,
+    /// The user a nick or pill links to; `None` for web and room links.
+    pub(crate) user_id: Option<String>,
 }
 
 /// What a timeline line shows.
@@ -3216,8 +3218,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_47() {
-        assert_eq!(PROTOCOL_VERSION, 47);
+    fn protocol_version_is_48() {
+        assert_eq!(PROTOCOL_VERSION, 48);
     }
 
     #[test]
@@ -5123,7 +5125,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":47,
+                    "protocol_version":48,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5754,6 +5756,7 @@ mod tests {
                                 start: 4,
                                 end: 9,
                                 url: "#a:b.c".to_owned(),
+                                user_id: None,
                             }],
                         }],
                     }),
@@ -5923,7 +5926,7 @@ mod tests {
                             "event_id":"$answer",
                             "click_point":{"x":8,"y":9},
                             "text_left":8,
-                            "links":[{"start":4,"end":9,"url":"#a:b.c"}]
+                            "links":[{"start":4,"end":9,"url":"#a:b.c","user_id":null}]
                         }]
                     },
                     "ignored_users":["@spam:example"]

@@ -1813,6 +1813,7 @@ configure_case_expectations() {
         --expect-room-view '!links:example::<Bob> logs: https://example.org/a/very/long/path/that/wraps/over/the/edge/of/the/window/to/the/next/line/index.html then more'
         --expect-room-view '!links:example::<Carol> C# is not a link, nor is issue#12'
         --expect-room-view '!links:example::<Bob> elsewhere: https://matrix.to/#/%23elsewhere%3Aexample.org?via=example.org'
+        --expect-room-view '!links:example::<Carol> thanks Alice, and www.bob.example too'
       )
       room_member_expect_args=(
         --expect-room-member '!links:example::Alice'

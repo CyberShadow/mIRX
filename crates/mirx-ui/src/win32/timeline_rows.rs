@@ -1,5 +1,7 @@
 //! Building a view's timeline rows from the model.
 
+use super::hotlinks::RowUserLink;
+use super::timeline_text::MessageLine;
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -92,6 +94,9 @@ pub(super) struct TimelineRow {
     /// How `logical_text` is formatted: a message's own styles, at their
     /// offsets in the row's text. Every other row is plain.
     pub(super) styles: Vec<TextStyleSpan>,
+    /// Where `logical_text` links to users, sorted and apart: a message's
+    /// sender nick and its pills. Every other row has none.
+    pub(super) user_links: Vec<RowUserLink>,
     pub(super) layout: TimelineRowLayout,
     pub(super) image_state: Option<TimelineImageState>,
 }
@@ -113,6 +118,7 @@ impl TimelineRow {
             kind,
             logical_text: text,
             styles: Vec::new(),
+            user_links: Vec::new(),
             layout: TimelineRowLayout::FullWidth,
             image_state: None,
         }
@@ -125,6 +131,7 @@ impl TimelineRow {
             kind,
             logical_text: text,
             styles: Vec::new(),
+            user_links: Vec::new(),
             layout: TimelineRowLayout::Log,
             image_state: None,
         }
@@ -147,6 +154,21 @@ impl TimelineRow {
             "a row's styles format its text"
         );
         self.styles = styles;
+        self
+    }
+
+    pub(super) fn with_user_links(mut self, user_links: Vec<RowUserLink>) -> Self {
+        let mut previous_end = 0;
+        for link in &user_links {
+            assert!(
+                previous_end <= link.range.start
+                    && link.range.start < link.range.end
+                    && self.logical_text.get(link.range.clone()).is_some(),
+                "a row's user links are sorted, apart and in its text: {user_links:?}"
+            );
+            previous_end = link.range.end;
+        }
+        self.user_links = user_links;
         self
     }
 }
@@ -321,6 +343,7 @@ fn push_room_activity_row(
         kind,
         text,
         styles,
+        user_links,
         image_state,
     } = activity_line_text(
         room_view,
@@ -329,6 +352,7 @@ fn push_room_activity_row(
     );
     let mut row = TimelineRow::log(kind, text)
         .with_styles(styles)
+        .with_user_links(user_links)
         .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
         .with_event_id(room_activity_event_id(activity));
     row.image_state = image_state;
@@ -416,23 +440,32 @@ pub(super) fn compose_target_row(
 }
 
 /// An activity's line: its row kind, text after the timestamp prefix, the
-/// text's styles and the image preview state.
+/// text's styles and user links, and the image preview state.
 struct ActivityLine {
     kind: TimelineRowKind,
     text: String,
     styles: Vec<TextStyleSpan>,
+    user_links: Vec<RowUserLink>,
     image_state: Option<TimelineImageState>,
 }
 
-impl ActivityLine {
-    fn plain(kind: TimelineRowKind, text: String, image_state: Option<TimelineImageState>) -> Self {
-        Self {
-            kind,
-            text,
-            styles: Vec::new(),
-            image_state,
-        }
+/// The link from a line's nick to its sender: a nick hotlink.
+fn sender_link(line: &MessageLine, sender: &RoomUserProfile) -> RowUserLink {
+    RowUserLink {
+        range: line.nick.clone(),
+        user_id: sender.user_id.clone(),
     }
+}
+
+/// An action line (`* Nick sent image: ...`) and its nick hotlink.
+fn action_line_with_link(
+    timestamp: &str,
+    sender: &RoomUserProfile,
+    body: &str,
+) -> (String, Vec<RowUserLink>) {
+    let line = action_line(timestamp, sender, body);
+    let link = sender_link(&line, sender);
+    (line.text, vec![link])
 }
 
 fn activity_line_text(
@@ -440,7 +473,7 @@ fn activity_line_text(
     activity: &RoomActivity,
     timestamp: &str,
 ) -> ActivityLine {
-    let (kind, text, image_state) = match &activity.kind {
+    let (kind, (text, user_links), image_state) = match &activity.kind {
         RoomActivityKind::Message(message) => {
             let suffix = match &message.send_state {
                 RoomMessageSendState::Pending => " (sending)",
@@ -455,13 +488,15 @@ fn activity_line_text(
                 RoomMessageSendState::Sent => "",
                 RoomMessageSendState::Failed { .. } => " (failed)",
             };
-            let (text, body_offset) = message_line(
+            let line = message_line(
                 timestamp,
                 message.presentation,
                 &message.sender,
                 &format!("{}{suffix}", message.body),
             );
-            // The suffix is mirx's note, not the sender's text: unstyled.
+            // The suffix is mirx's note, not the sender's text: unstyled
+            // and unlinked.
+            let body_offset = line.body_offset;
             let styles = message
                 .styles
                 .iter()
@@ -471,6 +506,13 @@ fn activity_line_text(
                     style: span.style,
                 })
                 .collect();
+            let user_links = std::iter::once(sender_link(&line, &message.sender))
+                .chain(message.user_links.iter().map(|link| RowUserLink {
+                    range: body_offset + link.start..body_offset + link.end,
+                    user_id: link.user_id.clone(),
+                }))
+                .collect();
+            let text = line.text;
             return ActivityLine {
                 kind: TimelineRowKind::Message {
                     presentation: message.presentation,
@@ -479,6 +521,7 @@ fn activity_line_text(
                 },
                 text,
                 styles,
+                user_links,
                 image_state: None,
             };
         }
@@ -495,7 +538,7 @@ fn activity_line_text(
                 TimelineRowKind::Image {
                     highlight: activity.highlight,
                 },
-                action_line(
+                action_line_with_link(
                     timestamp,
                     &message.sender,
                     &format!("sent image: {display_name}{metadata_suffix}"),
@@ -510,7 +553,7 @@ fn activity_line_text(
                 TimelineRowKind::File {
                     highlight: activity.highlight,
                 },
-                action_line(
+                action_line_with_link(
                     timestamp,
                     &message.sender,
                     &format!("sent file: {display_name}{metadata_suffix}"),
@@ -525,7 +568,7 @@ fn activity_line_text(
                 TimelineRowKind::Audio {
                     highlight: activity.highlight,
                 },
-                action_line(
+                action_line_with_link(
                     timestamp,
                     &message.sender,
                     &format!("sent audio: {display_name}{metadata_suffix}"),
@@ -544,7 +587,7 @@ fn activity_line_text(
                 TimelineRowKind::Video {
                     highlight: activity.highlight,
                 },
-                action_line(
+                action_line_with_link(
                     timestamp,
                     &message.sender,
                     &format!("sent video: {display_name}{metadata_suffix}"),
@@ -556,7 +599,7 @@ fn activity_line_text(
             TimelineRowKind::Unsupported {
                 highlight: activity.highlight,
             },
-            action_line(
+            action_line_with_link(
                 timestamp,
                 &message.sender,
                 &format!("sent unsupported {}: {}", message.msgtype, message.body),
@@ -565,7 +608,7 @@ fn activity_line_text(
         ),
         RoomActivityKind::UnableToDecrypt(message) => (
             TimelineRowKind::UnableToDecrypt,
-            action_line(
+            action_line_with_link(
                 timestamp,
                 &message.sender,
                 "sent an encrypted message that could not be decrypted",
@@ -595,18 +638,24 @@ fn activity_line_text(
                 TimelineRowKind::StateNotice {
                     highlight: activity.highlight,
                 },
-                event_line(timestamp, &body),
+                (event_line(timestamp, &body), Vec::new()),
                 None,
             )
         }
         // The redacted line no longer says what made it a highlight.
         RoomActivityKind::Redacted(_) => (
             TimelineRowKind::StateNotice { highlight: false },
-            event_line(timestamp, "message redacted"),
+            (event_line(timestamp, "message redacted"), Vec::new()),
             None,
         ),
     };
-    ActivityLine::plain(kind, text, image_state)
+    ActivityLine {
+        kind,
+        text,
+        styles: Vec::new(),
+        user_links,
+        image_state,
+    }
 }
 
 pub(super) fn build_room_timeline_rows(
@@ -1749,6 +1798,131 @@ mod tests {
                     vec![("bold", bold_style())]
                 ),
             ]
+        );
+    }
+
+    /// Each user link's text and user ID.
+    fn row_user_links(row: &TimelineRow) -> Vec<(&str, &str)> {
+        row.user_links
+            .iter()
+            .map(|link| (&row.logical_text[link.range.clone()], link.user_id.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn message_rows_link_their_sender_and_pills_past_the_nick() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", true)];
+        for (event_id, presentation) in [
+            ("$text", RoomMessagePresentationKind::Text),
+            ("$emote", RoomMessagePresentationKind::Emote),
+            ("$notice", RoomMessagePresentationKind::Notice),
+        ] {
+            let mut activity = sent_message_activity_with_presentation(
+                "!ops:example",
+                event_id,
+                None,
+                presentation,
+                "ask Bob",
+                1_700_000_000_000,
+            );
+            let RoomActivityKind::Message(message) = &mut activity.kind else {
+                unreachable!("a message activity");
+            };
+            message.user_links = vec![UserLinkSpan {
+                start: 4,
+                end: 7,
+                user_id: "@bob:example".to_owned(),
+            }];
+            apply_core_event(&mut state, Event::RoomActivity(Box::new(activity))).unwrap();
+        }
+        let Event::RoomActivityUpdate(mut edit) = incoming_replaced(
+            "!ops:example",
+            "$text",
+            "$edit",
+            RoomMessagePresentationKind::Text,
+            "Carol, then",
+        ) else {
+            unreachable!("a replacement");
+        };
+        let RoomActivityUpdateKind::MessageReplaced { user_links, .. } = &mut edit.kind else {
+            unreachable!("a replacement");
+        };
+        *user_links = vec![UserLinkSpan {
+            start: 0,
+            end: 5,
+            user_id: "@carol:example".to_owned(),
+        }];
+        apply_core_event(&mut state, Event::RoomActivityUpdate(edit)).unwrap();
+        apply_core_event(
+            &mut state,
+            Event::RoomActivity(Box::new(image_activity(
+                "!ops:example",
+                "$image",
+                "@dave:example",
+                1_700_000_000_000,
+                "diagram.png",
+                None,
+                None,
+            ))),
+        )
+        .unwrap();
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps())
+            .into_iter()
+            .filter(|row| row.event_id.is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.logical_text.as_str(), row_user_links(row)))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "[22:13] <@alice:example> Carol, then (edited)",
+                    vec![
+                        ("@alice:example", "@alice:example"),
+                        ("Carol", "@carol:example")
+                    ]
+                ),
+                (
+                    "[22:13] * @alice:example ask Bob",
+                    vec![
+                        ("@alice:example", "@alice:example"),
+                        ("Bob", "@bob:example")
+                    ]
+                ),
+                (
+                    "[22:13] -@alice:example- ask Bob",
+                    vec![
+                        ("@alice:example", "@alice:example"),
+                        ("Bob", "@bob:example")
+                    ]
+                ),
+                (
+                    "[22:13] * @dave:example sent image: diagram.png",
+                    vec![("@dave:example", "@dave:example")]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn reply_quotes_and_other_rows_have_no_user_links() {
+        let mut state = reply_quote_state("$q");
+        apply_core_event(&mut state, topic_state("!ops:example", "incident review")).unwrap();
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps());
+        let linked = rows
+            .iter()
+            .filter(|row| !row.user_links.is_empty())
+            .map(|row| row.logical_text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            linked,
+            vec![
+                "[22:13] <@alice:example> are we deploying today?\nsecond line",
+                "[22:14] <@bob:example> yes, after lunch",
+            ],
+            "{rows:#?}"
         );
     }
 
