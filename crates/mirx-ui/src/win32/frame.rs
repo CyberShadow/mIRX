@@ -168,7 +168,11 @@ unsafe extern "system" fn window_proc(
                 u16::try_from(header.idFrom).expect("frame child control ids are 16-bit");
             match (control_id, header.code) {
                 (TREE_ID, TVN_SELCHANGEDW) => {
-                    handle_tree_selection(hwnd);
+                    handle_tree_selection(hwnd, &*(lparam as *const NMTREEVIEWW));
+                    0
+                }
+                (TREE_ID, TVN_ITEMEXPANDEDW) => {
+                    tree_expansion_changed(hwnd).expect("the treebar notifies");
                     0
                 }
                 (TREE_ID, NM_CUSTOMDRAW) => {
@@ -284,7 +288,9 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         hwnd,
         TREE_CLASS_NAME,
         "",
-        WS_CHILD | WS_BORDER,
+        // Buttons on the items with children, as mIRC's treebar; no lines,
+        // and none on the root (Status).
+        WS_CHILD | WS_BORDER | TVS_HASBUTTONS,
         0,
         TREE_ID,
         instance,

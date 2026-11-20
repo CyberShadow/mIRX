@@ -360,7 +360,10 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                     "room context menu target is unavailable".to_owned(),
                 )
             })?;
-            let is_room = matches!(state_ref(hwnd).tree_items.get(&item), Some(ViewId::Room(_)));
+            let is_room = matches!(
+                state_ref(hwnd).tree_items[&item].node,
+                NavNode::View(ViewId::Room(_))
+            );
             if !is_room {
                 return Err(failure_response(
                     Some(id.clone()),
@@ -486,6 +489,18 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             })?;
             options_dialog::select_path(dialog, &args.path).map_err(|message| {
                 failure_response(Some(id.clone()), "unknown_options_page", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::SetNavigationExpanded { id, args } => {
+            let node = match &args.node {
+                NavigationNodeKey::View(identity) => NavNode::View(view_id_from_identity(identity)),
+                NavigationNodeKey::Space(room_id) => NavNode::Space {
+                    room_id: room_id.clone(),
+                },
+            };
+            set_navigation_expanded(hwnd, &node, args.expanded).map_err(|message| {
+                failure_response(Some(id.clone()), "unknown_navigation_node", message)
             })?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
@@ -779,6 +794,7 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::SendComposeKey { id, .. }
         | ParsedCommand::SelectNavigationPath { id, .. }
         | ParsedCommand::SelectNavigationView { id, .. }
+        | ParsedCommand::SetNavigationExpanded { id, .. }
         | ParsedCommand::OpenDialog { id, .. }
         | ParsedCommand::SelectOptionsPage { id, .. }
         | ParsedCommand::FindActiveView { id, .. }

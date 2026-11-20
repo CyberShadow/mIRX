@@ -1,0 +1,239 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!lobby:example",
+        "display_name": "Lobby",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!work:example",
+        "display_name": "Work",
+        "topic": null,
+        "encrypted": false,
+        "is_space": true,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [
+          {
+            "room_id": "!ops:example",
+            "suggested": false,
+            "order": null
+          },
+          {
+            "room_id": "!team:example",
+            "suggested": false,
+            "order": null
+          }
+        ],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!team:example",
+        "display_name": "Team",
+        "topic": null,
+        "encrypted": false,
+        "is_space": true,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [
+          {
+            "room_id": "!deploy:example",
+            "suggested": false,
+            "order": null
+          }
+        ],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!social:example",
+        "display_name": "Social",
+        "topic": null,
+        "encrypted": false,
+        "is_space": true,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [
+          {
+            "room_id": "!random:example",
+            "suggested": false,
+            "order": null
+          }
+        ],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!ops:example",
+        "display_name": "Ops",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!deploy:example",
+        "display_name": "Deploy",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!random:example",
+        "display_name": "Random",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!lobby:example",
+      "activity_id": "event:$lobby-1",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$lobby-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "display_name": null,
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "morning all",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$ops-1",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": null,
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "ops has updates",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!deploy:example",
+      "activity_id": "event:$deploy-1",
+      "timestamp_ms": 1700000120000,
+      "highlight": true,
+      "kind": {
+        "type": "message",
+        "event_id": "$deploy-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": null,
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "me: the deploy needs you",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!random:example",
+      "activity_id": "event:$random-1",
+      "timestamp_ms": 1700000180000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$random-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@dave:example",
+          "display_name": null,
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "random chatter",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  }
+]

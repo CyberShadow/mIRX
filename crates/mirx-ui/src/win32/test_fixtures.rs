@@ -1138,7 +1138,7 @@ pub(super) fn query(room_id: &str, display_name: &str, user_id: &str) -> RoomSum
 pub(super) fn nav_view(label: &str, view: ViewId, children: Vec<NavItem>) -> NavItem {
     NavItem {
         label: label.to_owned(),
-        view: Some(view),
+        node: NavNode::View(view),
         children,
     }
 }

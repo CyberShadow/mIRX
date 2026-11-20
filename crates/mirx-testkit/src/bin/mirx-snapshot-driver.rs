@@ -10,7 +10,8 @@ mod cli {
 
     use mirx_core::RoomMembership;
     use mirx_testkit::{
-        AutomationDialog, MdiArrangement, MdiWindowState, ViewActivityLevel, ViewIdentity,
+        AutomationDialog, MdiArrangement, MdiWindowState, NavigationNodeKey, ViewActivityLevel,
+        ViewIdentity,
     };
 
     const DEFAULT_FIND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -56,6 +57,7 @@ mod cli {
         pub(crate) expect_no_navigation_texts: Vec<String>,
         pub(crate) expect_navigation_activity: Vec<NavigationActivityExpectation>,
         pub(crate) expect_no_navigation_activity: Vec<ViewIdentity>,
+        pub(crate) expect_navigation_nodes: Vec<NavigationNodeExpectation>,
         pub(crate) expect_direct_rooms: Vec<String>,
         pub(crate) expect_room_tags: Vec<RoomTagExpectation>,
         pub(crate) expect_room_read_targets: Vec<RoomReadTargetExpectation>,
@@ -102,6 +104,8 @@ mod cli {
         Append(String),
         Arrange(MdiArrangement),
         WindowState(ViewIdentity, MdiWindowState),
+        /// Collapses a treebar item, as its button does.
+        Collapse(NavigationNodeKey),
         /// Opens a dialog, and for Options shows the page at the tree path.
         /// The dialog disables the frame, so this is the last action.
         Dialog {
@@ -171,6 +175,55 @@ mod cli {
     pub(crate) struct SwitchbarActivityExpectation {
         pub(crate) identity: ViewIdentity,
         pub(crate) level: ViewActivityLevel,
+    }
+
+    /// A treebar item's expanded state and the colour it is drawn with.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct NavigationNodeExpectation {
+        pub(crate) node: NavigationNodeKey,
+        pub(crate) expanded: bool,
+        pub(crate) activity: Option<ViewActivityLevel>,
+    }
+
+    /// `space:<room_id>` or a view identity.
+    pub(crate) fn parse_navigation_node_arg(
+        flag_name: &str,
+        value: &str,
+    ) -> Result<NavigationNodeKey, String> {
+        match value.strip_prefix("space:") {
+            Some("") => Err(format!(
+                "invalid {flag_name} value {value:?}; expected space:<room_id> or a view identity\n{}",
+                usage()
+            )),
+            Some(room_id) => Ok(NavigationNodeKey::Space(room_id.to_owned())),
+            None => parse_view_identity_arg(flag_name, value).map(NavigationNodeKey::View),
+        }
+    }
+
+    /// `<node>::<expanded|collapsed>::<event|message|highlight|none>`.
+    pub(crate) fn parse_navigation_node_expectation(
+        value: &str,
+    ) -> Result<NavigationNodeExpectation, String> {
+        let invalid = || {
+            format!(
+                "invalid --expect-navigation-node value {value:?}; expected <node>::<expanded|collapsed>::<event|message|highlight|none>\n{}",
+                usage()
+            )
+        };
+        let (rest, activity) = value.rsplit_once("::").ok_or_else(invalid)?;
+        let (node, expanded) = rest.rsplit_once("::").ok_or_else(invalid)?;
+        Ok(NavigationNodeExpectation {
+            node: parse_navigation_node_arg("--expect-navigation-node", node)?,
+            expanded: match expanded {
+                "expanded" => true,
+                "collapsed" => false,
+                _ => return Err(invalid()),
+            },
+            activity: match activity {
+                "none" => None,
+                level => Some(parse_wire_name(level).ok_or_else(invalid)?),
+            },
+        })
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -614,6 +667,14 @@ mod cli {
                             &value,
                         )?);
                 }
+                "--expect-navigation-node" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-navigation-node".to_owned())?;
+                    config
+                        .expect_navigation_nodes
+                        .push(parse_navigation_node_expectation(&value)?);
+                }
                 "--expect-mdi-placement" => {
                     let value = args
                         .next()
@@ -682,7 +743,8 @@ mod cli {
             "  --trigger-history-backfill",
             "  --append-events <path>",
             "  --find-active-view <query>",
-            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|dialog:<dialog>[:<options page>]|drag:<point>:<point>> (repeatable)",
+            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>> (repeatable)",
+            "  <node> is a treebar item: space:<room_id> for a space folder, or a view identity",
             "  <arrangement> is cascade, tile_horizontal, tile_vertical, or arrange_icons",
             "  <state> is maximized, normal, or minimized",
             "  <dialog> is options, select_server, about, commands_join, recover_e2ee, setup_e2ee_recovery, or close_active_view; it must be the last action",
@@ -724,6 +786,7 @@ mod cli {
             "  --expect-no-navigation-text <substring>",
             "  --expect-navigation-activity <identity>::<event|message|highlight>",
             "  --expect-no-navigation-activity <identity>",
+            "  --expect-navigation-node <node>::<expanded|collapsed>::<event|message|highlight|none>",
             "  --expect-mdi-placement <identity>::<state>",
             "  --expect-mdi-title <identity>::<caption>",
             "  --expect-dialog-title <title> (needs a dialog: action)",
@@ -776,6 +839,9 @@ mod cli {
                 from: point(from).ok_or_else(invalid)?,
                 to: point(to).ok_or_else(invalid)?,
             });
+        }
+        if let Some(node) = value.strip_prefix("collapse:") {
+            return parse_navigation_node_arg("--action", node).map(Action::Collapse);
         }
         if let Some(target) = value.strip_prefix("window-state:") {
             let (identity, state) = target.rsplit_once('=').ok_or_else(invalid)?;
@@ -998,14 +1064,15 @@ mod cli {
     mod tests {
         use super::{
             Action, FrameBar, MdiPlacementExpectation, MdiTitleExpectation,
-            NavigationActivityExpectation, RoomMembershipExpectation, RoomReadTargetExpectation,
-            RoomTagExpectation, RoomUnreadExpectation, SwitchbarActivityExpectation, TextPoint,
-            ViewExpectation, format_view_identity, parse_args, parse_view_expectation,
-            parse_view_identity_arg, usage,
+            NavigationActivityExpectation, NavigationNodeExpectation, RoomMembershipExpectation,
+            RoomReadTargetExpectation, RoomTagExpectation, RoomUnreadExpectation,
+            SwitchbarActivityExpectation, TextPoint, ViewExpectation, format_view_identity,
+            parse_args, parse_view_expectation, parse_view_identity_arg, usage,
         };
         use mirx_core::RoomMembership;
         use mirx_testkit::{
-            AutomationDialog, MdiArrangement, MdiWindowState, ViewActivityLevel, ViewIdentity,
+            AutomationDialog, MdiArrangement, MdiWindowState, NavigationNodeKey, ViewActivityLevel,
+            ViewIdentity,
         };
         use std::time::Duration;
 
@@ -1017,7 +1084,10 @@ mod cli {
             assert!(usage().contains("--select-view <identity> (repeatable)"));
             assert!(usage().contains("--append-events <path>"));
             assert!(usage().contains(
-                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|dialog:<dialog>[:<options page>]|drag:<point>:<point>> (repeatable)"
+                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>> (repeatable)"
+            ));
+            assert!(usage().contains(
+                "--expect-navigation-node <node>::<expanded|collapsed>::<event|message|highlight|none>"
             ));
             assert!(usage().contains("--expect-dialog-title <title> (needs a dialog: action)"));
             assert!(usage().contains("--expect-mdi-placement <identity>::<state>"));
@@ -1343,6 +1413,68 @@ mod cli {
                 &["--action", "dialog:about", "--action", "dialog:options"],
                 &["--expect-dialog-title", "About mirx"],
                 &["--action", "dialog:about", "--expect-dialog-title"],
+            ] {
+                assert!(
+                    parse_args(args.iter().map(|arg| (*arg).to_owned())).is_err(),
+                    "{args:?} must be rejected"
+                );
+            }
+        }
+
+        #[test]
+        fn parse_args_reads_collapse_actions_and_navigation_node_expectations() {
+            let config = parse_args(
+                [
+                    "--action",
+                    "collapse:space:!work:example",
+                    "--action",
+                    "collapse:status",
+                    "--expect-navigation-node",
+                    "space:!work:example::collapsed::highlight",
+                    "--expect-navigation-node",
+                    "room:!ops:example::expanded::none",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap();
+            assert_eq!(
+                config.actions,
+                [
+                    Action::Collapse(NavigationNodeKey::Space("!work:example".to_owned())),
+                    Action::Collapse(NavigationNodeKey::View(ViewIdentity::Status)),
+                ]
+            );
+            assert_eq!(
+                config.expect_navigation_nodes,
+                [
+                    NavigationNodeExpectation {
+                        node: NavigationNodeKey::Space("!work:example".to_owned()),
+                        expanded: false,
+                        activity: Some(ViewActivityLevel::Highlight),
+                    },
+                    NavigationNodeExpectation {
+                        node: NavigationNodeKey::View(ViewIdentity::Room {
+                            room_id: "!ops:example".to_owned(),
+                        }),
+                        expanded: true,
+                        activity: None,
+                    },
+                ]
+            );
+            for args in [
+                &["--action", "collapse:space:"][..],
+                &["--action", "collapse:!work:example"],
+                &["--expect-navigation-node", "space:!work:example::collapsed"],
+                &[
+                    "--expect-navigation-node",
+                    "space:!work:example::folded::none",
+                ],
+                &[
+                    "--expect-navigation-node",
+                    "space:!work:example::collapsed::red",
+                ],
+                &["--expect-navigation-node"],
             ] {
                 assert!(
                     parse_args(args.iter().map(|arg| (*arg).to_owned())).is_err(),
@@ -2168,6 +2300,7 @@ mod windows_main {
                 || !self.expect_no_navigation_texts.is_empty()
                 || !self.expect_navigation_activity.is_empty()
                 || !self.expect_no_navigation_activity.is_empty()
+                || !self.expect_navigation_nodes.is_empty()
                 || !self.expect_direct_rooms.is_empty()
                 || !self.expect_room_tags.is_empty()
                 || !self.expect_room_read_targets.is_empty()
@@ -2285,6 +2418,13 @@ mod windows_main {
                         .map_err(|error| format!("SET_VIEW_WINDOW_STATE failed: {error}"))?;
                     app.wait_idle(config.wait_idle).map_err(|error| {
                         format!("WAIT_IDLE after SET_VIEW_WINDOW_STATE failed: {error}")
+                    })?;
+                }
+                Action::Collapse(node) => {
+                    app.set_navigation_expanded(node, false)
+                        .map_err(|error| format!("SET_NAVIGATION_EXPANDED failed: {error}"))?;
+                    app.wait_idle(config.wait_idle).map_err(|error| {
+                        format!("WAIT_IDLE after SET_NAVIGATION_EXPANDED failed: {error}")
                     })?;
                 }
                 Action::Dialog {
@@ -2867,6 +3007,32 @@ mod windows_main {
                     }
                 }
                 println!("PASS navigation no activity {identity}");
+            }
+
+            for expectation in &config.expect_navigation_nodes {
+                let node = ui_state.navigation.find(&expectation.node).ok_or_else(|| {
+                    format!(
+                        "navigation node assertion failed: no node for {:?}",
+                        expectation.node
+                    )
+                })?;
+                if node.expanded != Some(expectation.expanded)
+                    || node.activity != expectation.activity
+                {
+                    return Err(format!(
+                        "navigation node assertion failed: expected {:?} ({:?}) expanded {} with {:?} activity, found expanded {:?} with {:?}",
+                        expectation.node,
+                        node.text,
+                        expectation.expanded,
+                        expectation.activity,
+                        node.expanded,
+                        node.activity
+                    ));
+                }
+                println!(
+                    "PASS navigation node {:?} expanded {} activity {:?}",
+                    expectation.node, expectation.expanded, expectation.activity
+                );
             }
 
             for expected_room_id in &config.expect_direct_rooms {

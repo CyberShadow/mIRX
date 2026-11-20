@@ -88,15 +88,43 @@ fn switchbar_button_state(state: &WindowState, view_id: &ViewId) -> u8 {
     button_state
 }
 
-/// The text colour of a view's switchbar button and treebar items: its
-/// activity colour, or `None` for the control's own colour.
-fn view_activity_text_color(state: &WindowState, view_id: &ViewId) -> Option<u32> {
+/// A view's activity, which its switchbar button and treebar items show.
+fn view_activity(state: &WindowState, view_id: &ViewId) -> Option<ViewActivityLevel> {
     let level = state.room_activity.get(view_id)?;
     assert_ne!(
         *view_id, state.active_view,
         "the active view never records activity"
     );
-    Some(activity_level_color(*level))
+    Some(*level)
+}
+
+/// The highest activity of `views`, for a collapsed treebar item.
+fn rolled_up_activity<'a>(
+    state: &WindowState,
+    views: impl IntoIterator<Item = &'a ViewId>,
+) -> Option<ViewActivityLevel> {
+    views
+        .into_iter()
+        .filter_map(|view_id| view_activity(state, view_id))
+        .max()
+}
+
+/// The activity a treebar item is drawn with: its own view's, or for a
+/// collapsed item the highest of its own and everything under it, as mIRC
+/// shows a collapsed folder. `is_expanded` is asked for items with children
+/// only.
+fn tree_item_activity(
+    state: &WindowState,
+    tree_item: isize,
+    is_expanded: impl FnOnce() -> bool,
+) -> Option<ViewActivityLevel> {
+    let item = &state.tree_items[&tree_item];
+    match &item.descendant_views {
+        Some(descendant_views) if !is_expanded() => {
+            rolled_up_activity(state, item.node.view().into_iter().chain(descendant_views))
+        }
+        _ => rolled_up_activity(state, item.node.view()),
+    }
 }
 
 /// The custom-draw reply that lets the control paint as usual.
@@ -126,18 +154,31 @@ pub(super) fn switchbar_custom_draw(state: &WindowState, draw: &mut NMTBCUSTOMDR
     let command_id = draw.nmcd.dwItemSpec;
     activity_custom_draw(draw.nmcd.dwDrawStage, &mut draw.clrText, || {
         let view_id = &state.switchbar_views[command_id - SWITCHBAR_COMMAND_FIRST];
-        view_activity_text_color(state, view_id)
+        view_activity(state, view_id).map(activity_level_color)
     })
 }
 
-/// Treebar items are identified by their `HTREEITEM`. Space folders map to
-/// no view, so keep the tree's text colour.
+/// Treebar items are identified by their `HTREEITEM`. A space folder has no
+/// view: it keeps the tree's text colour unless it is collapsed.
 pub(super) fn tree_custom_draw(state: &WindowState, draw: &mut NMTVCUSTOMDRAW) -> LRESULT {
+    let tree = draw.nmcd.hdr.hwndFrom;
     let tree_item = draw.nmcd.dwItemSpec as isize;
     activity_custom_draw(draw.nmcd.dwDrawStage, &mut draw.clrText, || {
-        let view_id = state.tree_items.get(&tree_item)?;
-        view_activity_text_color(state, view_id)
+        tree_item_activity(state, tree_item, || unsafe {
+            tree_item_expanded(tree, tree_item)
+        })
+        .map(activity_level_color)
     })
+}
+
+unsafe fn tree_item_expanded(tree: HWND, item: isize) -> bool {
+    let state = SendMessageW(
+        tree,
+        TVM_GETITEMSTATE,
+        item as WPARAM,
+        TVIS_EXPANDED as LPARAM,
+    ) as u32;
+    state & TVIS_EXPANDED != 0
 }
 
 pub(super) fn view_identity_from_view_id(view_id: &ViewId) -> ViewIdentity {
@@ -195,19 +236,16 @@ pub(super) unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
 
     refresh_every_view_content(hwnd)?;
 
+    // Activation makes it the active view: one that changes here (its room
+    // went) unfolds its treebar folder, as any newly active window does.
     let active_view = {
-        let state = state_mut(hwnd);
-        let active = resolve_active_view(
+        let state = state_ref(hwnd);
+        resolve_active_view(
             &state.active_view,
             state.model.selected_room.as_deref(),
             &state.model,
             &state.closed_queries,
-        );
-        if state.active_view != active {
-            state.selected_timeline_event = None;
-        }
-        state.active_view = active.clone();
-        active
+        )
     };
     refresh_tree(hwnd);
     rebuild_switchbar(hwnd)?;
@@ -222,38 +260,65 @@ unsafe fn refresh_tree(hwnd: HWND) {
         return;
     }
 
+    // The control's own expanded state is the only record of what the user
+    // collapsed: carry it over to the rebuilt items, by node.
+    let collapsed = state
+        .tree_items
+        .iter()
+        .filter(|(item, tree_item)| {
+            tree_item.descendant_views.is_some() && !tree_item_expanded(tree, **item)
+        })
+        .map(|(_, tree_item)| tree_item.node.clone())
+        .collect::<BTreeSet<_>>();
     SendMessageW(tree, TVM_DELETEITEM, 0, TVI_ROOT as LPARAM);
     state.tree_items.clear();
     state.primary_tree_items.clear();
 
     let layout = navigation_layout(&state.model);
-    insert_nav_item(state, TVI_ROOT, &layout);
+    insert_nav_item(state, TVI_ROOT, &layout, &collapsed);
 }
 
-/// Inserts `item` and its subtree, mapping each view's item, and expands
-/// every item that has children.
-unsafe fn insert_nav_item(state: &mut WindowState, parent: isize, item: &NavItem) {
+/// Inserts `item` and its subtree, mapping each item, and expands every
+/// item that has children unless it is in `collapsed`. A space or room
+/// listed under two spaces has one node: both of its items fold together.
+unsafe fn insert_nav_item(
+    state: &mut WindowState,
+    parent: isize,
+    item: &NavItem,
+    collapsed: &BTreeSet<NavNode>,
+) {
     let tree = state.controls.tree;
     let tree_item = insert_tree_item(tree, parent, &item.label);
-    if let Some(view_id) = &item.view {
-        state.tree_items.insert(tree_item, view_id.clone());
+    state.tree_items.insert(
+        tree_item,
+        TreeItem {
+            node: item.node.clone(),
+            descendant_views: (!item.children.is_empty()).then(|| item.descendant_views()),
+        },
+    );
+    if let Some(view_id) = item.node.view() {
         state
             .primary_tree_items
             .entry(view_id.clone())
             .or_insert(tree_item);
     }
     for child in &item.children {
-        insert_nav_item(state, tree_item, child);
+        insert_nav_item(state, tree_item, child, collapsed);
     }
-    if !item.children.is_empty() {
+    if !item.children.is_empty() && !collapsed.contains(&item.node) {
         expand_tree_item(tree, tree_item);
     }
 }
 
+/// Puts the treebar caret on the view's item. `reveal` (a newly active
+/// view) unfolds the folders hiding it, as mIRC does; otherwise a hidden
+/// item's outermost collapsed folder takes the caret, as when the user
+/// collapsed it, and the folders stay as they are.
 pub(super) unsafe fn select_tree_item(
     hwnd: HWND,
     view_id: &ViewId,
     preferred_tree_item: Option<isize>,
+    reveal: bool,
 ) {
     let (tree, item) = {
         let state = state_ref(hwnd);
@@ -262,7 +327,7 @@ pub(super) unsafe fn select_tree_item(
                 state
                     .tree_items
                     .get(item)
-                    .is_some_and(|mapped_view| mapped_view == view_id)
+                    .is_some_and(|tree_item| tree_item.node.view() == Some(view_id))
             })
             .or_else(|| state.primary_tree_items.get(view_id).copied());
         (state.controls.tree, item)
@@ -270,12 +335,36 @@ pub(super) unsafe fn select_tree_item(
     let Some(item) = item else {
         return;
     };
+    let target = if reveal {
+        item
+    } else {
+        outermost_collapsed_ancestor(tree, item).unwrap_or(item)
+    };
     let current = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as WPARAM, 0) as isize;
-    if current == item {
+    if current == target {
         return;
     }
 
-    SendMessageW(tree, TVM_SELECTITEM, TVGN_CARET as WPARAM, item as LPARAM);
+    // Selecting an item unfolds every folder above it.
+    SendMessageW(tree, TVM_SELECTITEM, TVGN_CARET as WPARAM, target as LPARAM);
+}
+
+unsafe fn outermost_collapsed_ancestor(tree: HWND, item: isize) -> Option<isize> {
+    let mut outermost = None;
+    let mut ancestor =
+        SendMessageW(tree, TVM_GETNEXTITEM, TVGN_PARENT as WPARAM, item as LPARAM) as isize;
+    while ancestor != 0 {
+        if !tree_item_expanded(tree, ancestor) {
+            outermost = Some(ancestor);
+        }
+        ancestor = SendMessageW(
+            tree,
+            TVM_GETNEXTITEM,
+            TVGN_PARENT as WPARAM,
+            ancestor as LPARAM,
+        ) as isize;
+    }
+    outermost
 }
 
 pub(super) unsafe fn insert_tree_item(tree: HWND, parent: isize, text: &str) -> isize {
@@ -304,12 +393,50 @@ pub(super) unsafe fn expand_tree_item(tree: HWND, item: isize) {
     SendMessageW(tree, TVM_EXPAND, TVE_EXPAND as WPARAM, item as LPARAM);
 }
 
-/// One treebar item: a window's view, or a space folder, which has none.
+/// What a treebar item stands for, which also keys its expanded state
+/// across rebuilds: a window's view, or a joined space's folder.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum NavNode {
+    View(ViewId),
+    Space { room_id: String },
+}
+
+impl NavNode {
+    pub(super) fn view(&self) -> Option<&ViewId> {
+        match self {
+            Self::View(view_id) => Some(view_id),
+            Self::Space { .. } => None,
+        }
+    }
+}
+
+/// A treebar item as inserted: its node, and for an item with children,
+/// every view under it (all depths) for the collapsed roll-up colour.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TreeItem {
+    pub(super) node: NavNode,
+    pub(super) descendant_views: Option<Vec<ViewId>>,
+}
+
+/// One treebar item: a window's view, or a space folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct NavItem {
     pub(super) label: String,
-    pub(super) view: Option<ViewId>,
+    pub(super) node: NavNode,
     pub(super) children: Vec<NavItem>,
+}
+
+impl NavItem {
+    /// Every view under the item, at all depths, in tree order.
+    fn descendant_views(&self) -> Vec<ViewId> {
+        let mut views = Vec::new();
+        let mut stack = self.children.iter().rev().collect::<Vec<_>>();
+        while let Some(item) = stack.pop() {
+            views.extend(item.node.view().cloned());
+            stack.extend(item.children.iter().rev());
+        }
+        views
+    }
 }
 
 /// The treebar, laid out like mIRC's: the Status window is the root, and the
@@ -383,13 +510,13 @@ pub(super) fn navigation_layout(model: &UiModel) -> NavItem {
     if model.room_list.is_some() {
         children.push(NavItem {
             label: ROOM_LIST_TITLE.to_owned(),
-            view: Some(ViewId::RoomList),
+            node: NavNode::View(ViewId::RoomList),
             children: Vec::new(),
         });
     }
     NavItem {
         label: view_short_title(model, &ViewId::Status),
-        view: Some(ViewId::Status),
+        node: NavNode::View(ViewId::Status),
         children,
     }
 }
@@ -436,7 +563,9 @@ fn space_nav_item(
             } else if chain.contains(child_id) {
                 NavItem {
                     label: space_tree_label(child),
-                    view: None,
+                    node: NavNode::Space {
+                        room_id: child.room_id.clone(),
+                    },
                     children: Vec::new(),
                 }
             } else {
@@ -446,7 +575,9 @@ fn space_nav_item(
         .collect();
     NavItem {
         label: space_tree_label(joined[space_id]),
-        view: None,
+        node: NavNode::Space {
+            room_id: space_id.to_owned(),
+        },
         children,
     }
 }
@@ -459,7 +590,7 @@ fn room_nav_item(model: &UiModel, room: &RoomSummary) -> NavItem {
             .iter()
             .map(|(thread_root_event_id, thread)| NavItem {
                 label: thread.label.clone(),
-                view: Some(ViewId::Thread {
+                node: NavNode::View(ViewId::Thread {
                     room_id: room.room_id.clone(),
                     thread_root_event_id: thread_root_event_id.clone(),
                 }),
@@ -470,7 +601,7 @@ fn room_nav_item(model: &UiModel, room: &RoomSummary) -> NavItem {
     };
     NavItem {
         label: room_tree_label(room),
-        view: Some(ViewId::Room(room.room_id.clone())),
+        node: NavNode::View(ViewId::Room(room.room_id.clone())),
         children,
     }
 }
@@ -658,17 +789,22 @@ pub(super) unsafe fn read_tree_item_text(tree: HWND, item: isize) -> Result<Stri
     Ok(String::from_utf16_lossy(&buffer[..text_len]))
 }
 
-/// Space folders map to no view, so carry no activity.
+/// The item as drawn: its activity is its colour, which a collapsed item
+/// rolls up from under it.
 unsafe fn read_navigation_node(
     state: &WindowState,
     tree: HWND,
     item: isize,
 ) -> Result<NavigationNode, String> {
     let text = read_tree_item_text(tree, item)?;
-    let view_id = state.tree_items.get(&item);
-    let activity = view_id
-        .and_then(|view_id| state.room_activity.get(view_id))
-        .copied();
+    let tree_item = &state.tree_items[&item];
+    let expanded = tree_item
+        .descendant_views
+        .is_some()
+        .then(|| tree_item_expanded(tree, item));
+    let activity = tree_item_activity(state, item, || {
+        expanded.expect("items with children have an expanded state")
+    });
     let mut children = Vec::new();
     let mut child =
         SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CHILD as WPARAM, item as LPARAM) as isize;
@@ -679,7 +815,12 @@ unsafe fn read_navigation_node(
 
     Ok(NavigationNode {
         text,
-        view: view_id.map(view_identity_from_view_id),
+        view: tree_item.node.view().map(view_identity_from_view_id),
+        space_id: match &tree_item.node {
+            NavNode::Space { room_id } => Some(room_id.clone()),
+            NavNode::View(_) => None,
+        },
+        expanded,
         activity,
         children,
     })
@@ -759,9 +900,9 @@ pub(super) unsafe fn dump_selected_navigation_path(
     if item == 0 {
         return Err("navigation tree selection was missing".to_owned());
     }
-    let view = state_ref(hwnd)
-        .tree_items
-        .get(&item)
+    let view = state_ref(hwnd).tree_items[&item]
+        .node
+        .view()
         .map(view_identity_from_view_id);
 
     let mut path = Vec::new();
@@ -845,6 +986,59 @@ pub(super) unsafe fn select_navigation_view(
     select_navigation_item(hwnd, tree, item)
 }
 
+/// Expands or collapses the node's first treebar item, as its button does.
+/// A collapse over the caret moves it to the item (the control does that)
+/// and activates nothing.
+pub(super) unsafe fn set_navigation_expanded(
+    hwnd: HWND,
+    node: &NavNode,
+    expanded: bool,
+) -> Result<(), String> {
+    let tree = state_ref(hwnd).controls.tree;
+    let root = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_ROOT as WPARAM, 0) as isize;
+    let item = first_tree_item_of(state_ref(hwnd), tree, root, node)
+        .ok_or_else(|| format!("unknown navigation node: {node:?}"))?;
+    if state_ref(hwnd).tree_items[&item].descendant_views.is_none() {
+        return Err(format!("navigation node has no children: {node:?}"));
+    }
+    let action = if expanded { TVE_EXPAND } else { TVE_COLLAPSE };
+    SendMessageW(tree, TVM_EXPAND, action as WPARAM, item as LPARAM);
+    // TVM_EXPAND sends no TVN_ITEMEXPANDEDW.
+    tree_expansion_changed(hwnd)
+}
+
+/// After an item folds or unfolds (`TVN_ITEMEXPANDEDW`): its colour depends
+/// on it, and the caret goes back to the active view's item once a folder
+/// unfolds over it, as it went to the folder when it folded.
+pub(super) unsafe fn tree_expansion_changed(hwnd: HWND) -> Result<(), String> {
+    let tree = state_ref(hwnd).controls.tree;
+    let active_view = state_ref(hwnd).active_view.clone();
+    select_tree_item(hwnd, &active_view, selected_tree_item(tree), false);
+    refresh_tree_activity_colors(hwnd)
+}
+
+/// The first item of `node` in tree order at or under `item` and its later
+/// siblings.
+unsafe fn first_tree_item_of(
+    state: &WindowState,
+    tree: HWND,
+    mut item: isize,
+    node: &NavNode,
+) -> Option<isize> {
+    while item != 0 {
+        if state.tree_items[&item].node == *node {
+            return Some(item);
+        }
+        let child =
+            SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CHILD as WPARAM, item as LPARAM) as isize;
+        if let Some(found) = first_tree_item_of(state, tree, child, node) {
+            return Some(found);
+        }
+        item = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_NEXT as WPARAM, item as LPARAM) as isize;
+    }
+    None
+}
+
 /// Selects a tree item like a click does, and activates its view. Activation
 /// runs here too because a selection that is already the caret sends no
 /// `TVN_SELCHANGEDW`, yet a click on it still brings its window forward.
@@ -853,7 +1047,7 @@ unsafe fn select_navigation_item(hwnd: HWND, tree: HWND, item: isize) -> Result<
     if selected != item {
         SendMessageW(tree, TVM_SELECTITEM, TVGN_CARET as WPARAM, item as LPARAM);
     }
-    let view_id = state_ref(hwnd).tree_items.get(&item).cloned();
+    let view_id = state_ref(hwnd).tree_items[&item].node.view().cloned();
     if let Some(view_id) = view_id {
         activate_view(hwnd, &view_id, Some(item))?;
     }
@@ -919,7 +1113,7 @@ pub(super) unsafe fn show_navigation_room_context_menu(
             (item, tree_item_context_screen_point(tree, item)?)
         }
     };
-    let Some(view_id) = state_ref(frame).tree_items.get(&item).cloned() else {
+    let Some(view_id) = state_ref(frame).tree_items[&item].node.view().cloned() else {
         return Ok(());
     };
     if !matches!(view_id, ViewId::Room(_)) {
@@ -946,14 +1140,20 @@ pub(super) unsafe fn show_navigation_room_context_menu(
     Ok(())
 }
 
-pub(super) unsafe fn handle_tree_selection(hwnd: HWND) {
-    let tree = state_ref(hwnd).controls.tree;
-    let selected_item = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as WPARAM, 0) as isize;
-    if selected_item == 0 {
+/// A selection the user makes, with the mouse or a key, activates its view.
+/// The caret also moves without the user: mirx moves it while activating
+/// (`select_tree_item`), and the control moves it to a folder collapsing
+/// over it (which Windows reports as `TVC_UNKNOWN`, and Wine not at all).
+/// Neither activates anything, so collapsing a folder keeps the window.
+pub(super) unsafe fn handle_tree_selection(hwnd: HWND, change: &NMTREEVIEWW) {
+    if change.action != TVC_BYMOUSE && change.action != TVC_BYKEYBOARD {
         return;
     }
-
-    let view_id = state_ref(hwnd).tree_items.get(&selected_item).cloned();
+    let selected_item = change.itemNew.hItem;
+    let view_id = state_ref(hwnd).tree_items[&selected_item]
+        .node
+        .view()
+        .cloned();
     if let Some(view_id) = view_id
         && let Err(message) = activate_view(hwnd, &view_id, Some(selected_item))
     {
@@ -1134,10 +1334,12 @@ mod tests {
         space
     }
 
-    fn nav_folder(label: &str, children: Vec<NavItem>) -> NavItem {
+    fn nav_folder(label: &str, room_id: &str, children: Vec<NavItem>) -> NavItem {
         NavItem {
             label: label.to_owned(),
-            view: None,
+            node: NavNode::Space {
+                room_id: room_id.to_owned(),
+            },
             children,
         }
     }
@@ -1229,20 +1431,23 @@ mod tests {
                 vec![
                     nav_folder(
                         "Work",
+                        "!work:example",
                         vec![
                             nav_room("Ops", "!ops:example"),
                             nav_folder(
                                 "Team",
+                                "!team:example",
                                 vec![
                                     nav_room("Shared", "!shared:example"),
                                     // A space containing itself ends in an empty folder.
-                                    nav_folder("Team", Vec::new()),
+                                    nav_folder("Team", "!team:example", Vec::new()),
                                 ]
                             ),
                         ]
                     ),
                     nav_folder(
                         "Social",
+                        "!social:example",
                         vec![
                             nav_room("Shared", "!shared:example"),
                             // Rooms under a space stay there whatever their kind.
@@ -1251,7 +1456,12 @@ mod tests {
                     ),
                     nav_folder(
                         "Loop A",
-                        vec![nav_folder("Loop B", vec![nav_folder("Loop A", Vec::new())])]
+                        "!loop-a:example",
+                        vec![nav_folder(
+                            "Loop B",
+                            "!loop-b:example",
+                            vec![nav_folder("Loop A", "!loop-a:example", Vec::new())]
+                        )]
                     ),
                     nav_room("Lobby", "!lobby:example"),
                     nav_room("Direct", "!direct:example"),
@@ -1643,12 +1853,25 @@ mod tests {
     }
 
     #[test]
-    fn tree_custom_draw_colors_mapped_items_and_leaves_group_labels() {
+    fn tree_custom_draw_colors_view_items_and_leaves_childless_folders() {
         let mut state = test_state();
         state.active_view = ViewId::Status;
+        let leaf = |node| TreeItem {
+            node,
+            descendant_views: None,
+        };
         state.tree_items = BTreeMap::from([
-            (11, room_view_id("!room:example")),
-            (12, thread_view_id("!room:example", "$root")),
+            (
+                10,
+                leaf(NavNode::Space {
+                    room_id: "!space:example".to_owned(),
+                }),
+            ),
+            (11, leaf(NavNode::View(room_view_id("!room:example")))),
+            (
+                12,
+                leaf(NavNode::View(thread_view_id("!room:example", "$root"))),
+            ),
         ]);
         state.room_activity.insert(
             thread_view_id("!room:example", "$root"),
@@ -1671,6 +1894,126 @@ mod tests {
         assert_eq!(draw(CDDS_ITEMPREPAINT, 10), (CDRF_DEFAULT, rgb(1, 2, 3)));
         assert_eq!(draw(CDDS_ITEMPREPAINT, 11), (CDRF_DEFAULT, rgb(1, 2, 3)));
         assert_eq!(draw(CDDS_ITEMPREPAINT, 12), (CDRF_DEFAULT, MIRC_BLUE));
+    }
+
+    #[test]
+    fn a_collapsed_item_shows_the_highest_activity_under_it() {
+        let mut state = test_state();
+        state.active_view = room_view_id("!active:example");
+        let parent = |node, descendants: &[ViewId]| TreeItem {
+            node,
+            descendant_views: Some(descendants.to_vec()),
+        };
+        state.tree_items = BTreeMap::from([
+            (
+                1,
+                parent(
+                    NavNode::View(ViewId::Status),
+                    &[
+                        room_view_id("!active:example"),
+                        room_view_id("!chat:example"),
+                        thread_view_id("!chat:example", "$root"),
+                    ],
+                ),
+            ),
+            (
+                2,
+                parent(
+                    NavNode::Space {
+                        room_id: "!muted-space:example".to_owned(),
+                    },
+                    &[room_view_id("!muted:example")],
+                ),
+            ),
+            (
+                3,
+                parent(
+                    NavNode::Space {
+                        room_id: "!quiet-space:example".to_owned(),
+                    },
+                    &[room_view_id("!quiet:example")],
+                ),
+            ),
+            (
+                4,
+                parent(
+                    NavNode::View(room_view_id("!chat:example")),
+                    &[thread_view_id("!chat:example", "$root")],
+                ),
+            ),
+            (
+                5,
+                TreeItem {
+                    node: NavNode::View(room_view_id("!muted:example")),
+                    descendant_views: None,
+                },
+            ),
+        ]);
+        // The active view records none: it never shows in a roll-up.
+        state.room_activity = BTreeMap::from([
+            (room_view_id("!chat:example"), ViewActivityLevel::Message),
+            (
+                thread_view_id("!chat:example", "$root"),
+                ViewActivityLevel::Highlight,
+            ),
+            // A muted room only ever reaches Event (core_events tests it).
+            (room_view_id("!muted:example"), ViewActivityLevel::Event),
+        ]);
+
+        let activity = |item, expanded: bool| tree_item_activity(&state, item, || expanded);
+        // Expanded: the item's own view only.
+        assert_eq!(activity(1, true), None);
+        assert_eq!(activity(4, true), Some(ViewActivityLevel::Message));
+        assert_eq!(activity(2, true), None);
+        // Collapsed: the highest of its own and everything under it.
+        assert_eq!(activity(1, false), Some(ViewActivityLevel::Highlight));
+        assert_eq!(activity(4, false), Some(ViewActivityLevel::Highlight));
+        assert_eq!(activity(2, false), Some(ViewActivityLevel::Event));
+        assert_eq!(activity(3, false), None);
+        // An item without children is never asked whether it is expanded.
+        assert_eq!(
+            tree_item_activity(&state, 5, || unreachable!()),
+            Some(ViewActivityLevel::Event)
+        );
+    }
+
+    #[test]
+    fn descendant_views_lists_every_view_under_an_item_in_tree_order() {
+        let thread = thread_view_id("!ops:example", "$root");
+        let item = nav_folder(
+            "Work",
+            "!work:example",
+            vec![
+                nav_view(
+                    "Ops",
+                    room_view_id("!ops:example"),
+                    vec![nav_view("root", thread.clone(), Vec::new())],
+                ),
+                nav_folder(
+                    "Team",
+                    "!team:example",
+                    vec![
+                        nav_room("Shared", "!shared:example"),
+                        nav_folder("Empty", "!empty:example", Vec::new()),
+                    ],
+                ),
+                nav_room("Lobby", "!lobby:example"),
+            ],
+        );
+
+        assert_eq!(
+            item.descendant_views(),
+            vec![
+                room_view_id("!ops:example"),
+                thread,
+                room_view_id("!shared:example"),
+                room_view_id("!lobby:example"),
+            ]
+        );
+        assert_eq!(
+            nav_room("Lobby", "!lobby:example").descendant_views(),
+            Vec::new()
+        );
     }
 
     #[test]

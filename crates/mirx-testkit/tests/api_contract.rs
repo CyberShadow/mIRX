@@ -730,16 +730,22 @@ fn data_models_round_trip_through_json() {
         navigation: NavigationNode {
             text: "Status".to_owned(),
             view: Some(ViewIdentity::Status),
+            space_id: None,
+            expanded: Some(true),
             activity: None,
             children: vec![NavigationNode {
                 text: "Work".to_owned(),
                 view: None,
-                activity: None,
+                space_id: Some("!work:example".to_owned()),
+                expanded: Some(false),
+                activity: Some(ViewActivityLevel::Message),
                 children: vec![NavigationNode {
                     text: "Room".to_owned(),
                     view: Some(ViewIdentity::Room {
                         room_id: "!room:example".to_owned(),
                     }),
+                    space_id: None,
+                    expanded: None,
                     activity: Some(ViewActivityLevel::Message),
                     children: vec![],
                 }],
@@ -1101,16 +1107,22 @@ fn data_models_round_trip_through_json() {
             "navigation": {
                 "text": "Status",
                 "view": {"kind": "status"},
+                "space_id": null,
+                "expanded": true,
                 "activity": null,
                 "children": [
                     {
                         "text": "Work",
                         "view": null,
-                        "activity": null,
+                        "space_id": "!work:example",
+                        "expanded": false,
+                        "activity": "message",
                         "children": [
                             {
                                 "text": "Room",
                                 "view": {"kind": "room", "room_id": "!room:example"},
+                                "space_id": null,
+                                "expanded": null,
                                 "activity": "message",
                                 "children": [],
                             }
@@ -6664,6 +6676,8 @@ fn switchbar_helpers_find_items_and_active_item() {
         navigation: NavigationNode {
             text: "Status".to_owned(),
             view: Some(ViewIdentity::Status),
+            space_id: None,
+            expanded: None,
             activity: None,
             children: vec![],
         },
@@ -6805,6 +6819,10 @@ fn nav_node(
 ) -> NavigationNode {
     NavigationNode {
         text: text.to_owned(),
+        space_id: view
+            .is_none()
+            .then(|| format!("!{}:example", text.to_lowercase())),
+        expanded: (!children.is_empty()).then_some(true),
         view,
         activity: None,
         children,

@@ -32,8 +32,8 @@ use mirx_testkit::{
     AutomationDialog, ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult,
     FindActiveViewResult, FrameSize, LaunchOptions, MdiArrangement, MdiView, MdiWindowPlacement,
     MdiWindowState, MemberModerationAction, MemberPowerRole, MembershipCommandAction,
-    MircFormatKey, MirxApp, Model, NavigationNode, NavigationPathSegment, Room, RoomActivity,
-    RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo,
+    MircFormatKey, MirxApp, Model, NavigationNode, NavigationNodeKey, NavigationPathSegment, Room,
+    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo,
     RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
     RoomImageActivity, RoomImageInfo, RoomImageMediaState, RoomMediaSource, RoomMemberChange,
     RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
@@ -2102,16 +2102,20 @@ fn nav_view_with_activity(
     NavigationNode {
         text: text.to_owned(),
         view: Some(view),
+        space_id: None,
+        expanded: (!children.is_empty()).then_some(true),
         activity,
         children,
     }
 }
 
-/// A tree item standing for no view, for full-tree equality tests.
-fn nav_folder(text: &str, children: Vec<NavigationNode>) -> NavigationNode {
+/// An expanded space folder, for full-tree equality tests.
+fn nav_folder(text: &str, space_id: &str, children: Vec<NavigationNode>) -> NavigationNode {
     NavigationNode {
         text: text.to_owned(),
         view: None,
+        space_id: Some(space_id.to_owned()),
+        expanded: (!children.is_empty()).then_some(true),
         activity: None,
         children,
     }
@@ -2980,7 +2984,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 48);
+    assert_eq!(version.protocol_version, 49);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -8192,6 +8196,97 @@ unsafe fn scrollbar_info(hwnd: HWND) -> Option<SCROLLINFO> {
 }
 
 #[test]
+fn collapsing_the_status_root_keeps_the_active_window() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let options = launch_options(Some(unique_local_app_data_path()));
+    let args = [OsString::from("--automation")];
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events_from_file(fixture_state_path("treebar-collapsed-space.json"))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let lobby = room_identity("!lobby:example");
+    app.select_navigation_view(&lobby)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let status = NavigationNodeKey::View(ViewIdentity::Status);
+    app.set_navigation_expanded(&status, false)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let collapsed = app.dump_ui_state()?;
+    assert_eq!(collapsed.mdi.active, lobby);
+    let status_node = collapsed.navigation.find(&status).expect("the Status root");
+    assert_eq!(status_node.expanded, Some(false));
+    assert_eq!(status_node.activity, Some(ViewActivityLevel::Highlight));
+    assert_eq!(
+        app.selected_navigation_view()?,
+        Some(ViewIdentity::Status),
+        "the caret rests on the folded root, as the control puts it"
+    );
+
+    app.set_navigation_expanded(&status, true)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let expanded = app.dump_ui_state()?;
+    assert_eq!(expanded.mdi.active, lobby);
+    let status_node = expanded.navigation.find(&status).expect("the Status root");
+    assert_eq!(status_node.expanded, Some(true));
+    assert_eq!(status_node.activity, None);
+    assert_eq!(app.selected_navigation_view()?, Some(lobby));
+    Ok(())
+}
+
+#[test]
+fn a_collapsed_space_stays_collapsed_until_one_of_its_rooms_is_activated()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let options = launch_options(Some(unique_local_app_data_path()));
+    let args = [OsString::from("--automation")];
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events_from_file(fixture_state_path("treebar-collapsed-space.json"))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ops = room_identity("!ops:example");
+    let deploy = room_identity("!deploy:example");
+    let work = NavigationNodeKey::Space("!work:example".to_owned());
+    app.select_navigation_view(&ops)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.set_navigation_expanded(&work, false)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let assert_work_collapsed = |ui_state: &UiState| {
+        assert_eq!(ui_state.mdi.active, ops);
+        let work_node = ui_state.navigation.find(&work).expect("the Work space");
+        assert_eq!(work_node.expanded, Some(false));
+        assert_eq!(work_node.activity, Some(ViewActivityLevel::Highlight));
+    };
+    assert_work_collapsed(&app.dump_ui_state()?);
+
+    // New activity rebuilds the treebar; the fold survives it.
+    app.append_synthetic_events(&serde_json::to_string(&vec![text_event(
+        "!random:example",
+        "@dave:example",
+        1_700_000_240_000,
+        "more chatter",
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_work_collapsed(&app.dump_ui_state()?);
+
+    activate_switchbar_item_by_command(&app, &deploy)?;
+    let revealed = app.dump_ui_state()?;
+    assert_eq!(revealed.mdi.active, deploy);
+    assert_eq!(
+        revealed
+            .navigation
+            .find(&work)
+            .expect("the Work space")
+            .expanded,
+        Some(true)
+    );
+    assert_eq!(app.selected_navigation_view()?, Some(deploy));
+    Ok(())
+}
+
+#[test]
 fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_selection()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
@@ -8267,6 +8362,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
             vec![
                 nav_folder(
                     "Work",
+                    "!work:example",
                     vec![
                         nav_view("Ops", room_identity("!ops:example"), vec![]),
                         nav_view_with_activity(
@@ -8279,6 +8375,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
                 ),
                 nav_folder(
                     "Social",
+                    "!social:example",
                     vec![
                         nav_view_with_activity(
                             "Shared",
@@ -8515,6 +8612,7 @@ fn automation_driver_lays_out_the_treebar_like_mirc() -> Result<(), Box<dyn std:
             vec![
                 nav_folder(
                     "Work",
+                    "!work:example",
                     vec![
                         nav_view("Ops", room_identity("!ops:example"), vec![]),
                         nav_view("Shared", room_identity("!shared:example"), vec![]),

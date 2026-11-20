@@ -1094,17 +1094,21 @@ unsafe fn apply_view_activation_state(
     };
     let cleared_view_activity = handle_view_activation(state_mut(hwnd), view_id)?;
 
-    {
+    let newly_active = {
         let state = state_mut(hwnd);
-        if state.active_view != *view_id {
+        let newly_active = state.active_view != *view_id;
+        if newly_active {
             state.selected_timeline_event = None;
         }
         state.active_view = view_id.clone();
-    }
+        newly_active
+    };
 
     refresh_tree_activity_colors(hwnd)?;
     refresh_view_content(hwnd, view_id)?;
-    select_tree_item(hwnd, view_id, preferred_tree_item);
+    // A newly active window unfolds its treebar folder; the active one,
+    // re-selected after a rebuild, leaves the folders as the user set them.
+    select_tree_item(hwnd, view_id, preferred_tree_item, newly_active);
 
     Ok(AppliedActivation {
         child,

@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 48;
+pub(crate) const PROTOCOL_VERSION: u32 = 49;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -74,6 +74,7 @@ pub(crate) const COMMAND_ID_SET_VIEW_WINDOW_STATE: u32 = 56;
 pub(crate) const COMMAND_ID_SELECT_NAVIGATION_VIEW: u32 = 57;
 pub(crate) const COMMAND_ID_OPEN_DIALOG: u32 = 58;
 pub(crate) const COMMAND_ID_SELECT_OPTIONS_PAGE: u32 = 59;
+pub(crate) const COMMAND_ID_SET_NAVIGATION_EXPANDED: u32 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -134,6 +135,7 @@ pub(crate) enum CommandKind {
     SelectNavigationView,
     OpenDialog,
     SelectOptionsPage,
+    SetNavigationExpanded,
 }
 
 impl CommandKind {
@@ -206,6 +208,7 @@ impl CommandKind {
             COMMAND_ID_SELECT_NAVIGATION_VIEW => Some(Self::SelectNavigationView),
             COMMAND_ID_OPEN_DIALOG => Some(Self::OpenDialog),
             COMMAND_ID_SELECT_OPTIONS_PAGE => Some(Self::SelectOptionsPage),
+            COMMAND_ID_SET_NAVIGATION_EXPANDED => Some(Self::SetNavigationExpanded),
             _ => None,
         }
     }
@@ -423,6 +426,11 @@ pub(crate) enum ParsedCommand {
         id: String,
         args: SelectOptionsPageArgs,
     },
+    /// Expands or collapses a treebar item, as its button does.
+    SetNavigationExpanded {
+        id: String,
+        args: SetNavigationExpandedArgs,
+    },
 }
 
 impl ParsedCommand {
@@ -495,6 +503,7 @@ impl ParsedCommand {
             Self::SelectNavigationView { .. } => CommandKind::SelectNavigationView,
             Self::OpenDialog { .. } => CommandKind::OpenDialog,
             Self::SelectOptionsPage { .. } => CommandKind::SelectOptionsPage,
+            Self::SetNavigationExpanded { .. } => CommandKind::SetNavigationExpanded,
         }
     }
 }
@@ -686,6 +695,22 @@ pub(crate) struct OpenDialogArgs {
 pub(crate) struct SelectOptionsPageArgs {
     /// The tree item's path, `IRC/Messages`.
     pub(crate) path: String,
+}
+
+/// A treebar item: a view's (`{"view":{...}}`) or a space folder's
+/// (`{"space":"!id"}`); the first such item when there are several.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum NavigationNodeKey {
+    View(ViewIdentity),
+    Space(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SetNavigationExpandedArgs {
+    pub(crate) node: NavigationNodeKey,
+    pub(crate) expanded: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1270,7 +1295,13 @@ pub(crate) struct NavigationNode {
     pub(crate) text: String,
     /// The view the item stands for; `None` for a folder.
     pub(crate) view: Option<ViewIdentity>,
-    /// `None` for nodes without activity and for folders.
+    /// The space a folder stands for; `None` for a view.
+    pub(crate) space_id: Option<String>,
+    /// Whether the item shows its children; `None` for an item without.
+    pub(crate) expanded: Option<bool>,
+    /// The colour the item is drawn with: its view's activity, or for a
+    /// collapsed item the highest under it. `None` for items without
+    /// activity and for expanded folders.
     pub(crate) activity: Option<ViewActivityLevel>,
     pub(crate) children: Vec<NavigationNode>,
 }
@@ -2748,6 +2779,10 @@ pub(crate) fn parse_command_request(
             id: envelope.id.clone(),
             args: parse_args_required::<SelectOptionsPageArgs>(&envelope.id, envelope.args)?,
         }),
+        CommandKind::SetNavigationExpanded => Ok(ParsedCommand::SetNavigationExpanded {
+            id: envelope.id.clone(),
+            args: parse_args_required::<SetNavigationExpandedArgs>(&envelope.id, envelope.args)?,
+        }),
         CommandKind::Login => Ok(ParsedCommand::Login {
             id: envelope.id.clone(),
             args: parse_args_required::<LoginArgs>(&envelope.id, envelope.args)?,
@@ -3022,18 +3057,18 @@ mod tests {
         COMMAND_ID_SELECT_NAVIGATION_VIEW, COMMAND_ID_SELECT_OPTIONS_PAGE, COMMAND_ID_SELECT_ROOM,
         COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY,
         COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
-        COMMAND_ID_SET_VIEW_WINDOW_STATE, COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC,
-        COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse, ConnectionState,
-        ContextMenuCommand, DumpE2eeRecoverySetupResult, DumpMemberModerationAction,
-        DumpMemberPowerRole, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
-        DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
-        DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
-        DumpRoomEncryptedFileKey, DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity,
-        DumpRoomImageInfo, DumpRoomMediaSource, DumpRoomMessageActivity,
-        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomPreviewMediaState,
-        DumpRoomReactionSummary, DumpRoomRedactedActivity, DumpRoomStateNoticeActivity,
-        DumpRoomStateNoticeContent, DumpRoomVideoActivity, DumpRoomVideoInfo,
-        DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
+        COMMAND_ID_SET_NAVIGATION_EXPANDED, COMMAND_ID_SET_VIEW_WINDOW_STATE,
+        COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
+        ComposeKey, ComposeTextResponse, ConnectionState, ContextMenuCommand,
+        DumpE2eeRecoverySetupResult, DumpMemberModerationAction, DumpMemberPowerRole, DumpModel,
+        DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind, DumpRoomActivityRelation,
+        DumpRoomActivityResponse, DumpRoomAudioActivity, DumpRoomAudioInfo,
+        DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey, DumpRoomFileActivity,
+        DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomMediaSource,
+        DumpRoomMessageActivity, DumpRoomMessageActivityLine, DumpRoomMessageSendState,
+        DumpRoomPreviewMediaState, DumpRoomReactionSummary, DumpRoomRedactedActivity,
+        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent, DumpRoomVideoActivity,
+        DumpRoomVideoInfo, DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
         DumpSubmittedMemberModerationCommand, DumpSubmittedPowerLevelCommand,
         DumpSubmittedProfileCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
         DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
@@ -3041,18 +3076,18 @@ mod tests {
         DumpUnsupportedRoomMessageActivity, DumpUserCommandAction, FindActiveViewArgs,
         FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
         LoadEventsArgs, LoginArgs, MdiArrangement, MdiState, MdiView, MdiWindowPlacement,
-        MdiWindowState, MircFormatKey, NavigationNode, NavigationPathSegment, NoArgs,
-        OpenDialogArgs, OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs,
+        MdiWindowState, MircFormatKey, NavigationNode, NavigationNodeKey, NavigationPathSegment,
+        NoArgs, OpenDialogArgs, OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs,
         PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
         RestoreSessionArgs, RoomMemberView, SelectMemberArgs, SelectNavigationPathArgs,
         SelectOptionsPageArgs, SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs,
         SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
-        SendFileArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, SetViewWindowStateArgs,
-        SetupE2eeRecoveryArgs, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiFindHistorySearchState, UiFindState, UiFrameLayout, UiRect, UiRoomHistoryBackfillState,
-        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewActivityLevel,
-        ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
-        success_response,
+        SendFileArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs,
+        SetNavigationExpandedArgs, SetViewWindowStateArgs, SetupE2eeRecoveryArgs, StatusBarState,
+        SwitchbarItem, SwitchbarState, UiFindHistorySearchState, UiFindState, UiFrameLayout,
+        UiRect, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+        VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
+        failure_response, parse_command_request, success_response,
     };
 
     fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -3218,8 +3253,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_48() {
-        assert_eq!(PROTOCOL_VERSION, 48);
+    fn protocol_version_is_49() {
+        assert_eq!(PROTOCOL_VERSION, 49);
     }
 
     #[test]
@@ -3437,7 +3472,11 @@ mod tests {
             Some(CommandKind::SelectOptionsPage)
         );
         assert_eq!(
-            CommandKind::from_id(COMMAND_ID_SELECT_OPTIONS_PAGE + 1),
+            CommandKind::from_id(COMMAND_ID_SET_NAVIGATION_EXPANDED),
+            Some(CommandKind::SetNavigationExpanded)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_SET_NAVIGATION_EXPANDED + 1),
             None
         );
     }
@@ -4632,6 +4671,48 @@ mod tests {
     }
 
     #[test]
+    fn set_navigation_expanded_names_a_view_or_a_space() {
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_SET_NAVIGATION_EXPANDED,
+                br#"{"id":"fold","args":{"node":{"space":"!work:example"},"expanded":false}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::SetNavigationExpanded {
+                id: "fold".to_owned(),
+                args: SetNavigationExpandedArgs {
+                    node: NavigationNodeKey::Space("!work:example".to_owned()),
+                    expanded: false,
+                },
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_SET_NAVIGATION_EXPANDED,
+                br#"{"id":"unfold","args":{"node":{"view":{"kind":"status"}},"expanded":true}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::SetNavigationExpanded {
+                id: "unfold".to_owned(),
+                args: SetNavigationExpandedArgs {
+                    node: NavigationNodeKey::View(ViewIdentity::Status),
+                    expanded: true,
+                },
+            }
+        );
+        for request in [
+            br#"{"id":"fold","args":{"node":{"space":"!work:example"}}}"#.as_slice(),
+            br#"{"id":"fold","args":{"node":{},"expanded":false}}"#.as_slice(),
+            br#"{"id":"fold","args":{"node":{"space":"!a:example","view":{"kind":"status"}},"expanded":false}}"#.as_slice(),
+            br#"{"id":"fold","args":{"node":{"space":"!a:example"},"expanded":false,"x":1}}"#.as_slice(),
+        ] {
+            let error =
+                parse_command_request(COMMAND_ID_SET_NAVIGATION_EXPANDED, request).unwrap_err();
+            assert_eq!(error.err.code, "invalid_args", "unexpected error {error:?}");
+        }
+    }
+
+    #[test]
     fn select_navigation_view_args_round_trip() {
         assert_eq!(
             parse_command_request(
@@ -5125,7 +5206,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":48,
+                    "protocol_version":49,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5525,16 +5606,22 @@ mod tests {
                     navigation: NavigationNode {
                         text: "Status".to_owned(),
                         view: Some(ViewIdentity::Status),
+                        space_id: None,
+                        expanded: Some(true),
                         activity: None,
                         children: vec![NavigationNode {
                             text: "Work".to_owned(),
                             view: None,
-                            activity: None,
+                            space_id: Some("!work:example".to_owned()),
+                            expanded: Some(false),
+                            activity: Some(ViewActivityLevel::Message),
                             children: vec![NavigationNode {
                                 text: "Room".to_owned(),
                                 view: Some(ViewIdentity::Room {
                                     room_id: "!room:example".to_owned(),
                                 }),
+                                space_id: None,
+                                expanded: None,
                                 activity: Some(ViewActivityLevel::Message),
                                 children: vec![],
                             }],
@@ -5771,10 +5858,12 @@ mod tests {
                     "navigation":{
                         "text":"Status",
                         "view":{"kind":"status"},
+                        "space_id":null,
+                        "expanded":true,
                         "activity":null,
                         "children":[
-                            {"text":"Work","view":null,"activity":null,"children":[
-                                {"text":"Room","view":{"kind":"room","room_id":"!room:example"},"activity":"message","children":[]}
+                            {"text":"Work","view":null,"space_id":"!work:example","expanded":false,"activity":"message","children":[
+                                {"text":"Room","view":{"kind":"room","room_id":"!room:example"},"space_id":null,"expanded":null,"activity":"message","children":[]}
                             ]}
                         ]
                     },

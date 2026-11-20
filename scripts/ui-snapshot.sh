@@ -195,6 +195,7 @@ configure_case_expectations() {
   navigation_forbid_args=()
   navigation_activity_expect_args=()
   navigation_no_activity_expect_args=()
+  navigation_node_expect_args=()
   expect_selected=
   expect_error=
   expect_verification=
@@ -570,6 +571,28 @@ configure_case_expectations() {
         --expect-no-navigation-text 'rooms:'
         --expect-no-navigation-text 'invites:'
         --expect-no-navigation-text 'mirx'
+      )
+      ;;
+    treebar-collapsed-space)
+      # Work holds Ops (a message) and the nested Team space, whose Deploy
+      # has a highlight; collapsed, Work is drawn in the highest of them.
+      expect_selected='!lobby:example'
+      expect_active_view='room:!lobby:example'
+      expect_switchbar_active='room:!lobby:example'
+      ordered_actions=('collapse:space:!work:example')
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'room:!ops:example::message'
+        --expect-switchbar-activity 'room:!deploy:example::highlight'
+        --expect-switchbar-activity 'room:!random:example::message'
+      )
+      navigation_node_expect_args=(
+        --expect-navigation-node 'space:!work:example::collapsed::highlight'
+        --expect-navigation-node 'space:!team:example::expanded::none'
+        --expect-navigation-node 'space:!social:example::expanded::none'
+        --expect-navigation-node 'status::expanded::none'
+      )
+      navigation_activity_expect_args=(
+        --expect-navigation-activity 'room:!random:example::message'
       )
       ;;
     space-hierarchy)
@@ -2941,6 +2964,7 @@ run_case() {
     "${navigation_forbid_args[@]}"
     "${navigation_activity_expect_args[@]}"
     "${navigation_no_activity_expect_args[@]}"
+    "${navigation_node_expect_args[@]}"
     "${mdi_placement_expect_args[@]}"
     "${mdi_title_expect_args[@]}"
   )

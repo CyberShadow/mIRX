@@ -131,6 +131,8 @@ const COMMAND_ID_OPEN_DIALOG: u32 = 58;
 #[cfg(windows)]
 const COMMAND_ID_SELECT_OPTIONS_PAGE: u32 = 59;
 #[cfg(windows)]
+const COMMAND_ID_SET_NAVIGATION_EXPANDED: u32 = 60;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -1553,12 +1555,39 @@ pub struct NavigationNode {
     pub text: String,
     /// The view the item stands for; `None` for a folder.
     pub view: Option<ViewIdentity>,
-    /// `None` for nodes without activity and for folders.
+    /// The space a folder stands for; `None` for a view.
+    pub space_id: Option<String>,
+    /// Whether the item shows its children; `None` for an item without.
+    pub expanded: Option<bool>,
+    /// The colour the item is drawn with: its view's activity, or for a
+    /// collapsed item the highest under it. `None` for items without
+    /// activity and for expanded folders.
     pub activity: Option<ViewActivityLevel>,
     pub children: Vec<NavigationNode>,
 }
 
+/// A treebar item for `set_navigation_expanded`: a view's, or a space
+/// folder's by its room ID. The first such item when there are several.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigationNodeKey {
+    View(ViewIdentity),
+    Space(String),
+}
+
 impl NavigationNode {
+    /// The first node standing for `key`, in tree order.
+    pub fn find(&self, key: &NavigationNodeKey) -> Option<&NavigationNode> {
+        let matches = match key {
+            NavigationNodeKey::View(view) => self.view.as_ref() == Some(view),
+            NavigationNodeKey::Space(room_id) => self.space_id.as_ref() == Some(room_id),
+        };
+        if matches {
+            return Some(self);
+        }
+        self.children.iter().find_map(|child| child.find(key))
+    }
+
     /// Every node standing for `view`, in tree order. A room listed under
     /// two spaces has two.
     pub fn find_view(&self, view: &ViewIdentity) -> Vec<&NavigationNode> {
@@ -2202,6 +2231,15 @@ impl MirxApp {
         self.inner.select_navigation_view(view)
     }
 
+    /// Expands or collapses a treebar item, as its button does.
+    pub fn set_navigation_expanded(
+        &self,
+        node: &NavigationNodeKey,
+        expanded: bool,
+    ) -> Result<(), TestkitError> {
+        self.inner.set_navigation_expanded(node, expanded)
+    }
+
     pub fn selected_navigation_path(&self) -> Result<Vec<NavigationPathSegment>, TestkitError> {
         self.inner.selected_navigation_path()
     }
@@ -2652,6 +2690,14 @@ struct SelectViewArgs {
 #[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
+struct SetNavigationExpandedArgs {
+    node: NavigationNodeKey,
+    expanded: bool,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct FindActiveViewRequestArgs<'a> {
     query: &'a str,
 }
@@ -3056,6 +3102,16 @@ mod imp {
         pub(crate) fn select_navigation_view(
             &self,
             _view: &ViewIdentity,
+        ) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mirx-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn set_navigation_expanded(
+            &self,
+            _node: &NavigationNodeKey,
+            _expanded: bool,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mirx-testkit requires the Windows target",
@@ -3838,6 +3894,21 @@ mod imp {
                 COMMAND_ID_SELECT_NAVIGATION_VIEW,
                 SelectViewArgs { view: view.clone() },
                 "SELECT_NAVIGATION_VIEW",
+            )
+        }
+
+        pub(crate) fn set_navigation_expanded(
+            &self,
+            node: &NavigationNodeKey,
+            expanded: bool,
+        ) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_SET_NAVIGATION_EXPANDED,
+                SetNavigationExpandedArgs {
+                    node: node.clone(),
+                    expanded,
+                },
+                "SET_NAVIGATION_EXPANDED",
             )
         }
 
