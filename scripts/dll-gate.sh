@@ -71,4 +71,12 @@ for dll in "${imported_dlls[@]}"; do
   fi
 done
 
-printf 'dll-gate ok: %s\n' "${imported_dlls[*]}"
+headers=$("$objdump_bin" -p "$exe_path")
+
+# A GUI-subsystem program: no console window opens beside it.
+if ! grep -E '^Subsystem' <<<"$headers" | grep -qF '(Windows GUI)'; then
+  echo "dll-gate failed: $exe_path is not a Windows GUI subsystem program" >&2
+  exit 1
+fi
+
+printf 'dll-gate ok: %s; subsystem GUI\n' "${imported_dlls[*]}"

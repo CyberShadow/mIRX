@@ -1,3 +1,8 @@
+// A GUI program: started from Explorer or a shortcut, no console opens beside
+// it. The bin's unit-test harness stays a console program so `cargo test`
+// prints its results.
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
@@ -52,10 +57,7 @@ enum AppCommand {
 fn main() -> ExitCode {
     match parse_args(env::args_os().skip(1)) {
         Ok(command) => platform::run(command),
-        Err(()) => {
-            eprintln!("{USAGE}");
-            ExitCode::from(2)
-        }
+        Err(()) => platform::usage_error(USAGE),
     }
 }
 

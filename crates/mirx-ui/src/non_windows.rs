@@ -22,3 +22,8 @@ pub(crate) fn run(command: AppCommand) -> ExitCode {
         }
     }
 }
+
+pub(crate) fn usage_error(usage: &str) -> ExitCode {
+    eprintln!("{usage}");
+    ExitCode::from(2)
+}

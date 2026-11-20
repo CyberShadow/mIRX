@@ -6,6 +6,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::ptr::{copy_nonoverlapping, null, null_mut};
@@ -118,22 +119,23 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT,
     LB_GETTEXT, LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL, LB_SETITEMHEIGHT,
     LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED, LoadCursorW, MB_ICONERROR,
-    MB_ICONQUESTION, MB_OK, MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL,
-    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
-    MF_STRING, MF_UNCHECKED, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
-    SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE, SCROLLINFO, SHOW_WINDOW_CMD, SIF_ALL,
-    SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_MINIMIZE, SW_SHOW, SW_SHOWMINNOACTIVE,
-    SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
-    WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
-    WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE,
-    WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE,
-    WM_MDITILE, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE,
-    WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW,
-    WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE,
-    WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    MB_ICONINFORMATION, MB_ICONQUESTION, MB_OK, MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL,
+    MDITILE_VERTICAL, MESSAGEBOX_STYLE, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_ENABLED,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, MessageBoxW, MoveWindow,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
+    SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE,
+    SC_MINIMIZE, SCROLLINFO, SHOW_WINDOW_CMD, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
+    SW_HIDE, SW_MINIMIZE, SW_SHOW, SW_SHOWMINNOACTIVE, SendMessageW, SetForegroundWindow, SetMenu,
+    SetTimer, SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+    TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR,
+    WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_DRAWITEM,
+    WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE,
+    WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE, WM_MEASUREITEM, WM_NCCREATE,
+    WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE,
+    WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU,
+    WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use self::glyph_fonts::GlyphFonts;
@@ -776,18 +778,62 @@ struct CoreBridge {
 }
 
 pub(crate) fn run(command: AppCommand) -> ExitCode {
+    let interactive = is_interactive(&command);
     match run_inner(command) {
         Ok(code) => code,
         Err(message) => {
             eprintln!("{message}");
+            // A user who started mirx from Explorer has no console to read
+            // stderr in. Automation runs never open a modal: nothing would
+            // close it.
+            if interactive {
+                show_error_message(null_mut(), FRAME_TITLE, &message);
+            }
             ExitCode::from(1)
         }
     }
 }
 
+pub(crate) fn usage_error(usage: &str) -> ExitCode {
+    cli_text(CliStream::Stderr, usage);
+    ExitCode::from(2)
+}
+
+#[derive(Clone, Copy)]
+enum CliStream {
+    Stdout,
+    Stderr,
+}
+
+/// Text for the person at the command line. mirx is a GUI-subsystem program,
+/// so it has std handles only when its starter gave it some (a redirection,
+/// or a parent such as the testkit that passes its own); started from `cmd`
+/// without one, or from a shortcut, it has none, and printing would vanish,
+/// so the text goes to a box instead.
+fn cli_text(stream: CliStream, text: &str) {
+    let has_handle = match stream {
+        CliStream::Stdout => !std::io::stdout().as_raw_handle().is_null(),
+        CliStream::Stderr => !std::io::stderr().as_raw_handle().is_null(),
+    };
+    match (stream, has_handle) {
+        (CliStream::Stdout, true) => println!("{text}"),
+        (CliStream::Stderr, true) => eprintln!("{text}"),
+        (CliStream::Stdout, false) => show_cli_box(text, MB_ICONINFORMATION),
+        (CliStream::Stderr, false) => show_cli_box(text, MB_ICONERROR),
+    }
+}
+
+fn show_cli_box(text: &str, icon: MESSAGEBOX_STYLE) {
+    let title = wide_null(FRAME_TITLE);
+    let text = wide_null(text);
+    unsafe {
+        MessageBoxW(null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | icon);
+    }
+}
+
 fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     if matches!(command, AppCommand::Help) {
-        println!("{HELP}");
+        cli_text(CliStream::Stdout, HELP);
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -826,8 +872,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     let exit_code = Arc::new(AtomicI32::new(0));
     let event_queue = Arc::new(Mutex::new(VecDeque::new()));
     let (gdiplus_session, gdiplus_startup_error) = initialize_gdiplus_state();
-    let settings = load_settings(render_state_mode)
-        .inspect_err(|message| show_error_message(null_mut(), FRAME_TITLE, message))?;
+    let settings = load_settings(render_state_mode)?;
     let text_font = unsafe { TextFont::create(&settings.settings().text_font)? };
     let scheme_brushes = unsafe { SchemeBrushes::create(&settings.settings().colors) };
 
@@ -1030,15 +1075,18 @@ fn should_start_core_bridge(command: &AppCommand) -> bool {
     }
 }
 
+/// A run for a person at the screen: the only kind that may open a modal on
+/// its own (Select Server at startup, the startup-error and crash boxes).
+/// Automation (which `--render-state` implies), `--auto-close`, `--self-test`
+/// and `--help` never do: nothing would close it.
+fn is_interactive(command: &AppCommand) -> bool {
+    matches!(command, AppCommand::Run(_)) && !automation_enabled_for_command(command)
+}
+
 /// Only an interactive run without a saved session opens Select Server by
-/// itself; automation, `--auto-close` and `--self-test` never open a modal.
+/// itself.
 fn opens_connect_dialog_at_startup(command: &AppCommand, session_saved: bool) -> bool {
-    match command {
-        AppCommand::Run(options) => {
-            !options.automation && options.render_state.is_none() && !session_saved
-        }
-        AppCommand::SelfTest | AppCommand::AutoClose | AppCommand::Help => false,
-    }
+    is_interactive(command) && !session_saved
 }
 
 fn should_install_inert_command_sender(command: &AppCommand) -> bool {
@@ -1214,6 +1262,27 @@ mod tests {
             AppCommand::Help,
         ] {
             assert!(!opens_connect_dialog_at_startup(&command, false));
+        }
+    }
+
+    #[test]
+    fn only_a_plain_run_is_interactive() {
+        let run = |automation, render_state: Option<&str>| {
+            AppCommand::Run(RunOptions {
+                automation,
+                render_state: render_state.map(PathBuf::from),
+                frame_size: None,
+            })
+        };
+        assert!(is_interactive(&run(false, None)));
+        assert!(!is_interactive(&run(true, None)));
+        assert!(!is_interactive(&run(true, Some("state.json"))));
+        for command in [
+            AppCommand::SelfTest,
+            AppCommand::AutoClose,
+            AppCommand::Help,
+        ] {
+            assert!(!is_interactive(&command));
         }
     }
 
