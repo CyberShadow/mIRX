@@ -1,5 +1,7 @@
 //! Applying core events to the window state, then refreshing the UI.
 
+use mirx_core::SyncStopReason;
+
 use super::open_link::open_web_link;
 use super::*;
 
@@ -625,8 +627,20 @@ pub(super) fn apply_core_event(
             state.model.status = "continuous sync started".to_owned();
             state.model.lifecycle_state = LifecycleState::Syncing;
         }
+        Event::SyncConnected => {
+            state.model.status = format!("connected to {}", session_server(state));
+        }
         Event::SyncStopped(reason) => {
-            let (kind, line) = status_log::disconnected(&reason);
+            let (kind, line) = match reason {
+                SyncStopReason::Requested => (StatusLineKind::Info, status_log::STOPPED.to_owned()),
+                SyncStopReason::Lost(message) => {
+                    (StatusLineKind::Error, status_log::connection_lost(&message))
+                }
+                SyncStopReason::SessionEnded(message) => (
+                    StatusLineKind::Error,
+                    status_log::session_ended(session_server(state), &message),
+                ),
+            };
             log_status(state, kind, line);
             state.model.status = "continuous sync stopped".to_owned();
         }
@@ -660,6 +674,17 @@ pub(super) fn apply_core_event(
         }
     }
     Ok(ActivityAttention::default())
+}
+
+/// The server the signed-in session is on, as connection lines name it.
+fn session_server(state: &WindowState) -> &str {
+    status_log::user_server(
+        state
+            .model
+            .own_user_id
+            .as_deref()
+            .expect("a syncing session knows its user"),
+    )
 }
 
 /// A join the user asked for opens the room's window and makes it active,
@@ -4758,11 +4783,17 @@ mod tests {
             apply_core_event(&mut state, Event::SyncedRooms(rooms)).unwrap();
             apply_core_event(&mut state, Event::SyncStopped(SyncStopReason::Requested)).unwrap();
             apply_core_event(&mut state, Event::SyncStarted).unwrap();
+            apply_core_event(&mut state, Event::SyncConnected).unwrap();
+            assert_eq!(state.model.status, "connected to example");
             apply_core_event(
                 &mut state,
-                Event::SyncStopped(SyncStopReason::Failed(
-                    "continuous Matrix sync failed: boom".to_owned(),
-                )),
+                Event::SyncStopped(SyncStopReason::Lost("boom".to_owned())),
+            )
+            .unwrap();
+            apply_core_event(&mut state, Event::SyncStarted).unwrap();
+            apply_core_event(
+                &mut state,
+                Event::SyncStopped(SyncStopReason::SessionEnded("token gone".to_owned())),
             )
             .unwrap();
             apply_core_event(&mut state, Event::LoggedOut).unwrap();
@@ -4777,7 +4808,9 @@ mod tests {
                     "[22:12] * Synced rooms: 1 joined, 1 invited".to_owned(),
                     "[22:12] * Disconnected".to_owned(),
                     "[22:12] * Syncing with the homeserver".to_owned(),
-                    "[22:12] * Disconnected: continuous Matrix sync failed: boom".to_owned(),
+                    "[22:12] * Disconnected: boom".to_owned(),
+                    "[22:12] * Syncing with the homeserver".to_owned(),
+                    "[22:12] * Disconnected: example signed this session out (token gone). Log out, then sign in again.".to_owned(),
                     "[22:12] * Logged out".to_owned(),
                     "[22:12] * Disconnected".to_owned(),
                 ]

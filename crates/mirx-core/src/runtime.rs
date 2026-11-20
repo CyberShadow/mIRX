@@ -2865,9 +2865,10 @@ mod tests {
     }
 
     #[test]
-    fn sync_failure_emits_sync_stopped_failed() {
+    fn sync_with_an_unknown_token_stops_with_session_ended() {
         run_local(async {
             let mock_server = MatrixMockServer::new().await;
+            // No refresh token: the SDK would try a refresh first.
             let client = mock_server.client_builder().build().await;
             mock_server
                 .mock_sync()
@@ -2881,17 +2882,121 @@ mod tests {
 
             assert_eq!(next_event(&event_rx).await, Event::SyncStarted);
             match next_event(&event_rx).await {
-                Event::SyncStopped(SyncStopReason::Failed(message)) => {
-                    assert!(
-                        message.starts_with("continuous Matrix sync failed"),
-                        "{message}"
-                    );
+                Event::SyncStopped(SyncStopReason::SessionEnded(message)) => {
+                    assert!(message.contains("M_UNKNOWN_TOKEN"), "{message}");
                 }
-                other => panic!("expected a failed sync stop, got {other:?}"),
+                other => panic!("expected a session-ended sync stop, got {other:?}"),
             }
             assert_eq!(drain_events(&event_rx), Vec::new());
             shutdown_state(&mut state).await;
         });
+    }
+
+    #[test]
+    fn sync_without_a_server_stops_with_lost_and_never_connects() {
+        run_local(async {
+            let client = matrix_sdk::test_utils::client::MockClientBuilder::new(Some(
+                &closed_port_url(),
+            ))
+            .build()
+            .await;
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = ready_state(client);
+
+            assert!(!handle_start_sync(&event_tx, &mut state));
+
+            assert_eq!(next_event(&event_rx).await, Event::SyncStarted);
+            match next_event(&event_rx).await {
+                Event::SyncStopped(SyncStopReason::Lost(message)) => {
+                    assert!(message.contains("error sending request"), "{message}");
+                }
+                other => panic!("expected a lost sync stop, got {other:?}"),
+            }
+            assert_eq!(drain_events(&event_rx), Vec::new());
+            shutdown_state(&mut state).await;
+        });
+    }
+
+    #[test]
+    fn sync_with_another_server_error_stops_with_lost() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            // A 4xx is not retried; a 5xx would be, for minutes.
+            mock_server
+                .mock_sync()
+                .respond_with(wiremock::ResponseTemplate::new(400).set_body_json(
+                    serde_json::json!({
+                        "errcode": "M_UNKNOWN",
+                        "error": "bad sync",
+                    }),
+                ))
+                .mount()
+                .await;
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = ready_state(client);
+
+            assert!(!handle_start_sync(&event_tx, &mut state));
+
+            assert_eq!(next_event(&event_rx).await, Event::SyncStarted);
+            match next_event(&event_rx).await {
+                Event::SyncStopped(SyncStopReason::Lost(message)) => {
+                    assert!(message.contains("bad sync"), "{message}");
+                }
+                other => panic!("expected a lost sync stop, got {other:?}"),
+            }
+            assert_eq!(drain_events(&event_rx), Vec::new());
+            shutdown_state(&mut state).await;
+        });
+    }
+
+    #[test]
+    fn sync_announces_the_first_response_once() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server.mock_sync().ok(|_| {}).mount().await;
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = ready_state(client);
+
+            assert!(!handle_start_sync(&event_tx, &mut state));
+
+            assert_eq!(next_event(&event_rx).await, Event::SyncStarted);
+            assert_eq!(next_event(&event_rx).await, Event::SyncConnected);
+            wait_for_sync_requests(&mock_server, 3).await;
+            assert_eq!(drain_events(&event_rx), Vec::new());
+            shutdown_state(&mut state).await;
+        });
+    }
+
+    /// A URL whose port refuses connections: the network is down.
+    fn closed_port_url() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a local port");
+        let address = listener.local_addr().expect("a bound listener has an address");
+        drop(listener);
+        format!("http://{address}")
+    }
+
+    async fn wait_for_sync_requests(mock_server: &MatrixMockServer, count: usize) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let syncs = mock_server
+                .server()
+                .received_requests()
+                .await
+                .expect("the mock server records requests")
+                .into_iter()
+                .filter(|request| request.url.path().ends_with("/sync"))
+                .count();
+            if syncs >= count {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for {count} sync requests, saw {syncs}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     fn login_request(mock_server: &MatrixMockServer, start_sync: bool) -> LoginRequest {

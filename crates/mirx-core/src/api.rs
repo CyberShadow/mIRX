@@ -1730,8 +1730,13 @@ pub enum Operation {
 pub enum SyncStopReason {
     /// `Command::StopSync`.
     Requested,
-    /// The sync loop ended with this error.
-    Failed(String),
+    /// The sync loop ended with this error: the network, the server or a
+    /// timeout. Starting sync again may work.
+    Lost(String),
+    /// The server no longer accepts this session's access token
+    /// (`M_UNKNOWN_TOKEN`): it was signed out elsewhere or expired. Starting
+    /// sync again cannot work; signing in again can.
+    SessionEnded(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1756,6 +1761,9 @@ pub enum Event {
     },
     RestoredSession,
     SyncStarted,
+    /// The sync task's first successful response: the server answers.
+    /// Once per `SyncStarted`.
+    SyncConnected,
     SyncStopped(SyncStopReason),
     SyncedRooms(Vec<RoomSummary>),
     RoomActivity(Box<RoomActivity>),

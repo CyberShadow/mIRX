@@ -2042,16 +2042,21 @@ fn sync_started_event_round_trips_and_logged_in_no_longer_uses_unit_shape() {
 }
 
 #[test]
-fn sync_stopped_event_round_trips_both_reasons() {
+fn sync_connected_and_every_sync_stop_reason_round_trip() {
     for (event, json) in [
         (
             Event::SyncStopped(SyncStopReason::Requested),
             r#"{"SyncStopped":"Requested"}"#,
         ),
         (
-            Event::SyncStopped(SyncStopReason::Failed("boom".to_owned())),
-            r#"{"SyncStopped":{"Failed":"boom"}}"#,
+            Event::SyncStopped(SyncStopReason::Lost("boom".to_owned())),
+            r#"{"SyncStopped":{"Lost":"boom"}}"#,
         ),
+        (
+            Event::SyncStopped(SyncStopReason::SessionEnded("gone".to_owned())),
+            r#"{"SyncStopped":{"SessionEnded":"gone"}}"#,
+        ),
+        (Event::SyncConnected, r#""SyncConnected""#),
     ] {
         assert_eq!(serde_json::to_string(&event).expect("serialize"), json);
         assert_eq!(

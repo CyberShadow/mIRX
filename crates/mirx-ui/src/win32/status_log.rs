@@ -6,7 +6,7 @@
 //! line holds the text after its `[hh:mm]` timestamp, so a command's echo
 //! may print other lines too, such as `-> *Alice* hi`.
 
-use mirx_core::{E2eeStatus, SyncStopReason, VerificationState, VerificationStateEvent};
+use mirx_core::{E2eeStatus, VerificationState, VerificationStateEvent};
 
 use super::menus::verification_actions_text;
 use super::{
@@ -107,14 +107,26 @@ pub(super) const E2EE_RECOVERY_SET_UP: &str =
 pub(super) const E2EE_RECOVERY_COMPLETE: &str = "E2EE recovery complete";
 pub(super) const E2EE_STATUS_UNKNOWN: &str = "E2EE status not yet known";
 
-/// mIRC's `* Disconnected`, with the reason when sync ended by itself.
-pub(super) fn disconnected(reason: &SyncStopReason) -> (StatusLineKind, String) {
-    match reason {
-        SyncStopReason::Requested => (StatusLineKind::Info, "Disconnected".to_owned()),
-        SyncStopReason::Failed(message) => {
-            (StatusLineKind::Error, format!("Disconnected: {message}"))
-        }
-    }
+/// The server of `user_id` (`@alice:example.org` is on `example.org`), as
+/// connection lines name it: mIRC names the server it is connected to.
+pub(super) fn user_server(user_id: &str) -> &str {
+    user_id
+        .split_once(':')
+        .expect("a Matrix user ID names its server")
+        .1
+}
+
+/// mIRC's `* Disconnected` when the connection ended by itself; the user's
+/// own Disconnect logs `STOPPED`.
+pub(super) fn connection_lost(message: &str) -> String {
+    format!("Disconnected: {message}")
+}
+
+/// The server no longer accepts the session: no retry can help.
+pub(super) fn session_ended(server: &str, message: &str) -> String {
+    format!(
+        "Disconnected: {server} signed this session out ({message}). Log out, then sign in again."
+    )
 }
 
 /// A space has no window to open on joining; it shows as a treebar folder.
@@ -219,18 +231,15 @@ mod tests {
             "Logged in as @alice:example (device DEVICE)"
         );
         assert_eq!(synced(3, 1), "Synced rooms: 3 joined, 1 invited");
+        assert_eq!(user_server("@alice:example.org"), "example.org");
+        assert_eq!(user_server("@alice:localhost:8448"), "localhost:8448");
         assert_eq!(
-            disconnected(&SyncStopReason::Requested),
-            (StatusLineKind::Info, "Disconnected".to_owned())
+            connection_lost("connection refused"),
+            "Disconnected: connection refused"
         );
         assert_eq!(
-            disconnected(&SyncStopReason::Failed(
-                "continuous Matrix sync failed: timeout".to_owned()
-            )),
-            (
-                StatusLineKind::Error,
-                "Disconnected: continuous Matrix sync failed: timeout".to_owned()
-            )
+            session_ended("example.org", "[401 / M_UNKNOWN_TOKEN] Invalid token"),
+            "Disconnected: example.org signed this session out ([401 / M_UNKNOWN_TOKEN] Invalid token). Log out, then sign in again."
         );
         assert_eq!(
             error("send message", "message send failed"),

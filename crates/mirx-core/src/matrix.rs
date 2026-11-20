@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -135,9 +136,9 @@ use crate::api::{
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
     SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    SpaceChildSummary, StoredSession, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity,
-    UserProfile, VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent,
+    SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
+    UnsupportedRoomMessageActivity, UserProfile, VerificationDecimals, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::api::{TextStyleSpan, UserLinkSpan, check_text_styles, validate_highlight_word};
 use crate::mentions::body_mentions;
@@ -3200,27 +3201,39 @@ fn map_decimals((first, second, third): (u16, u16, u16)) -> VerificationDecimals
     }
 }
 
+/// Runs continuous sync until it fails: `SyncConnected` at the first
+/// response, then `SyncStopped` with why it ended.
 pub(crate) fn start_sync_task(client: Client, events: EventSender) -> JoinHandle<()> {
     tokio::task::spawn_local(async move {
-        if let Err(err) = client
-            .sync_with_callback(SyncSettings::default(), |response| {
+        let connected = Cell::new(false);
+        let result = client
+            .sync_with_result_callback(SyncSettings::default(), |result| {
                 let client = client.clone();
                 let events = events.clone();
+                let connected = &connected;
                 async move {
+                    let response = result?;
+                    if !connected.replace(true) {
+                        emit_event(&events, Event::SyncConnected);
+                    }
                     emit_member_snapshots_after_sync(&client, &response, &events).await;
-                    LoopCtrl::Continue
+                    Ok(LoopCtrl::Continue)
                 }
             })
-            .await
-        {
-            emit_event(
-                &events,
-                Event::SyncStopped(crate::api::SyncStopReason::Failed(format!(
-                    "continuous Matrix sync failed: {err}"
-                ))),
-            );
-        }
+            .await;
+        let err = result.expect_err("the sync callback never breaks the loop");
+        emit_event(&events, Event::SyncStopped(sync_stop_reason(&err)));
     })
+}
+
+/// Only a token the server no longer accepts is final; mIRC retries any
+/// other disconnection.
+fn sync_stop_reason(err: &matrix_sdk::Error) -> SyncStopReason {
+    let message = err.to_string();
+    match err.client_api_error_kind() {
+        Some(ErrorKind::UnknownToken { .. }) => SyncStopReason::SessionEnded(message),
+        _ => SyncStopReason::Lost(message),
+    }
 }
 
 /// Emits a joined room's read state whenever it changes. `updates` is taken

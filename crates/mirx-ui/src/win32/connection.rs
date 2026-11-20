@@ -193,10 +193,19 @@ mod tests {
         assert_eq!(
             after_event(
                 Syncing,
-                &Event::SyncStopped(SyncStopReason::Failed("boom".to_owned()))
+                &Event::SyncStopped(SyncStopReason::Lost("boom".to_owned()))
             ),
             SignedIn
         );
+        assert_eq!(
+            after_event(
+                Syncing,
+                &Event::SyncStopped(SyncStopReason::SessionEnded("gone".to_owned()))
+            ),
+            SignedIn
+        );
+        // Connecting is news for the log, not a change of state.
+        assert_eq!(after_event(Syncing, &Event::SyncConnected), Syncing);
     }
 
     #[test]
