@@ -33,7 +33,7 @@ use mirx_core::{
     SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
     SendReactionRequest, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession,
-    UnbanRoomMemberRequest, UserProfile, VerificationEmoji, VerificationFlowId,
+    TextStyleSpan, UnbanRoomMemberRequest, UserProfile, VerificationEmoji, VerificationFlowId,
     VerificationRequest, VerificationState, VerificationStateEvent, login_server, start,
 };
 use serde::Serialize;
@@ -231,7 +231,7 @@ use status_log::{StatusLineKind, StatusLog};
 use settings::{Bar, FontSetting, SETTINGS_FILE_NAME, SettingsStore};
 use timeline_layout::{
     TimelinePaintLine, TimelinePaintLineVisual, activity_level_color, paint_timeline,
-    plain_timeline_paint_lines, timeline_row_paint_lines,
+    plain_timeline_paint_lines, rendered_line_ranges, timeline_row_paint_lines,
 };
 use timeline_text::{
     ENCRYPTED_ROOM_TEXT, INVITE_RESPONSE_TEXT, action_line, context_line, event_line, invited_text,
@@ -532,6 +532,9 @@ struct TimelineRow {
     kind: TimelineRowKind,
     /// The row's text, painted exactly as find and selection see it.
     logical_text: String,
+    /// How `logical_text` is formatted: a message's own styles, at their
+    /// offsets in the row's text. Every other row is plain.
+    styles: Vec<TextStyleSpan>,
     layout: TimelineRowLayout,
     image_state: Option<TimelineImageState>,
 }
@@ -552,6 +555,7 @@ impl TimelineRow {
             event_id: None,
             kind,
             logical_text: text,
+            styles: Vec::new(),
             layout: TimelineRowLayout::FullWidth,
             image_state: None,
         }
@@ -563,6 +567,7 @@ impl TimelineRow {
             event_id: None,
             kind,
             logical_text: text,
+            styles: Vec::new(),
             layout: TimelineRowLayout::Log,
             image_state: None,
         }
@@ -575,6 +580,16 @@ impl TimelineRow {
 
     fn with_event_id(mut self, event_id: Option<&str>) -> Self {
         self.event_id = event_id.map(str::to_owned);
+        self
+    }
+
+    fn with_styles(mut self, styles: Vec<TextStyleSpan>) -> Self {
+        assert_eq!(
+            mirx_core::check_text_styles(&self.logical_text, &styles),
+            Ok(()),
+            "a row's styles format its text"
+        );
+        self.styles = styles;
         self
     }
 }
@@ -893,6 +908,7 @@ struct LastMessageActivity {
 struct MessageReplacementFields {
     presentation: RoomMessagePresentationKind,
     body: String,
+    styles: Vec<TextStyleSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1011,13 +1027,17 @@ impl RoomViewModel {
                         (
                             RoomActivityUpdateTarget::Event { event_id },
                             RoomActivityUpdateKind::MessageReplaced {
-                                presentation, body, ..
+                                presentation,
+                                body,
+                                styles,
+                                ..
                             },
                         ) => self.replace_message(
                             event_id,
                             MessageReplacementFields {
                                 presentation: *presentation,
                                 body: body.clone(),
+                                styles: styles.clone(),
                             },
                         ),
                         (
@@ -1307,6 +1327,7 @@ impl RoomViewModel {
         };
         message.presentation = replacement.presentation;
         message.body = replacement.body;
+        message.styles = replacement.styles;
         self.edited_event_ids.insert(target_event_id.to_owned());
         self.rebuild_threads();
         true
@@ -1644,7 +1665,10 @@ fn validate_synthetic_room_activity_events(
                     (
                         RoomActivityUpdateTarget::Event { event_id },
                         RoomActivityUpdateKind::MessageReplaced {
-                            presentation, body, ..
+                            presentation,
+                            body,
+                            styles,
+                            ..
                         },
                     ) => {
                         let replaced = room_view.replace_message(
@@ -1652,6 +1676,7 @@ fn validate_synthetic_room_activity_events(
                             MessageReplacementFields {
                                 presentation: *presentation,
                                 body: body.clone(),
+                                styles: styles.clone(),
                             },
                         );
                         assert!(replaced, "validated synthetic message edit must resolve");
@@ -2402,7 +2427,10 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
         (
             RoomActivityUpdateTarget::Event { event_id },
             RoomActivityUpdateKind::MessageReplaced {
-                presentation, body, ..
+                presentation,
+                body,
+                styles,
+                ..
             },
         ) => {
             let _ = state
@@ -2415,6 +2443,7 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
                     MessageReplacementFields {
                         presentation: *presentation,
                         body: body.clone(),
+                        styles: styles.clone(),
                     },
                 );
         }
@@ -4457,6 +4486,7 @@ unsafe fn draw_nick_list_item(hwnd: HWND, item: &DRAWITEMSTRUCT) {
         item.rcItem.top + glyphs.metrics().tmAscent,
         &item.rcItem,
         &text,
+        false,
     );
 
     SetBkMode(hdc, previous_mode);
@@ -8956,12 +8986,18 @@ fn push_room_activity_row(
     timestamps: TimestampStyle,
 ) {
     push_reply_quote_row(rows, room_view, activity);
-    let (kind, line, image_state) = activity_line_text(
+    let ActivityLine {
+        kind,
+        text,
+        styles,
+        image_state,
+    } = activity_line_text(
         room_view,
         activity,
         &timestamps.prefix(activity.timestamp_ms),
     );
-    let mut row = TimelineRow::log(kind, line)
+    let mut row = TimelineRow::log(kind, text)
+        .with_styles(styles)
         .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
         .with_event_id(room_activity_event_id(activity));
     row.image_state = image_state;
@@ -9023,7 +9059,7 @@ fn push_reply_quote_row(
 
 /// A message as a quote or the compose indicator shows it.
 fn quoted_line(room_view: &RoomViewModel, activity: &RoomActivity) -> String {
-    replies::quote_excerpt(&activity_line_text(room_view, activity, "").1)
+    replies::quote_excerpt(&activity_line_text(room_view, activity, "").text)
 }
 
 /// The bottom line of a window whose editbox is armed with `target`. It
@@ -9061,14 +9097,32 @@ fn window_message<'a>(
     (in_window && !matches!(activity.kind, RoomActivityKind::Redacted(_))).then_some(activity)
 }
 
-/// An activity's line after the timestamp `prefix`, with its row kind and
-/// image preview state.
+/// An activity's line: its row kind, text after the timestamp prefix, the
+/// text's styles and the image preview state.
+struct ActivityLine {
+    kind: TimelineRowKind,
+    text: String,
+    styles: Vec<TextStyleSpan>,
+    image_state: Option<TimelineImageState>,
+}
+
+impl ActivityLine {
+    fn plain(kind: TimelineRowKind, text: String, image_state: Option<TimelineImageState>) -> Self {
+        Self {
+            kind,
+            text,
+            styles: Vec::new(),
+            image_state,
+        }
+    }
+}
+
 fn activity_line_text(
     room_view: &RoomViewModel,
     activity: &RoomActivity,
     timestamp: &str,
-) -> (TimelineRowKind, String, Option<TimelineImageState>) {
-    match &activity.kind {
+) -> ActivityLine {
+    let (kind, text, image_state) = match &activity.kind {
         RoomActivityKind::Message(message) => {
             let suffix = match &message.send_state {
                 RoomMessageSendState::Pending => " (sending)",
@@ -9083,20 +9137,32 @@ fn activity_line_text(
                 RoomMessageSendState::Sent => "",
                 RoomMessageSendState::Failed { .. } => " (failed)",
             };
-            (
-                TimelineRowKind::Message {
+            let (text, body_offset) = message_line(
+                timestamp,
+                message.presentation,
+                &message.sender,
+                &format!("{}{suffix}", message.body),
+            );
+            // The suffix is mirx's note, not the sender's text: unstyled.
+            let styles = message
+                .styles
+                .iter()
+                .map(|span| TextStyleSpan {
+                    start: body_offset + span.start,
+                    end: body_offset + span.end,
+                    style: span.style,
+                })
+                .collect();
+            return ActivityLine {
+                kind: TimelineRowKind::Message {
                     presentation: message.presentation,
                     send_state: timeline_message_send_state(&message.send_state),
                     highlight: activity.highlight,
                 },
-                message_line(
-                    timestamp,
-                    message.presentation,
-                    &message.sender,
-                    &format!("{}{suffix}", message.body),
-                ),
-                None,
-            )
+                text,
+                styles,
+                image_state: None,
+            };
         }
         RoomActivityKind::Image(message) => {
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
@@ -9221,7 +9287,8 @@ fn activity_line_text(
             event_line(timestamp, "message redacted"),
             None,
         ),
-    }
+    };
+    ActivityLine::plain(kind, text, image_state)
 }
 
 fn build_room_timeline_rows(
@@ -12560,12 +12627,9 @@ fn write_response_bytes_if_fits(automation: &AutomationState, response_bytes: &[
 }
 
 fn split_rendered_lines(text: &str) -> Vec<String> {
-    if text.is_empty() {
-        return Vec::new();
-    }
-
-    text.split('\n')
-        .map(|line| line.trim_end_matches('\r').to_owned())
+    rendered_line_ranges(text)
+        .into_iter()
+        .map(|line| text[line].to_owned())
         .collect()
 }
 
@@ -13446,11 +13510,15 @@ unsafe fn dump_active_timeline(timeline: HWND) -> UiActiveTimeline {
         .skip(state.top_line)
         .take(visible_rows)
         .map(|(line_index, line)| {
+            let (text, styles) = match &line.visual {
+                TimelinePaintLineVisual::Text { text, styles, .. } => {
+                    (text.clone(), styles.clone())
+                }
+                TimelinePaintLineVisual::ImageSlot => (String::new(), Vec::new()),
+            };
             UiTimelineLine {
-                text: match &line.visual {
-                    TimelinePaintLineVisual::Text { text, .. } => text.clone(),
-                    TimelinePaintLineVisual::ImageSlot => String::new(),
-                },
+                text,
+                styles,
                 kind: ui_timeline_line_kind(&line.kind),
                 // Text set as a whole (WM_SETTEXT) has no rows.
                 event_id: line
@@ -20636,6 +20704,92 @@ mod tests {
         .unwrap();
     }
 
+    fn bold_style() -> mirx_core::TextStyle {
+        mirx_core::TextStyle {
+            bold: true,
+            ..mirx_core::TextStyle::default()
+        }
+    }
+
+    /// Each of `row`'s styled spans as the text it covers.
+    fn styled_row_texts(row: &TimelineRow) -> Vec<(&str, mirx_core::TextStyle)> {
+        row.styles
+            .iter()
+            .map(|span| (&row.logical_text[span.start..span.end], span.style))
+            .collect()
+    }
+
+    #[test]
+    fn message_rows_carry_their_styles_past_the_nick_and_never_on_the_suffix() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", true)];
+        for (event_id, presentation) in [
+            ("$text", RoomMessagePresentationKind::Text),
+            ("$emote", RoomMessagePresentationKind::Emote),
+            ("$notice", RoomMessagePresentationKind::Notice),
+        ] {
+            let mut activity = sent_message_activity_with_presentation(
+                "!ops:example",
+                event_id,
+                None,
+                presentation,
+                "say bold",
+                1_700_000_000_000,
+            );
+            let RoomActivityKind::Message(message) = &mut activity.kind else {
+                unreachable!("a message activity");
+            };
+            message.styles = vec![TextStyleSpan {
+                start: 4,
+                end: 8,
+                style: bold_style(),
+            }];
+            apply_core_event(&mut state, Event::RoomActivity(Box::new(activity))).unwrap();
+        }
+        let Event::RoomActivityUpdate(mut edit) = incoming_replaced(
+            "!ops:example",
+            "$text",
+            "$edit",
+            RoomMessagePresentationKind::Text,
+            "now bold",
+        ) else {
+            unreachable!("a replacement");
+        };
+        let RoomActivityUpdateKind::MessageReplaced { styles, .. } = &mut edit.kind else {
+            unreachable!("a replacement");
+        };
+        *styles = vec![TextStyleSpan {
+            start: 0,
+            end: 8,
+            style: bold_style(),
+        }];
+        apply_core_event(&mut state, Event::RoomActivityUpdate(edit)).unwrap();
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps())
+            .into_iter()
+            .filter(|row| row.event_id.is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.logical_text.as_str(), styled_row_texts(row)))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "[22:13] <@alice:example> now bold (edited)",
+                    vec![("now bold", bold_style())]
+                ),
+                (
+                    "[22:13] * @alice:example say bold",
+                    vec![("bold", bold_style())]
+                ),
+                (
+                    "[22:13] -@alice:example- say bold",
+                    vec![("bold", bold_style())]
+                ),
+            ]
+        );
+    }
+
     #[test]
     fn build_room_timeline_rows_capture_kind_order_and_projection() {
         let mut state = test_state();
@@ -25006,6 +25160,7 @@ mod tests {
             MessageReplacementFields {
                 presentation: RoomMessagePresentationKind::Text,
                 body: "edited root".to_owned(),
+                styles: Vec::new(),
             }
         ));
         assert_eq!(

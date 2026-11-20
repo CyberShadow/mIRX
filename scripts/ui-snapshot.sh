@@ -1673,6 +1673,38 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!unicode:example'
       ;;
+    rich-text)
+      expect_selected='!rich:example'
+      expect_active_view='room:!rich:example'
+      room_expect_args=(
+        --expect-room '!rich:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!rich:example::[22:14] <Alice> bold italic курсив underline strike all'
+        --expect-room-view '!rich:example::[22:15] <Bob> 00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 0,1 8,2'
+        --expect-room-view '!rich:example::[22:16] <Carol> extended colour 61 violet'
+        --expect-room-view '!rich:example::[22:17] <Bob> Alice: the green build is yours'
+        --expect-room-view '!rich:example::[22:18] * Carol waves hard'
+        --expect-room-view '!rich:example::[22:19] -Bob- deploy window starts now'
+        --expect-room-view '!rich:example::carries on past the break onto the next line before ending plain'
+        --expect-room-view '!rich:example::[22:21] <Carol> todo:'
+        --expect-room-view '!rich:example::* ship it'
+        --expect-room-view '!rich:example::> quoted wisdom'
+        --expect-room-view '!rich:example::let x = 1;'
+        --expect-room-view '!rich:example::[22:22] <Bob> see docs (https://example.org/docs)'
+        --expect-room-view '!rich:example::[22:23] <Alice> final text (edited)'
+      )
+      room_member_expect_args=(
+        --expect-room-member '!rich:example::Alice'
+        --expect-room-member '!rich:example::Bob'
+        --expect-room-member '!rich:example::Carol'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!rich:example::Rich'
+      )
+      expect_switchbar_active='room:!rich:example'
+      ;;
     irc-commands)
       expect_selected='!ops:example'
       expect_active_view='room:!ops:example'

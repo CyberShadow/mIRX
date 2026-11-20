@@ -1234,6 +1234,8 @@ pub struct UiTimelineLine {
     /// Empty for an image preview's lines.
     pub text: String,
     pub kind: UiTimelineLineKind,
+    /// How `text` is formatted, at offsets in it: a message's own styles.
+    pub styles: Vec<mirx_core::TextStyleSpan>,
     /// The event the line belongs to; clicking it selects that event.
     pub event_id: Option<String>,
     pub click_point: UiPoint,

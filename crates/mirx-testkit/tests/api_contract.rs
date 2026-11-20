@@ -954,6 +954,19 @@ fn data_models_round_trip_through_json() {
             visible_lines: vec![UiTimelineLine {
                 text: "[22:13] <Alice> hello".to_owned(),
                 kind: UiTimelineLineKind::Message,
+                styles: vec![mirx_core::TextStyleSpan {
+                    start: 16,
+                    end: 21,
+                    style: mirx_core::TextStyle {
+                        bold: true,
+                        foreground: Some(mirx_core::TextColor {
+                            red: 0xff,
+                            green: 0,
+                            blue: 0,
+                        }),
+                        ..mirx_core::TextStyle::default()
+                    },
+                }],
                 event_id: Some("$hello".to_owned()),
                 click_point: UiPoint { x: 8, y: 9 },
             }],
@@ -1221,6 +1234,18 @@ fn data_models_round_trip_through_json() {
                 "visible_lines": [{
                     "text": "[22:13] <Alice> hello",
                     "kind": "message",
+                    "styles": [{
+                        "start": 16,
+                        "end": 21,
+                        "style": {
+                            "bold": true,
+                            "italic": false,
+                            "underline": false,
+                            "strikethrough": false,
+                            "foreground": "#ff0000",
+                            "background": null,
+                        },
+                    }],
                     "event_id": "$hello",
                     "click_point": {"x": 8, "y": 9},
                 }],

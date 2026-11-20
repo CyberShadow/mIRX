@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 43;
+pub(crate) const PROTOCOL_VERSION: u32 = 44;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -970,6 +970,8 @@ pub(crate) struct UiTimelineLine {
     /// Empty for an image preview's lines.
     pub(crate) text: String,
     pub(crate) kind: UiTimelineLineKind,
+    /// How `text` is formatted, at offsets in it: a message's own styles.
+    pub(crate) styles: Vec<mirx_core::TextStyleSpan>,
     /// The event the line belongs to; clicking it selects that event.
     pub(crate) event_id: Option<String>,
     pub(crate) click_point: UiPoint,
@@ -3106,8 +3108,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_43() {
-        assert_eq!(PROTOCOL_VERSION, 43);
+    fn protocol_version_is_44() {
+        assert_eq!(PROTOCOL_VERSION, 44);
     }
 
     #[test]
@@ -4925,7 +4927,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":43,
+                    "protocol_version":44,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5546,6 +5548,7 @@ mod tests {
                         visible_lines: vec![super::UiTimelineLine {
                             text: "    > <Alice> are we deploying?".to_owned(),
                             kind: super::UiTimelineLineKind::ReplyQuote,
+                            styles: Vec::new(),
                             event_id: Some("$answer".to_owned()),
                             click_point: super::UiPoint { x: 8, y: 9 },
                         }],
@@ -5712,6 +5715,7 @@ mod tests {
                         "visible_lines":[{
                             "text":"    > <Alice> are we deploying?",
                             "kind":"reply_quote",
+                            "styles":[],
                             "event_id":"$answer",
                             "click_point":{"x":8,"y":9}
                         }]

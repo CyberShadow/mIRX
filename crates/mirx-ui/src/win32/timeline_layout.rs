@@ -1,6 +1,11 @@
 //! Timeline layout and paint: rows become wrapped paint lines, and paint
 //! lines are drawn in the frame's text font.
 
+use std::ops::Range;
+
+use mirx_core::{TextColor, TextStyle, TextStyleSpan};
+use windows_sys::Win32::Graphics::Gdi::HDC;
+
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,10 +19,12 @@ pub(super) struct TimelinePaintLine {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TimelinePaintLineVisual {
-    /// Text drawn `indent` pixels right of the timeline's left padding.
+    /// Text drawn `indent` pixels right of the timeline's left padding, in
+    /// the row's styles clipped to it, at their offsets in `text`.
     Text {
         text: String,
         indent: i32,
+        styles: Vec<TextStyleSpan>,
     },
     ImageSlot,
 }
@@ -34,7 +41,11 @@ pub(super) fn plain_timeline_paint_lines(lines: &[String]) -> Vec<TimelinePaintL
         .cloned()
         .map(|text| TimelinePaintLine {
             kind: TimelineRowKind::Plain,
-            visual: TimelinePaintLineVisual::Text { text, indent: 0 },
+            visual: TimelinePaintLineVisual::Text {
+                text,
+                indent: 0,
+                styles: Vec::new(),
+            },
             image_state: None,
             image_slot_index: None,
             source_row_index: None,
@@ -42,20 +53,37 @@ pub(super) fn plain_timeline_paint_lines(lines: &[String]) -> Vec<TimelinePaintL
         .collect()
 }
 
-fn trim_timeline_visual_segment(text: &str) -> String {
-    text.trim_end_matches(|c: char| c.is_whitespace())
-        .to_owned()
+/// The ranges of `text`'s lines, split at `\n`, each without a trailing
+/// `\r`. Empty text has no lines.
+pub(super) fn rendered_line_ranges(text: &str) -> Vec<Range<usize>> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    for line in text.split('\n') {
+        let end = start + line.trim_end_matches('\r').len();
+        ranges.push(start..end);
+        start += line.len() + 1;
+    }
+    ranges
 }
 
-/// Wraps one text line: the first segment fits `first_width`, later ones
-/// `continuation_width`. Breaks prefer whitespace, which is dropped at the
-/// break; unbroken tokens are split at the last fitting character.
+/// The length of `text` without its trailing whitespace.
+fn trimmed_end_len(text: &str) -> usize {
+    text.trim_end_matches(|c: char| c.is_whitespace()).len()
+}
+
+/// Wraps one text line into the ranges of its segments: the first fits
+/// `first_width`, later ones `continuation_width`. Breaks prefer
+/// whitespace, which is dropped at the break; unbroken tokens are split at
+/// the last fitting character.
 fn wrap_timeline_visual_line<Measure>(
     line: &str,
     first_width: i32,
     continuation_width: i32,
     measure: &Measure,
-) -> Vec<String>
+) -> Vec<Range<usize>>
 where
     Measure: Fn(&str) -> i32,
 {
@@ -65,19 +93,21 @@ where
     );
 
     if line.is_empty() {
-        return vec![String::new()];
+        // One empty visual line.
+        return vec![Range { start: 0, end: 0 }];
     }
 
     let mut wrapped = Vec::new();
-    let mut remaining = line;
-    while !remaining.is_empty() {
+    let mut start = 0;
+    while start < line.len() {
+        let remaining = &line[start..];
         let max_width = if wrapped.is_empty() {
             first_width
         } else {
             continuation_width
         };
         if measure(remaining) <= max_width {
-            wrapped.push(trim_timeline_visual_segment(remaining));
+            wrapped.push(start..start + trimmed_end_len(remaining));
             break;
         }
 
@@ -105,55 +135,65 @@ where
             .or_else(|| (last_fit_end > 0).then_some(last_fit_end))
             .or(first_char_end)
             .expect("a non-empty timeline body line must have at least one char boundary");
-        wrapped.push(trim_timeline_visual_segment(&remaining[..break_index]));
-        remaining = remaining[break_index..].trim_start();
+        wrapped.push(start..start + trimmed_end_len(&remaining[..break_index]));
+        let rest = &remaining[break_index..];
+        start += break_index + (rest.len() - rest.trim_start().len());
     }
 
     wrapped
 }
 
-/// Paint lines for a log row: the first line starts at the left padding and
-/// every continuation, whether wrapped or from a newline in the text, is
-/// indented past the timestamp like mIRC's hanging indent: by the width of
-/// `indent_sample`, a timestamp prefix.
-fn timeline_log_paint_texts<Measure>(
+/// Paint lines for a log row, as ranges of `text` with their indent: the
+/// first line starts at the left padding and every continuation, whether
+/// wrapped or from a newline in the text, is indented past the timestamp
+/// like mIRC's hanging indent: by the width of `indent_sample`, a timestamp
+/// prefix.
+fn timeline_log_paint_ranges<Measure>(
     text: &str,
     width: i32,
     indent_sample: &str,
     measure: &Measure,
-) -> Vec<(String, i32)>
+) -> Vec<(Range<usize>, i32)>
 where
     Measure: Fn(&str) -> i32,
 {
     let indent = measure(indent_sample).min(width - 1);
     let continuation_width = width - indent;
     let mut lines = Vec::new();
-    for line in split_rendered_lines(text) {
+    for line in rendered_line_ranges(text) {
         let first_width = if lines.is_empty() {
             width
         } else {
             continuation_width
         };
-        for segment in wrap_timeline_visual_line(&line, first_width, continuation_width, measure) {
+        for segment in wrap_timeline_visual_line(
+            &text[line.clone()],
+            first_width,
+            continuation_width,
+            measure,
+        ) {
             let segment_indent = if lines.is_empty() { 0 } else { indent };
-            lines.push((segment, segment_indent));
+            lines.push((
+                line.start + segment.start..line.start + segment.end,
+                segment_indent,
+            ));
         }
     }
     lines
 }
 
-fn timeline_full_width_paint_lines(kind: &TimelineRowKind, text: &str) -> Vec<TimelinePaintLine> {
-    split_rendered_lines(text)
-        .into_iter()
-        .map(|line| TimelinePaintLine {
-            kind: kind.clone(),
-            visual: TimelinePaintLineVisual::Text {
-                text: line,
-                indent: 0,
-            },
-            image_state: None,
-            image_slot_index: None,
-            source_row_index: None,
+/// The parts of `styles` inside `segment`, at their offsets in it.
+fn clip_styles(styles: &[TextStyleSpan], segment: &Range<usize>) -> Vec<TextStyleSpan> {
+    styles
+        .iter()
+        .filter_map(|span| {
+            let start = span.start.max(segment.start);
+            let end = span.end.min(segment.end);
+            (start < end).then(|| TextStyleSpan {
+                start: start - segment.start,
+                end: end - segment.start,
+                style: span.style,
+            })
         })
         .collect()
 }
@@ -171,28 +211,27 @@ where
     let width = timeline_text_width(client_width);
     let mut paint_lines = Vec::new();
     for (source_row_index, row) in rows.iter().enumerate() {
-        match row.layout {
-            TimelineRowLayout::FullWidth => {
-                let mut row_paint_lines =
-                    timeline_full_width_paint_lines(&row.kind, &row.logical_text);
-                for line in &mut row_paint_lines {
-                    line.source_row_index = Some(source_row_index);
-                }
-                paint_lines.extend(row_paint_lines);
-            }
+        let segments = match row.layout {
+            TimelineRowLayout::FullWidth => rendered_line_ranges(&row.logical_text)
+                .into_iter()
+                .map(|line| (line, 0))
+                .collect(),
             TimelineRowLayout::Log => {
-                for (text, indent) in
-                    timeline_log_paint_texts(&row.logical_text, width, indent_sample, measure)
-                {
-                    paint_lines.push(TimelinePaintLine {
-                        kind: row.kind.clone(),
-                        visual: TimelinePaintLineVisual::Text { text, indent },
-                        image_state: None,
-                        image_slot_index: None,
-                        source_row_index: Some(source_row_index),
-                    });
-                }
+                timeline_log_paint_ranges(&row.logical_text, width, indent_sample, measure)
             }
+        };
+        for (segment, indent) in segments {
+            paint_lines.push(TimelinePaintLine {
+                kind: row.kind.clone(),
+                visual: TimelinePaintLineVisual::Text {
+                    text: row.logical_text[segment.clone()].to_owned(),
+                    indent,
+                    styles: clip_styles(&row.styles, &segment),
+                },
+                image_state: None,
+                image_slot_index: None,
+                source_row_index: Some(source_row_index),
+            });
         }
         if let Some(image_state) = &row.image_state {
             for image_slot_index in 0..image_slot_lines(line_height) {
@@ -235,6 +274,24 @@ pub(super) unsafe fn timeline_row_paint_lines(
     );
     ReleaseDC(hwnd, hdc);
     paint_lines
+}
+
+/// `text` as consecutive pieces covering all of it: each styled span and
+/// the plain text between them, with `None` for plain.
+fn style_pieces<'a>(text: &'a str, styles: &[TextStyleSpan]) -> Vec<(&'a str, Option<TextStyle>)> {
+    let mut pieces = Vec::new();
+    let mut written = 0;
+    for span in styles {
+        if written < span.start {
+            pieces.push((&text[written..span.start], None));
+        }
+        pieces.push((&text[span.start..span.end], Some(span.style)));
+        written = span.end;
+    }
+    if written < text.len() {
+        pieces.push((&text[written..], None));
+    }
+    pieces
 }
 
 pub(super) unsafe fn paint_timeline(hwnd: HWND) {
@@ -298,9 +355,12 @@ pub(super) unsafe fn paint_timeline(hwnd: HWND) {
             continue;
         }
 
-        SetTextColor(hdc, timeline_row_color(&line.kind));
         match &line.visual {
-            TimelinePaintLineVisual::Text { text, indent } => {
+            TimelinePaintLineVisual::Text {
+                text,
+                indent,
+                styles,
+            } => {
                 let left = TIMELINE_LEFT_PADDING + indent;
                 let rect = RECT {
                     left,
@@ -308,7 +368,15 @@ pub(super) unsafe fn paint_timeline(hwnd: HWND) {
                     right: (client_rect.right - TIMELINE_RIGHT_PADDING).max(left + 1),
                     bottom: line_y + state.line_height,
                 };
-                glyphs.draw(hdc, left, line_y + glyphs.metrics().tmAscent, &rect, text);
+                paint_styled_text(
+                    hdc,
+                    glyphs,
+                    left,
+                    &rect,
+                    text,
+                    styles,
+                    timeline_row_color(&line.kind),
+                );
             }
             TimelinePaintLineVisual::ImageSlot => {}
         }
@@ -319,6 +387,87 @@ pub(super) unsafe fn paint_timeline(hwnd: HWND) {
     SelectObject(hdc, previous);
 
     EndPaint(hwnd, &paint);
+}
+
+/// Draws one line of `text` from `left` within `rect`, a line's height,
+/// in `default_color` except where `styles` say otherwise. Bold is drawn a
+/// second time a pixel right, as GDI emboldens raster fonts, and italic in
+/// the faces' italic fonts at the regular advances, so styles never change
+/// where text goes and wrapping stays exact.
+unsafe fn paint_styled_text(
+    hdc: HDC,
+    glyphs: &GlyphFonts,
+    left: i32,
+    rect: &RECT,
+    text: &str,
+    styles: &[TextStyleSpan],
+    default_color: u32,
+) {
+    let baseline = rect.top + glyphs.metrics().tmAscent;
+    if styles.is_empty() {
+        SetTextColor(hdc, default_color);
+        glyphs.draw(hdc, left, baseline, rect, text, false);
+        return;
+    }
+    let mut x = left;
+    for (piece, style) in style_pieces(text, styles) {
+        let width = glyphs.measure(hdc, piece);
+        let style = style.unwrap_or_default();
+        let color = style.foreground.map_or(default_color, colorref);
+        if let Some(background) = style.background {
+            fill_clipped(
+                hdc,
+                rect,
+                x,
+                rect.top,
+                width,
+                rect.bottom - rect.top,
+                colorref(background),
+            );
+        }
+        SetTextColor(hdc, color);
+        glyphs.draw(hdc, x, baseline, rect, piece, style.italic);
+        if style.bold {
+            glyphs.draw(hdc, x + 1, baseline, rect, piece, style.italic);
+        }
+        if style.underline {
+            fill_clipped(hdc, rect, x, baseline + 1, width, 1, color);
+        }
+        if style.strikethrough {
+            fill_clipped(
+                hdc,
+                rect,
+                x,
+                baseline - glyphs.metrics().tmAscent / 3,
+                width,
+                1,
+                color,
+            );
+        }
+        x += width;
+    }
+}
+
+/// Fills the part of the `width` by `height` box at `x`, `y` inside `clip`.
+unsafe fn fill_clipped(hdc: HDC, clip: &RECT, x: i32, y: i32, width: i32, height: i32, color: u32) {
+    let rect = RECT {
+        left: x.max(clip.left),
+        top: y.max(clip.top),
+        right: (x + width).min(clip.right),
+        bottom: (y + height).min(clip.bottom),
+    };
+    if rect.left >= rect.right || rect.top >= rect.bottom {
+        return;
+    }
+    let brush = CreateSolidBrush(color);
+    assert!(!brush.is_null(), "CreateSolidBrush must succeed");
+    FillRect(hdc, &rect, brush);
+    DeleteObject(brush);
+}
+
+/// A style colour as GDI takes it.
+fn colorref(color: TextColor) -> u32 {
+    rgb(color.red, color.green, color.blue)
 }
 
 pub(super) const fn rgb(r: u8, g: u8, b: u8) -> u32 {
@@ -602,7 +751,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             logical_lines
                 .into_iter()
-                .map(|text| TimelinePaintLineVisual::Text { text, indent: 0 })
+                .map(|text| TimelinePaintLineVisual::Text {
+                    text,
+                    indent: 0,
+                    styles: Vec::new(),
+                })
                 .collect::<Vec<_>>()
         );
         assert_eq!(
@@ -633,7 +786,7 @@ mod tests {
         )
         .into_iter()
         .map(|line| match line.visual {
-            TimelinePaintLineVisual::Text { text, indent } => (text, indent),
+            TimelinePaintLineVisual::Text { text, indent, .. } => (text, indent),
             TimelinePaintLineVisual::ImageSlot => unreachable!("message rows have no image"),
         })
         .collect()
@@ -688,16 +841,137 @@ mod tests {
         );
     }
 
+    fn style_span(start: usize, end: usize, style: TextStyle) -> TextStyleSpan {
+        TextStyleSpan { start, end, style }
+    }
+
+    fn bold() -> TextStyle {
+        TextStyle {
+            bold: true,
+            ..TextStyle::default()
+        }
+    }
+
+    fn italic() -> TextStyle {
+        TextStyle {
+            italic: true,
+            ..TextStyle::default()
+        }
+    }
+
+    #[test]
+    fn clip_styles_keeps_the_parts_inside_a_segment_at_its_offsets() {
+        let styles = [
+            style_span(0, 3, bold()),
+            style_span(5, 9, italic()),
+            style_span(12, 14, bold()),
+        ];
+        assert_eq!(
+            clip_styles(&styles, &(2..10)),
+            vec![style_span(0, 1, bold()), style_span(3, 7, italic())]
+        );
+        assert_eq!(clip_styles(&styles, &(3..5)), Vec::new());
+        assert_eq!(clip_styles(&styles, &(0..20)), styles.to_vec());
+        assert_eq!(clip_styles(&styles, &(9..9)), Vec::new());
+    }
+
+    #[test]
+    fn style_pieces_cover_the_text_in_order() {
+        assert_eq!(
+            style_pieces(
+                "plain bold mid it",
+                &[style_span(6, 10, bold()), style_span(15, 17, italic())]
+            ),
+            vec![
+                ("plain ", None),
+                ("bold", Some(bold())),
+                (" mid ", None),
+                ("it", Some(italic())),
+            ]
+        );
+        assert_eq!(
+            style_pieces("ab", &[style_span(0, 2, bold())]),
+            vec![("ab", Some(bold()))]
+        );
+        assert_eq!(style_pieces("ab", &[]), vec![("ab", None)]);
+    }
+
+    #[test]
+    fn rendered_line_ranges_split_at_newlines_without_carriage_returns() {
+        assert_eq!(rendered_line_ranges(""), Vec::<Range<usize>>::new());
+        assert_eq!(
+            rendered_line_ranges("a\r\nbc\n\nd"),
+            vec![0..1, 3..5, 6..6, 7..8]
+        );
+    }
+
+    #[test]
+    fn styled_log_rows_split_their_spans_across_wrapped_lines() {
+        // "[22:13] <@alice:example> alpha beta gamma" with "alpha beta"
+        // bold: the break between alpha and beta splits the span, and the
+        // dropped space at the break is in neither line.
+        let text = "[22:13] <@alice:example> alpha beta gamma\nnext gamma";
+        let row = TimelineRow::log(
+            TimelineRowKind::Message {
+                presentation: RoomMessagePresentationKind::Text,
+                send_state: TimelineMessageSendState::Sent,
+                highlight: false,
+            },
+            text.to_owned(),
+        )
+        .with_styles(vec![
+            style_span(25, 35, bold()),
+            style_span(36, 41, italic()),
+            style_span(47, 52, italic()),
+        ]);
+        let lines = timeline_row_paint_lines_with_measure(
+            &[row],
+            client_width_for_text(30),
+            20,
+            "[00:00] ",
+            &measure_ascii_width,
+        )
+        .into_iter()
+        .map(|line| match line.visual {
+            TimelinePaintLineVisual::Text { text, styles, .. } => (text, styles),
+            TimelinePaintLineVisual::ImageSlot => unreachable!("message rows have no image"),
+        })
+        .collect::<Vec<_>>();
+        assert_eq!(
+            lines,
+            vec![
+                (
+                    "[22:13] <@alice:example> alpha".to_owned(),
+                    vec![style_span(25, 30, bold())]
+                ),
+                (
+                    "beta gamma".to_owned(),
+                    vec![style_span(0, 4, bold()), style_span(5, 10, italic())]
+                ),
+                ("next gamma".to_owned(), vec![style_span(5, 10, italic())]),
+            ]
+        );
+    }
+
     #[test]
     fn wrap_timeline_visual_line_uses_the_first_width_once_then_the_continuation_width() {
+        let wrap = |line: &'static str, first_width, continuation_width| {
+            wrap_timeline_visual_line(line, first_width, continuation_width, &measure_ascii_width)
+                .into_iter()
+                .map(|segment| &line[segment])
+                .collect::<Vec<_>>()
+        };
         assert_eq!(
-            wrap_timeline_visual_line("abcdefghijklmno", 6, 4, &measure_ascii_width),
+            wrap("abcdefghijklmno", 6, 4),
             vec!["abcdef", "ghij", "klmn", "o"]
         );
+        assert_eq!(wrap("alpha   beta", 5, 5), vec!["alpha", "beta"]);
         assert_eq!(
-            wrap_timeline_visual_line("alpha   beta", 5, 5, &measure_ascii_width),
-            vec!["alpha", "beta"]
+            wrap_timeline_visual_line("alpha   beta  ", 5, 5, &measure_ascii_width),
+            vec![0..5, 8..12]
         );
+        assert_eq!(wrap("", 5, 5), vec![""]);
+        assert_eq!(wrap("   ", 5, 5), vec![""]);
     }
 
     #[test]

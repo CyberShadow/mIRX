@@ -54,20 +54,23 @@ fn nick_with_user_id(profile: &RoomUserProfile) -> String {
     nick_label(&profile.user_id, profile.display_name.as_deref(), true)
 }
 
-/// `[ts] <Nick> body`, `[ts] * Nick body`, or `[ts] -Nick- body`. The
-/// timestamp `prefix` is `"[ts] "`, or empty when timestamps are off.
+/// `[ts] <Nick> body`, `[ts] * Nick body`, or `[ts] -Nick- body`, and the
+/// byte offset of `body` in it. The timestamp `prefix` is `"[ts] "`, or
+/// empty when timestamps are off.
 pub(super) fn message_line(
     prefix: &str,
     presentation: RoomMessagePresentationKind,
     sender: &RoomUserProfile,
     body: &str,
-) -> String {
+) -> (String, usize) {
     let nick = profile_nick(sender);
-    match presentation {
-        RoomMessagePresentationKind::Text => format!("{prefix}<{nick}> {body}"),
-        RoomMessagePresentationKind::Emote => format!("{prefix}* {nick} {body}"),
-        RoomMessagePresentationKind::Notice => format!("{prefix}-{nick}- {body}"),
-    }
+    let head = match presentation {
+        RoomMessagePresentationKind::Text => format!("{prefix}<{nick}> "),
+        RoomMessagePresentationKind::Emote => format!("{prefix}* {nick} "),
+        RoomMessagePresentationKind::Notice => format!("{prefix}-{nick}- "),
+    };
+    let body_offset = head.len();
+    (head + body, body_offset)
 }
 
 /// An action-style line, as for media: `[ts] * Nick sent image: ...`.
@@ -218,17 +221,19 @@ mod tests {
         let alice = profile("@alice:example", Some("Alice"), false);
         let line = |presentation| message_line("[12:34] ", presentation, &alice, "hi");
 
+        // The body offset is where the body starts: message styles shift
+        // by it.
         assert_eq!(
             line(RoomMessagePresentationKind::Text),
-            "[12:34] <Alice> hi"
+            ("[12:34] <Alice> hi".to_owned(), 16)
         );
         assert_eq!(
             line(RoomMessagePresentationKind::Emote),
-            "[12:34] * Alice hi"
+            ("[12:34] * Alice hi".to_owned(), 16)
         );
         assert_eq!(
             line(RoomMessagePresentationKind::Notice),
-            "[12:34] -Alice- hi"
+            ("[12:34] -Alice- hi".to_owned(), 16)
         );
         assert_eq!(
             action_line("[12:34] ", &alice, "sent image: a.png"),
@@ -240,7 +245,7 @@ mod tests {
         );
         assert_eq!(
             message_line("", RoomMessagePresentationKind::Text, &alice, "hi"),
-            "<Alice> hi"
+            ("<Alice> hi".to_owned(), 8)
         );
         assert_eq!(event_line("", "message redacted"), "* message redacted");
     }

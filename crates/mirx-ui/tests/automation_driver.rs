@@ -2878,7 +2878,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 43);
+    assert_eq!(version.protocol_version, 44);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -17569,6 +17569,98 @@ fn live_matrix_ui_session() -> Result<(), Box<dyn std::error::Error>> {
     restored.wait_for_lifecycle_state("logged_out", Duration::from_secs(120))?;
     assert!(!session_path.exists());
 
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn formatted_messages_render_styled_lines() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        LaunchOptions {
+            frame_size: Some(FrameSize {
+                width: 800,
+                height: 700,
+            }),
+            ..launch_options(Some(local_app_data.clone()))
+        },
+    )?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(fixture_state_path("rich-text.json"))?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!rich:example")?;
+    let timeline = active_timeline(&app)?;
+    let lines_of = |event_id: &str| {
+        timeline
+            .visible_lines
+            .iter()
+            .filter(|line| line.event_id.as_deref() == Some(event_id))
+            .collect::<Vec<_>>()
+    };
+    // The styled text of each span across an event's lines.
+    let styled_texts = |lines: &[&mirx_testkit::UiTimelineLine]| {
+        lines
+            .iter()
+            .flat_map(|line| {
+                line.styles
+                    .iter()
+                    .map(|span| line.text[span.start..span.end].to_owned())
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // The styles sit on the body, past the timestamp and nick.
+    let first = lines_of("$rich-1");
+    assert!(
+        first[0].text.starts_with("[22:14] <Alice> bold "),
+        "{first:?}"
+    );
+    assert_eq!((first[0].styles[0].start, first[0].styles[0].end), (16, 20));
+    assert!(first[0].styles[0].style.bold);
+    assert_eq!(
+        styled_texts(&first),
+        ["bold", "italic курсив", "underline", "strike", " all"]
+    );
+    let last_span = first.last().unwrap().styles.last().unwrap();
+    assert!(last_span.style.bold && last_span.style.italic && last_span.style.underline);
+
+    // A span crossing a wrap is split between the lines, each part on its own text.
+    let wrapped = lines_of("$rich-7");
+    assert!(wrapped.len() >= 2, "{wrapped:?}");
+    let red = mirx_core::TextColor {
+        red: 0xff,
+        green: 0,
+        blue: 0,
+    };
+    let red_text = wrapped
+        .iter()
+        .flat_map(|line| {
+            line.styles.iter().map(|span| {
+                assert!(span.style.underline);
+                assert_eq!(span.style.foreground, Some(red));
+                line.text[span.start..span.end].trim().to_owned()
+            })
+        })
+        .collect::<Vec<_>>();
+    assert!(red_text.len() >= 2, "{wrapped:?}");
+    assert_eq!(
+        red_text.join(" "),
+        "its red underlined span carries on past the break onto the next line"
+    );
+
+    // An edit shows the replacement's styles.
+    let edited = lines_of("$rich-10");
+    assert_eq!(edited.len(), 1, "{timeline:?}");
+    assert_eq!(edited[0].text, "[22:23] <Alice> final text (edited)");
+    assert_eq!(styled_texts(&edited), ["text"]);
+    assert!(edited[0].styles[0].style.bold);
+    assert!(!edited[0].styles[0].style.italic);
+
+    drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }

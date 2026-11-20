@@ -1,0 +1,730 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!rich:example",
+        "display_name": "Rich",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!rich:example",
+      "activity_id": "event:$rich-1",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$rich-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "bold italic курсив underline strike all",
+        "styles": [
+          {
+            "start": 0,
+            "end": 4,
+            "style": {
+              "bold": true,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": null,
+              "background": null
+            }
+          },
+          {
+            "start": 5,
+            "end": 24,
+            "style": {
+              "bold": false,
+              "italic": true,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": null,
+              "background": null
+            }
+          },
+          {
+            "start": 25,
+            "end": 34,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": true,
+              "strikethrough": false,
+              "foreground": null,
+              "background": null
+            }
+          },
+          {
+            "start": 35,
+            "end": 41,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": true,
+              "foreground": null,
+              "background": null
+            }
+          },
+          {
+            "start": 41,
+            "end": 45,
+            "style": {
+              "bold": true,
+              "italic": true,
+              "underline": true,
+              "strikethrough": false,
+              "foreground": null,
+              "background": null
+            }
+          }
+        ],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!rich:example",
+      "activity_id": "event:$rich-2",
+      "timestamp_ms": 1700000120000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$rich-2",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 0,1 8,2",
+        "styles": [
+          {
+            "start": 0,
+            "end": 2,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#ffffff",
+              "background": null
+            }
+          },
+          {
+            "start": 3,
+            "end": 5,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#000000",
+              "background": null
+            }
+          },
+          {
+            "start": 6,
+            "end": 8,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#00007f",
+              "background": null
+            }
+          },
+          {
+            "start": 9,
+            "end": 11,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#009300",
+              "background": null
+            }
+          },
+          {
+            "start": 12,
+            "end": 14,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#ff0000",
+              "background": null
+            }
+          },
+          {
+            "start": 15,
+            "end": 17,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#7f0000",
+              "background": null
+            }
+          },
+          {
+            "start": 18,
+            "end": 20,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#9c009c",
+              "background": null
+            }
+          },
+          {
+            "start": 21,
+            "end": 23,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#fc7f00",
+              "background": null
+            }
+          },
+          {
+            "start": 24,
+            "end": 26,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#ffff00",
+              "background": null
+            }
+          },
+          {
+            "start": 27,
+            "end": 29,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#00fc00",
+              "background": null
+            }
+          },
+          {
+            "start": 30,
+            "end": 32,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#009393",
+              "background": null
+            }
+          },
+          {
+            "start": 33,
+            "end": 35,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#00ffff",
+              "background": null
+            }
+          },
+          {
+            "start": 36,
+            "end": 38,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#0000fc",
+              "background": null
+            }
+          },
+          {
+            "start": 39,
+            "end": 41,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#ff00ff",
+              "background": null
+            }
+          },
+          {
+            "start": 42,
+            "end": 44,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#7f7f7f",
+              "background": null
+            }
+          },
+          {
+            "start": 45,
+            "end": 47,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#d2d2d2",
+              "background": null
+            }
+          },
+          {
+            "start": 48,
+            "end": 51,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#ffffff",
+              "background": "#000000"
+            }
+          },
+          {
+            "start": 52,
+            "end": 55,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#ffff00",
+              "background": "#00007f"
+            }
+          }
+        ],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!rich:example",
+      "activity_id": "event:$rich-3",
+      "timestamp_ms": 1700000180000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$rich-3",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "extended colour 61 violet",
+        "styles": [
+          {
+            "start": 16,
+            "end": 25,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#a500ff",
+              "background": null
+            }
+          }
+        ],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!rich:example",
+      "activity_id": "event:$rich-4",
+      "timestamp_ms": 1700000240000,
+      "highlight": true,
+      "kind": {
+        "type": "message",
+        "event_id": "$rich-4",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "Alice: the green build is yours",
+        "styles": [
+          {
+            "start": 11,
+            "end": 16,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#009300",
+              "background": null
+            }
+          }
+        ],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!rich:example",
+      "activity_id": "event:$rich-5",
+      "timestamp_ms": 1700000300000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$rich-5",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false
+        },
+        "presentation": "emote",
+        "body": "waves hard",
+        "styles": [
+          {
+            "start": 6,
+            "end": 10,
+            "style": {
+              "bold": true,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": null,
+              "background": null
+            }
+          }
+        ],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!rich:example",
+      "activity_id": "event:$rich-6",
+      "timestamp_ms": 1700000360000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$rich-6",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "notice",
+        "body": "deploy window starts now",
+        "styles": [
+          {
+            "start": 14,
+            "end": 24,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": true,
+              "strikethrough": false,
+              "foreground": null,
+              "background": null
+            }
+          }
+        ],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!rich:example",
+      "activity_id": "event:$rich-7",
+      "timestamp_ms": 1700000420000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$rich-7",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "this line is long enough to wrap and its red underlined span carries on past the break onto the next line before ending plain",
+        "styles": [
+          {
+            "start": 37,
+            "end": 105,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": true,
+              "strikethrough": false,
+              "foreground": "#ff0000",
+              "background": null
+            }
+          }
+        ],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!rich:example",
+      "activity_id": "event:$rich-8",
+      "timestamp_ms": 1700000480000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$rich-8",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "todo:\n* ship it\n* tell everyone\n> quoted wisdom\nlet x = 1;",
+        "styles": [
+          {
+            "start": 8,
+            "end": 12,
+            "style": {
+              "bold": true,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": null,
+              "background": null
+            }
+          },
+          {
+            "start": 23,
+            "end": 31,
+            "style": {
+              "bold": false,
+              "italic": true,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": null,
+              "background": null
+            }
+          },
+          {
+            "start": 41,
+            "end": 47,
+            "style": {
+              "bold": false,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": "#0000fc",
+              "background": null
+            }
+          }
+        ],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!rich:example",
+      "activity_id": "event:$rich-9",
+      "timestamp_ms": 1700000540000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$rich-9",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "see docs (https://example.org/docs)",
+        "styles": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!rich:example",
+      "activity_id": "event:$rich-10",
+      "timestamp_ms": 1700000600000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$rich-10",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "draft text",
+        "styles": [
+          {
+            "start": 6,
+            "end": 10,
+            "style": {
+              "bold": false,
+              "italic": true,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": null,
+              "background": null
+            }
+          }
+        ],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!rich:example",
+      "target": {
+        "type": "event",
+        "event_id": "$rich-10"
+      },
+      "kind": {
+        "type": "message_replaced",
+        "replacement_event_id": "$rich-edit",
+        "sender": "@alice:example",
+        "timestamp_ms": 1700000660000,
+        "presentation": "text",
+        "body": "final text",
+        "styles": [
+          {
+            "start": 6,
+            "end": 10,
+            "style": {
+              "bold": true,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": null,
+              "background": null
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!rich:example",
+      "members": [
+        {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false,
+          "is_own_user": true,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        }
+      ]
+    }
+  }
+]

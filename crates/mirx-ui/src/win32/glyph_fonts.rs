@@ -12,7 +12,7 @@ use windows_sys::Win32::Foundation::{RECT, SIZE};
 use windows_sys::Win32::Graphics::Gdi::GGI_MARK_NONEXISTING_GLYPHS;
 use windows_sys::Win32::Graphics::Gdi::{
     CreateFontIndirectW, DEFAULT_CHARSET, ETO_CLIPPED, ETO_GLYPH_INDEX, ExtTextOutW, FW_BOLD,
-    FW_NORMAL, GDI_ERROR, GetDC, GetFontData, GetGlyphIndicesW, GetTextExtentPoint32W,
+    FW_NORMAL, GDI_ERROR, GetDC, GetFontData, GetGlyphIndicesW, GetObjectW, GetTextExtentPoint32W,
     GetTextExtentPointI, GetTextFaceW, GetTextMetricsW, HDC, HFONT, LOGFONTW, ReleaseDC,
     SelectObject, SetTextAlign, TA_BASELINE, TA_LEFT, TEXTMETRICW, TMPF_TRUETYPE,
 };
@@ -73,6 +73,9 @@ impl Coverage {
 
 struct GlyphFace {
     font: OwnedFont,
+    /// `font` in italic: GDI's simulated slant for faces without one, which
+    /// keeps the advances, or the face's own italic.
+    italic: OwnedFont,
     /// The face name GDI reports for `font`.
     face: String,
     coverage: Coverage,
@@ -119,6 +122,7 @@ impl GlyphFonts {
         };
         SelectObject(screen, previous);
         let mut faces = vec![GlyphFace {
+            italic: italic_font(&primary),
             font: primary,
             face,
             coverage: coverage.map_err(|error| format!("text font {error}"))?,
@@ -140,6 +144,7 @@ impl GlyphFonts {
             SelectObject(screen, previous);
             if let Some(cmap) = cmap {
                 faces.push(GlyphFace {
+                    italic: italic_font(&font),
                     font,
                     face,
                     coverage: Coverage::Cmap(cmap),
@@ -201,15 +206,35 @@ impl GlyphFonts {
     }
 
     /// Draws `text` from `x` on the baseline `baseline_y`, clipped to
-    /// `clip`, in the text colour and background mode of `hdc`. The font and
-    /// text alignment of `hdc` are restored.
-    pub(super) unsafe fn draw(&self, hdc: HDC, x: i32, baseline_y: i32, clip: &RECT, text: &str) {
+    /// `clip`, in the text colour and background mode of `hdc`, `italic` or
+    /// not. Italic runs advance as the regular ones measure, so text takes
+    /// the same room either way. The font and text alignment of `hdc` are
+    /// restored.
+    pub(super) unsafe fn draw(
+        &self,
+        hdc: HDC,
+        x: i32,
+        baseline_y: i32,
+        clip: &RECT,
+        text: &str,
+        italic: bool,
+    ) {
         let previous_align = SetTextAlign(hdc, TA_BASELINE | TA_LEFT);
         let mut x = x;
         for run in self.runs(text) {
-            let previous = SelectObject(hdc, self.faces[run.slot].font.0);
+            let face = &self.faces[run.slot];
+            let previous = SelectObject(hdc, face.font.0);
             let run_text = self.run_text(&run);
+            let width = run_width(hdc, &run_text);
+            // A face's own italic has glyph ids of its own: italic runs go
+            // by character.
+            let italic_units;
             let (options, units) = match &run_text {
+                _ if italic => {
+                    SelectObject(hdc, face.italic.0);
+                    italic_units = run.text.encode_utf16().collect::<Vec<_>>();
+                    (ETO_CLIPPED, &italic_units)
+                }
                 RunText::Glyphs(glyphs) => (ETO_CLIPPED | ETO_GLYPH_INDEX, glyphs),
                 RunText::Utf16(units) => (ETO_CLIPPED, units),
             };
@@ -224,7 +249,7 @@ impl GlyphFonts {
                 null(),
             );
             assert!(drawn != 0, "ExtTextOutW must succeed");
-            x += run_width(hdc, &run_text);
+            x += width;
             SelectObject(hdc, previous);
         }
         SetTextAlign(hdc, previous_align);
@@ -243,6 +268,21 @@ unsafe fn run_width(hdc: HDC, run_text: &RunText) -> i32 {
     };
     assert!(measured != 0, "measuring a text run must succeed");
     size.cx
+}
+
+/// `font` with italic on.
+unsafe fn italic_font(font: &OwnedFont) -> OwnedFont {
+    let mut logfont = LOGFONTW::default();
+    let size = size_of::<LOGFONTW>() as i32;
+    assert_eq!(
+        GetObjectW(font.0, size, (&mut logfont as *mut LOGFONTW).cast()),
+        size,
+        "GetObjectW must read a font's LOGFONTW"
+    );
+    logfont.lfItalic = 1;
+    let italic = OwnedFont(CreateFontIndirectW(&logfont));
+    assert!(!italic.0.is_null(), "CreateFontIndirectW must succeed");
+    italic
 }
 
 fn fallback_logfont(face: &str, cell_height: i32, bold: bool) -> LOGFONTW {
@@ -440,6 +480,23 @@ mod tests {
                 measure("a") + measure("Ж") + measure("b") + measure("🐶")
             );
             assert_eq!(measure("👍\u{FE0F}"), measure("👍"));
+        });
+    }
+
+    #[test]
+    fn styled_pieces_measure_to_the_whole_line() {
+        // Paint advances through a styled line piece by piece; the pieces
+        // must take exactly the room the line was wrapped in.
+        let font = text_font("Fixedsys", 9);
+        with_screen_dc(font.hfont(), |hdc| unsafe {
+            let measure = |text| font.glyphs.measure(hdc, text);
+            let line = "[22:13] <Alice> bold, Жирный 🐶 and plain";
+            let pieces = ["[22:13] <Alice> ", "bold", ", Ж", "ирный 🐶", " and plain"];
+            assert_eq!(pieces.concat(), line);
+            assert_eq!(
+                pieces.iter().map(|piece| measure(piece)).sum::<i32>(),
+                measure(line)
+            );
         });
     }
 
