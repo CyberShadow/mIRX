@@ -2,6 +2,7 @@ mod api;
 mod loopback;
 mod matrix;
 mod matrix_link;
+mod mentions;
 mod rich_text;
 mod runtime;
 

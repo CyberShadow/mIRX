@@ -138,7 +138,8 @@ use crate::api::{
     UserProfile, VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
     VerificationState, VerificationStateEvent,
 };
-use crate::api::{TextStyleSpan, check_text_styles, validate_highlight_word};
+use crate::api::{TextStyleSpan, UserLinkSpan, check_text_styles, validate_highlight_word};
+use crate::mentions::body_mentions;
 use crate::rich_text::{StyledText, html_from_styled_text, styled_text_from_html};
 use crate::runtime::{EventSender, emit_event};
 
@@ -3808,21 +3809,22 @@ fn reaction_target_and_key_from_serialized_event(
 }
 
 /// The message type for a text, notice or emote: plain `body`, plus an
-/// HTML `formatted_body` when `styles` format it. Unformatted text has no
-/// `formatted_body` at all.
+/// HTML `formatted_body` when `styles` format it or `pills` link names in
+/// it. Text with neither has no `formatted_body` at all.
 fn room_message_type(
     presentation: RoomMessagePresentationKind,
     body: String,
     styles: &[TextStyleSpan],
+    pills: &[UserLinkSpan],
 ) -> MessageType {
-    if styles.is_empty() {
+    if styles.is_empty() && pills.is_empty() {
         return match presentation {
             RoomMessagePresentationKind::Text => MessageType::text_plain(body),
             RoomMessagePresentationKind::Notice => MessageType::notice_plain(body),
             RoomMessagePresentationKind::Emote => MessageType::emote_plain(body),
         };
     }
-    let html = html_from_styled_text(&body, styles, &[]);
+    let html = html_from_styled_text(&body, styles, pills);
     match presentation {
         RoomMessagePresentationKind::Text => MessageType::text_html(body, html),
         RoomMessagePresentationKind::Notice => MessageType::notice_html(body, html),
@@ -3899,16 +3901,23 @@ fn owned_event_id_from_str(event_id: &str) -> Result<OwnedEventId, MatrixCoreErr
         .map(|event_id| event_id.to_owned())
 }
 
-/// Whom a reply mentions (MSC3952), so it notifies them as clients that
-/// rely on `m.mentions` expect: see `reply_mention_user_ids`.
-async fn reply_mentions(
+/// The `m.mentions` (MSC3952) and pills of a message with `body`, replying
+/// to `reply` if it does: the members it names (see `body_mentions`), the
+/// room if it says `@room`, and the replied-to sender unless that is the
+/// user. Every message carries one, an empty one when it names nobody:
+/// since MSC4210, servers notify only the users and room it lists.
+///
+/// The members are the cached joined ones (`members_no_sync`), complete for
+/// a room whose window was opened, as opening loads them. A send to a room
+/// never opened (`/msg #room`) may miss a name; fetching the members on
+/// every send would cost a request each time.
+async fn message_mentions(
     client: &Client,
     room: &Room,
-    reply: &SendMessageReplyTarget,
     body: &str,
-) -> Result<Mentions, MatrixCoreError> {
-    let replied_to_sender = UserId::parse(&reply.sender_user_id)
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+    reply: Option<&SendMessageReplyTarget>,
+) -> Result<(Mentions, Vec<UserLinkSpan>), MatrixCoreError> {
+    let own_user_id = client.user_id().expect("a client that sends is logged in");
     let members = room
         .members_no_sync(RoomMemberships::JOIN)
         .await
@@ -3917,51 +3926,24 @@ async fn reply_mentions(
                 "failed to read cached joined Matrix room members: {err}"
             ))
         })?;
-    Ok(Mentions::with_user_ids(reply_mention_user_ids(
+    let named = body_mentions(
         body,
         members
             .iter()
             .map(|member| (member.user_id(), member.display_name())),
-        client.user_id().expect("a client that sends is logged in"),
-        &replied_to_sender,
-    )))
-}
-
-/// The users a reply mentions: the sender of the message it replies to,
-/// and each joined member the body names the way the legacy push rules
-/// would notice, by user ID anywhere or by display name as a whole word
-/// (`.m.rule.contains_display_name`), ignoring case. Never the user.
-fn reply_mention_user_ids<'a>(
-    body: &str,
-    members: impl IntoIterator<Item = (&'a UserId, Option<&'a str>)>,
-    own_user_id: &UserId,
-    replied_to_sender: &UserId,
-) -> BTreeSet<OwnedUserId> {
-    let body = body.to_lowercase();
-    members
-        .into_iter()
-        .filter(|(user_id, display_name)| {
-            body.contains(&user_id.as_str().to_lowercase())
-                || display_name.is_some_and(|name| contains_word(&body, &name.to_lowercase()))
-        })
-        .map(|(user_id, _)| user_id)
-        .chain([replied_to_sender])
-        .filter(|user_id| *user_id != own_user_id)
-        .map(UserId::to_owned)
-        .collect()
-}
-
-/// Whether `word` occurs in `text` bounded by the start or end of `text` or
-/// by characters outside `[A-Za-z0-9_]`, as push rules define word
-/// boundaries.
-fn contains_word(text: &str, word: &str) -> bool {
-    let is_word_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
-    !word.is_empty()
-        && text.match_indices(word).any(|(start, _)| {
-            let end = start + word.len();
-            !text[..start].chars().next_back().is_some_and(is_word_char)
-                && !text[end..].chars().next().is_some_and(is_word_char)
-        })
+        own_user_id,
+    );
+    let mut user_ids = named.user_ids;
+    if let Some(reply) = reply {
+        let replied_to_sender = UserId::parse(&reply.sender_user_id)
+            .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+        if replied_to_sender != own_user_id {
+            user_ids.insert(replied_to_sender);
+        }
+    }
+    let mut mentions = Mentions::with_user_ids(user_ids);
+    mentions.room = named.room;
+    Ok((mentions, named.pills))
 }
 
 pub(crate) async fn send_message(
@@ -3972,18 +3954,15 @@ pub(crate) async fn send_message(
     check_text_styles(&request.body, &request.styles).expect("a sent message's styles are valid");
     let room = joined_room_by_id(client, &request.room_id)?;
 
-    // Only replies carry `m.mentions`: once present, it replaces the legacy
-    // body-name push rules for the event, which plain sends still rely on.
-    let mentions = match &request.reply {
-        Some(reply) => Some(reply_mentions(client, &room, reply, &request.body).await?),
-        None => None,
-    };
+    let (mentions, pills) =
+        message_mentions(client, &room, &request.body, request.reply.as_ref()).await?;
     let mut content = RoomMessageEventContent::new(room_message_type(
         request.presentation,
         request.body,
         &request.styles,
+        &pills,
     ));
-    content.mentions = mentions;
+    content.mentions = Some(mentions);
     match (request.thread, request.reply) {
         (None, None) => {}
         (Some(thread), None) => attach_thread_relation(&mut content, thread)?,
@@ -4138,11 +4117,19 @@ pub(crate) async fn edit_message(
     let room = joined_room_by_id(client, &request.room_id)?;
     let target_event_id = <&EventId>::try_from(request.target_event_id.as_str())
         .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))?;
-    let new_content = RoomMessageEventContentWithoutRelation::new(room_message_type(
+    // The new text's mentions. The SDK's replacement lists them all in
+    // `m.new_content` and, at the top level, only those the original did
+    // not, so an edit notifies only the newly named. An edited reply's
+    // replied-to sender is not added back: the original notified them, and
+    // an edit is compared with the original, not with `m.new_content`.
+    let (mentions, pills) = message_mentions(client, &room, &request.body, None).await?;
+    let mut new_content = RoomMessageEventContentWithoutRelation::new(room_message_type(
         request.presentation,
         request.body,
         &request.styles,
+        &pills,
     ));
+    new_content.mentions = Some(mentions);
     let edit_event = room
         .make_edit_event(target_event_id, EditedContent::RoomMessage(new_content))
         .await
@@ -4570,7 +4557,7 @@ pub(crate) fn stored_session(client: &Client) -> StoredSession {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -4592,9 +4579,8 @@ mod tests {
         message_presentation_and_text_from_serialized_event, outgoing_events_from_local_echo_event,
         own_room_user_profile, owned_event_id_from_str, power_levels_change,
         reaction_event_content, read_file_bytes, register_event_handlers, remove_highlight_word,
-        reply_mention_user_ids, restore_session, room_activity_from_sync_member,
-        room_activity_from_sync_message, room_activity_from_sync_topic,
-        room_activity_update_from_indexed_reaction_redaction,
+        restore_session, room_activity_from_sync_member, room_activity_from_sync_message,
+        room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
         room_activity_update_from_sync_message_replacement,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_history_backfill_event_from_timeline_event,
@@ -6755,7 +6741,7 @@ mod tests {
         presentation: RoomMessagePresentationKind,
         body: String,
     ) -> RoomMessageEventContent {
-        RoomMessageEventContent::new(room_message_type(presentation, body, &[]))
+        RoomMessageEventContent::new(room_message_type(presentation, body, &[], &[]))
     }
 
     fn room_message_event_content_without_relation(
@@ -6765,6 +6751,7 @@ mod tests {
         super::RoomMessageEventContentWithoutRelation::new(room_message_type(
             presentation,
             body,
+            &[],
             &[],
         ))
     }
@@ -6777,8 +6764,13 @@ mod tests {
             (RoomMessagePresentationKind::Emote, "m.emote"),
         ] {
             assert_eq!(
-                serde_json::to_value(room_message_type(presentation, "hi there".to_owned(), &[]))
-                    .unwrap(),
+                serde_json::to_value(room_message_type(
+                    presentation,
+                    "hi there".to_owned(),
+                    &[],
+                    &[]
+                ))
+                .unwrap(),
                 serde_json::json!({ "msgtype": msgtype, "body": "hi there" })
             );
         }
@@ -6795,7 +6787,8 @@ mod tests {
                 serde_json::to_value(room_message_type(
                     presentation,
                     "hi <there>".to_owned(),
-                    &[style_span(3, 10, bold())]
+                    &[style_span(3, 10, bold())],
+                    &[]
                 ))
                 .unwrap(),
                 serde_json::json!({
@@ -12535,54 +12528,6 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_mentions_its_target_and_the_members_it_names() {
-        let user = |id: &str| OwnedUserId::try_from(id).expect("valid user id");
-        let (me, alice, bob, bobby, carol) = (
-            user("@me:example.org"),
-            user("@alice:example.org"),
-            user("@bob:example.org"),
-            user("@bobby:example.org"),
-            user("@carol:example.org"),
-        );
-        let members = [
-            (me.as_ref(), Some("Me")),
-            (alice.as_ref(), Some("Alice")),
-            (bob.as_ref(), Some("Bob")),
-            (bobby.as_ref(), Some("Bobby")),
-            (carol.as_ref(), None),
-        ];
-        let mentions = |body: &str, replied_to: &UserId| {
-            reply_mention_user_ids(body, members, &me, replied_to)
-        };
-
-        assert_eq!(mentions("sure", &alice), BTreeSet::from([alice.clone()]));
-        assert_eq!(
-            mentions("sure", &me),
-            BTreeSet::new(),
-            "replying to oneself mentions nobody"
-        );
-        assert_eq!(
-            mentions("BOB: ask me, alice", &carol),
-            BTreeSet::from([alice.clone(), bob.clone(), carol.clone()]),
-            "display names match as words, ignoring case; the user never"
-        );
-        assert_eq!(
-            mentions("bobby_tables and Bobbyx", &alice),
-            BTreeSet::from([alice.clone()]),
-            "a display name inside a longer word is no mention"
-        );
-        assert_eq!(
-            mentions("ping @Carol:example.org!", &alice),
-            BTreeSet::from([alice.clone(), carol.clone()]),
-            "a user ID anywhere in the body is one"
-        );
-        assert_eq!(
-            mentions("Bobby, Bob", &alice),
-            BTreeSet::from([alice, bob, bobby])
-        );
-    }
-
-    #[test]
     fn content_type_comes_from_the_file_name_extension() {
         for (name, expected) in [
             ("shot.png", "image/png"),
@@ -12817,12 +12762,13 @@ mod tests {
                     "body": "waves at <you>",
                     "format": "org.matrix.custom.html",
                     "formatted_body":
-                        "<b>waves</b> at <span data-mx-color=\"#ff0000\">&lt;you&gt;</span>"
+                        "<b>waves</b> at <span data-mx-color=\"#ff0000\">&lt;you&gt;</span>",
+                    "m.mentions": {},
                 })
             );
             assert_eq!(
                 bodies[1],
-                serde_json::json!({ "msgtype": "m.text", "body": "plain line" })
+                serde_json::json!({ "msgtype": "m.text", "body": "plain line", "m.mentions": {} })
             );
             assert_eq!(
                 bodies[2]["m.new_content"],
@@ -12830,7 +12776,8 @@ mod tests {
                     "msgtype": "m.text",
                     "body": "fixed it",
                     "format": "org.matrix.custom.html",
-                    "formatted_body": "fixed <b>it</b>"
+                    "formatted_body": "fixed <b>it</b>",
+                    "m.mentions": {},
                 })
             );
             // The fallback for clients without edits is the SDK's, from the
@@ -12841,7 +12788,7 @@ mod tests {
     }
 
     #[test]
-    fn only_replies_send_m_mentions() {
+    fn an_edit_notifies_only_the_members_it_newly_names() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -12867,12 +12814,95 @@ mod tests {
                 .ok(OwnedEventId::try_from("$sent:localhost").expect("valid event id"))
                 .mount()
                 .await;
-            let send = |body: &str, reply: Option<SendMessageReplyTarget>| {
+            let mut mine = text_message_json("$mine:localhost", "@example:localhost", "bob: typo");
+            mine["room_id"] = serde_json::json!(room_id().as_str());
+            mine["content"]["m.mentions"] = serde_json::json!({ "user_ids": ["@bob:localhost"] });
+            mock_server
+                .mock_room_event()
+                .room(room_id())
+                .match_event_id()
+                .ok(timeline_event(mine))
+                .mount()
+                .await;
+
+            edit_message(
+                &client,
+                EditMessageRequest {
+                    room_id: room_id().to_string(),
+                    target_event_id: "$mine:localhost".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "bob, @sam1:localhost: fixed".to_owned(),
+                    styles: Vec::new(),
+                },
+            )
+            .await
+            .expect("send the edit");
+
+            let bodies = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let bodies =
+                        request_bodies_containing(&mock_server, "/send/m.room.message/").await;
+                    if !bodies.is_empty() {
+                        return bodies;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("the edit is sent");
+            assert_eq!(
+                bodies[0]["m.new_content"],
+                serde_json::json!({
+                    "msgtype": "m.text",
+                    "body": "bob, @sam1:localhost: fixed",
+                    "format": "org.matrix.custom.html",
+                    "formatted_body":
+                        "<a href=\"https://matrix.to/#/@bob:localhost\">bob</a>, \
+                         <a href=\"https://matrix.to/#/@sam1:localhost\">@sam1:localhost</a>: fixed",
+                    "m.mentions": { "user_ids": ["@bob:localhost", "@sam1:localhost"] },
+                })
+            );
+            assert_eq!(
+                bodies[0]["m.mentions"],
+                serde_json::json!({ "user_ids": ["@sam1:localhost"] }),
+                "the original already notified Bob"
+            );
+        });
+    }
+
+    #[test]
+    fn every_send_carries_m_mentions() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&profile_test_state_events())),
+                )
+                .await;
+            mock_server
+                .mock_room_state_encryption()
+                .plain()
+                .mount()
+                .await;
+            mock_server
+                .mock_room_send()
+                .ok(OwnedEventId::try_from("$sent:localhost").expect("valid event id"))
+                .mount()
+                .await;
+            let send = |presentation, body: &str, reply: Option<SendMessageReplyTarget>| {
                 send_message(
                     &client,
                     SendMessageRequest {
                         room_id: room_id().to_string(),
-                        presentation: RoomMessagePresentationKind::Text,
+                        presentation,
                         body: body.to_owned(),
                         styles: Vec::new(),
                         thread: None,
@@ -12880,8 +12910,10 @@ mod tests {
                     },
                 )
             };
+            let text = RoomMessagePresentationKind::Text;
 
             send(
+                text,
                 "Sam: are you on it?",
                 Some(SendMessageReplyTarget {
                     event_id: "$question:localhost".to_owned(),
@@ -12890,36 +12922,77 @@ mod tests {
             )
             .await
             .expect("send the reply");
-            send("plain line", None).await.expect("send the line");
+            send(text, "plain line", None).await.expect("send the line");
+            send(text, "bob: deploy  done", None)
+                .await
+                .expect("send the named line");
+            send(RoomMessagePresentationKind::Emote, "waves at Bob", None)
+                .await
+                .expect("send the emote");
+            send(RoomMessagePresentationKind::Notice, "@room: Me here", None)
+                .await
+                .expect("send the notice");
 
             // The send queue sends in the background, in order.
             let bodies = tokio::time::timeout(Duration::from_secs(10), async {
                 loop {
                     let bodies =
                         request_bodies_containing(&mock_server, "/send/m.room.message/").await;
-                    if bodies.len() == 2 {
+                    if bodies.len() == 5 {
                         return bodies;
                     }
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
             })
             .await
-            .expect("both messages are sent");
+            .expect("all five messages are sent");
+            // Two members are named Sam: both are named, and neither pilled.
             assert_eq!(
-                bodies[0]["m.mentions"],
+                bodies[0],
                 serde_json::json!({
-                    "user_ids": ["@bob:localhost", "@sam1:localhost", "@sam2:localhost"]
+                    "msgtype": "m.text",
+                    "body": "Sam: are you on it?",
+                    "m.mentions": {
+                        "user_ids": ["@bob:localhost", "@sam1:localhost", "@sam2:localhost"]
+                    },
+                    "m.relates_to": { "m.in_reply_to": { "event_id": "$question:localhost" } },
                 })
             );
             assert_eq!(
-                bodies[0]["m.relates_to"],
-                serde_json::json!({ "m.in_reply_to": { "event_id": "$question:localhost" } })
+                bodies[1],
+                serde_json::json!({ "msgtype": "m.text", "body": "plain line", "m.mentions": {} }),
+                "a line naming nobody says so"
             );
-            assert_eq!(bodies[1]["body"], "plain line");
-            assert!(
-                bodies[1].get("m.mentions").is_none(),
-                "a plain send keeps the legacy push rules: {}",
-                bodies[1]
+            assert_eq!(
+                bodies[2],
+                serde_json::json!({
+                    "msgtype": "m.text",
+                    "body": "bob: deploy  done",
+                    "format": "org.matrix.custom.html",
+                    "formatted_body":
+                        "<a href=\"https://matrix.to/#/@bob:localhost\">bob</a>: deploy &nbsp;done",
+                    "m.mentions": { "user_ids": ["@bob:localhost"] },
+                })
+            );
+            assert_eq!(
+                bodies[3],
+                serde_json::json!({
+                    "msgtype": "m.emote",
+                    "body": "waves at Bob",
+                    "format": "org.matrix.custom.html",
+                    "formatted_body":
+                        "waves at <a href=\"https://matrix.to/#/@bob:localhost\">Bob</a>",
+                    "m.mentions": { "user_ids": ["@bob:localhost"] },
+                })
+            );
+            // The user's own name ("Me") is no mention.
+            assert_eq!(
+                bodies[4],
+                serde_json::json!({
+                    "msgtype": "m.notice",
+                    "body": "@room: Me here",
+                    "m.mentions": { "room": true },
+                })
             );
         });
     }
