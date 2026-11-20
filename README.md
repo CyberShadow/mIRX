@@ -27,6 +27,8 @@ nix develop -c ./scripts/dll-gate.sh
 nix develop -c ./scripts/measure.sh
 ```
 
+`windows-ui-tests.sh` runs the Wine UI suites in parallel shards (`MIRX_UI_TEST_SHARDS`, default 12), each with its own Wine prefix, Xvfb display and temp dir, and its tests one at a time; `-- [--exact] <filter>...` runs only the tests whose names match, and each shard's output is kept in `target/windows-ui-tests/`.
+
 Normal checks remain offline and deterministic. They do not require network access or Matrix credentials.
 Wine/Xvfb automation and screenshot diffs are required local gates for the Win32 shell, but real Windows remains authoritative for DPI, keyboard/input behavior, DPAPI, and installer validation.
 `ui-snapshot.sh` captures each case in `tests/ui-states/` after the snapshot driver's actions; its prefix lets Wine draw window captions and stops the caret blinking. A `collapse:<node>` action folds a treebar item: `space:<room_id>`, or a view (`status`, `room:<room_id>`, `thread:<room_id>|<root_event_id>`). A `dialog:<name>[:<Options page>]` action (for example `dialog:select_server` or `dialog:options:IRC/Messages`) opens a dialog over the window and must be the case's last action. So must a `drag:<line>,<offset>:<line>,<offset>` action, which presses the left button at a byte offset into one visible line of the active timeline and moves to another without releasing it, leaving the mark on screen.
