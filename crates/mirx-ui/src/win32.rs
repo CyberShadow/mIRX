@@ -13775,6 +13775,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 },
                 presentation: RoomMessagePresentationKind::Text,
                 body: "first line".to_owned(),
+                styles: Vec::new(),
                 send_state: RoomMessageSendState::Sent,
             }),
         })),
@@ -13794,6 +13795,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 },
                 presentation: RoomMessagePresentationKind::Text,
                 body: "second line".to_owned(),
+                styles: Vec::new(),
                 send_state: RoomMessageSendState::Sent,
             }),
         })),
@@ -13813,6 +13815,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 },
                 presentation: RoomMessagePresentationKind::Text,
                 body: "third line".to_owned(),
+                styles: Vec::new(),
                 send_state: RoomMessageSendState::Sent,
             }),
         })),
@@ -14472,6 +14475,7 @@ fn submit_compose(
             room_id: destination.room_id.clone(),
             presentation,
             body,
+            styles: Vec::new(),
             thread: destination.thread,
             reply: None,
         },
@@ -14499,6 +14503,7 @@ fn send_room_message(
             room_id,
             presentation,
             body,
+            styles: Vec::new(),
             thread: None,
             reply: None,
         },
@@ -15583,6 +15588,7 @@ fn send_edit(
             target_event_id: target_event_id.to_owned(),
             presentation,
             body,
+            styles: Vec::new(),
         }),
     )
 }
@@ -15609,6 +15615,7 @@ fn send_reply(
             room_id: destination.room_id,
             presentation,
             body,
+            styles: Vec::new(),
             thread: destination.thread,
             reply: Some(SendMessageReplyTarget {
                 event_id: target_event_id.to_owned(),
@@ -17328,6 +17335,7 @@ mod tests {
                 sender: user_profile("@alice:example"),
                 presentation,
                 body: body.to_owned(),
+                styles: Vec::new(),
                 send_state: RoomMessageSendState::Sent,
             }),
         }
@@ -17600,6 +17608,7 @@ mod tests {
                 sender: user_profile("@alice:example"),
                 presentation,
                 body: body.to_owned(),
+                styles: Vec::new(),
                 send_state: RoomMessageSendState::Pending,
             }),
         }
@@ -17708,6 +17717,7 @@ mod tests {
                 timestamp_ms: 1_700_000_000_500,
                 presentation,
                 body: body.to_owned(),
+                styles: Vec::new(),
             },
         })
     }
@@ -17827,6 +17837,7 @@ mod tests {
                 sender: user_profile("@alice:example"),
                 presentation,
                 body: body.to_owned(),
+                styles: Vec::new(),
                 send_state: RoomMessageSendState::Failed {
                     message: message.to_owned(),
                     recoverable: true,
@@ -18628,6 +18639,7 @@ mod tests {
                         timestamp_ms: 1_700_000_000_500,
                         presentation: RoomMessagePresentationKind::Text,
                         body: "edited".to_owned(),
+                        styles: Vec::new(),
                     },
                 })]
             ),
@@ -27999,6 +28011,7 @@ mod tests {
             room_id: room_id.to_owned(),
             presentation,
             body: body.to_owned(),
+            styles: Vec::new(),
             thread: None,
             reply: None,
         })
@@ -29598,6 +29611,7 @@ mod tests {
             room_id: "!ops:example".to_owned(),
             presentation,
             body: body.to_owned(),
+            styles: Vec::new(),
             thread: None,
             reply: Some(SendMessageReplyTarget {
                 event_id: "$q".to_owned(),
@@ -29689,6 +29703,7 @@ mod tests {
                         target_event_id: "$wave".to_owned(),
                         presentation: RoomMessagePresentationKind::Emote,
                         body: "waves back".to_owned(),
+                        styles: Vec::new(),
                     })]
                 );
                 assert_eq!(active_compose_target(hwnd), None);
@@ -29722,6 +29737,7 @@ mod tests {
                         target_event_id: "$wave".to_owned(),
                         presentation: RoomMessagePresentationKind::Emote,
                         body: "waves twice".to_owned(),
+                        styles: Vec::new(),
                     })]
                 );
                 assert_eq!(active_compose_target(hwnd), None);
@@ -30043,6 +30059,7 @@ mod tests {
                 room_id: "!ops:example".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
                 body: "threaded acknowledgement".to_owned(),
+                styles: Vec::new(),
                 thread: Some(SendMessageThreadTarget {
                     thread_root_event_id: "$thread-root:example".to_owned(),
                     latest_event_id: "$thread-1:example".to_owned(),
@@ -30147,6 +30164,7 @@ mod tests {
                 target_event_id: "$mine".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
                 body: "replacement text".to_owned(),
+                styles: Vec::new(),
             })]
         );
         assert_eq!(
@@ -30193,6 +30211,7 @@ mod tests {
                 target_event_id: "$mine-in-thread".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
                 body: "thread final".to_owned(),
+                styles: Vec::new(),
             })]
         );
     }
@@ -30543,6 +30562,7 @@ mod tests {
                     room_id: "!selected:example".to_owned(),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
+                    styles: Vec::new(),
                     thread: None,
                     reply: None,
                 }),
@@ -30550,6 +30570,7 @@ mod tests {
                     room_id: "!selected:example".to_owned(),
                     presentation: RoomMessagePresentationKind::Emote,
                     body: "waves".to_owned(),
+                    styles: Vec::new(),
                     thread: None,
                     reply: None,
                 }),
@@ -30586,6 +30607,7 @@ mod tests {
                 room_id: "!beta:example".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
                 body: "/status".to_owned(),
+                styles: Vec::new(),
                 thread: None,
                 reply: None,
             })]
@@ -30674,6 +30696,7 @@ mod tests {
                     room_id: "!ops:example".to_owned(),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
+                    styles: Vec::new(),
                     thread: Some(SendMessageThreadTarget {
                         thread_root_event_id: "$thread-root:example".to_owned(),
                         latest_event_id: "$thread-1:example".to_owned(),
@@ -30684,6 +30707,7 @@ mod tests {
                     room_id: "!ops:example".to_owned(),
                     presentation: RoomMessagePresentationKind::Emote,
                     body: "waves".to_owned(),
+                    styles: Vec::new(),
                     thread: Some(SendMessageThreadTarget {
                         thread_root_event_id: "$thread-root:example".to_owned(),
                         latest_event_id: "$thread-1:example".to_owned(),
@@ -30738,6 +30762,7 @@ mod tests {
                 room_id: "!ops:example".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
                 body: "hello".to_owned(),
+                styles: Vec::new(),
                 thread: None,
                 reply: None,
             })]

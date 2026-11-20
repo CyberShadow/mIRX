@@ -51,6 +51,7 @@
         },
         "presentation": "text",
         "body": "morning all",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -75,6 +76,7 @@
         },
         "presentation": "text",
         "body": "coffee is ready",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -99,6 +101,7 @@
         },
         "presentation": "text",
         "body": "deploy window opens at 18:00 UTC",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -123,6 +126,7 @@
         },
         "presentation": "text",
         "body": "rollback plan is in the doc",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

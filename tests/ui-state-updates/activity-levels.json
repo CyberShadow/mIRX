@@ -47,6 +47,7 @@
         },
         "presentation": "text",
         "body": "lunch?",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -71,6 +72,7 @@
         },
         "presentation": "text",
         "body": "Alice: review please",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -95,6 +97,7 @@
         },
         "presentation": "text",
         "body": "hey, got a minute?",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

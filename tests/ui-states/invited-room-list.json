@@ -46,6 +46,7 @@
         "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "beta latest",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

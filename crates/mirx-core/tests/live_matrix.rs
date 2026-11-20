@@ -540,6 +540,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                 room_id,
                 presentation: RoomMessagePresentationKind::Text,
                 body: format!("mirx live test {nonce}"),
+                styles: Vec::new(),
                 thread: None,
                 reply: None,
             }))
@@ -716,6 +717,7 @@ fn live_matrix_message_actions_round_trip_is_env_gated() {
             target_event_id: edit_target.to_string(),
             presentation: RoomMessagePresentationKind::Text,
             body: edited_body.clone(),
+            styles: Vec::new(),
         }))
         .expect("send edit message");
     runtime.block_on(live_wait_for_room_event(

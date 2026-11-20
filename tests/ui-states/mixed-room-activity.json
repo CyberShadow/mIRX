@@ -31,6 +31,7 @@
         "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "synced hello",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -109,6 +110,7 @@
         "sender": { "user_id": "@system:example", "display_name": "Server", "display_name_ambiguous": false },
         "presentation": "notice",
         "body": "server maintenance",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -129,6 +131,7 @@
         "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "emote",
         "body": "waves hello",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -149,6 +152,7 @@
         "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "emote",
         "body": "pending local echo",
+        "styles": [],
         "send_state": {
           "state": "pending"
         }
@@ -169,6 +173,7 @@
         "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "emote",
         "body": "failed local echo",
+        "styles": [],
         "send_state": {
           "state": "pending"
         }

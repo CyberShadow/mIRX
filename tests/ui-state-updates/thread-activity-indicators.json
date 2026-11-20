@@ -18,6 +18,7 @@
         "sender": { "user_id": "@erin:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "fresh thread activity",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

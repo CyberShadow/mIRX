@@ -12,7 +12,8 @@
         "sender": "@bob:example",
         "timestamp_ms": 1700100420000,
         "presentation": "text",
-        "body": "redaction edited replacement should disappear"
+        "body": "redaction edited replacement should disappear",
+        "styles": []
       }
     }
   },

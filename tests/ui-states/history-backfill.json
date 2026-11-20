@@ -31,6 +31,7 @@
         "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "current room line one",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -51,6 +52,7 @@
         "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "current room line two",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

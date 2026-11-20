@@ -36,6 +36,7 @@
         },
         "presentation": "text",
         "body": "ranks sort above names",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -130,6 +131,7 @@
         },
         "presentation": "text",
         "body": "shared names still show the user ID",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

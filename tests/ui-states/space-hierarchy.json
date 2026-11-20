@@ -134,6 +134,7 @@
         "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "ops workspace is ready",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -154,6 +155,7 @@
         "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "shared room has updates",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -174,6 +176,7 @@
         "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "random room has updates",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

@@ -82,6 +82,7 @@
         },
         "presentation": "text",
         "body": "morning all",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

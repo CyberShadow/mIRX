@@ -12,6 +12,7 @@
         "sender": { "user_id": "@erin:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "beta wakeup",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -38,6 +39,7 @@
         "sender": { "user_id": "@frank:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "fresh alpha thread",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

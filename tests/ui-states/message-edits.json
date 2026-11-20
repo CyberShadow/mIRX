@@ -51,6 +51,7 @@
         "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "lobby draft",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -71,6 +72,7 @@
         "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "root msg draft",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -97,6 +99,7 @@
         "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "thread reply",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

@@ -59,6 +59,7 @@
         "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "welcome to the lobby",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -79,6 +80,7 @@
         "sender": { "user_id": "@bob:example", "display_name": "Bob", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "build is green",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -137,6 +139,7 @@
         "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "ops topic: incident review",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -157,6 +160,7 @@
         "sender": { "user_id": "@bob:example", "display_name": "Bob", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "encryption enabled for ops",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -177,6 +181,7 @@
         "sender": { "user_id": "@carol:example", "display_name": "Carol", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "deploy window opens at 18:00 UTC",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -197,6 +202,7 @@
         "sender": { "user_id": "@dave:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "random: lunch votes are in",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

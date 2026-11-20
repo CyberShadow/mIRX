@@ -59,6 +59,7 @@
         "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "focus kickoff for constrained shell snapshot coverage",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -79,6 +80,7 @@
         "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "member pane stays visible while the timeline still has enough width to read",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -99,6 +101,7 @@
         "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "long visible timeline line for the 900x620 shell frame so the MDI content remains obvious",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -119,6 +122,7 @@
         "sender": { "user_id": "@dave:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "another line keeps the room busy without depending on any new protocol behavior",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -139,6 +143,7 @@
         "sender": { "user_id": "@erin:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "inbox update keeps the status bar visible",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

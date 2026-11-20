@@ -53,6 +53,7 @@
         },
         "presentation": "text",
         "body": "welcome to ops",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -77,6 +78,7 @@
         },
         "presentation": "text",
         "body": "who is around?",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -101,6 +103,7 @@
         },
         "presentation": "text",
         "body": "hello",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

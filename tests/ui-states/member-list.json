@@ -31,6 +31,7 @@
         "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "member list context line",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -51,6 +52,7 @@
         "sender": { "user_id": "@casey:example", "display_name": "Casey", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "timeline stays visible beside the list",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -71,6 +73,7 @@
         "sender": { "user_id": "@sam-one:example", "display_name": "Sam", "display_name_ambiguous": true },
         "presentation": "text",
         "body": "shared names show the user ID",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

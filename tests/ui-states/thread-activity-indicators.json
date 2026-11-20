@@ -51,6 +51,7 @@
         "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "lobby",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -71,6 +72,7 @@
         "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "root msg",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -95,6 +97,7 @@
         "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "plain",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -120,6 +123,7 @@
         "sender": { "user_id": "@dave:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "thread rep",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -145,6 +149,7 @@
         "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "pending threaded draft",
+        "styles": [],
         "send_state": {
           "state": "pending"
         }

@@ -12,7 +12,8 @@
         "sender": "@alice:example",
         "timestamp_ms": 1700000180000,
         "presentation": "text",
-        "body": "lobby edited"
+        "body": "lobby edited",
+        "styles": []
       }
     }
   },
@@ -29,7 +30,8 @@
         "sender": "@bob:example",
         "timestamp_ms": 1700000240000,
         "presentation": "text",
-        "body": "root msg edited"
+        "body": "root msg edited",
+        "styles": []
       }
     }
   }

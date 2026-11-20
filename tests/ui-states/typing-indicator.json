@@ -31,6 +31,7 @@
         "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "typing context",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

@@ -1017,6 +1017,7 @@ pub enum RoomActivityUpdateKind {
         timestamp_ms: u64,
         presentation: RoomMessagePresentationKind,
         body: String,
+        styles: Vec<mirx_core::TextStyleSpan>,
     },
     ReactionAdded {
         reaction_event_id: String,

@@ -31,6 +31,7 @@
         "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "opening line before the search hit",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -51,6 +52,7 @@
         "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "needle in the first matching row",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -71,6 +73,7 @@
         "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "neutral middle line",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -91,6 +94,7 @@
         "sender": { "user_id": "@dave:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "needle appears again in the second matching row",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

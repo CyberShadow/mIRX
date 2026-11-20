@@ -31,6 +31,7 @@
         "sender": { "user_id": "@normal:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "normal reaction target",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -51,6 +52,7 @@
         "sender": { "user_id": "@root:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "thread reaction root",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -77,6 +79,7 @@
         "sender": { "user_id": "@reply:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "thread reaction reply",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

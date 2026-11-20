@@ -114,6 +114,7 @@
         },
         "presentation": "text",
         "body": "morning all",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -138,6 +139,7 @@
         },
         "presentation": "text",
         "body": "Alice: ping",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -162,6 +164,7 @@
         },
         "presentation": "emote",
         "body": "waves at Alice",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -186,6 +189,7 @@
         },
         "presentation": "text",
         "body": "back to work",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

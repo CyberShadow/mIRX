@@ -1081,6 +1081,7 @@ fn message_event(
             sender: user_profile(sender),
             presentation,
             body: body.to_owned(),
+            styles: Vec::new(),
             send_state: CoreRoomMessageSendState::Sent,
         }),
     }))
@@ -1136,6 +1137,7 @@ fn message_event_with_event_id_and_relation(
             sender: user_profile(sender),
             presentation,
             body: body.to_owned(),
+            styles: Vec::new(),
             send_state: CoreRoomMessageSendState::Sent,
         }),
     }))
@@ -1200,6 +1202,7 @@ fn pending_message_event_with_presentation(
             sender: user_profile(sender),
             presentation,
             body: body.to_owned(),
+            styles: Vec::new(),
             send_state: CoreRoomMessageSendState::Pending,
         }),
     }))
@@ -1272,6 +1275,7 @@ fn message_replaced_update_event(
             timestamp_ms,
             presentation,
             body: body.to_owned(),
+            styles: Vec::new(),
         },
     })
 }

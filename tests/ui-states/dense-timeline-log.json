@@ -31,6 +31,7 @@
         "sender": { "user_id": "@dense.sender.with.a.very.long.mxid:example.org", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "dense text row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -51,6 +52,7 @@
         "sender": { "user_id": "@system:example", "display_name": "Server", "display_name_ambiguous": false },
         "presentation": "notice",
         "body": "dense notice row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -71,6 +73,7 @@
         "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "emote",
         "body": "dense emote row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -190,6 +193,7 @@
         "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "dense pending row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "styles": [],
         "send_state": {
           "state": "pending"
         }
@@ -210,6 +214,7 @@
         "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "dense failed row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "styles": [],
         "send_state": {
           "state": "pending"
         }
@@ -271,6 +276,7 @@
         "sender": { "user_id": "@bob:example", "display_name": "Bob", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "dense thread root alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -297,6 +303,7 @@
         "sender": { "user_id": "@carol:example", "display_name": "Carol", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "dense threaded reply alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

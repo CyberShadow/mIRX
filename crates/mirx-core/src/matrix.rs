@@ -1901,6 +1901,7 @@ fn room_activity_from_sync_message(
                 sender,
                 presentation,
                 body,
+                styles: Vec::new(),
                 send_state: RoomMessageSendState::Sent,
             }),
         });
@@ -2014,6 +2015,7 @@ fn room_activity_update_from_sync_message_replacement(
             timestamp_ms: event.origin_server_ts.get().into(),
             presentation,
             body,
+            styles: Vec::new(),
         },
     })
 }
@@ -3513,6 +3515,7 @@ fn map_local_message_activity(
             sender: own_profile.clone(),
             presentation,
             body,
+            styles: Vec::new(),
             send_state: RoomMessageSendState::Pending,
         }),
     }))
@@ -6505,6 +6508,7 @@ mod tests {
                     sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
+                    styles: Vec::new(),
                     send_state: RoomMessageSendState::Sent,
                 }),
             })
@@ -6608,6 +6612,7 @@ mod tests {
                     sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Notice,
                     body: "heads up".to_owned(),
+                    styles: Vec::new(),
                     send_state: RoomMessageSendState::Sent,
                 }),
             })
@@ -6647,6 +6652,7 @@ mod tests {
                     sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Emote,
                     body: "waves".to_owned(),
+                    styles: Vec::new(),
                     send_state: RoomMessageSendState::Sent,
                 }),
             })
@@ -6688,6 +6694,7 @@ mod tests {
                     timestamp_ms: 1_700_000_001_000,
                     presentation: RoomMessagePresentationKind::Text,
                     body: "edited body".to_owned(),
+                    styles: Vec::new(),
                 },
             })
         );
@@ -6748,6 +6755,7 @@ mod tests {
                     timestamp_ms: 1_700_000_001_001,
                     presentation: RoomMessagePresentationKind::Notice,
                     body: "heads up".to_owned(),
+                    styles: Vec::new(),
                 },
             })
         );
@@ -6764,6 +6772,7 @@ mod tests {
                     timestamp_ms: 1_700_000_001_002,
                     presentation: RoomMessagePresentationKind::Emote,
                     body: "waves".to_owned(),
+                    styles: Vec::new(),
                 },
             })
         );
@@ -6812,6 +6821,7 @@ mod tests {
                     timestamp_ms: 1_700_000_001_003,
                     presentation: RoomMessagePresentationKind::Text,
                     body: "thread reply edited".to_owned(),
+                    styles: Vec::new(),
                 },
             })
         );
@@ -6881,6 +6891,7 @@ mod tests {
                     sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "older message".to_owned(),
+                    styles: Vec::new(),
                     send_state: RoomMessageSendState::Sent,
                 }),
             })))
@@ -6925,6 +6936,7 @@ mod tests {
                         timestamp_ms: 1_700_000_001_000,
                         presentation: RoomMessagePresentationKind::Text,
                         body: "edited body".to_owned(),
+                        styles: Vec::new(),
                     },
                 }
             ))
@@ -7014,6 +7026,7 @@ mod tests {
                         sender: profile("@alice:example.org"),
                         presentation: RoomMessagePresentationKind::Text,
                         body: "older".to_owned(),
+                        styles: Vec::new(),
                         send_state: RoomMessageSendState::Sent,
                     }),
                 })),
@@ -7029,6 +7042,7 @@ mod tests {
                         sender: profile("@alice:example.org"),
                         presentation: RoomMessagePresentationKind::Text,
                         body: "newer".to_owned(),
+                        styles: Vec::new(),
                         send_state: RoomMessageSendState::Sent,
                     }),
                 })),
@@ -7331,6 +7345,7 @@ mod tests {
                     timestamp_ms: 1_700_000_001_000,
                     presentation: RoomMessagePresentationKind::Text,
                     body: "edited body".to_owned(),
+                    styles: Vec::new(),
                 },
             })
         );
@@ -7424,6 +7439,7 @@ mod tests {
                     sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello from thread".to_owned(),
+                    styles: Vec::new(),
                     send_state: RoomMessageSendState::Sent,
                 }),
             })
@@ -7470,6 +7486,7 @@ mod tests {
                     sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "reply only".to_owned(),
+                    styles: Vec::new(),
                     send_state: RoomMessageSendState::Sent,
                 }),
             })
@@ -11065,6 +11082,7 @@ mod tests {
                     sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
+                    styles: Vec::new(),
                     send_state: RoomMessageSendState::Pending,
                 }),
             }
@@ -11104,6 +11122,7 @@ mod tests {
                     sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Notice,
                     body: "heads up".to_owned(),
+                    styles: Vec::new(),
                     send_state: RoomMessageSendState::Pending,
                 }),
             }
@@ -11142,6 +11161,7 @@ mod tests {
                     sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Emote,
                     body: "waves".to_owned(),
+                    styles: Vec::new(),
                     send_state: RoomMessageSendState::Pending,
                 }),
             }
@@ -11250,6 +11270,7 @@ mod tests {
                     sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello from thread".to_owned(),
+                    styles: Vec::new(),
                     send_state: RoomMessageSendState::Pending,
                 }),
             }
@@ -11298,6 +11319,7 @@ mod tests {
                     sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello in reply".to_owned(),
+                    styles: Vec::new(),
                     send_state: RoomMessageSendState::Pending,
                 }),
             }
@@ -11658,6 +11680,7 @@ mod tests {
                     sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
+                    styles: Vec::new(),
                     send_state: RoomMessageSendState::Pending,
                 }),
             }))]
@@ -11710,6 +11733,7 @@ mod tests {
                     sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello from thread".to_owned(),
+                    styles: Vec::new(),
                     send_state: RoomMessageSendState::Pending,
                 }),
             }))]
@@ -11760,6 +11784,7 @@ mod tests {
                     sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello in reply".to_owned(),
+                    styles: Vec::new(),
                     send_state: RoomMessageSendState::Pending,
                 }),
             }))]
@@ -11801,6 +11826,7 @@ mod tests {
                         sender: profile("@alice:example.org"),
                         presentation: RoomMessagePresentationKind::Text,
                         body: "hello".to_owned(),
+                        styles: Vec::new(),
                         send_state: RoomMessageSendState::Pending,
                     }),
                 })),
@@ -12231,6 +12257,7 @@ mod tests {
                         room_id: room_id().to_string(),
                         presentation: RoomMessagePresentationKind::Text,
                         body: body.to_owned(),
+                        styles: Vec::new(),
                         thread: None,
                         reply,
                     },

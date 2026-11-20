@@ -230,6 +230,7 @@ mod tests {
                 },
                 presentation,
                 body: body.to_owned(),
+                styles: Vec::new(),
                 send_state: RoomMessageSendState::Sent,
             }),
         }

@@ -130,6 +130,8 @@ pub struct SendMessageRequest {
     pub room_id: String,
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
+    /// Formats `body`; must pass [`check_text_styles`].
+    pub styles: Vec<TextStyleSpan>,
     pub thread: Option<SendMessageThreadTarget>,
     pub reply: Option<SendMessageReplyTarget>,
 }
@@ -150,6 +152,8 @@ pub struct EditMessageRequest {
     pub target_event_id: String,
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
+    /// Formats `body`; must pass [`check_text_styles`].
+    pub styles: Vec<TextStyleSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -652,15 +656,183 @@ pub enum RoomMessagePresentationKind {
     Emote,
 }
 
+/// An sRGB colour; `"#rrggbb"` in lowercase hex on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextColor {
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
+}
+
+impl TextColor {
+    /// Parses exactly `#rrggbb` in lowercase hex, the wire form.
+    fn from_wire(text: &str) -> Option<Self> {
+        let hex = text.strip_prefix('#')?;
+        if hex.len() != 6
+            || !hex
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return None;
+        }
+        let channel = |index: usize| {
+            u8::from_str_radix(&hex[index..index + 2], 16).expect("checked lowercase hex digits")
+        };
+        Some(Self {
+            red: channel(0),
+            green: channel(2),
+            blue: channel(4),
+        })
+    }
+}
+
+impl fmt::Display for TextColor {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "#{:02x}{:02x}{:02x}",
+            self.red, self.green, self.blue
+        )
+    }
+}
+
+impl serde::Serialize for TextColor {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for TextColor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let text = String::deserialize(deserializer)?;
+        Self::from_wire(&text).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "invalid text color {text:?}: expected #rrggbb in lowercase hex"
+            ))
+        })
+    }
+}
+
+/// How a run of message text is drawn. `TextStyle::default()` is plain.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextStyle {
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
+    pub foreground: Option<TextColor>,
+    pub background: Option<TextColor>,
+}
+
+/// `style` applies to `body[start..end]`, in UTF-8 byte offsets.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TextStyleSpan {
+    pub start: usize,
+    pub end: usize,
+    pub style: TextStyle,
+}
+
+/// Checks that `styles` describe `body` in the one canonical way: sorted,
+/// non-overlapping, non-empty spans on char boundaries, none plain, no two
+/// touching spans with the same style (they are one span), and none
+/// covering a `\n`, so styles never cross a line.
+pub fn check_text_styles(body: &str, styles: &[TextStyleSpan]) -> Result<(), String> {
+    let mut previous: Option<&TextStyleSpan> = None;
+    for span in styles {
+        let TextStyleSpan { start, end, style } = span;
+        if start >= end {
+            return Err(format!("empty text style span {start}..{end}"));
+        }
+        if *end > body.len() {
+            return Err(format!(
+                "text style span {start}..{end} is past the body's {} bytes",
+                body.len()
+            ));
+        }
+        if !body.is_char_boundary(*start) || !body.is_char_boundary(*end) {
+            return Err(format!(
+                "text style span {start}..{end} is not on char boundaries"
+            ));
+        }
+        if *style == TextStyle::default() {
+            return Err(format!("text style span {start}..{end} is plain"));
+        }
+        if body[*start..*end].contains('\n') {
+            return Err(format!("text style span {start}..{end} crosses a line"));
+        }
+        if let Some(previous) = previous {
+            if previous.end > *start {
+                return Err(format!(
+                    "text style span {start}..{end} overlaps or precedes {}..{}",
+                    previous.start, previous.end
+                ));
+            }
+            if previous.end == *start && previous.style == *style {
+                return Err(format!(
+                    "text style spans {}..{} and {start}..{end} have the same style and must be one",
+                    previous.start, previous.end
+                ));
+            }
+        }
+        previous = Some(span);
+    }
+    Ok(())
+}
+
+/// A text, notice or emote message. `styles` format `body`; they pass
+/// [`check_text_styles`], which the wire form enforces.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "WireRoomMessageActivity")]
 pub struct RoomMessageActivity {
     pub event_id: Option<String>,
     pub transaction_id: Option<String>,
     pub sender: RoomUserProfile,
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
+    pub styles: Vec<TextStyleSpan>,
     pub send_state: RoomMessageSendState,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRoomMessageActivity {
+    event_id: Option<String>,
+    transaction_id: Option<String>,
+    sender: RoomUserProfile,
+    presentation: RoomMessagePresentationKind,
+    body: String,
+    styles: Vec<TextStyleSpan>,
+    send_state: RoomMessageSendState,
+}
+
+impl TryFrom<WireRoomMessageActivity> for RoomMessageActivity {
+    type Error = String;
+
+    fn try_from(message: WireRoomMessageActivity) -> Result<Self, Self::Error> {
+        check_text_styles(&message.body, &message.styles).map_err(|err| {
+            format!(
+                "invalid styles for message (event {:?}, transaction {:?}): {err}",
+                message.event_id, message.transaction_id
+            )
+        })?;
+        Ok(Self {
+            event_id: message.event_id,
+            transaction_id: message.transaction_id,
+            sender: message.sender,
+            presentation: message.presentation,
+            body: message.body,
+            styles: message.styles,
+            send_state: message.send_state,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -872,12 +1044,45 @@ pub enum RoomMemberChange {
     AvatarChanged,
 }
 
+/// A change to an earlier activity. A `MessageReplaced` kind's styles pass
+/// [`check_text_styles`], which the wire form enforces.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "WireRoomActivityUpdate")]
 pub struct RoomActivityUpdate {
     pub room_id: String,
     pub target: RoomActivityUpdateTarget,
     pub kind: RoomActivityUpdateKind,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRoomActivityUpdate {
+    room_id: String,
+    target: RoomActivityUpdateTarget,
+    kind: RoomActivityUpdateKind,
+}
+
+impl TryFrom<WireRoomActivityUpdate> for RoomActivityUpdate {
+    type Error = String;
+
+    fn try_from(update: WireRoomActivityUpdate) -> Result<Self, Self::Error> {
+        if let RoomActivityUpdateKind::MessageReplaced {
+            replacement_event_id,
+            body,
+            styles,
+            ..
+        } = &update.kind
+        {
+            check_text_styles(body, styles).map_err(|err| {
+                format!("invalid styles for replacement {replacement_event_id}: {err}")
+            })?;
+        }
+        Ok(Self {
+            room_id: update.room_id,
+            target: update.target,
+            kind: update.kind,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1120,6 +1325,7 @@ pub enum RoomActivityUpdateKind {
         timestamp_ms: u64,
         presentation: RoomMessagePresentationKind,
         body: String,
+        styles: Vec<TextStyleSpan>,
     },
     ReactionAdded {
         reaction_event_id: String,
@@ -1438,4 +1644,210 @@ pub enum Event {
     LoggedOut,
     Stopped,
     Error(CoreErrorEvent),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RED: TextColor = TextColor {
+        red: 0xff,
+        green: 0,
+        blue: 0,
+    };
+
+    fn bold() -> TextStyle {
+        TextStyle {
+            bold: true,
+            ..TextStyle::default()
+        }
+    }
+
+    fn span(start: usize, end: usize, style: TextStyle) -> TextStyleSpan {
+        TextStyleSpan { start, end, style }
+    }
+
+    #[test]
+    fn text_colors_are_lowercase_rrggbb_on_the_wire() {
+        let color = TextColor {
+            red: 0x0a,
+            green: 0xbc,
+            blue: 0xff,
+        };
+        assert_eq!(
+            serde_json::to_value(color).unwrap(),
+            serde_json::json!("#0abcff")
+        );
+        assert_eq!(
+            serde_json::from_value::<TextColor>(serde_json::json!("#0abcff")).unwrap(),
+            color
+        );
+        for invalid in [
+            "#0ABCFF", "0abcff", "#abc", "#0abcff0", "#0abcfg", "", "#+abcff",
+        ] {
+            assert!(
+                serde_json::from_value::<TextColor>(serde_json::json!(invalid)).is_err(),
+                "{invalid:?} must be rejected"
+            );
+        }
+        assert!(serde_json::from_value::<TextColor>(serde_json::json!(16711680)).is_err());
+    }
+
+    #[test]
+    fn text_styles_round_trip_and_reject_unknown_fields() {
+        let style = TextStyle {
+            italic: true,
+            foreground: Some(RED),
+            ..TextStyle::default()
+        };
+        let json = serde_json::json!({
+            "bold": false,
+            "italic": true,
+            "underline": false,
+            "strikethrough": false,
+            "foreground": "#ff0000",
+            "background": null,
+        });
+        assert_eq!(serde_json::to_value(style).unwrap(), json);
+        assert_eq!(serde_json::from_value::<TextStyle>(json).unwrap(), style);
+        assert!(
+            serde_json::from_value::<TextStyle>(serde_json::json!({
+                "bold": false, "italic": true, "underline": false, "strikethrough": false,
+                "foreground": null, "background": null, "monospace": true,
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn check_text_styles_accepts_canonical_spans() {
+        let italic = TextStyle {
+            italic: true,
+            ..TextStyle::default()
+        };
+        assert_eq!(check_text_styles("", &[]), Ok(()));
+        assert_eq!(
+            check_text_styles(
+                "héllo world\nnext",
+                &[
+                    span(0, 6, bold()),
+                    span(6, 12, italic),
+                    span(13, 17, bold())
+                ]
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn check_text_styles_rejects_each_invariant_violation() {
+        let italic = TextStyle {
+            italic: true,
+            ..TextStyle::default()
+        };
+        let body = "héllo world\nnext";
+        for (styles, expected) in [
+            (vec![span(3, 3, bold())], "empty"),
+            (vec![span(4, 2, bold())], "empty"),
+            (vec![span(0, 18, bold())], "past the body"),
+            (vec![span(0, 2, bold())], "char boundaries"),
+            (vec![span(2, 4, bold())], "char boundaries"),
+            (vec![span(0, 3, TextStyle::default())], "plain"),
+            (vec![span(7, 14, bold())], "crosses a line"),
+            (vec![span(0, 5, bold()), span(4, 6, italic)], "overlaps"),
+            (vec![span(6, 9, bold()), span(0, 3, italic)], "overlaps"),
+            (vec![span(0, 3, bold()), span(3, 6, bold())], "must be one"),
+        ] {
+            let err = check_text_styles(body, &styles).unwrap_err();
+            assert!(err.contains(expected), "{styles:?}: {err}");
+        }
+    }
+
+    fn message_json(styles: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "event_id": "$event:example.org",
+            "transaction_id": null,
+            "sender": {
+                "user_id": "@alice:example.org",
+                "display_name": null,
+                "display_name_ambiguous": false,
+            },
+            "presentation": "text",
+            "body": "hi there",
+            "styles": styles,
+            "send_state": { "state": "sent" },
+        })
+    }
+
+    #[test]
+    fn message_activities_carry_checked_styles() {
+        let message = serde_json::from_value::<RoomMessageActivity>(message_json(
+            serde_json::json!([{ "start": 0, "end": 2, "style": bold() }]),
+        ))
+        .unwrap();
+        assert_eq!(message.styles, vec![span(0, 2, bold())]);
+        assert_eq!(
+            serde_json::to_value(&message).unwrap(),
+            message_json(serde_json::json!([{ "start": 0, "end": 2, "style": bold() }]))
+        );
+
+        let err = serde_json::from_value::<RoomMessageActivity>(message_json(
+            serde_json::json!([{ "start": 0, "end": 20, "style": bold() }]),
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("$event:example.org"), "{err}");
+        assert!(err.contains("past the body"), "{err}");
+
+        let mut missing = message_json(serde_json::json!([]));
+        missing.as_object_mut().unwrap().remove("styles");
+        let err = serde_json::from_value::<RoomMessageActivity>(missing)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing field `styles`"), "{err}");
+
+        let mut unknown = message_json(serde_json::json!([]));
+        unknown["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<RoomMessageActivity>(unknown).is_err());
+    }
+
+    #[test]
+    fn message_replacements_carry_checked_styles() {
+        let update = |styles: serde_json::Value| {
+            serde_json::json!({
+                "room_id": "!ops:example.org",
+                "target": { "type": "event", "event_id": "$original:example.org" },
+                "kind": {
+                    "type": "message_replaced",
+                    "replacement_event_id": "$edit:example.org",
+                    "sender": "@alice:example.org",
+                    "timestamp_ms": 1700000001000u64,
+                    "presentation": "text",
+                    "body": "edited",
+                    "styles": styles,
+                },
+            })
+        };
+        let parsed = serde_json::from_value::<RoomActivityUpdate>(update(serde_json::json!([
+            { "start": 0, "end": 6, "style": bold() }
+        ])))
+        .unwrap();
+        assert!(matches!(
+            parsed.kind,
+            RoomActivityUpdateKind::MessageReplaced { ref styles, .. }
+                if *styles == vec![span(0, 6, bold())]
+        ));
+
+        let err = serde_json::from_value::<RoomActivityUpdate>(update(serde_json::json!([
+            { "start": 0, "end": 6, "style": TextStyle::default() }
+        ])))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("$edit:example.org"), "{err}");
+        assert!(err.contains("plain"), "{err}");
+
+        let mut unknown = update(serde_json::json!([]));
+        unknown["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<RoomActivityUpdate>(unknown).is_err());
+    }
 }

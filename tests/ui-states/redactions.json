@@ -31,6 +31,7 @@
         "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "redaction text payload should disappear",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -51,6 +52,7 @@
         "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "redaction edited original should disappear",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -114,6 +116,7 @@
         "sender": { "user_id": "@erin:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "redaction thread root payload should disappear",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -140,6 +143,7 @@
         "sender": { "user_id": "@frank:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "redaction thread reply payload should disappear",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }

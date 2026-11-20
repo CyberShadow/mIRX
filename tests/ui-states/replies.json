@@ -80,6 +80,7 @@
         },
         "presentation": "text",
         "body": "are we deploying today? the build looks green on every platform now",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -107,6 +108,7 @@
         },
         "presentation": "text",
         "body": "yes, after lunch",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -134,6 +136,7 @@
         },
         "presentation": "emote",
         "body": "cheers",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -161,6 +164,7 @@
         },
         "presentation": "text",
         "body": "I will tag the release",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -185,6 +189,7 @@
         },
         "presentation": "text",
         "body": "the deploy window is 13:00 UTC",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -204,7 +209,8 @@
         "sender": "@alice:example",
         "timestamp_ms": 1700000250000,
         "presentation": "text",
-        "body": "the deploy window is 14:00 UTC"
+        "body": "the deploy window is 14:00 UTC",
+        "styles": []
       }
     }
   },
@@ -229,6 +235,7 @@
         },
         "presentation": "text",
         "body": "that one was fixed last week",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -256,6 +263,7 @@
         },
         "presentation": "text",
         "body": "still seeing it here",
+        "styles": [],
         "send_state": {
           "state": "sent"
         }
@@ -285,6 +293,7 @@
             },
             "presentation": "text",
             "body": "the login page times out on the second try",
+            "styles": [],
             "send_state": {
               "state": "sent"
             }
