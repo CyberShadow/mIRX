@@ -3037,7 +3037,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 59);
+    assert_eq!(version.protocol_version, 60);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -10124,6 +10124,9 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
             read_target_event_id: None,
             read_state: None,
             history_backfill: UiRoomHistoryBackfillState::Idle,
+            // Refresh work is not what this test is about.
+            timeline_row_builds: find_ui_room(&initial_state, "!direct:example")
+                .timeline_row_builds,
         }
     );
     assert_eq!(
@@ -12678,6 +12681,8 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
                 num_mentions: 0,
             }),
             history_backfill: UiRoomHistoryBackfillState::Idle,
+            // Refresh work is not what this test is about.
+            timeline_row_builds: find_ui_room(&initial_state, "!beta:example").timeline_row_builds,
         }
     );
     assert_eq!(
@@ -12703,6 +12708,8 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
                 num_mentions: 1,
             }),
             history_backfill: UiRoomHistoryBackfillState::Idle,
+            // Refresh work is not what this test is about.
+            timeline_row_builds: find_ui_room(&initial_state, "!alpha:example").timeline_row_builds,
         }
     );
 
@@ -12743,6 +12750,9 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
                 num_mentions: 1,
             }),
             history_backfill: UiRoomHistoryBackfillState::Idle,
+            // Refresh work is not what this test is about.
+            timeline_row_builds: find_ui_room(&activated_state, "!alpha:example")
+                .timeline_row_builds,
         }
     );
 

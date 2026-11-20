@@ -876,6 +876,7 @@ pub(super) fn test_state() -> WindowState {
         colors_dialog: None,
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
+        refresh_counters: RefreshCounters::default(),
     }
 }
 

@@ -1281,6 +1281,21 @@ pub struct UiState {
     /// The account's ignore list as the server last listed it; `None`
     /// until the first list.
     pub ignored_users: Option<Vec<String>>,
+    /// How much refresh work the UI has done since it started.
+    pub refresh_counters: UiRefreshCounters,
+}
+
+/// Counts of the UI's costly refresh work since it started. They only grow:
+/// compare two dumps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiRefreshCounters {
+    /// Rows built for a window (Status, room, thread).
+    pub timeline_row_builds: u64,
+    /// Log rows wrapped, each measured in the text font.
+    pub rows_wrapped: u64,
+    pub treebar_rebuilds: u64,
+    pub switchbar_rebuilds: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1698,6 +1713,8 @@ pub struct UiRoomState {
     pub read_target_event_id: Option<String>,
     pub read_state: Option<UiRoomReadState>,
     pub history_backfill: UiRoomHistoryBackfillState,
+    /// Rows built for the room's window; 0 without one.
+    pub timeline_row_builds: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

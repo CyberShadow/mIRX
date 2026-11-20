@@ -8,6 +8,61 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use super::*;
 
 const MDI_CHILD_CLASS_NAME: &str = "mirxWin32MdiChild";
+
+/// How often the refresh path did its costly work since the frame started:
+/// rows built for a window, log rows wrapped (measured), and treebar and
+/// switchbar rebuilds. They only count up, so tests read deltas from the
+/// automation dump; they assert work, never time.
+#[derive(Debug, Default)]
+pub(super) struct RefreshCounters {
+    timeline_row_builds: u64,
+    rows_wrapped: u64,
+    treebar_rebuilds: u64,
+    switchbar_rebuilds: u64,
+    /// `timeline_row_builds` of room windows, by room.
+    row_builds_by_room: BTreeMap<String, u64>,
+}
+
+impl RefreshCounters {
+    fn count_row_build(&mut self, view_id: &ViewId) {
+        self.timeline_row_builds += 1;
+        if let ViewId::Room(room_id) = view_id {
+            *self.row_builds_by_room.entry(room_id.clone()).or_default() += 1;
+        }
+    }
+
+    pub(super) fn count_rows_wrapped(&mut self, rows: usize) {
+        self.rows_wrapped += rows as u64;
+    }
+
+    pub(super) fn count_treebar_rebuild(&mut self) {
+        self.treebar_rebuilds += 1;
+    }
+
+    pub(super) fn count_switchbar_rebuild(&mut self) {
+        self.switchbar_rebuilds += 1;
+    }
+
+    pub(super) fn timeline_row_builds(&self) -> u64 {
+        self.timeline_row_builds
+    }
+
+    pub(super) fn rows_wrapped(&self) -> u64 {
+        self.rows_wrapped
+    }
+
+    pub(super) fn treebar_rebuilds(&self) -> u64 {
+        self.treebar_rebuilds
+    }
+
+    pub(super) fn switchbar_rebuilds(&self) -> u64 {
+        self.switchbar_rebuilds
+    }
+
+    pub(super) fn room_row_builds(&self, room_id: &str) -> u64 {
+        self.row_builds_by_room.get(room_id).copied().unwrap_or(0)
+    }
+}
 pub(super) const ROOM_CONTENT_CLASS_NAME: &str = "mirxWin32RoomContent";
 /// `WC_LISTVIEWW`, the common controls' list view.
 const ROOM_LIST_CLASS_NAME: &str = "SysListView32";
@@ -1042,6 +1097,7 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
                 build_status_timeline_rows(&state.model.status_log, state.timestamps())
             };
             set_timeline_rows(content, &rows);
+            state_mut(hwnd).refresh_counters.count_row_build(view_id);
             recompute_find_for_view(state_mut(hwnd), view_id, &rows);
             apply_find_to_active_view(hwnd, view_id)?;
             InvalidateRect(content, null(), 1);
@@ -1083,6 +1139,7 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
             validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
             let timeline = room_content_timeline(content);
             set_timeline_rows(timeline, &rows);
+            state_mut(hwnd).refresh_counters.count_row_build(view_id);
             recompute_find_for_view(state_mut(hwnd), view_id, &rows);
             if state_ref(hwnd).active_view == *view_id {
                 apply_find_to_active_view(hwnd, view_id)?;
@@ -1130,6 +1187,7 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
             validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
             let timeline = room_content_timeline(content);
             set_timeline_rows(timeline, &rows);
+            state_mut(hwnd).refresh_counters.count_row_build(view_id);
             recompute_find_for_view(state_mut(hwnd), view_id, &rows);
             if state_ref(hwnd).active_view == *view_id {
                 apply_find_to_active_view(hwnd, view_id)?;

@@ -9,7 +9,7 @@ use super::hotlinks::LinkKind;
 use super::settings::{ActivityColors, Settings};
 use super::timeline_layout::timeline_row_color;
 use super::*;
-use crate::automation::{UiActivityColors, UiColorItem, UiColors};
+use crate::automation::{UiActivityColors, UiColorItem, UiColors, UiRefreshCounters};
 
 pub(super) unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenuState, String> {
     let menu = state_ref(hwnd).controls.member_menu;
@@ -590,6 +590,12 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         color_index: color_index::dump(hwnd),
         tray: dump_tray(hwnd),
         ignored_users: state.model.ignored_users.clone(),
+        refresh_counters: UiRefreshCounters {
+            timeline_row_builds: state.refresh_counters.timeline_row_builds(),
+            rows_wrapped: state.refresh_counters.rows_wrapped(),
+            treebar_rebuilds: state.refresh_counters.treebar_rebuilds(),
+            switchbar_rebuilds: state.refresh_counters.switchbar_rebuilds(),
+        },
         active_timeline: match &state.active_view {
             ViewId::RoomList => None,
             view_id => Some(dump_active_timeline(
@@ -608,6 +614,7 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             .rooms
             .iter()
             .map(|room| UiRoomState {
+                timeline_row_builds: state.refresh_counters.room_row_builds(&room.room_id),
                 history_backfill: state
                     .model
                     .room_views

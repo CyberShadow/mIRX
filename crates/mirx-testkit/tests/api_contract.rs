@@ -40,7 +40,7 @@ use mirx_testkit::{
     SubmittedUserCommand, SwitchbarItem, SwitchbarState, TestkitError, UiActiveTimeline,
     UiActivityColors, UiColorItem, UiColors, UiComposeTarget, UiComposeTargetKind,
     UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState, UiFrameLayout,
-    UiLoggingOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRect,
+    UiLoggingOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRect, UiRefreshCounters,
     UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState, UiState, UiTextFont,
     UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiTipsOptions, UiTray,
     UiTrayMenuItem, UiTrayOptions, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
@@ -923,6 +923,7 @@ fn data_models_round_trip_through_json() {
                 num_mentions: 1,
             }),
             history_backfill: UiRoomHistoryBackfillState::Idle,
+            timeline_row_builds: 4,
         }],
         text_font: UiTextFont {
             face: "Fixedsys".to_owned(),
@@ -1050,6 +1051,12 @@ fn data_models_round_trip_through_json() {
             }],
         },
         ignored_users: Some(vec!["@spam:example".to_owned()]),
+        refresh_counters: UiRefreshCounters {
+            timeline_row_builds: 5,
+            rows_wrapped: 6,
+            treebar_rebuilds: 7,
+            switchbar_rebuilds: 8,
+        },
     };
     let navigation_path = vec![
         NavigationPathSegment::first("mirx"),
@@ -1355,6 +1362,12 @@ fn data_models_round_trip_through_json() {
             },
             "tray": {"icon": true, "hidden": true, "menu": [{"label": "Room", "checked": true}]},
             "ignored_users": ["@spam:example"],
+            "refresh_counters": {
+                "timeline_row_builds": 5u64,
+                "rows_wrapped": 6u64,
+                "treebar_rebuilds": 7u64,
+                "switchbar_rebuilds": 8u64,
+            },
             "rooms": [
                 {
                     "room_id": "!room:example",
@@ -1384,6 +1397,7 @@ fn data_models_round_trip_through_json() {
                     "history_backfill": {
                         "state": "idle",
                     },
+                    "timeline_row_builds": 4u64,
                 }
             ],
             "text_font": {
@@ -6923,6 +6937,12 @@ fn switchbar_helpers_find_items_and_active_item() {
         },
         active_timeline: None,
         ignored_users: None,
+        refresh_counters: UiRefreshCounters {
+            timeline_row_builds: 0,
+            rows_wrapped: 0,
+            treebar_rebuilds: 0,
+            switchbar_rebuilds: 0,
+        },
     };
 
     let identity = ViewIdentity::Room {

@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 59;
+pub(crate) const PROTOCOL_VERSION: u32 = 60;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1073,6 +1073,21 @@ pub(crate) struct UiState {
     /// The account's ignore list as the server last listed it; `None`
     /// until the first list.
     pub(crate) ignored_users: Option<Vec<String>>,
+    /// How much refresh work the UI has done since it started.
+    pub(crate) refresh_counters: UiRefreshCounters,
+}
+
+/// Counts of the refresh path's costly work since the UI started. They only
+/// grow: tests compare two dumps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiRefreshCounters {
+    /// Rows built for a window (Status, room, thread).
+    pub(crate) timeline_row_builds: u64,
+    /// Log rows wrapped, each measured in the text font.
+    pub(crate) rows_wrapped: u64,
+    pub(crate) treebar_rebuilds: u64,
+    pub(crate) switchbar_rebuilds: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1452,6 +1467,8 @@ pub(crate) struct UiRoomState {
     pub(crate) read_target_event_id: Option<String>,
     pub(crate) read_state: Option<UiRoomReadState>,
     pub(crate) history_backfill: UiRoomHistoryBackfillState,
+    /// Rows built for the room's window; 0 without one.
+    pub(crate) timeline_row_builds: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3475,8 +3492,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_59() {
-        assert_eq!(PROTOCOL_VERSION, 59);
+    fn protocol_version_is_60() {
+        assert_eq!(PROTOCOL_VERSION, 60);
     }
 
     #[test]
@@ -4490,7 +4507,8 @@ mod tests {
             "active_system_menu_items":[],
             "active_system_menu_checked":[],
             "menu_bar":[],
-            "tray":{"icon":false,"hidden":false,"menu":[]}
+            "tray":{"icon":false,"hidden":false,"menu":[]},
+            "refresh_counters":{"timeline_row_builds":0,"rows_wrapped":0,"treebar_rebuilds":0,"switchbar_rebuilds":0}
         }))
         .unwrap();
         assert_eq!(without_find.active_find, None);
@@ -4517,7 +4535,8 @@ mod tests {
             "active_system_menu_items":[],
             "active_system_menu_checked":[],
             "menu_bar":[],
-            "tray":{"icon":false,"hidden":false,"menu":[]}
+            "tray":{"icon":false,"hidden":false,"menu":[]},
+            "refresh_counters":{"timeline_row_builds":0,"rows_wrapped":0,"treebar_rebuilds":0,"switchbar_rebuilds":0}
         }))
         .unwrap();
         assert_eq!(
@@ -5495,7 +5514,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":59,
+                    "protocol_version":60,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6081,6 +6100,7 @@ mod tests {
                             num_mentions: 1,
                         }),
                         history_backfill: UiRoomHistoryBackfillState::Idle,
+                        timeline_row_builds: 4,
                     }],
                     text_font: super::UiTextFont {
                         face: "Fixedsys".to_owned(),
@@ -6227,6 +6247,12 @@ mod tests {
                         }],
                     },
                     ignored_users: Some(vec!["@spam:example".to_owned()]),
+                    refresh_counters: super::UiRefreshCounters {
+                        timeline_row_builds: 5,
+                        rows_wrapped: 6,
+                        treebar_rebuilds: 7,
+                        switchbar_rebuilds: 8,
+                    },
                 },
             ))
             .unwrap(),
@@ -6356,7 +6382,8 @@ mod tests {
                                 "num_notifications":3,
                                 "num_mentions":1
                             },
-                            "history_backfill":{"state":"idle"}
+                            "history_backfill":{"state":"idle"},
+                            "timeline_row_builds":4
                         }
                     ],
                     "text_font":{
@@ -6430,7 +6457,13 @@ mod tests {
                         }]
                     },
                     "tray":{"icon":true,"hidden":false,"menu":[{"label":"Status","checked":false}]},
-                    "ignored_users":["@spam:example"]
+                    "ignored_users":["@spam:example"],
+                    "refresh_counters":{
+                        "timeline_row_builds":5,
+                        "rows_wrapped":6,
+                        "treebar_rebuilds":7,
+                        "switchbar_rebuilds":8
+                    }
                 }
             })
         );

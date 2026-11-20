@@ -289,6 +289,13 @@ pub(super) unsafe fn timeline_row_paint_lines(
         &|text| unsafe { glyphs.measure(hdc, text) },
     );
     ReleaseDC(hwnd, hdc);
+    let wrapped = rows
+        .iter()
+        .filter(|row| row.layout == TimelineRowLayout::Log)
+        .count();
+    state_mut(frame_window_for(hwnd))
+        .refresh_counters
+        .count_rows_wrapped(wrapped);
     paint_lines
 }
 

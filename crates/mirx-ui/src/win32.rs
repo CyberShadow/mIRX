@@ -472,12 +472,12 @@ use verification::{
     verification_state_event_from_request, verification_state_label,
 };
 use views::{
-    CloseAction, activate_view, cached_view_is_alive, check_window_menu_logging, close_action,
-    destroy_stale_room_views, ensure_room_view, ensure_status_view, ensure_view, layout_mdi_child,
-    mdi_child_content, mdi_child_edit, mdi_window_placement, refresh_every_view_content,
-    refresh_view_content, register_mdi_child_class, register_room_content_class,
-    resolve_active_view, room_content_member_list, room_content_timeline, set_view_window_state,
-    show_view, view_timeline,
+    CloseAction, RefreshCounters, activate_view, cached_view_is_alive, check_window_menu_logging,
+    close_action, destroy_stale_room_views, ensure_room_view, ensure_status_view, ensure_view,
+    layout_mdi_child, mdi_child_content, mdi_child_edit, mdi_window_placement,
+    refresh_every_view_content, refresh_view_content, register_mdi_child_class,
+    register_room_content_class, resolve_active_view, room_content_member_list,
+    room_content_timeline, set_view_window_state, show_view, view_timeline,
 };
 #[cfg(test)]
 use views::{ROOM_CONTENT_CLASS_NAME, take_stale_room_views};
@@ -703,6 +703,8 @@ struct WindowState {
     tray: TrayState,
     /// The retry bookkeeping; `reconnect` and the sync events move it.
     reconnect: connection::Reconnect,
+    /// How often the refresh path rebuilt, wrapped and redrew, for tests.
+    refresh_counters: RefreshCounters,
 }
 
 /// Where Status lines get their arrival time. Render-state snapshots must not
@@ -934,6 +936,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         colors_dialog: None,
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
+        refresh_counters: RefreshCounters::default(),
     });
 
     let hwnd = create_main_window(instance, state, frame_size_for_command(&command))?;

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs the Windows UI test suites (automation_driver, mdi_child_reactivation,
-# verify_duplicate_navigation_labels) under Wine, split over parallel shards.
+# verify_duplicate_navigation_labels, scale) under Wine, split over parallel
+# shards.
 #
 #   windows-ui-tests.sh [-- [--test-threads=1] [--exact] [filter ...]]
 #
@@ -12,7 +13,7 @@
 set -euo pipefail
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-suites=(automation_driver mdi_child_reactivation verify_duplicate_navigation_labels)
+suites=(automation_driver mdi_child_reactivation verify_duplicate_navigation_labels scale)
 tmpdir=
 # Running shards: pid -> shard number.
 declare -A running=()

@@ -287,6 +287,7 @@ unsafe fn refresh_tree(hwnd: HWND) {
         (node, occurrence)
     });
     SendMessageW(tree, TVM_DELETEITEM, 0, TVI_ROOT as LPARAM);
+    state.refresh_counters.count_treebar_rebuild();
     state.tree_items.clear();
     state.primary_tree_items.clear();
 
@@ -735,6 +736,7 @@ pub(super) unsafe fn rebuild_switchbar(hwnd: HWND) -> Result<(), String> {
         return Err("switchbar control was not created".to_owned());
     }
 
+    state_mut(hwnd).refresh_counters.count_switchbar_rebuild();
     loop {
         let count = SendMessageW(switchbar, TB_BUTTONCOUNT, 0, 0);
         if count < 0 {
