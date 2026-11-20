@@ -127,11 +127,12 @@ pub(super) unsafe fn edit_selection(edit: HWND) -> (usize, usize) {
     (start as usize, end as usize)
 }
 
-/// Shows the colour index over the active window's editbox while a colour
-/// number is typed at its caret, by the code, and hides it otherwise.
-pub(super) unsafe fn update_color_index(frame: HWND) {
+/// Shows the colour index over `edit` while a colour number is typed at
+/// its caret, by the code, and hides it otherwise. `edit` is the editbox
+/// that was typed in or changed: the active window's, or one whose text a
+/// command just cleared as it activated another window.
+pub(super) unsafe fn update_color_index(frame: HWND, edit: HWND) {
     let popup = state_ref(frame).controls.color_index;
-    let edit = compose_edit(frame);
     match color_code_at_caret(edit) {
         Some(code) => {
             place(popup, edit, code.code_offset);

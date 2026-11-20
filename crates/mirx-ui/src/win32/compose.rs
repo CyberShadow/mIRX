@@ -423,7 +423,7 @@ pub(super) unsafe fn set_compose_text(hwnd: HWND, text: &str) -> Result<(), Stri
     let edit = compose_edit(hwnd);
     active_compose_history(state_mut(hwnd)).reset_navigation();
     set_compose_edit_text(edit, text);
-    update_color_index(hwnd);
+    update_color_index(hwnd, edit);
     Ok(())
 }
 
@@ -470,7 +470,7 @@ unsafe fn insert_compose_text(frame: HWND, edit: HWND, text: &str) {
     let text = wide_null(text);
     // wParam TRUE: the replacement can be undone.
     SendMessageW(edit, EM_REPLACESEL, 1, text.as_ptr() as LPARAM);
-    update_color_index(frame);
+    update_color_index(frame, edit);
 }
 
 pub(super) unsafe fn submit_compose_from_control(
@@ -487,7 +487,7 @@ pub(super) unsafe fn submit_compose_from_control(
     )?;
     let empty = wide_null("");
     SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
-    update_color_index(hwnd);
+    update_color_index(hwnd, edit);
     Ok(room_id)
 }
 
@@ -755,7 +755,7 @@ unsafe extern "system" fn edit_window_proc(
         WM_KEYDOWN | WM_CHAR | WM_LBUTTONUP | WM_PASTE | WM_CUT | WM_CLEAR | WM_UNDO | EM_UNDO
     ) && !escape
     {
-        update_color_index(parent);
+        update_color_index(parent, hwnd);
     }
     result
 }
