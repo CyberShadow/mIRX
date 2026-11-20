@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 54;
+pub(crate) const PROTOCOL_VERSION: u32 = 55;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1034,11 +1034,32 @@ pub(crate) struct UiState {
     pub(crate) colors_dialog: Option<UiColorsDialog>,
     /// The colour index while it shows.
     pub(crate) color_index: Option<UiColorIndex>,
+    /// The tray icon and the frame's place behind it.
+    pub(crate) tray: UiTray,
     /// The active window's timeline; the Rooms List has none.
     pub(crate) active_timeline: Option<UiActiveTimeline>,
     /// The account's ignore list as the server last listed it; `None`
     /// until the first list.
     pub(crate) ignored_users: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiTray {
+    /// The shell holds mirx's icon.
+    pub(crate) icon: bool,
+    /// The frame is hidden in the tray.
+    pub(crate) hidden: bool,
+    /// The icon's popup, top to bottom.
+    pub(crate) menu: Vec<UiTrayMenuItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiTrayMenuItem {
+    pub(crate) label: String,
+    /// The window had new messages.
+    pub(crate) checked: bool,
 }
 
 /// The active window's timeline: the lines it shows now.
@@ -3356,8 +3377,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_54() {
-        assert_eq!(PROTOCOL_VERSION, 54);
+    fn protocol_version_is_55() {
+        assert_eq!(PROTOCOL_VERSION, 55);
     }
 
     #[test]
@@ -4365,7 +4386,8 @@ mod tests {
             "colors":{"items":[{"item":"background","index":0,"color":"#ffffff"}],"switchbar":{"event":5,"message":4,"highlight":12}},
             "active_system_menu_items":[],
             "active_system_menu_checked":[],
-            "menu_bar":[]
+            "menu_bar":[],
+            "tray":{"icon":false,"hidden":false,"menu":[]}
         }))
         .unwrap();
         assert_eq!(without_find.active_find, None);
@@ -4391,7 +4413,8 @@ mod tests {
             "colors":{"items":[{"item":"background","index":0,"color":"#ffffff"}],"switchbar":{"event":5,"message":4,"highlight":12}},
             "active_system_menu_items":[],
             "active_system_menu_checked":[],
-            "menu_bar":[]
+            "menu_bar":[],
+            "tray":{"icon":false,"hidden":false,"menu":[]}
         }))
         .unwrap();
         assert_eq!(
@@ -5316,7 +5339,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":54,
+                    "protocol_version":55,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6018,6 +6041,14 @@ mod tests {
                             }],
                         }],
                     }),
+                    tray: super::UiTray {
+                        icon: true,
+                        hidden: false,
+                        menu: vec![super::UiTrayMenuItem {
+                            label: "Status".to_owned(),
+                            checked: false,
+                        }],
+                    },
                     ignored_users: Some(vec!["@spam:example".to_owned()]),
                 },
             ))
@@ -6211,6 +6242,7 @@ mod tests {
                             "links":[{"start":4,"end":9,"url":"#a:b.c","user_id":null}]
                         }]
                     },
+                    "tray":{"icon":true,"hidden":false,"menu":[{"label":"Status","checked":false}]},
                     "ignored_users":["@spam:example"]
                 }
             })

@@ -1254,11 +1254,32 @@ pub struct UiState {
     pub colors_dialog: Option<UiColorsDialog>,
     /// The colour index while it shows.
     pub color_index: Option<UiColorIndex>,
+    /// The tray icon and the frame's place behind it.
+    pub tray: UiTray,
     /// The active window's timeline; the Rooms List has none.
     pub active_timeline: Option<UiActiveTimeline>,
     /// The account's ignore list as the server last listed it; `None`
     /// until the first list.
     pub ignored_users: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiTray {
+    /// The shell holds mirx's icon.
+    pub icon: bool,
+    /// The frame is hidden in the tray.
+    pub hidden: bool,
+    /// The icon's popup, top to bottom.
+    pub menu: Vec<UiTrayMenuItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiTrayMenuItem {
+    pub label: String,
+    /// The window had new messages.
+    pub checked: bool,
 }
 
 /// The active window's timeline: the lines it shows now.

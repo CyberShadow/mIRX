@@ -91,6 +91,7 @@ pub(super) struct Settings {
     pub(super) switchbar: SwitchbarSetting,
     pub(super) treebar: TreebarSetting,
     pub(super) logging: LoggingSetting,
+    pub(super) tray: TraySetting,
     /// mIRC's Tools > Colors.
     pub(super) colors: ColorScheme,
 }
@@ -264,6 +265,19 @@ impl Default for LoggingSetting {
     }
 }
 
+/// mIRC's Options > Display > Tray. All off by default, as in mIRC.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct TraySetting {
+    /// Always show the icon in the tray, not only while mirx is there.
+    pub(super) always: bool,
+    /// On startup, minimize mirx to the tray.
+    pub(super) startup: bool,
+    /// Place mirx in the tray when minimized (Shift+minimize always does).
+    pub(super) minimize: bool,
+    /// A single click on the icon opens mirx, not a double click.
+    pub(super) single_click: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Fonts,
@@ -272,6 +286,7 @@ enum Section {
     Switchbar,
     Treebar,
     Logging,
+    Tray,
     Colors,
 }
 
@@ -297,6 +312,7 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                 "switchbar" => Section::Switchbar,
                 "treebar" => Section::Treebar,
                 "logging" => Section::Logging,
+                "tray" => Section::Tray,
                 "colors" => Section::Colors,
                 _ => return Err(error(format!("unknown section [{name}]"))),
             });
@@ -358,6 +374,18 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Logging, "timestamp") => {
                 settings.logging.timestamp = parse_on_off(value, "timestamp").map_err(error)?;
             }
+            (Section::Tray, "always") => {
+                settings.tray.always = parse_on_off(value, "always").map_err(error)?;
+            }
+            (Section::Tray, "startup") => {
+                settings.tray.startup = parse_on_off(value, "startup").map_err(error)?;
+            }
+            (Section::Tray, "minimize") => {
+                settings.tray.minimize = parse_on_off(value, "minimize").map_err(error)?;
+            }
+            (Section::Tray, "single_click") => {
+                settings.tray.single_click = parse_on_off(value, "single_click").map_err(error)?;
+            }
             (Section::Colors, key) if let Some(item) = ColorItem::from_ini_key(key) => {
                 settings
                     .colors
@@ -406,6 +434,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
     let bold = if font.bold { ",bold" } else { "" };
     let activity = &settings.switchbar.activity;
     let logging = &settings.logging;
+    let tray = &settings.tray;
     let colors = ColorItem::ALL
         .into_iter()
         .map(|item| format!("{}={}\r\n", item.ini_key(), settings.colors.get(item).get()))
@@ -418,6 +447,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
          event={}\r\nmessage={}\r\nhighlight={}\r\n\
          [treebar]\r\nshow={}\r\n\
          [logging]\r\nchannels={}\r\nqueries={}\r\nstrip={}\r\ntimestamp={}\r\n\
+         [tray]\r\nalways={}\r\nstartup={}\r\nminimize={}\r\nsingle_click={}\r\n\
          [colors]\r\n{colors}",
         font.face,
         font.points,
@@ -434,6 +464,10 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         on_off(logging.queries),
         on_off(logging.strip_codes),
         on_off(logging.timestamp),
+        on_off(tray.always),
+        on_off(tray.startup),
+        on_off(tray.minimize),
+        on_off(tray.single_click),
     )
 }
 
@@ -512,6 +546,7 @@ mod tests {
         [switchbar]\r\nshow=on\r\nbuttons=120\r\nevent=5\r\nmessage=4\r\nhighlight=12\r\n\
         [treebar]\r\nshow=on\r\n\
         [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
+        [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
         [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\ninvite=3\r\n\
         join=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\nnotice=5\r\nother=6\r\nown=1\r\n\
         part=3\r\ntopic=3\r\neditbox=0\r\neditbox_text=1\r\nlistbox=0\r\nlistbox_text=1\r\n\
@@ -589,7 +624,7 @@ mod tests {
         let text = to_ini(&settings);
         assert!(text.contains(
             "[treebar]\r\nshow=on\r\n\
-             [logging]\r\nchannels=on\r\nqueries=off\r\nstrip=on\r\ntimestamp=off\r\n[colors]"
+             [logging]\r\nchannels=on\r\nqueries=off\r\nstrip=on\r\ntimestamp=off\r\n[tray]"
         ));
         assert_eq!(parse_ini(&text), Ok(settings));
         assert_eq!(
@@ -615,6 +650,41 @@ mod tests {
                 "line 3: duplicate key strip",
             ),
             ("[logging]\nfolder=logs", "line 2: unknown key folder"),
+        ] {
+            assert_eq!(parse_ini(text), Err(error.to_owned()), "{text}");
+        }
+    }
+
+    #[test]
+    fn tray_settings_round_trip() {
+        let settings = Settings {
+            tray: TraySetting {
+                always: true,
+                startup: false,
+                minimize: true,
+                single_click: true,
+            },
+            ..Settings::default()
+        };
+        let text = to_ini(&settings);
+        assert!(text.contains(
+            "[tray]\r\nalways=on\r\nstartup=off\r\nminimize=on\r\nsingle_click=on\r\n[colors]"
+        ));
+        assert_eq!(parse_ini(&text), Ok(settings));
+        assert_eq!(
+            parse_ini("[Tray]\nStartup=On").map(|settings| settings.tray),
+            Ok(TraySetting {
+                startup: true,
+                ..TraySetting::default()
+            })
+        );
+        for (text, error) in [
+            ("[tray]\nalways=yes", "line 2: always must be on or off"),
+            (
+                "[tray]\nsingle_click=",
+                "line 2: single_click must be on or off",
+            ),
+            ("[tray]\nicon=mirx.ico", "line 2: unknown key icon"),
         ] {
             assert_eq!(parse_ini(text), Err(error.to_owned()), "{text}");
         }

@@ -122,18 +122,18 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
     MF_STRING, MF_UNCHECKED, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
     RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
-    SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SHOW_WINDOW_CMD, SIF_ALL, SIF_PAGE,
-    SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_MINIMIZE, SW_SHOW, SendMessageW,
-    SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE,
-    WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP,
-    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE,
-    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE,
-    WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETFOCUS,
-    WM_SETFONT, WM_SETTEXT, WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC,
-    WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED,
-    WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE, SCROLLINFO, SHOW_WINDOW_CMD, SIF_ALL,
+    SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_MINIMIZE, SW_SHOW, SW_SHOWMINNOACTIVE,
+    SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
+    WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
+    WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE,
+    WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE,
+    WM_MDITILE, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE,
+    WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW,
+    WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE,
+    WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use self::glyph_fonts::GlyphFonts;
@@ -229,6 +229,7 @@ mod timeline_rows;
 mod timeline_text;
 mod timeline_window;
 mod timestamp;
+mod tray;
 mod verification;
 mod views;
 mod window_data;
@@ -320,9 +321,9 @@ use fonts::{
 #[cfg(test)]
 use frame::window_class_is;
 use frame::{
-    apply_color_scheme, create_main_window, frame_status_text, frame_window_for,
-    init_common_controls, layout_controls, message_loop, refresh_status_bar, register_frame_class,
-    set_switchbar_button_width,
+    apply_color_scheme, create_main_window, default_window_proc, frame_status_text,
+    frame_window_for, init_common_controls, layout_controls, message_loop, refresh_status_bar,
+    register_frame_class, set_switchbar_button_width,
 };
 #[cfg(test)]
 use frame_menus::active_message_action_state;
@@ -449,6 +450,10 @@ use timeline_window::{
     validate_selected_timeline_event,
 };
 use timestamp::{LocalTime, LocalTimeFn, TimestampSetting, TimestampStyle};
+use tray::{
+    TrayState, dump_tray, hide_to_tray, minimize_frame, on_taskbar_created, on_tray_icon,
+    remove_tray_icon, sync_tray_icon, taskbar_created_message,
+};
 use verification::{
     apply_verification_event, e2ee_backup_health_summary, e2ee_cross_signing_label,
     e2ee_local_backup_label, e2ee_recovery_state_label, e2ee_server_backup_label,
@@ -488,6 +493,8 @@ const WM_SELF_TEST: u32 = WM_APP + 2;
 /// Posted at startup without a saved session, so Select Server opens once
 /// the frame is shown, as mIRC opens its connect options on a first run.
 const WM_CONNECT_AT_STARTUP: u32 = WM_APP + 3;
+/// The tray icon's callback message (`NOTIFYICONDATAW.uCallbackMessage`).
+const WM_TRAY_ICON: u32 = WM_APP + 4;
 const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
 const TREE_WIDTH: i32 = 240;
@@ -682,6 +689,7 @@ struct WindowState {
     options_dialog: Option<HWND>,
     /// The Colors dialog while it is open, for the automation dump.
     colors_dialog: Option<HWND>,
+    tray: TrayState,
 }
 
 /// Where Status lines get their arrival time. Render-state snapshots must not
@@ -863,6 +871,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         last_attachment_save: None,
         options_dialog: None,
         colors_dialog: None,
+        tray: TrayState::default(),
     });
 
     let hwnd = create_main_window(instance, state, frame_size_for_command(&command))?;
@@ -912,9 +921,18 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         };
 
         unsafe {
-            ShowWindow(hwnd, SW_SHOW);
-            if automation_enabled {
-                SetForegroundWindow(hwnd);
+            if state_ref(hwnd).settings.settings().tray.startup {
+                // On startup minimize to tray: shown minimized, then hidden
+                // behind the icon if the shell takes it.
+                ShowWindow(hwnd, SW_SHOWMINNOACTIVE);
+                hide_to_tray(hwnd)?;
+            } else {
+                ShowWindow(hwnd, SW_SHOW);
+                if automation_enabled {
+                    SetForegroundWindow(hwnd);
+                }
+                // Always show the icon in the tray.
+                sync_tray_icon(hwnd)?;
             }
             if let Some(events) = render_state_events {
                 apply_event_load(hwnd, events)?;

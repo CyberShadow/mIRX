@@ -157,6 +157,24 @@ unsafe extern "system" fn window_proc(
             handle_core_events(hwnd);
             0
         }
+        WM_SYSCOMMAND if (wparam & 0xfff0) as u32 == SC_MINIMIZE => {
+            minimize_frame(hwnd, message, wparam, lparam).unwrap_or_else(|message| {
+                show_error_message(hwnd, "Tray", &message);
+                0
+            })
+        }
+        WM_TRAY_ICON => {
+            if let Err(message) = on_tray_icon(hwnd, lparam) {
+                show_error_message(hwnd, "Tray", &message);
+            }
+            0
+        }
+        message if message == taskbar_created_message() => {
+            if let Err(message) = on_taskbar_created(hwnd) {
+                show_error_message(hwnd, "Tray", &message);
+            }
+            0
+        }
         WM_CONNECT_AT_STARTUP => {
             if let Err(message) = connect(hwnd, None) {
                 show_error_message(hwnd, "Connect", &message);
@@ -200,6 +218,7 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_DESTROY => {
+            remove_tray_icon(hwnd);
             let controls = &mut state_mut(hwnd).controls;
             // The menubar goes with the window; these hang in no menubar.
             for menu in [
@@ -591,7 +610,12 @@ pub(super) unsafe fn window_class_is(hwnd: HWND, class_name: &str) -> bool {
         .eq(class_name.encode_utf16())
 }
 
-unsafe fn default_window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+pub(super) unsafe fn default_window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     // Messages before WM_NCCREATE and after WM_NCDESTROY.
     let Some(state) = window_data::get::<WindowState>(hwnd) else {
         return DefWindowProcW(hwnd, message, wparam, lparam);

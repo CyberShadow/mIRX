@@ -62,6 +62,11 @@ impl StatusLog {
     }
 }
 
+/// The shell refused the tray icon: no tray, so no hiding in it.
+pub(super) fn tray_icon_unavailable(error: &str) -> String {
+    format!("Tray icon unavailable: {error}")
+}
+
 pub(super) fn connecting(homeserver_url: &str, username: &str) -> String {
     format!("Connecting to {homeserver_url} as {username}")
 }

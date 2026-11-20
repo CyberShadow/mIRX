@@ -874,6 +874,7 @@ pub(super) fn test_state() -> WindowState {
         last_attachment_save: None,
         options_dialog: None,
         colors_dialog: None,
+        tray: TrayState::default(),
     }
 }
 

@@ -66,21 +66,21 @@ use windows_sys::Win32::UI::Controls::{
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_CONTROL, VK_DOWN,
     VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_NEXT, VK_OEM_COMMA, VK_PRIOR, VK_RETURN,
-    VK_RIGHT, VK_SHIFT, VK_TAB,
+    VK_RIGHT, VK_SHIFT, VK_TAB, VK_X,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, EnumThreadWindows, FindWindowExW,
     FindWindowW, GCL_STYLE, GUITHREADINFO, GW_OWNER, GWL_STYLE, GetClassLongPtrW, GetClassNameW,
     GetClientRect, GetDlgCtrlID, GetDlgItem, GetForegroundWindow, GetGUIThreadInfo,
     GetLastActivePopup, GetScrollInfo, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES, IsWindow, IsWindowVisible, LB_GETCOUNT,
-    LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN, LBS_OWNERDRAWFIXED, PostMessageW, SB_BOTTOM,
-    SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SMTO_NORMAL,
-    SPI_GETWHEELSCROLLLINES, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW, SendMessageW,
-    SetForegroundWindow, SetWindowPos, SetWindowTextW, SystemParametersInfoW, WM_CHAR, WM_COMMAND,
-    WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PASTE, WM_SETTEXT,
-    WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
+    GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES, IsIconic, IsWindow, IsWindowVisible,
+    LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN, LBS_OWNERDRAWFIXED, PostMessageW,
+    RegisterWindowMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE,
+    SCROLLINFO, SIF_ALL, SMTO_NORMAL, SPI_GETWHEELSCROLLLINES, SWP_NOMOVE, SWP_NOZORDER,
+    SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW,
+    SystemParametersInfoW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -2987,7 +2987,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 54);
+    assert_eq!(version.protocol_version, 55);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -5371,6 +5371,7 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
          event=5\r\nmessage=4\r\nhighlight=12\r\n\
          [treebar]\r\nshow=on\r\n\
          [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
+         [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
          [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\n\
          invite=3\r\njoin=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\n\
          notice=5\r\nother=6\r\nown=1\r\npart=3\r\ntopic=3\r\neditbox=0\r\n\
@@ -5456,13 +5457,11 @@ fn untimed(line: &str) -> &str {
     &line[8..]
 }
 
-fn write_logging_settings(
-    local_app_data: &Path,
-    logging: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+/// Writes `mirx.ini` with `ini`'s sections; the rest keep their defaults.
+fn write_settings(local_app_data: &Path, ini: &str) -> Result<(), Box<dyn std::error::Error>> {
     let path = settings_file_path(local_app_data);
     fs::create_dir_all(path.parent().expect("mirx.ini is in the profile"))?;
-    fs::write(path, format!("[logging]\r\n{logging}"))?;
+    fs::write(path, ini)?;
     Ok(())
 }
 
@@ -5638,7 +5637,10 @@ fn untimed_or_session(line: &str) -> &str {
 fn rooms_log_automatically_as_the_options_say_and_exit_closes_the_logs()
 -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    write_logging_settings(&local_app_data, "channels=on\r\nqueries=off\r\n")?;
+    write_settings(
+        &local_app_data,
+        "[logging]\r\nchannels=on\r\nqueries=off\r\n",
+    )?;
     let (app, local_app_data) = launch_close_lifecycle_app_in(local_app_data)?;
     let beta = room_identity("!beta:example");
     let alpha = room_identity("!alpha:example");
@@ -5709,7 +5711,10 @@ fn rooms_log_automatically_as_the_options_say_and_exit_closes_the_logs()
     assert!(!log_file_path(&local_app_data, "@alice.example").exists());
 
     // Queries only, the next time.
-    write_logging_settings(&local_app_data, "channels=off\r\nqueries=on\r\n")?;
+    write_settings(
+        &local_app_data,
+        "[logging]\r\nchannels=off\r\nqueries=on\r\n",
+    )?;
     let (app, local_app_data) = launch_close_lifecycle_app_in(local_app_data)?;
     assert_eq!(view_log(&app, &beta)?, None);
     assert!(view_log(&app, &alpha)?.is_some());
@@ -5721,7 +5726,7 @@ fn rooms_log_automatically_as_the_options_say_and_exit_closes_the_logs()
 #[test]
 fn a_closed_query_reopened_by_a_message_logs_it() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    write_logging_settings(&local_app_data, "queries=on\r\n")?;
+    write_settings(&local_app_data, "[logging]\r\nqueries=on\r\n")?;
     let (app, local_app_data) = launch_close_lifecycle_app_in(local_app_data)?;
     let alpha = room_identity("!alpha:example");
     assert!(view_log(&app, &alpha)?.is_some());
@@ -5793,9 +5798,9 @@ fn logging_options_strip_codes_and_drop_timestamps() -> Result<(), Box<dyn std::
         event
     };
     let mut logs = Vec::new();
-    for logging in ["", "strip=on\r\ntimestamp=off\r\n"] {
+    for logging in ["", "[logging]\r\nstrip=on\r\ntimestamp=off\r\n"] {
         let local_app_data = unique_local_app_data_path();
-        write_logging_settings(&local_app_data, logging)?;
+        write_settings(&local_app_data, logging)?;
         let (app, local_app_data) = launch_close_lifecycle_app_in(local_app_data)?;
         app.select_view(room_identity("!beta:example"))?;
         type_commands(&app, &["/log on"])?;
@@ -5915,6 +5920,226 @@ fn backfilled_history_is_not_logged() -> Result<(), Box<dyn std::error::Error>> 
     ));
     let log = read_log(&log_file_path(&local_app_data, "!beta.example"))?;
     assert_eq!(log.len(), 3, "{log:?}");
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The tray icon's callback message, `WM_APP + 4` (`WM_TRAY_ICON` in
+/// win32.rs).
+const WM_TRAY_ICON: u32 = 0x8000 + 4;
+
+/// Sends the frame the icon's callback as the shell does with
+/// `NOTIFYICON_VERSION_4`: the event in `LOWORD(lParam)`, the icon's id in
+/// `HIWORD(lParam)`. Sent, not posted, so it has run on return.
+fn tray_icon_event(app: &MirxApp, event: u32) -> Result<(), Box<dyn std::error::Error>> {
+    let frame = app.automation_frame_hwnd() as HWND;
+    let mut result = 0;
+    assert_ne!(
+        unsafe {
+            SendMessageTimeoutW(
+                frame,
+                WM_TRAY_ICON,
+                0,
+                ((1 << 16) | event) as isize,
+                SMTO_NORMAL,
+                5_000,
+                &mut result,
+            )
+        },
+        0
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+/// `WM_SYSCOMMAND SC_MINIMIZE`, as the caption button sends it. Sent, so
+/// it has run on return.
+fn minimize_frame(app: &MirxApp) -> Result<(), Box<dyn std::error::Error>> {
+    let frame = app.automation_frame_hwnd() as HWND;
+    let mut result = 0;
+    assert_ne!(
+        unsafe {
+            SendMessageTimeoutW(
+                frame,
+                WM_SYSCOMMAND,
+                SC_MINIMIZE as WPARAM,
+                0,
+                SMTO_NORMAL,
+                5_000,
+                &mut result,
+            )
+        },
+        0
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+/// The frame as the user sees it: (visible, minimized).
+fn frame_shown(app: &MirxApp) -> (bool, bool) {
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe { (IsWindowVisible(frame) != 0, IsIconic(frame) != 0) }
+}
+
+/// Holds Shift down in mirx's input. Key input is handled after posted
+/// messages, so Shift is followed by a letter in the editbox: once the
+/// editbox shows it capitalised, mirx's key state has Shift down.
+fn hold_shift(app: &MirxApp) -> Result<(), Box<dyn std::error::Error>> {
+    unsafe { SetForegroundWindow(app.automation_frame_hwnd() as HWND) };
+    assert_compose_has_focus(app);
+    app.set_compose_text("")?;
+    send_key_events(&[(VK_SHIFT, false), (VK_X, false), (VK_X, true)]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.compose_text()? != "X" {
+        assert!(
+            Instant::now() < deadline,
+            "Shift+X never reached the editbox"
+        );
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    Ok(())
+}
+
+fn tray_icon_and_hidden(app: &MirxApp) -> Result<(bool, bool), Box<dyn std::error::Error>> {
+    let tray = app.dump_ui_state()?.tray;
+    Ok((tray.icon, tray.hidden))
+}
+
+fn launch_with_tray(tray: &str) -> Result<(GuiTestApp, PathBuf), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    write_settings(&local_app_data, &format!("[tray]\r\n{tray}"))?;
+    launch_close_lifecycle_app_in(local_app_data)
+}
+
+#[test]
+fn minimize_with_place_in_tray_hides_the_frame_behind_an_icon()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_with_tray("minimize=on\r\n")?;
+    assert_eq!(tray_icon_and_hidden(&app)?, (false, false));
+    minimize_frame(&app)?;
+    // Wine's shell took the icon, so the frame could hide.
+    assert_eq!(tray_icon_and_hidden(&app)?, (true, true));
+    assert!(!frame_shown(&app).0);
+    tray_icon_event(&app, WM_LBUTTONDBLCLK)?;
+    assert_eq!(frame_shown(&app), (true, false));
+    assert_eq!(tray_icon_and_hidden(&app)?, (false, false));
+    assert!(!status_view_contains(&app, "Tray icon unavailable")?);
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn minimize_without_the_option_stays_on_the_taskbar() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    minimize_frame(&app)?;
+    assert_eq!(frame_shown(&app), (true, true));
+    assert_eq!(tray_icon_and_hidden(&app)?, (false, false));
+    // Shift+minimize goes to the tray all the same.
+    tray_icon_event(&app, WM_LBUTTONDBLCLK)?;
+    assert_eq!(frame_shown(&app), (true, false));
+    hold_shift(&app)?;
+    minimize_frame(&app)?;
+    send_key_events(&[(VK_SHIFT, true)]);
+    assert_eq!(tray_icon_and_hidden(&app)?, (true, true));
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn always_shows_the_icon_and_restoring_keeps_it() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_with_tray("always=on\r\nminimize=on\r\n")?;
+    assert_eq!(tray_icon_and_hidden(&app)?, (true, false));
+    minimize_frame(&app)?;
+    assert_eq!(tray_icon_and_hidden(&app)?, (true, true));
+    tray_icon_event(&app, WM_LBUTTONDBLCLK)?;
+    assert_eq!(tray_icon_and_hidden(&app)?, (true, false));
+    assert_eq!(frame_shown(&app), (true, false));
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn startup_in_tray_starts_hidden() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_with_tray("startup=on\r\n")?;
+    // The automation found the hidden frame and loaded the fixture.
+    assert_eq!(tray_icon_and_hidden(&app)?, (true, true));
+    assert!(!frame_shown(&app).0);
+    tray_icon_event(&app, WM_LBUTTONDBLCLK)?;
+    assert_eq!(frame_shown(&app), (true, false));
+    assert_eq!(tray_icon_and_hidden(&app)?, (false, false));
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn single_click_opens_and_a_double_click_does_not_toggle_twice()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_with_tray("minimize=on\r\nsingle_click=on\r\n")?;
+    minimize_frame(&app)?;
+    tray_icon_event(&app, WM_LBUTTONUP)?;
+    assert_eq!(frame_shown(&app), (true, false));
+    // The rest of a double click: its DBLCLK does nothing, its second up
+    // toggles again, so a double click ends where it began.
+    tray_icon_event(&app, WM_LBUTTONDBLCLK)?;
+    assert_eq!(frame_shown(&app), (true, false));
+    tray_icon_event(&app, WM_LBUTTONUP)?;
+    assert_eq!(tray_icon_and_hidden(&app)?, (true, true));
+    drop(app);
+
+    // Without the option, a click does nothing.
+    let (app, local_app_data_2) = launch_with_tray("minimize=on\r\n")?;
+    minimize_frame(&app)?;
+    tray_icon_event(&app, WM_LBUTTONUP)?;
+    assert_eq!(tray_icon_and_hidden(&app)?, (true, true));
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    let _ = fs::remove_dir_all(&local_app_data_2);
+    Ok(())
+}
+
+#[test]
+fn double_click_while_active_minimizes() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_with_tray("always=on\r\nminimize=on\r\n")?;
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe { SetForegroundWindow(frame) };
+    tray_icon_event(&app, WM_LBUTTONDBLCLK)?;
+    assert_eq!(tray_icon_and_hidden(&app)?, (true, true));
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn taskbar_created_adds_the_icon_again() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_with_tray("always=on\r\n")?;
+    assert_eq!(tray_icon_and_hidden(&app)?, (true, false));
+    let name = wide_null("TaskbarCreated");
+    let taskbar_created = unsafe { RegisterWindowMessageW(name.as_ptr()) };
+    assert_ne!(taskbar_created, 0);
+    let frame = app.automation_frame_hwnd() as HWND;
+    let mut result = 0;
+    assert_ne!(
+        unsafe {
+            SendMessageTimeoutW(
+                frame,
+                taskbar_created,
+                0,
+                0,
+                SMTO_NORMAL,
+                5_000,
+                &mut result,
+            )
+        },
+        0
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(tray_icon_and_hidden(&app)?, (true, false));
+    assert!(!status_view_contains(&app, "Tray icon unavailable")?);
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
@@ -14925,22 +15150,31 @@ fn select_options_page_selects_each_page() -> Result<(), Box<dyn std::error::Err
 /// Presses `keys` in order through `SendInput`, then releases them in
 /// reverse: a chord such as Shift+Tab, or one key.
 fn press_keys(keys: &[u16]) {
-    let input = |virtual_key: u16, flags| INPUT {
-        r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 {
-            ki: KEYBDINPUT {
-                wVk: virtual_key,
-                wScan: 0,
-                dwFlags: flags,
-                time: 0,
-                dwExtraInfo: 0,
-            },
-        },
-    };
-    let inputs = keys
+    send_key_events(
+        &keys
+            .iter()
+            .map(|key| (*key, false))
+            .chain(keys.iter().rev().map(|key| (*key, true)))
+            .collect::<Vec<_>>(),
+    );
+}
+
+/// Sends key events, `(virtual key, up)`, through `SendInput`.
+fn send_key_events(events: &[(u16, bool)]) {
+    let inputs = events
         .iter()
-        .map(|key| input(*key, 0))
-        .chain(keys.iter().rev().map(|key| input(*key, KEYEVENTF_KEYUP)))
+        .map(|(virtual_key, up)| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: *virtual_key,
+                    wScan: 0,
+                    dwFlags: if *up { KEYEVENTF_KEYUP } else { 0 },
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         unsafe {

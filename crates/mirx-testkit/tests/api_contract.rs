@@ -42,9 +42,9 @@ use mirx_testkit::{
     UiFindHistorySearchState, UiFindState, UiFrameLayout, UiLoggingOptions, UiMenu, UiMenuItem,
     UiOptionsDialog, UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState,
     UiRoomState, UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink,
-    UiTimestamp, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
-    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
-    ViewActivityLevel, ViewIdentity,
+    UiTimestamp, UiTray, UiTrayMenuItem, UnsupportedRoomMessageActivity, UserCommandAction,
+    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
+    VerificationState, ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -1019,6 +1019,14 @@ fn data_models_round_trip_through_json() {
                 }],
             }],
         }),
+        tray: UiTray {
+            icon: true,
+            hidden: true,
+            menu: vec![UiTrayMenuItem {
+                label: "Room".to_owned(),
+                checked: true,
+            }],
+        },
         ignored_users: Some(vec!["@spam:example".to_owned()]),
     };
     let navigation_path = vec![
@@ -1313,6 +1321,7 @@ fn data_models_round_trip_through_json() {
                     "links": [{"start": 0, "end": 5, "url": "https://example.org", "user_id": null}],
                 }],
             },
+            "tray": {"icon": true, "hidden": true, "menu": [{"label": "Room", "checked": true}]},
             "ignored_users": ["@spam:example"],
             "rooms": [
                 {
@@ -6820,6 +6829,11 @@ fn switchbar_helpers_find_items_and_active_item() {
         options_dialog: None,
         colors_dialog: None,
         color_index: None,
+        tray: UiTray {
+            icon: false,
+            hidden: false,
+            menu: Vec::new(),
+        },
         active_timeline: None,
         ignored_users: None,
     };
