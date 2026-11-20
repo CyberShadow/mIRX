@@ -276,6 +276,14 @@ pub struct StoredSession {
     pub device_id: String,
     pub access_token: String,
     pub refresh_token: Option<String>,
+    pub auth: SessionAuth,
+}
+
+/// Mirrors `mirx_core::SessionAuth`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionAuth {
+    Matrix,
+    OAuth { client_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

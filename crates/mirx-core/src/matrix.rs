@@ -11,7 +11,11 @@ use matrix_sdk::{
     attachment::{
         AttachmentConfig, AttachmentInfo, BaseAudioInfo, BaseFileInfo, BaseImageInfo, BaseVideoInfo,
     },
-    authentication::matrix::MatrixSession,
+    authentication::{
+        AuthSession,
+        matrix::MatrixSession,
+        oauth::{ClientId, OAuthSession, UserSession},
+    },
     config::SyncSettings,
     deserialized_responses::{
         SyncOrStrippedState, TimelineEvent, TimelineEventKind, UnableToDecryptInfo,
@@ -120,11 +124,11 @@ use crate::api::{
     RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
     RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
-    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
-    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession,
-    UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserProfile, VerificationDecimals,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent,
+    SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
+    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
+    SpaceChildSummary, StoredSession, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity,
+    UserProfile, VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent,
 };
 use crate::api::{TextStyleSpan, check_text_styles, validate_highlight_word};
 use crate::rich_text::{StyledText, html_from_styled_text, styled_text_from_html};
@@ -209,30 +213,43 @@ pub(crate) async fn restore_session(
     client: &Client,
     dto: StoredSession,
 ) -> Result<(), MatrixCoreError> {
-    let session = MatrixSession {
-        meta: SessionMeta {
-            user_id: OwnedUserId::try_from(dto.user_id)
-                .map_err(|err| MatrixCoreError::new(format!("invalid session user id: {err}")))?,
-            device_id: OwnedDeviceId::from(dto.device_id),
-        },
-        tokens: SessionTokens {
-            access_token: dto.access_token,
-            refresh_token: dto.refresh_token,
-        },
+    let meta = SessionMeta {
+        user_id: OwnedUserId::try_from(dto.user_id)
+            .map_err(|err| MatrixCoreError::new(format!("invalid session user id: {err}")))?,
+        device_id: OwnedDeviceId::from(dto.device_id),
     };
-
-    client
-        .matrix_auth()
-        .restore_session(session, RoomLoadSettings::default())
-        .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to restore Matrix session: {err}")))
+    let tokens = SessionTokens {
+        access_token: dto.access_token,
+        refresh_token: dto.refresh_token,
+    };
+    let restored = match dto.auth {
+        SessionAuth::Matrix => {
+            client
+                .matrix_auth()
+                .restore_session(MatrixSession { meta, tokens }, RoomLoadSettings::default())
+                .await
+        }
+        SessionAuth::OAuth { client_id } => {
+            client
+                .oauth()
+                .restore_session(
+                    OAuthSession {
+                        client_id: ClientId::new(client_id),
+                        user: UserSession { meta, tokens },
+                    },
+                    RoomLoadSettings::default(),
+                )
+                .await
+        }
+    };
+    restored.map_err(|err| MatrixCoreError::new(format!("failed to restore Matrix session: {err}")))
 }
 
 pub(crate) async fn login(
     client: &Client,
     request: &LoginRequest,
 ) -> Result<StoredSession, MatrixCoreError> {
-    let response = client
+    client
         .matrix_auth()
         .login_username(&request.username, &request.password)
         .initial_device_display_name(&request.device_display_name)
@@ -241,9 +258,7 @@ pub(crate) async fn login(
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to log in to Matrix: {err}")))?;
 
-    Ok(stored_session_from_matrix_session(MatrixSession::from(
-        &response,
-    )))
+    Ok(stored_session(client))
 }
 
 pub(crate) async fn initial_room_sync(
@@ -3121,18 +3136,12 @@ pub(crate) fn start_session_update_task(client: Client, events: EventSender) -> 
     tokio::task::spawn_local(async move {
         loop {
             match session_changes.recv().await {
-                Ok(SessionChange::TokensRefreshed) => {
-                    let session = client
-                        .matrix_auth()
-                        .session()
-                        .expect("refreshed tokens require an active Matrix session");
-                    emit_event(
-                        &events,
-                        Event::SessionUpdated {
-                            session: stored_session_from_matrix_session(session),
-                        },
-                    );
-                }
+                Ok(SessionChange::TokensRefreshed) => emit_event(
+                    &events,
+                    Event::SessionUpdated {
+                        session: stored_session(&client),
+                    },
+                ),
                 Ok(SessionChange::UnknownToken { .. }) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => emit_event(
@@ -4368,12 +4377,26 @@ pub(crate) async fn logout(client: Client) -> Result<(), MatrixCoreError> {
         .map_err(|err| MatrixCoreError::new(format!("failed to log out of Matrix: {err}")))
 }
 
-pub(crate) fn stored_session_from_matrix_session(session: MatrixSession) -> StoredSession {
+/// The signed-in client's session, as the UI saves it.
+pub(crate) fn stored_session(client: &Client) -> StoredSession {
+    let (meta, tokens, auth) = match client.session().expect("the client is signed in") {
+        AuthSession::Matrix(session) => (session.meta, session.tokens, SessionAuth::Matrix),
+        AuthSession::OAuth(session) => (
+            session.user.meta,
+            session.user.tokens,
+            SessionAuth::OAuth {
+                client_id: session.client_id.as_str().to_owned(),
+            },
+        ),
+        // mirx signs in only through the two APIs above.
+        _ => unreachable!("unknown authentication API"),
+    };
     StoredSession {
-        user_id: session.meta.user_id.to_string(),
-        device_id: session.meta.device_id.to_string(),
-        access_token: session.tokens.access_token,
-        refresh_token: session.tokens.refresh_token,
+        user_id: meta.user_id.to_string(),
+        device_id: meta.device_id.to_string(),
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        auth,
     }
 }
 
@@ -4422,7 +4445,7 @@ mod tests {
         PublicRoomsPage, PublicRoomsResult, RoomNotificationMode, RoomSummary, SendFileRequest,
         SetRoomNotificationModeRequest, UserProfile,
     };
-    use crate::api::{EditMessageRequest, TextColor, TextStyle, TextStyleSpan};
+    use crate::api::{EditMessageRequest, SessionAuth, TextColor, TextStyle, TextStyleSpan};
     use crate::rich_text::StyledText;
 
     #[test]
@@ -4565,6 +4588,7 @@ mod tests {
                     device_id: "DEVICE".to_owned(),
                     access_token: "access-token".to_owned(),
                     refresh_token: None,
+                    auth: SessionAuth::Matrix,
                 },
             )
             .await

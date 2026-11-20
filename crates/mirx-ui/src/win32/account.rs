@@ -5,7 +5,7 @@ use super::*;
 
 pub(super) const PROFILE_SUBDIR: &str = "mirx\\ui-shell";
 pub(super) const SESSION_FILE_NAME: &str = "session.json";
-pub(super) const SAVED_SESSION_VERSION: u32 = 1;
+pub(super) const SAVED_SESSION_VERSION: u32 = 2;
 const PROTECTED_SESSION_MAGIC: &[u8] = b"mirx-ui-session:v1\0";
 const SESSION_DPAPI_ENTROPY: &[u8] = b"mirx-ui/session/v1";
 const STORE_PASSPHRASE_FILE_NAME: &str = "store-passphrase.dpapi";
@@ -18,6 +18,54 @@ pub(super) struct SavedSession {
     pub(super) version: u32,
     pub(super) homeserver_url: String,
     pub(super) session: StoredSession,
+}
+
+/// Version 1, from before sessions recorded how they signed in: every one
+/// was a password login.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedSessionV1 {
+    #[serde(rename = "version")]
+    _version: u32,
+    homeserver_url: String,
+    session: StoredSessionV1,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredSessionV1 {
+    user_id: String,
+    device_id: String,
+    access_token: String,
+    refresh_token: Option<String>,
+}
+
+impl From<SavedSessionV1> for SavedSession {
+    fn from(saved: SavedSessionV1) -> Self {
+        let StoredSessionV1 {
+            user_id,
+            device_id,
+            access_token,
+            refresh_token,
+        } = saved.session;
+        Self {
+            version: SAVED_SESSION_VERSION,
+            homeserver_url: saved.homeserver_url,
+            session: StoredSession {
+                user_id,
+                device_id,
+                access_token,
+                refresh_token,
+                auth: SessionAuth::Matrix,
+            },
+        }
+    }
+}
+
+/// The version field alone, to pick the format of the rest.
+#[derive(serde::Deserialize)]
+struct SavedSessionVersion {
+    version: u32,
 }
 
 pub(super) fn profile_dir() -> Result<PathBuf, String> {
@@ -46,16 +94,24 @@ pub(super) fn load_saved_session() -> Result<SavedSession, String> {
             path.display()
         )
     })?;
-    let saved = serde_json::from_slice::<SavedSession>(&payload)
-        .map_err(|err| format!("failed to parse saved session {}: {err}", path.display()))?;
-    if saved.version != SAVED_SESSION_VERSION {
-        return Err(format!(
-            "unsupported saved session version {} in {}",
-            saved.version,
+    let parse_error =
+        |err: serde_json::Error| format!("failed to parse saved session {}: {err}", path.display());
+    // The next save writes the current version.
+    match serde_json::from_slice::<SavedSessionVersion>(&payload)
+        .map_err(parse_error)?
+        .version
+    {
+        1 => serde_json::from_slice::<SavedSessionV1>(&payload)
+            .map(SavedSession::from)
+            .map_err(parse_error),
+        SAVED_SESSION_VERSION => {
+            serde_json::from_slice::<SavedSession>(&payload).map_err(parse_error)
+        }
+        version => Err(format!(
+            "unsupported saved session version {version} in {}",
             path.display()
-        ));
+        )),
     }
-    Ok(saved)
 }
 
 pub(super) fn save_session(homeserver_url: &str, session: &StoredSession) -> Result<(), String> {
@@ -524,14 +580,70 @@ mod tests {
             write_session_bytes(
                 &root,
                 &protected_saved_session_bytes(&SavedSession {
-                    version: 2,
+                    version: 3,
                     ..saved_session_payload()
                 }),
             );
             assert!(
                 load_saved_session()
                     .unwrap_err()
-                    .contains("unsupported saved session version 2")
+                    .contains("unsupported saved session version 3")
+            );
+        });
+    }
+
+    #[test]
+    fn a_version_1_session_loads_as_a_matrix_login() {
+        with_local_app_data(|root| {
+            write_session_bytes(
+                &root,
+                &protected_saved_session_payload_bytes(
+                    br#"{"version":1,"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":"refresh-token"}}"#,
+                ),
+            );
+            assert_eq!(load_saved_session(), Ok(saved_session_payload()));
+        });
+    }
+
+    #[test]
+    fn a_version_2_session_round_trips_either_auth() {
+        with_local_app_data(|_| {
+            for auth in [
+                SessionAuth::Matrix,
+                SessionAuth::OAuth {
+                    client_id: "mirx-client".to_owned(),
+                },
+            ] {
+                let session = StoredSession {
+                    auth: auth.clone(),
+                    ..stored_session()
+                };
+                save_session("https://matrix.example", &session).unwrap();
+                assert_eq!(
+                    load_saved_session(),
+                    Ok(SavedSession {
+                        version: 2,
+                        homeserver_url: "https://matrix.example".to_owned(),
+                        session,
+                    })
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_version_2_session_requires_its_auth() {
+        with_local_app_data(|root| {
+            write_session_bytes(
+                &root,
+                &protected_saved_session_payload_bytes(
+                    br#"{"version":2,"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":null}}"#,
+                ),
+            );
+            assert!(
+                load_saved_session()
+                    .unwrap_err()
+                    .contains("missing field `auth`")
             );
         });
     }

@@ -22,7 +22,8 @@ use mirx_core::{
     RoomMembership, RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomNotificationMode, RoomSummary,
-    RoomTyping, SpaceChildSummary, StoredSession as CoreStoredSession, UserProfile,
+    RoomTyping, SessionAuth as CoreSessionAuth, SpaceChildSummary,
+    StoredSession as CoreStoredSession, UserProfile,
     VerificationDecimals as CoreVerificationDecimals, VerificationEmoji as CoreVerificationEmoji,
     VerificationState as CoreVerificationState,
     VerificationStateEvent as CoreVerificationStateEvent,
@@ -37,18 +38,19 @@ use mirx_testkit::{
     RoomImageActivity, RoomImageInfo, RoomImageMediaState, RoomMediaSource, RoomMemberChange,
     RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
     RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand,
-    SubmittedEditCommand, SubmittedFileCommand, SubmittedHistoryCommand,
-    SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedMessageCommand,
-    SubmittedNotificationCommand, SubmittedPowerLevelCommand, SubmittedProfileCommand,
-    SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
-    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomListRequest,
-    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SubmittedUserCommand,
-    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiActiveTimeline, UiComposeTarget,
-    UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem,
-    UiPoint, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
-    UiTimelineLink, UiTimestamp, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
-    VerificationActionKind, VerificationState, ViewActivityLevel, ViewIdentity,
+    RoomStateNoticeContent, RoomTag, SessionAuth, SpaceChild, StoredSession,
+    SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedFileCommand,
+    SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
+    SubmittedMessageCommand, SubmittedNotificationCommand, SubmittedPowerLevelCommand,
+    SubmittedProfileCommand, SubmittedReactionCommand, SubmittedRecoveryCommand,
+    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
+    SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
+    SubmittedUserCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
+    UiActiveTimeline, UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState,
+    UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState, UiRoomReadState,
+    UiRoomState, UiState, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
+    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionKind,
+    VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -239,6 +241,7 @@ fn stored_session() -> StoredSession {
         device_id: "DEVICE".to_owned(),
         access_token: "secret-token".to_owned(),
         refresh_token: Some("refresh-token".to_owned()),
+        auth: SessionAuth::Matrix,
     }
 }
 
@@ -248,28 +251,56 @@ fn core_stored_session() -> CoreStoredSession {
         device_id: "DEVICE".to_owned(),
         access_token: "secret-token".to_owned(),
         refresh_token: Some("refresh-token".to_owned()),
+        auth: CoreSessionAuth::Matrix,
     }
 }
 
+/// Saves a password login's session, as the app does.
 fn write_saved_session(
     local_app_data: &Path,
     homeserver_url: &str,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    write_saved_session_payload(
+        local_app_data,
+        &serde_json::json!({
+            "version": 2,
+            "homeserver_url": homeserver_url,
+            "session": core_stored_session(),
+        }),
+    )
+}
+
+/// Saves a session the way mirx did before sessions recorded how they
+/// signed in.
+fn write_version_1_saved_session(
+    local_app_data: &Path,
+    homeserver_url: &str,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    write_saved_session_payload(
+        local_app_data,
+        &serde_json::json!({
+            "version": 1,
+            "homeserver_url": homeserver_url,
+            "session": {
+                "user_id": "@alice:example",
+                "device_id": "DEVICE",
+                "access_token": "secret-token",
+                "refresh_token": "refresh-token"
+            }
+        }),
+    )
+}
+
+fn write_saved_session_payload(
+    local_app_data: &Path,
+    payload: &serde_json::Value,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let path = session_file_path(local_app_data);
     let parent = path
         .parent()
         .ok_or_else(|| format!("missing parent for {}", path.display()))?;
     fs::create_dir_all(parent)?;
-    let payload = serde_json::to_vec(&serde_json::json!({
-        "version": 1,
-        "homeserver_url": homeserver_url,
-        "session": {
-            "user_id": "@alice:example",
-            "device_id": "DEVICE",
-            "access_token": "secret-token",
-            "refresh_token": "refresh-token"
-        }
-    }))?;
+    let payload = serde_json::to_vec(payload)?;
     let protected = dpapi::protect(&payload, "mirx saved session test", SESSION_DPAPI_ENTROPY)?;
     let mut bytes = Vec::with_capacity(PROTECTED_SESSION_MAGIC.len() + protected.len());
     bytes.extend_from_slice(PROTECTED_SESSION_MAGIC);
@@ -2873,7 +2904,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 46);
+    assert_eq!(version.protocol_version, 47);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -3185,7 +3216,8 @@ fn startup_without_session_logs_connect_hint() -> Result<(), Box<dyn std::error:
 fn startup_with_saved_session_restores_and_syncs() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
-    write_saved_session(&local_app_data, &server.base_url)?;
+    // A session saved by an older mirx still restores.
+    write_version_1_saved_session(&local_app_data, &server.base_url)?;
     // Not launch_automation_app: the restore starts before the core reports
     // Started, so the lifecycle never shows core_started.
     let exe_path =

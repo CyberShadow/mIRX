@@ -6,7 +6,8 @@
         "user_id": "@me:example",
         "device_id": "MIRXDEVICE",
         "access_token": "fixture-access-token",
-        "refresh_token": null
+        "refresh_token": null,
+        "auth": "Matrix"
       },
       "homeserver_url": "https://matrix.example/"
     }

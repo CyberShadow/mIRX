@@ -31,7 +31,7 @@ use mirx_core::{
     RoomMessageSendState, RoomNotificationMode, RoomReadState, RoomRedactedActivity,
     RoomStateNoticeContent, RoomSummary, RoomTyping, RoomUserProfile, RoomVideoInfo,
     SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
-    SendReactionRequest, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
+    SendReactionRequest, SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession,
     TextStyleSpan, UnbanRoomMemberRequest, UserProfile, VerificationEmoji, VerificationFlowId,
     VerificationRequest, VerificationState, VerificationStateEvent, login_server, start,

@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 46;
+pub(crate) const PROTOCOL_VERSION: u32 = 47;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -2986,8 +2986,8 @@ mod tests {
         RoomMediaSource, RoomMemberRank, RoomMembership, RoomMessageActivity,
         RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomReadState,
         RoomRedactedActivity, RoomSummary, RoomTagSummary, RoomVideoActivity, RoomVideoInfo,
-        SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationRequest,
-        VerificationState, VerificationStateEvent,
+        SessionAuth, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+        VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use serde_json::{Value, json};
 
@@ -3063,6 +3063,7 @@ mod tests {
             device_id: "DEVICE".to_owned(),
             access_token: "secret-token".to_owned(),
             refresh_token: Some("refresh-token".to_owned()),
+            auth: SessionAuth::Matrix,
         }
     }
 
@@ -3212,8 +3213,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_46() {
-        assert_eq!(PROTOCOL_VERSION, 46);
+    fn protocol_version_is_47() {
+        assert_eq!(PROTOCOL_VERSION, 47);
     }
 
     #[test]
@@ -3892,7 +3893,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_RESTORE_SESSION,
-                br#"{"id":"restore","args":{"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":"refresh-token"}}}"#,
+                br#"{"id":"restore","args":{"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":"refresh-token","auth":"Matrix"}}}"#,
             )
             .unwrap(),
             ParsedCommand::RestoreSession {
@@ -4707,7 +4708,7 @@ mod tests {
 
         let restore_error = parse_command_request(
             COMMAND_ID_RESTORE_SESSION,
-            br#"{"id":"restore","args":{"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":null,"unexpected":true}}}"#,
+            br#"{"id":"restore","args":{"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":null,"auth":"Matrix","unexpected":true}}}"#,
         )
         .expect_err("restore nested unknown field must fail");
         assert!(
@@ -4719,7 +4720,7 @@ mod tests {
 
         let restore_args_error = parse_command_request(
             COMMAND_ID_RESTORE_SESSION,
-            br#"{"id":"restore","args":{"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":null},"unexpected":true}}"#,
+            br#"{"id":"restore","args":{"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":null,"auth":"Matrix"},"unexpected":true}}"#,
         )
         .expect_err("restore args unknown field must fail");
         assert!(
@@ -5118,7 +5119,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":46,
+                    "protocol_version":47,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })

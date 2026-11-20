@@ -29,7 +29,7 @@ pub use api::{
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
     RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity,
     RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
-    SendMessageThreadTarget, SendReactionRequest, SetDisplayNameRequest,
+    SendMessageThreadTarget, SendReactionRequest, SessionAuth, SetDisplayNameRequest,
     SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
     SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, SyncStopReason, TextColor,
     TextStyle, TextStyleSpan, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserProfile,

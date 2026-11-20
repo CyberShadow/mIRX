@@ -89,7 +89,7 @@ pub(super) fn check_sign_in(connection: ConnectionState) -> Result<(), &'static 
 
 #[cfg(test)]
 mod tests {
-    use mirx_core::{CoreErrorEvent, StoredSession, SyncStopReason};
+    use mirx_core::{CoreErrorEvent, SessionAuth, StoredSession, SyncStopReason};
 
     use super::*;
 
@@ -112,6 +112,7 @@ mod tests {
                 device_id: "DEVICE".to_owned(),
                 access_token: "token".to_owned(),
                 refresh_token: None,
+                auth: SessionAuth::Matrix,
             },
             homeserver_url: "https://matrix.example/".to_owned(),
         }

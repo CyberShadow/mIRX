@@ -31,7 +31,7 @@ use mirx_testkit::{
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
     RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReactionSummary, RoomRedactedActivity,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, RoomUnableToDecryptActivity,
-    RoomUnableToDecryptReason, RoomVideoActivity, RoomVideoInfo, SendFileArgs,
+    RoomUnableToDecryptReason, RoomVideoActivity, RoomVideoInfo, SendFileArgs, SessionAuth,
     SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession, SubmittedDirectRoomCommand,
     SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
     SubmittedMessageCommand, SubmittedPowerLevelCommand, SubmittedProfileCommand,
@@ -166,6 +166,7 @@ fn stored_session() -> StoredSession {
         device_id: "DEVICE".to_owned(),
         access_token: "secret-token".to_owned(),
         refresh_token: Some("refresh-token".to_owned()),
+        auth: SessionAuth::Matrix,
     }
 }
 
@@ -5800,6 +5801,7 @@ fn data_models_reject_unknown_fields() {
             "device_id":"DEVICE",
             "access_token":"secret-token",
             "refresh_token":null,
+            "auth":"Matrix",
             "unexpected":true
         }"#
         )
@@ -6113,7 +6115,8 @@ fn data_models_reject_unknown_fields() {
                 "user_id":"@alice:example",
                 "device_id":"DEVICE",
                 "access_token":"secret-token",
-                "refresh_token":null
+                "refresh_token":null,
+                "auth":"Matrix"
             },
             "unexpected":true
         }"#

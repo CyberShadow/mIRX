@@ -110,6 +110,18 @@ pub struct StoredSession {
     pub device_id: String,
     pub access_token: String,
     pub refresh_token: Option<String>,
+    pub auth: SessionAuth,
+}
+
+/// How a session signed in, which decides where its tokens are refreshed
+/// and revoked.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SessionAuth {
+    /// The Matrix login API: a password or an SSO login token.
+    Matrix,
+    /// OAuth 2.0: the homeserver's authorization server refreshes and
+    /// revokes the tokens of the client it registered as `client_id`.
+    OAuth { client_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

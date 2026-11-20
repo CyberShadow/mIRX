@@ -19,7 +19,7 @@ use mirx_core::{
     RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
     RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
     RoomSummary, RoomTagSummary, RoomTyping, RoomUserProfile, SendFileRequest, SendMessageRequest,
-    SendReactionRequest, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
+    SendReactionRequest, SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
     SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
     UnsupportedRoomMessageActivity, UserProfile, VerificationDecimals, VerificationEmoji,
@@ -1010,12 +1010,13 @@ fn stored_session_serializes_and_deserializes_with_existing_fields() {
         device_id: "DEVICE".to_owned(),
         access_token: "access-token".to_owned(),
         refresh_token: Some("refresh-token".to_owned()),
+        auth: SessionAuth::Matrix,
     };
 
     let json = serde_json::to_string(&session).expect("serialize stored session");
     assert_eq!(
         json,
-        r#"{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":"refresh-token"}"#
+        r#"{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":"refresh-token","auth":"Matrix"}"#
     );
 
     let restored: StoredSession = serde_json::from_str(&json).expect("deserialize stored session");
@@ -1023,18 +1024,21 @@ fn stored_session_serializes_and_deserializes_with_existing_fields() {
 }
 
 #[test]
-fn stored_session_serializes_and_deserializes_without_refresh_token() {
+fn stored_session_serializes_and_deserializes_an_oauth_session_without_refresh_token() {
     let session = StoredSession {
         user_id: "@user:example.org".to_owned(),
         device_id: "DEVICE".to_owned(),
         access_token: "access-token".to_owned(),
         refresh_token: None,
+        auth: SessionAuth::OAuth {
+            client_id: "client-id".to_owned(),
+        },
     };
 
     let json = serde_json::to_string(&session).expect("serialize stored session");
     assert_eq!(
         json,
-        r#"{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":null}"#
+        r#"{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":null,"auth":{"OAuth":{"client_id":"client-id"}}}"#
     );
 
     let restored: StoredSession = serde_json::from_str(&json).expect("deserialize stored session");
@@ -1045,7 +1049,7 @@ fn stored_session_serializes_and_deserializes_without_refresh_token() {
 fn stored_session_rejects_unknown_fields() {
     assert!(
         serde_json::from_str::<StoredSession>(
-            r#"{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":null,"unexpected":"value"}"#
+            r#"{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":null,"auth":"Matrix","unexpected":"value"}"#
         )
         .is_err(),
         "stored session must reject unknown fields"
@@ -1640,6 +1644,7 @@ fn logged_in_event_serializes_and_deserializes_session_payload() {
         device_id: "DEVICE".to_owned(),
         access_token: "access-token".to_owned(),
         refresh_token: Some("refresh-token".to_owned()),
+        auth: SessionAuth::Matrix,
     };
     let event = Event::LoggedIn {
         session: session.clone(),
@@ -1649,7 +1654,7 @@ fn logged_in_event_serializes_and_deserializes_session_payload() {
     let json = serde_json::to_string(&event).expect("serialize logged-in event");
     assert_eq!(
         json,
-        r#"{"LoggedIn":{"session":{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":"refresh-token"},"homeserver_url":"https://matrix-client.example.org/"}}"#
+        r#"{"LoggedIn":{"session":{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":"refresh-token","auth":"Matrix"},"homeserver_url":"https://matrix-client.example.org/"}}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize logged-in event");
@@ -1663,6 +1668,7 @@ fn session_updated_event_serializes_and_deserializes_session_payload() {
         device_id: "DEVICE".to_owned(),
         access_token: "updated-access-token".to_owned(),
         refresh_token: Some("updated-refresh-token".to_owned()),
+        auth: SessionAuth::Matrix,
     };
     let event = Event::SessionUpdated {
         session: session.clone(),
@@ -1671,7 +1677,7 @@ fn session_updated_event_serializes_and_deserializes_session_payload() {
     let json = serde_json::to_string(&event).expect("serialize session-updated event");
     assert_eq!(
         json,
-        r#"{"SessionUpdated":{"session":{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"updated-access-token","refresh_token":"updated-refresh-token"}}}"#
+        r#"{"SessionUpdated":{"session":{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"updated-access-token","refresh_token":"updated-refresh-token","auth":"Matrix"}}}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize session-updated event");

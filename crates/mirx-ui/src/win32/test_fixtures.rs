@@ -772,6 +772,7 @@ pub(super) fn stored_session() -> StoredSession {
         device_id: "DEVICE".to_owned(),
         access_token: "secret-token".to_owned(),
         refresh_token: Some("refresh-token".to_owned()),
+        auth: SessionAuth::Matrix,
     }
 }
 
