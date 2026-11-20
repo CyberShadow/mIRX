@@ -81,9 +81,12 @@ fn trimmed_end_len(text: &str) -> usize {
 }
 
 /// Wraps one text line into the ranges of its segments: the first fits
-/// `first_width`, later ones `continuation_width`. Breaks prefer
-/// whitespace, which is dropped at the break; unbroken tokens are split at
-/// the last fitting character.
+/// `first_width`, later ones `continuation_width`. A line breaks, as in
+/// mIRC, at its last whitespace that fits, which is dropped at the break,
+/// or right after its last comma that fits, whichever is later; a token
+/// with neither is split at its last fitting character. The fit is a
+/// binary search over the line's char boundaries, which relies on a
+/// prefix never measuring narrower than a shorter one.
 fn wrap_timeline_visual_line<Measure>(
     line: &str,
     first_width: i32,
@@ -117,36 +120,43 @@ where
             break;
         }
 
-        let mut last_fit_end = 0;
-        let mut last_whitespace_break = None;
-        let mut first_char_end = None;
-        for (index, ch) in remaining.char_indices() {
-            let next = index + ch.len_utf8();
-            if first_char_end.is_none() {
-                first_char_end = Some(next);
-            }
-            // Whitespace is dropped at a break, so a space just past the
-            // width still ends a line whose text fits.
-            if ch.is_whitespace() && index > 0 {
-                last_whitespace_break = Some(index);
-            }
-            if measure(&remaining[..next]) <= max_width {
-                last_fit_end = next;
-                continue;
-            }
-            break;
-        }
-
-        let break_index = last_whitespace_break
-            .or_else(|| (last_fit_end > 0).then_some(last_fit_end))
-            .or(first_char_end)
-            .expect("a non-empty timeline body line must have at least one char boundary");
+        // The end of every char; the last one, all of `remaining`, does not
+        // fit.
+        let char_ends = remaining
+            .char_indices()
+            .map(|(index, ch)| index + ch.len_utf8())
+            .collect::<Vec<_>>();
+        let fitting = char_ends[..char_ends.len() - 1]
+            .partition_point(|&end| measure(&remaining[..end]) <= max_width);
+        let fit_end = fitting.checked_sub(1).map_or(0, |last| char_ends[last]);
+        let break_index = line_break_within(remaining, fit_end)
+            .or_else(|| (fit_end > 0).then_some(fit_end))
+            .unwrap_or(char_ends[0]);
         wrapped.push(start..start + trimmed_end_len(&remaining[..break_index]));
         let rest = &remaining[break_index..];
         start += break_index + (rest.len() - rest.trim_start().len());
     }
 
     wrapped
+}
+
+/// Where `text`, whose first `fit_end` bytes fit a line, breaks: before its
+/// last whitespace at or before `fit_end` (whitespace is dropped at a break,
+/// so a space just past the width still ends a line whose text fits), or
+/// after its last comma inside the fit, whichever is later. Never at 0.
+fn line_break_within(text: &str, fit_end: usize) -> Option<usize> {
+    text.char_indices()
+        .take_while(|&(index, _)| index <= fit_end)
+        .filter_map(|(index, ch)| {
+            if ch.is_whitespace() {
+                (index > 0).then_some(index)
+            } else if ch == ',' {
+                (index < fit_end).then_some(index + 1)
+            } else {
+                None
+            }
+        })
+        .last()
 }
 
 /// Paint lines for a log row, as ranges of `text` with their indent: the
@@ -698,6 +708,8 @@ fn scaled_thumbnail_dimensions(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
     use crate::win32::colors::PaletteIndex;
 
@@ -1037,6 +1049,139 @@ mod tests {
         );
         assert_eq!(wrap("", 5, 5), vec![""]);
         assert_eq!(wrap("   ", 5, 5), vec![""]);
+    }
+
+    fn wrapped(line: &str, first_width: i32, continuation_width: i32) -> Vec<&str> {
+        wrap_timeline_visual_line(line, first_width, continuation_width, &measure_ascii_width)
+            .into_iter()
+            .map(|segment| &line[segment])
+            .collect()
+    }
+
+    #[test]
+    fn wraps_after_a_comma_when_no_space_fits() {
+        assert_eq!(
+            wrapped("alpha,beta,gamma", 12, 12),
+            vec!["alpha,beta,", "gamma"]
+        );
+        // A comma just past the width does not fit, so it is no break.
+        assert_eq!(
+            wrapped("alphabeta,gamma", 9, 9),
+            vec!["alphabeta", ",gamma"]
+        );
+        // The later of a space and a comma wins.
+        assert_eq!(wrapped("ab cd,efgh", 8, 8), vec!["ab cd,", "efgh"]);
+        assert_eq!(wrapped("ab,cd efgh", 8, 8), vec!["ab,cd", "efgh"]);
+    }
+
+    #[test]
+    fn a_space_after_a_comma_still_drops_at_the_break() {
+        assert_eq!(wrapped("alpha, beta", 8, 8), vec!["alpha,", "beta"]);
+        assert_eq!(wrapped("alpha, beta", 6, 6), vec!["alpha,", "beta"]);
+    }
+
+    /// The wrap before the binary search: one measure per char until the
+    /// width overflows, with comma breaks. Kept to pin the search's result.
+    fn linear_reference_wrap(
+        line: &str,
+        first_width: i32,
+        continuation_width: i32,
+        measure: &dyn Fn(&str) -> i32,
+    ) -> Vec<Range<usize>> {
+        if line.is_empty() {
+            return vec![Range { start: 0, end: 0 }];
+        }
+        let mut wrapped = Vec::new();
+        let mut start = 0;
+        while start < line.len() {
+            let remaining = &line[start..];
+            let max_width = if wrapped.is_empty() {
+                first_width
+            } else {
+                continuation_width
+            };
+            if measure(remaining) <= max_width {
+                wrapped.push(start..start + trimmed_end_len(remaining));
+                break;
+            }
+            let mut last_fit_end = 0;
+            let mut last_break = None;
+            let mut first_char_end = None;
+            for (index, ch) in remaining.char_indices() {
+                let next = index + ch.len_utf8();
+                first_char_end.get_or_insert(next);
+                if ch.is_whitespace() && index > 0 {
+                    last_break = Some(index);
+                }
+                if measure(&remaining[..next]) <= max_width {
+                    last_fit_end = next;
+                    if ch == ',' {
+                        last_break = Some(next);
+                    }
+                    continue;
+                }
+                break;
+            }
+            let break_index = last_break
+                .or_else(|| (last_fit_end > 0).then_some(last_fit_end))
+                .or(first_char_end)
+                .unwrap();
+            wrapped.push(start..start + trimmed_end_len(&remaining[..break_index]));
+            let rest = &remaining[break_index..];
+            start += break_index + (rest.len() - rest.trim_start().len());
+        }
+        wrapped
+    }
+
+    #[test]
+    fn binary_search_bounds_measure_calls() {
+        let calls = Cell::new(0usize);
+        let counting = |text: &str| {
+            calls.set(calls.get() + 1);
+            measure_ascii_width(text)
+        };
+        let line = ["abcdefg"; 251].join(" ");
+        let line = &line[..2000];
+        let lines = wrap_timeline_visual_line(line, 60, 60, &counting).len();
+        // One measure for the whole rest, and a search over at most 2000
+        // boundaries, per line.
+        assert!(
+            calls.get() <= lines * (11 + 3),
+            "{} measures for {lines} lines",
+            calls.get()
+        );
+
+        // A wide char measures 2, so prefix widths are not char counts.
+        let wide = |text: &str| {
+            text.chars()
+                .map(|ch| if ch.len_utf8() > 1 { 2 } else { 1 })
+                .sum::<i32>()
+        };
+        let inputs = [
+            "",
+            "   ",
+            "alpha beta gamma delta",
+            "alpha,beta,gamma,delta",
+            "a, b, c, d, e, f, g",
+            "supercalifragilistic",
+            "end-to-end encrypted (!lobby:example)",
+            "café crème brûlée à la carte",
+            "🙂🙂🙂 🙂🙂🙂🙂🙂 🙂,🙂",
+            "  leading and trailing  ",
+            ",,,,,,,,,,,,",
+            "x",
+        ];
+        for input in inputs {
+            for (first, continuation) in [(1, 1), (3, 2), (5, 5), (6, 4), (10, 8), (40, 40)] {
+                for measure in [&measure_ascii_width as &dyn Fn(&str) -> i32, &wide] {
+                    assert_eq!(
+                        wrap_timeline_visual_line(input, first, continuation, &measure),
+                        linear_reference_wrap(input, first, continuation, measure),
+                        "{input:?} at {first}/{continuation}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
