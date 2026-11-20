@@ -354,6 +354,64 @@ impl Writer {
     }
 }
 
+/// Matrix HTML for `body` formatted by `styles`, which must pass
+/// [`check_text_styles`]: each span as a `<span>` with its colours (new
+/// messages use `span`, not the deprecated `font`; spec v1.10) around
+/// `<b><i><u><del>`, in that order. Spans are flat, so the elements always
+/// nest properly. `\n` is `<br>`.
+pub(crate) fn html_from_styled_text(body: &str, styles: &[TextStyleSpan]) -> String {
+    check_text_styles(body, styles).expect("styles sent must describe their body");
+    let mut html = String::new();
+    let mut written = 0;
+    for span in styles {
+        push_escaped_html(&mut html, &body[written..span.start]);
+        let style = span.style;
+        let mut closing = Vec::new();
+        if style.foreground.is_some() || style.background.is_some() {
+            html.push_str("<span");
+            if let Some(color) = style.foreground {
+                html.push_str(&format!(" data-mx-color=\"{color}\""));
+            }
+            if let Some(color) = style.background {
+                html.push_str(&format!(" data-mx-bg-color=\"{color}\""));
+            }
+            html.push('>');
+            closing.push("</span>");
+        }
+        for (on, open, close) in [
+            (style.bold, "<b>", "</b>"),
+            (style.italic, "<i>", "</i>"),
+            (style.underline, "<u>", "</u>"),
+            (style.strikethrough, "<del>", "</del>"),
+        ] {
+            if on {
+                html.push_str(open);
+                closing.push(close);
+            }
+        }
+        push_escaped_html(&mut html, &body[span.start..span.end]);
+        for close in closing.into_iter().rev() {
+            html.push_str(close);
+        }
+        written = span.end;
+    }
+    push_escaped_html(&mut html, &body[written..]);
+    html
+}
+
+fn push_escaped_html(html: &mut String, text: &str) {
+    for c in text.chars() {
+        match c {
+            '&' => html.push_str("&amp;"),
+            '<' => html.push_str("&lt;"),
+            '>' => html.push_str("&gt;"),
+            '"' => html.push_str("&quot;"),
+            '\n' => html.push_str("<br>"),
+            c => html.push(c),
+        }
+    }
+}
+
 const BLACK: TextColor = TextColor {
     red: 0,
     green: 0,
@@ -759,5 +817,118 @@ mod tests {
     fn markup_without_text_is_empty() {
         assert_eq!(plain_text(""), "");
         assert_eq!(plain_text("<p> </p><br>"), "");
+    }
+
+    fn span(start: usize, end: usize, style: TextStyle) -> TextStyleSpan {
+        TextStyleSpan { start, end, style }
+    }
+
+    #[test]
+    fn styled_text_becomes_flat_matrix_html() {
+        assert_eq!(html_from_styled_text("plain", &[]), "plain");
+        assert_eq!(
+            html_from_styled_text("a & <b> \"c\"\nnext", &[]),
+            "a &amp; &lt;b&gt; &quot;c&quot;<br>next"
+        );
+        let everything = TextStyle {
+            bold: true,
+            italic: true,
+            underline: true,
+            strikethrough: true,
+            foreground: Some(color(0xff, 0, 0)),
+            background: Some(color(0, 0, 0x7f)),
+        };
+        assert_eq!(
+            html_from_styled_text("all of it", &[span(4, 6, everything)]),
+            "all <span data-mx-color=\"#ff0000\" data-mx-bg-color=\"#00007f\">\
+             <b><i><u><del>of</del></u></i></b></span> it"
+        );
+        assert_eq!(
+            html_from_styled_text(
+                "bold, red bg <tag>",
+                &[
+                    span(0, 4, bold()),
+                    span(6, 9, foreground(color(0xff, 0, 0))),
+                    span(
+                        10,
+                        18,
+                        TextStyle {
+                            background: Some(color(0, 0, 0)),
+                            ..TextStyle::default()
+                        }
+                    ),
+                ]
+            ),
+            "<b>bold</b>, <span data-mx-color=\"#ff0000\">red</span> \
+             <span data-mx-bg-color=\"#000000\">bg &lt;tag&gt;</span>"
+        );
+        // Without a colour there is no span.
+        assert_eq!(
+            html_from_styled_text("x", &[span(0, 1, italic())]),
+            "<i>x</i>"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "styles sent must describe their body")]
+    fn styled_text_html_refuses_invalid_styles() {
+        html_from_styled_text("x", &[span(0, 2, bold())]);
+    }
+
+    #[test]
+    fn styled_text_round_trips_through_html() {
+        let styles = [
+            TextStyle::default(),
+            bold(),
+            italic(),
+            TextStyle {
+                underline: true,
+                strikethrough: true,
+                ..TextStyle::default()
+            },
+            foreground(color(0x12, 0x34, 0x56)),
+            TextStyle {
+                bold: true,
+                foreground: Some(color(0xff, 0xff, 0xff)),
+                background: Some(color(0, 0, 0)),
+                ..TextStyle::default()
+            },
+        ];
+        // Text as HTML keeps it: single spaces, none at a line's ends.
+        let words = ["héllo", "<w&>", "x", "👋", "two words", "\"q\""];
+        for (first, first_style) in styles.iter().enumerate() {
+            for (second, second_style) in styles.iter().enumerate() {
+                for separator in [" ", "", "\n"] {
+                    let mut body = String::new();
+                    let mut spans = Vec::new();
+                    for (word, style) in
+                        [(words[first], first_style), (words[second], second_style)]
+                    {
+                        if !body.is_empty() {
+                            body.push_str(separator);
+                        }
+                        let start = body.len();
+                        body.push_str(word);
+                        if *style != TextStyle::default() {
+                            match spans.last_mut() {
+                                Some(TextStyleSpan {
+                                    end, style: last, ..
+                                }) if *end == start && last == style => *end = body.len(),
+                                _ => spans.push(span(start, body.len(), *style)),
+                            }
+                        }
+                    }
+                    let html = html_from_styled_text(&body, &spans);
+                    assert_eq!(
+                        styled_text_from_html(&html),
+                        StyledText {
+                            body: body.clone(),
+                            styles: spans.clone()
+                        },
+                        "{html}"
+                    );
+                }
+            }
+        }
     }
 }

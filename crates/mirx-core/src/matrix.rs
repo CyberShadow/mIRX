@@ -101,7 +101,6 @@ use mime::Mime;
 use serde::Deserialize;
 use tokio::task::JoinHandle;
 
-use crate::api::validate_highlight_word;
 use crate::api::{
     BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent,
     CreateRoomRequest, CreateRoomVisibility, E2eeBackupState, E2eeBackupStatus,
@@ -127,7 +126,8 @@ use crate::api::{
     VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
     VerificationStateEvent,
 };
-use crate::rich_text::{StyledText, styled_text_from_html};
+use crate::api::{TextStyleSpan, check_text_styles, validate_highlight_word};
+use crate::rich_text::{StyledText, html_from_styled_text, styled_text_from_html};
 use crate::runtime::{EventSender, emit_event};
 
 #[derive(Debug)]
@@ -3630,31 +3630,26 @@ fn reaction_target_and_key_from_serialized_event(
     )))
 }
 
-fn room_message_event_content(
+/// The message type for a text, notice or emote: plain `body`, plus an
+/// HTML `formatted_body` when `styles` format it. Unformatted text has no
+/// `formatted_body` at all.
+fn room_message_type(
     presentation: RoomMessagePresentationKind,
     body: String,
-) -> RoomMessageEventContent {
-    match presentation {
-        RoomMessagePresentationKind::Text => RoomMessageEventContent::text_plain(body),
-        RoomMessagePresentationKind::Notice => RoomMessageEventContent::notice_plain(body),
-        RoomMessagePresentationKind::Emote => RoomMessageEventContent::emote_plain(body),
+    styles: &[TextStyleSpan],
+) -> MessageType {
+    if styles.is_empty() {
+        return match presentation {
+            RoomMessagePresentationKind::Text => MessageType::text_plain(body),
+            RoomMessagePresentationKind::Notice => MessageType::notice_plain(body),
+            RoomMessagePresentationKind::Emote => MessageType::emote_plain(body),
+        };
     }
-}
-
-fn room_message_event_content_without_relation(
-    presentation: RoomMessagePresentationKind,
-    body: String,
-) -> RoomMessageEventContentWithoutRelation {
+    let html = html_from_styled_text(&body, styles);
     match presentation {
-        RoomMessagePresentationKind::Text => {
-            RoomMessageEventContentWithoutRelation::text_plain(body)
-        }
-        RoomMessagePresentationKind::Notice => {
-            RoomMessageEventContentWithoutRelation::notice_plain(body)
-        }
-        RoomMessagePresentationKind::Emote => {
-            RoomMessageEventContentWithoutRelation::emote_plain(body)
-        }
+        RoomMessagePresentationKind::Text => MessageType::text_html(body, html),
+        RoomMessagePresentationKind::Notice => MessageType::notice_html(body, html),
+        RoomMessagePresentationKind::Emote => MessageType::emote_html(body, html),
     }
 }
 
@@ -3796,6 +3791,8 @@ pub(crate) async fn send_message(
     client: &Client,
     request: SendMessageRequest,
 ) -> Result<(), MatrixCoreError> {
+    // The UI builds the styles from what was typed: invalid ones are its bug.
+    check_text_styles(&request.body, &request.styles).expect("a sent message's styles are valid");
     let room = joined_room_by_id(client, &request.room_id)?;
 
     // Only replies carry `m.mentions`: once present, it replaces the legacy
@@ -3804,7 +3801,11 @@ pub(crate) async fn send_message(
         Some(reply) => Some(reply_mentions(client, &room, reply, &request.body).await?),
         None => None,
     };
-    let mut content = room_message_event_content(request.presentation, request.body);
+    let mut content = RoomMessageEventContent::new(room_message_type(
+        request.presentation,
+        request.body,
+        &request.styles,
+    ));
     content.mentions = mentions;
     match (request.thread, request.reply) {
         (None, None) => {}
@@ -3956,11 +3957,15 @@ pub(crate) async fn edit_message(
     client: &Client,
     request: EditMessageRequest,
 ) -> Result<(), MatrixCoreError> {
+    check_text_styles(&request.body, &request.styles).expect("an edit's styles are valid");
     let room = joined_room_by_id(client, &request.room_id)?;
     let target_event_id = <&EventId>::try_from(request.target_event_id.as_str())
         .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))?;
-    let new_content =
-        room_message_event_content_without_relation(request.presentation, request.body);
+    let new_content = RoomMessageEventContentWithoutRelation::new(room_message_type(
+        request.presentation,
+        request.body,
+        &request.styles,
+    ));
     let edit_event = room
         .make_edit_event(target_event_id, EditedContent::RoomMessage(new_content))
         .await
@@ -4379,6 +4384,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use super::edit_message;
     use super::{
         LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, PowerLevelsChange,
         ReactionEventIndex, ReactionEventIndexEntry, SenderProfileCache, activity_highlight,
@@ -4403,8 +4409,7 @@ mod tests {
         room_history_backfill_event_from_timeline_event,
         room_history_backfill_events_from_timeline, room_list_update_is_relevant,
         room_media_request_parameters, room_member_change_from_sync_member, room_member_rank,
-        room_members_from_parts, room_message_event_content,
-        room_message_event_content_without_relation, room_read_state_from_parts,
+        room_members_from_parts, room_message_type, room_read_state_from_parts,
         room_read_update_is_relevant, room_tag_summaries_from_tags, room_typing_from_sync_typing,
         room_unable_to_decrypt_reason_from_sdk, send_file, send_message, set_display_name,
         set_room_member_power_level, set_room_notification_mode,
@@ -4417,7 +4422,7 @@ mod tests {
         PublicRoomsPage, PublicRoomsResult, RoomNotificationMode, RoomSummary, SendFileRequest,
         SetRoomNotificationModeRequest, UserProfile,
     };
-    use crate::api::{TextColor, TextStyle, TextStyleSpan};
+    use crate::api::{EditMessageRequest, TextColor, TextStyle, TextStyleSpan};
     use crate::rich_text::StyledText;
 
     #[test]
@@ -6552,6 +6557,63 @@ mod tests {
                 }),
             })
         );
+    }
+
+    fn room_message_event_content(
+        presentation: RoomMessagePresentationKind,
+        body: String,
+    ) -> RoomMessageEventContent {
+        RoomMessageEventContent::new(room_message_type(presentation, body, &[]))
+    }
+
+    fn room_message_event_content_without_relation(
+        presentation: RoomMessagePresentationKind,
+        body: String,
+    ) -> super::RoomMessageEventContentWithoutRelation {
+        super::RoomMessageEventContentWithoutRelation::new(room_message_type(
+            presentation,
+            body,
+            &[],
+        ))
+    }
+
+    #[test]
+    fn plain_message_types_have_no_formatted_body() {
+        for (presentation, msgtype) in [
+            (RoomMessagePresentationKind::Text, "m.text"),
+            (RoomMessagePresentationKind::Notice, "m.notice"),
+            (RoomMessagePresentationKind::Emote, "m.emote"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(room_message_type(presentation, "hi there".to_owned(), &[]))
+                    .unwrap(),
+                serde_json::json!({ "msgtype": msgtype, "body": "hi there" })
+            );
+        }
+    }
+
+    #[test]
+    fn styled_message_types_carry_an_html_formatted_body() {
+        for (presentation, msgtype) in [
+            (RoomMessagePresentationKind::Text, "m.text"),
+            (RoomMessagePresentationKind::Notice, "m.notice"),
+            (RoomMessagePresentationKind::Emote, "m.emote"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(room_message_type(
+                    presentation,
+                    "hi <there>".to_owned(),
+                    &[style_span(3, 10, bold())]
+                ))
+                .unwrap(),
+                serde_json::json!({
+                    "msgtype": msgtype,
+                    "body": "hi <there>",
+                    "format": "org.matrix.custom.html",
+                    "formatted_body": "hi <b>&lt;there&gt;</b>"
+                })
+            );
+        }
     }
 
     fn sync_message_body(content: serde_json::Value) -> String {
@@ -12457,6 +12519,132 @@ mod tests {
                 upload_types,
                 ["image/png", "application/octet-stream", "text/plain"]
             );
+        });
+    }
+
+    #[test]
+    fn styled_sends_and_edits_carry_an_html_formatted_body() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&profile_test_state_events())),
+                )
+                .await;
+            mock_server
+                .mock_room_state_encryption()
+                .plain()
+                .mount()
+                .await;
+            mock_server
+                .mock_room_send()
+                .ok(OwnedEventId::try_from("$sent:localhost").expect("valid event id"))
+                .mount()
+                .await;
+            let mut mine = text_message_json("$mine:localhost", "@example:localhost", "typo");
+            mine["room_id"] = serde_json::json!(room_id().as_str());
+            mock_server
+                .mock_room_event()
+                .room(room_id())
+                .match_event_id()
+                .ok(timeline_event(mine))
+                .mount()
+                .await;
+            let red = TextStyle {
+                foreground: Some(TextColor {
+                    red: 0xff,
+                    green: 0,
+                    blue: 0,
+                }),
+                ..TextStyle::default()
+            };
+
+            send_message(
+                &client,
+                SendMessageRequest {
+                    room_id: room_id().to_string(),
+                    presentation: RoomMessagePresentationKind::Emote,
+                    body: "waves at <you>".to_owned(),
+                    styles: vec![style_span(0, 5, bold()), style_span(9, 14, red)],
+                    thread: None,
+                    reply: None,
+                },
+            )
+            .await
+            .expect("send the styled emote");
+            send_message(
+                &client,
+                SendMessageRequest {
+                    room_id: room_id().to_string(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "plain line".to_owned(),
+                    styles: Vec::new(),
+                    thread: None,
+                    reply: None,
+                },
+            )
+            .await
+            .expect("send the plain line");
+            edit_message(
+                &client,
+                EditMessageRequest {
+                    room_id: room_id().to_string(),
+                    target_event_id: "$mine:localhost".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "fixed it".to_owned(),
+                    styles: vec![style_span(6, 8, bold())],
+                },
+            )
+            .await
+            .expect("send the styled edit");
+
+            let bodies = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let bodies =
+                        request_bodies_containing(&mock_server, "/send/m.room.message/").await;
+                    if bodies.len() == 3 {
+                        return bodies;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("all three messages are sent");
+            assert_eq!(
+                bodies[0],
+                serde_json::json!({
+                    "msgtype": "m.emote",
+                    "body": "waves at <you>",
+                    "format": "org.matrix.custom.html",
+                    "formatted_body":
+                        "<b>waves</b> at <span data-mx-color=\"#ff0000\">&lt;you&gt;</span>"
+                })
+            );
+            assert_eq!(
+                bodies[1],
+                serde_json::json!({ "msgtype": "m.text", "body": "plain line" })
+            );
+            assert_eq!(
+                bodies[2]["m.new_content"],
+                serde_json::json!({
+                    "msgtype": "m.text",
+                    "body": "fixed it",
+                    "format": "org.matrix.custom.html",
+                    "formatted_body": "fixed <b>it</b>"
+                })
+            );
+            // The fallback for clients without edits is the SDK's, from the
+            // new content.
+            assert_eq!(bodies[2]["body"], "* fixed it");
+            assert_eq!(bodies[2]["format"], "org.matrix.custom.html");
         });
     }
 
