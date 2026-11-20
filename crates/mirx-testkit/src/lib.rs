@@ -413,6 +413,9 @@ pub struct Model {
     pub submitted_setup_recovery_commands: Vec<SubmittedSetupRecoveryCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_room_list_requests: Vec<SubmittedRoomListRequest>,
+    /// The web links handed to the shell, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub opened_links: Vec<String>,
     pub last_error: Option<UiError>,
     pub selected_room: Option<String>,
 }
@@ -1262,6 +1265,19 @@ pub struct UiTimelineLine {
     pub click_point: UiPoint,
     /// The client x where `text` starts.
     pub text_left: i32,
+    /// The links of the line's row that the line shows, at offsets in
+    /// `text`: a link that wraps is in each of its lines.
+    pub links: Vec<UiTimelineLink>,
+}
+
+/// A link in a timeline line: `text[start..end]` shows part or all of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiTimelineLink {
+    pub start: usize,
+    pub end: usize,
+    /// The whole link as written.
+    pub url: String,
 }
 
 /// What a timeline line shows.

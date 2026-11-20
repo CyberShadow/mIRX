@@ -47,7 +47,7 @@ use mirx_testkit::{
     SubmittedVerificationAction, SwitchbarItem, TestkitError, UiActiveTimeline, UiComposeTarget,
     UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem,
     UiPoint, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
-    UiTimestamp, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
+    UiTimelineLink, UiTimestamp, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
     VerificationActionKind, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
@@ -16629,6 +16629,173 @@ fn new_lines_during_a_drag_keep_the_mark() -> Result<(), Box<dyn std::error::Err
     send_mouse(timeline, WM_MOUSEMOVE, MK_LBUTTON, &to);
     send_mouse(timeline, WM_LBUTTONUP, 0, &to);
     assert_eq!(clipboard_text()?, "sentinel");
+    Ok(())
+}
+
+fn link(start: usize, end: usize, url: &str) -> UiTimelineLink {
+    UiTimelineLink {
+        start,
+        end,
+        url: url.to_owned(),
+    }
+}
+
+#[test]
+fn timeline_dump_lists_links() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_render_state("hotlinks.json")?;
+    let timeline = app
+        .dump_ui_state()?
+        .active_timeline
+        .ok_or("a timeline is active")?;
+    let links_of = |needle: &str| {
+        let line = timeline
+            .visible_lines
+            .iter()
+            .find(|line| line.text.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} is on screen"));
+        line.links
+            .iter()
+            .map(|link| (line.text[link.start..link.end].to_owned(), link.url.clone()))
+            .collect::<Vec<_>>()
+    };
+    let pair = |shown: &str, url: &str| (shown.to_owned(), url.to_owned());
+    assert_eq!(
+        links_of("<Alice> the spec"),
+        vec![pair(
+            "https://spec.matrix.org/latest/",
+            "https://spec.matrix.org/latest/"
+        )]
+    );
+    assert_eq!(
+        links_of("<Bob> mirror"),
+        vec![pair("www.example.org", "www.example.org")]
+    );
+    assert_eq!(
+        links_of("<Carol> see docs"),
+        vec![pair("https://example.org/docs", "https://example.org/docs")]
+    );
+    // The wrapped address is in both of its lines, whole in each `url`.
+    let long = "https://example.org/a/very/long/path/that/wraps/over/the/edge/of/the/window/to/the/next/line/index.html";
+    let halves = timeline
+        .visible_lines
+        .iter()
+        .flat_map(|line| {
+            line.links
+                .iter()
+                .filter(|link| link.url == long)
+                .map(|link| line.text[link.start..link.end].to_owned())
+        })
+        .collect::<Vec<_>>();
+    assert!(halves.len() >= 2, "{halves:?}");
+    assert_eq!(halves.concat(), long);
+    assert_eq!(links_of("C# is not a link"), vec![]);
+    // Offsets are in the line's text.
+    let line = timeline
+        .visible_lines
+        .iter()
+        .find(|line| line.text.contains("<Bob> mirror"))
+        .expect("checked above");
+    let start = line.text.find("www.").expect("on the line");
+    assert_eq!(
+        line.links,
+        vec![link(
+            start,
+            start + "www.example.org".len(),
+            "www.example.org"
+        )]
+    );
+    Ok(())
+}
+
+/// Double-clicks the first character of `needle` on screen.
+fn double_click_text(app: &MirxApp, needle: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let point = text_point(app, needle, 0)?;
+    send_left_click(app.active_timeline_hwnd()? as HWND, &point, true);
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+#[test]
+fn double_clicking_a_web_link_hands_it_to_the_shell() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_render_state("hotlinks.json")?;
+    double_click_text(&app, "https://spec.matrix.org")?;
+    double_click_text(&app, "www.example.org")?;
+    assert_eq!(
+        app.dump_model()?.opened_links,
+        vec![
+            "https://spec.matrix.org/latest/".to_owned(),
+            "http://www.example.org".to_owned()
+        ]
+    );
+    // winebrowser is disabled under test: the shell fails, and says so in
+    // the window, without a box of its own.
+    let ui_state = app.dump_ui_state()?;
+    let view = find_view(&ui_state, &room_identity("!links:example"));
+    for url in ["https://spec.matrix.org/latest/", "http://www.example.org"] {
+        assert!(
+            view_contains(
+                view,
+                &format!("* Unable to open {url}: ShellExecuteExW failed: ")
+            ),
+            "{:?}",
+            view.lines
+        );
+    }
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .starts_with("* Unable to open http://www.example.org: ")
+    );
+    assert!(
+        app.wait_for_modal_dialog(Duration::from_millis(500))
+            .is_err()
+    );
+    // A double-click on a link does not go anywhere else.
+    assert_eq!(ui_state.mdi.active, room_identity("!links:example"));
+    Ok(())
+}
+
+#[test]
+fn double_clicking_a_room_link_activates_or_joins() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_render_state("hotlinks.json")?;
+    // The Rust room is joined under the alias: its window comes forward.
+    double_click_text(&app, "#rust:matrix.org,")?;
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!rust:example")
+    );
+    app.select_room("!links:example")?;
+    double_click_text(&app, "https://matrix.to/#/%23rust")?;
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!rust:example")
+    );
+    app.select_room("!links:example")?;
+    let model = app.dump_model()?;
+    assert!(model.submitted_membership_commands.is_empty());
+
+    // Any other room is joined.
+    double_click_text(&app, "https://matrix.to/#/%23elsewhere")?;
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::Join,
+            target: "#elsewhere:example.org".to_owned(),
+        }]
+    );
+    assert_eq!(model.status, "join submitted: #elsewhere:example.org");
+
+    // A user opens a query, as /query does.
+    double_click_text(&app, "https://matrix.to/#/@bob")?;
+    assert_eq!(
+        app.dump_model()?.submitted_direct_room_commands,
+        vec![SubmittedDirectRoomCommand {
+            user_id: "@bob:example".to_owned(),
+        }]
+    );
+    assert!(app.dump_model()?.opened_links.is_empty());
     Ok(())
 }
 

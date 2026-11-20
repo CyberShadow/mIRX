@@ -65,8 +65,10 @@
           export CXXFLAGS_x86_64_pc_windows_gnu="-I$PTHREADS/include"
           # No winedbg: a crash ends the process with Wine's one-line
           # report instead of stalling while winedbg --auto reads the debug
-          # info of a 1 GB test executable.
-          export WINEDLLOVERRIDES="mscoree,mshtml=;winedbg.exe=d"
+          # info of a 1 GB test executable. No winebrowser: a web link a
+          # test opens must fail in the shell, never reach xdg-open and the
+          # host's browser.
+          export WINEDLLOVERRIDES="mscoree,mshtml=;winedbg.exe=d;winebrowser.exe=d"
           export MIRX_WINE_FONTS="${wineFonts}"
 
           ln -sfn "$PTHREADS" "$MIRX_ROOT/.nix-pthreads"

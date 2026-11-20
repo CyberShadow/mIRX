@@ -1029,6 +1029,19 @@ pub(crate) struct UiTimelineLine {
     pub(crate) click_point: UiPoint,
     /// The client x where `text` starts.
     pub(crate) text_left: i32,
+    /// The links of the line's row that the line shows, at offsets in
+    /// `text`: a link that wraps is in each of its lines.
+    pub(crate) links: Vec<UiTimelineLink>,
+}
+
+/// A link in a timeline line: `text[start..end]` shows part or all of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiTimelineLink {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    /// The whole link as written.
+    pub(crate) url: String,
 }
 
 /// What a timeline line shows.
@@ -1575,6 +1588,9 @@ pub(crate) struct DumpModel {
     pub(crate) submitted_setup_recovery_commands: Vec<DumpSubmittedSetupRecoveryCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_room_list_requests: Vec<DumpSubmittedRoomListRequest>,
+    /// The web links handed to the shell, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) opened_links: Vec<String>,
     pub(crate) last_error: Option<DumpError>,
     pub(crate) selected_room: Option<String>,
 }
@@ -5174,6 +5190,7 @@ mod tests {
                     submitted_recovery_commands: Vec::new(),
                     submitted_setup_recovery_commands: Vec::new(),
                     submitted_room_list_requests: Vec::new(),
+                    opened_links: Vec::new(),
                     last_error: None,
                     selected_room: Some("!room:example".to_owned()),
                 },
@@ -5728,6 +5745,11 @@ mod tests {
                             event_id: Some("$answer".to_owned()),
                             click_point: super::UiPoint { x: 8, y: 9 },
                             text_left: 8,
+                            links: vec![super::UiTimelineLink {
+                                start: 4,
+                                end: 9,
+                                url: "#a:b.c".to_owned(),
+                            }],
                         }],
                     }),
                     ignored_users: Some(vec!["@spam:example".to_owned()]),
@@ -5895,7 +5917,8 @@ mod tests {
                             "styles":[],
                             "event_id":"$answer",
                             "click_point":{"x":8,"y":9},
-                            "text_left":8
+                            "text_left":8,
+                            "links":[{"start":4,"end":9,"url":"#a:b.c"}]
                         }]
                     },
                     "ignored_users":["@spam:example"]
@@ -5951,6 +5974,7 @@ mod tests {
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
+            opened_links: Vec::new(),
             last_error: None,
             selected_room: None,
         };
@@ -6044,6 +6068,7 @@ mod tests {
                 wait_for_backups_to_upload: true,
             }],
             submitted_room_list_requests: Vec::new(),
+            opened_links: Vec::new(),
             last_error: None,
             selected_room: None,
         };
@@ -6101,6 +6126,7 @@ mod tests {
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
+            opened_links: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -6169,6 +6195,7 @@ mod tests {
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
+            opened_links: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -6264,6 +6291,7 @@ mod tests {
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
+            opened_links: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -6366,6 +6394,7 @@ mod tests {
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
+            opened_links: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -6472,6 +6501,7 @@ mod tests {
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
+            opened_links: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -6606,6 +6636,7 @@ mod tests {
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
+            opened_links: Vec::new(),
             last_error: None,
             selected_room: Some("!room:example".to_owned()),
         };
@@ -6684,6 +6715,7 @@ mod tests {
                 submitted_recovery_commands: Vec::new(),
                 submitted_setup_recovery_commands: Vec::new(),
                 submitted_room_list_requests: Vec::new(),
+                opened_links: Vec::new(),
                 last_error: None,
                 selected_room: None,
             }

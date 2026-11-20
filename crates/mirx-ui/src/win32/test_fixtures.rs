@@ -861,6 +861,7 @@ pub(super) fn test_state() -> WindowState {
         gdiplus_startup_error,
         #[cfg(test)]
         recorded_commands: Vec::new(),
+        opened_links: Vec::new(),
         #[cfg(test)]
         submitted_setup_e2ee_recovery: Vec::new(),
         pending_attachment_saves: BTreeMap::new(),

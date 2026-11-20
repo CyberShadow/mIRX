@@ -185,6 +185,31 @@
     }
   },
   {
+    "RoomActivity": {
+      "room_id": "!links:example",
+      "activity_id": "event:$links-6",
+      "timestamp_ms": 1700000360000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$links-6",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "elsewhere: https://matrix.to/#/%23elsewhere%3Aexample.org?via=example.org",
+        "styles": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
     "RoomMembers": {
       "room_id": "!links:example",
       "members": [

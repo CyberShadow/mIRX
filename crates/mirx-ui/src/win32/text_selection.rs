@@ -74,6 +74,16 @@ pub(super) fn offset_at_x(text: &str, x: i32, measure: &dyn Fn(&str) -> i32) -> 
     text.len()
 }
 
+/// The start of the character of `text` under `x`, if one is.
+fn char_at_x(text: &str, x: i32, measure: &dyn Fn(&str) -> i32) -> Option<usize> {
+    if x < 0 {
+        return None;
+    }
+    text.char_indices()
+        .find(|(index, ch)| x < measure(&text[..index + ch.len_utf8()]))
+        .map(|(index, _)| index)
+}
+
 /// The visible line at client `y`, clamped to the visible lines: `None`
 /// only when none is visible.
 fn visible_line_at(lines_len: usize, geometry: LineGeometry, y: i32) -> Option<ClampedLine> {
@@ -148,6 +158,26 @@ pub(super) fn point_at(
         None => range.start + offset_at_x(text, x - TIMELINE_LEFT_PADDING - indent, measure),
     };
     Some(TextPoint { row, offset })
+}
+
+/// The character under client `x`, `y`, if a row's text is there: what the
+/// pointer is on, for hotlinks.
+pub(super) fn exact_point_at(
+    lines: &[TimelinePaintLine],
+    geometry: LineGeometry,
+    x: i32,
+    y: i32,
+    measure: &dyn Fn(&str) -> i32,
+) -> Option<TextPoint> {
+    let ClampedLine::On(index) = visible_line_at(lines.len(), geometry, y)? else {
+        return None;
+    };
+    let (row, text, indent, range) = text_line(&lines[index])?;
+    let offset = char_at_x(text, x - TIMELINE_LEFT_PADDING - indent, measure)?;
+    Some(TextPoint {
+        row,
+        offset: range.start + offset,
+    })
 }
 
 /// The text between `a` and `b` in either order, rows joined by CRLF as
@@ -291,6 +321,17 @@ mod tests {
     }
 
     #[test]
+    fn char_at_x_is_the_character_under_the_point() {
+        assert_eq!(char_at_x("abc", -1, &mono), None);
+        assert_eq!(char_at_x("abc", 0, &mono), Some(0));
+        assert_eq!(char_at_x("abc", 9, &mono), Some(0));
+        assert_eq!(char_at_x("abc", 10, &mono), Some(1));
+        assert_eq!(char_at_x("abc", 29, &mono), Some(2));
+        assert_eq!(char_at_x("abc", 30, &mono), None);
+        assert_eq!(char_at_x("añb", 25, &mono), Some("añ".len()));
+    }
+
+    #[test]
     fn point_at_clamps_to_the_visible_lines() {
         let rows = vec![row("first row", "a"), row("second row wraps", "b")];
         let lines = vec![
@@ -339,14 +380,28 @@ mod tests {
             point_at(&lines, GEOMETRY, 0, 6 + 3 * 15, &mono),
             Some(point(0, 21))
         );
+        assert_eq!(exact_point_at(&lines, GEOMETRY, 0, 6 + 3 * 15, &mono), None);
     }
 
     #[test]
     fn lines_without_a_row_have_no_point() {
         let mut line = text_line(0, &[row("plain", "a")], 0..5, 0);
         line.source_row_index = None;
-        assert_eq!(point_at(&[line], GEOMETRY, 10, 10, &mono), None);
+        assert_eq!(point_at(&[line.clone()], GEOMETRY, 10, 10, &mono), None);
+        assert_eq!(exact_point_at(&[line], GEOMETRY, 10, 10, &mono), None);
         assert_eq!(point_at(&[], GEOMETRY, 10, 10, &mono), None);
+    }
+
+    #[test]
+    fn exact_point_at_needs_a_character_under_the_point() {
+        let rows = vec![row("abc", "a")];
+        let lines = vec![text_line(0, &rows, 0..3, 0)];
+        let at = |x, y| exact_point_at(&lines, GEOMETRY, x, y, &mono);
+        assert_eq!(at(x_of(1, 0) + 9, 6), Some(point(0, 1)));
+        assert_eq!(at(x_of(3, 0), 6), None);
+        assert_eq!(at(x_of(0, 0) - 1, 6), None);
+        assert_eq!(at(x_of(0, 0), 5), None);
+        assert_eq!(at(x_of(0, 0), 6 + 15), None);
     }
 
     #[test]

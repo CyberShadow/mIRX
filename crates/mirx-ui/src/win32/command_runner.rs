@@ -56,9 +56,7 @@ pub(super) unsafe fn run_slash_command(
             activate_view(hwnd, &ViewId::Room(room_id), None)?;
             Ok(Some(format!("window active: {target}")))
         }
-        SlashCommand::Join { target } => {
-            submit_join_room(state_mut(hwnd), target, Vec::new()).map(Some)
-        }
+        SlashCommand::Join { target } => open_room_link(hwnd, target, Vec::new()).map(Some),
         SlashCommand::List { server, filter } => {
             start_room_list(hwnd, RoomListQuery { server, filter }).map(Some)
         }
@@ -805,6 +803,38 @@ fn submit_create_room(state: &mut WindowState, args: CreateRoomArgs) -> Result<S
     let status = format!("create submitted: {}", request.name);
     enqueue_command(state, Command::CreateRoom(request))?;
     Ok(status)
+}
+
+/// The room `target`, a room ID or alias as `/join` or a link names it: its
+/// window comes to the front if the user has one, joined or invited, as
+/// mIRC's `/join #channel` does for a channel it is on. Any other room is
+/// joined through `via`, and its window opens when the join lands.
+pub(super) unsafe fn open_room_link(
+    hwnd: HWND,
+    target: String,
+    via: Vec<String>,
+) -> Result<String, String> {
+    let room_id = state_ref(hwnd)
+        .model
+        .rooms
+        .iter()
+        .find(|room| is_navigable_room(room) && room_answers_to(room, &target))
+        .map(|room| room.room_id.clone());
+    match room_id {
+        Some(room_id) => {
+            activate_view(hwnd, &ViewId::Room(room_id), None)?;
+            Ok(format!("window active: {target}"))
+        }
+        None => submit_join_room(state_mut(hwnd), target, via),
+    }
+}
+
+/// Whether `target` is `room`'s ID or one of its published aliases, exactly:
+/// display names, which `/window` also takes, name no room to join.
+fn room_answers_to(room: &RoomSummary, target: &str) -> bool {
+    room.room_id == target
+        || room.canonical_alias.as_deref() == Some(target)
+        || room.alt_aliases.iter().any(|alias| alias == target)
 }
 
 pub(super) fn submit_join_room(
@@ -1628,6 +1658,120 @@ mod tests {
             resolve_invite_command_room_id(&state, "reject", None),
             Err("reject failed: no invited room selected".to_owned())
         );
+    }
+
+    /// A real frame with the joined rooms Ops (`#ops:example.org`, also
+    /// `#operations:example.org`) and Dev, and an invite to Lobby; Dev is
+    /// active, and the sender's commands wait.
+    unsafe fn with_room_link_frame(test: impl FnOnce(HWND)) {
+        with_test_frame(600, 400, |hwnd| {
+            let (sender, commands) = inert_command_sender();
+            std::mem::forget(commands);
+            state_mut(hwnd).command_sender = Some(sender);
+            let mut ops = room("!ops:example.org", "Ops", false);
+            ops.canonical_alias = Some("#ops:example.org".to_owned());
+            ops.alt_aliases = vec!["#operations:example.org".to_owned()];
+            state_mut(hwnd).model.rooms = vec![
+                ops,
+                room("!dev:example.org", "Dev", false),
+                invited_room("!lobby:example.org", "Lobby"),
+            ];
+            sync_views_and_tree(hwnd).unwrap();
+            activate_view(hwnd, &room_view_id("!dev:example.org"), None).unwrap();
+            test(hwnd);
+        });
+    }
+
+    fn joins(state: &WindowState) -> Vec<&Command> {
+        state
+            .recorded_commands
+            .iter()
+            .filter(|command| matches!(command, Command::JoinRoom(_)))
+            .collect()
+    }
+
+    #[test]
+    fn a_room_link_activates_a_window_the_user_has_by_id_or_alias() {
+        unsafe {
+            with_room_link_frame(|hwnd| {
+                for (target, room_id) in [
+                    ("!ops:example.org", "!ops:example.org"),
+                    ("#ops:example.org", "!ops:example.org"),
+                    ("#operations:example.org", "!ops:example.org"),
+                    ("!lobby:example.org", "!lobby:example.org"),
+                    ("!dev:example.org", "!dev:example.org"),
+                ] {
+                    assert_eq!(
+                        open_room_link(hwnd, target.to_owned(), vec!["x.org".to_owned()]),
+                        Ok(format!("window active: {target}"))
+                    );
+                    assert_eq!(state_ref(hwnd).active_view, room_view_id(room_id));
+                }
+                assert!(joins(state_ref(hwnd)).is_empty());
+            });
+        }
+    }
+
+    #[test]
+    fn a_room_link_joins_any_other_room_through_its_servers() {
+        unsafe {
+            with_room_link_frame(|hwnd| {
+                // A display name is not an alias.
+                assert_eq!(
+                    open_room_link(hwnd, "Ops".to_owned(), Vec::new()),
+                    Ok("join submitted: Ops".to_owned())
+                );
+                assert_eq!(
+                    open_room_link(
+                        hwnd,
+                        "#rust:matrix.org".to_owned(),
+                        vec!["matrix.org".to_owned()]
+                    ),
+                    Ok("join submitted: #rust:matrix.org".to_owned())
+                );
+                assert_eq!(
+                    joins(state_ref(hwnd)),
+                    vec![
+                        &Command::JoinRoom(JoinRoomRequest {
+                            room_or_alias: "Ops".to_owned(),
+                            via: Vec::new(),
+                        }),
+                        &Command::JoinRoom(JoinRoomRequest {
+                            room_or_alias: "#rust:matrix.org".to_owned(),
+                            via: vec!["matrix.org".to_owned()],
+                        }),
+                    ]
+                );
+                assert_eq!(
+                    state_ref(hwnd).active_view,
+                    room_view_id("!dev:example.org")
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn typed_join_of_a_joined_room_activates_its_window() {
+        unsafe {
+            with_room_link_frame(|hwnd| {
+                run_local_command(
+                    hwnd,
+                    SlashCommand::Join {
+                        target: "#ops:example.org".to_owned(),
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    state_ref(hwnd).active_view,
+                    room_view_id("!ops:example.org")
+                );
+                assert_eq!(
+                    state_ref(hwnd).model.status,
+                    "window active: #ops:example.org"
+                );
+                assert!(joins(state_ref(hwnd)).is_empty());
+            });
+        }
     }
 
     #[test]

@@ -39,6 +39,7 @@ use mirx_core::{
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+use windows_sys::Win32::Foundation::S_OK;
 use windows_sys::Win32::Foundation::{
     CloseHandle, FILETIME, GetLastError, GlobalFree, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM,
     LRESULT, POINT, RECT, SYSTEMTIME, WPARAM,
@@ -58,6 +59,9 @@ use windows_sys::Win32::Graphics::GdiPlus::{
     GdiplusStartup, GdiplusStartupInput, GpGraphics, GpImage,
 };
 use windows_sys::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
+use windows_sys::Win32::System::Com::{
+    COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx,
+};
 use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{
@@ -159,8 +163,8 @@ use crate::{
         SwitchbarState, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind,
         UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiPoint, UiRect,
         UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState, UiTextFont, UiTimelineLine,
-        UiTimelineLineKind, UiTimestamp, VerificationActionArgs, ViewActivityLevel, ViewIdentity,
-        WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
+        UiTimelineLineKind, UiTimelineLink, UiTimestamp, VerificationActionArgs, ViewActivityLevel,
+        ViewIdentity, WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
         dump_room_from_summary, dump_room_message_send_state_from_core,
         dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
         parse_command_request, success_response,
@@ -187,6 +191,7 @@ mod frame;
 mod frame_menus;
 mod glyph_fonts;
 mod glyph_runs;
+mod hotlinks;
 mod ignore;
 mod images;
 mod mdi;
@@ -196,6 +201,7 @@ mod navigation;
 mod nick_completion;
 mod nick_list;
 mod notifications;
+mod open_link;
 mod options;
 mod options_dialog;
 mod reactions;
@@ -248,9 +254,9 @@ use automation_host::{
 #[cfg(test)]
 use command_runner::run_slash_command;
 use command_runner::{
-    echo_lines_in_active_view, enqueue_command, known_nick, own_server, report_command_error,
-    report_error_line, resolve_invite_command_room_id, resolve_joined_room_target,
-    run_local_command, send_edit, send_reply, set_local_command_status,
+    echo_lines_in_active_view, enqueue_command, known_nick, open_room_link, own_server,
+    report_command_error, report_error_line, resolve_invite_command_room_id,
+    resolve_joined_room_target, run_local_command, send_edit, send_reply, set_local_command_status,
     submit_accept_slash_command, submit_join_room, submit_part_slash_command,
     submit_query_slash_command, submit_redact_slash_command, submit_reject_slash_command,
     submit_room_notification_mode, whois_lines,
@@ -641,6 +647,8 @@ struct WindowState {
     gdiplus_session: Option<GdiplusSession>,
     gdiplus_startup_error: Option<String>,
     recorded_commands: Vec<Command>,
+    /// The web links handed to the shell, in order.
+    opened_links: Vec<String>,
     submitted_setup_e2ee_recovery: Vec<SubmittedSetupE2eeRecovery>,
     pending_attachment_saves: BTreeMap<String, PendingAttachmentSave>,
     last_attachment_save: Option<AttachmentSaveResult>,
@@ -751,6 +759,16 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     };
     let automation_enabled = automation_enabled_for_command(&command);
 
+    // The shell, which opens web links, needs COM on the thread that calls
+    // it: this one, before any window exists.
+    let com = unsafe {
+        CoInitializeEx(
+            null(),
+            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+        )
+    };
+    assert_eq!(com, S_OK, "COM starts once, first, on the UI thread");
+
     let instance = unsafe { GetModuleHandleW(null()) };
     if instance.is_null() {
         return Err(last_os_error("GetModuleHandleW"));
@@ -809,6 +827,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         gdiplus_session,
         gdiplus_startup_error,
         recorded_commands: Vec::new(),
+        opened_links: Vec::new(),
         submitted_setup_e2ee_recovery: Vec::new(),
         pending_attachment_saves: BTreeMap::new(),
         last_attachment_save: None,

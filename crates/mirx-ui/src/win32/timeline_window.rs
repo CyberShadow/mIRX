@@ -5,13 +5,17 @@ use super::*;
 use windows_sys::Win32::System::SystemServices::MK_CONTROL;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, SM_CXDRAG, SM_CYDRAG, SPI_GETWHEELSCROLLLINES, SystemParametersInfoW,
-    WHEEL_DELTA, WM_CAPTURECHANGED, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    GetCursorPos, GetSystemMetrics, HTCLIENT, IDC_HAND, SM_CXDRAG, SM_CYDRAG,
+    SPI_GETWHEELSCROLLLINES, SetCursor, SystemParametersInfoW, WHEEL_DELTA, WM_CAPTURECHANGED,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_SETCURSOR,
 };
 
 use super::clipboard::copy_to_clipboard;
+use super::hotlinks::{LinkKind, link_at};
+use super::open_link::open_link;
 use super::text_selection::{
-    LineGeometry, TextDrag, TextPoint, left_drag_box, point_at, remap, selected_text,
+    LineGeometry, TextDrag, TextPoint, exact_point_at, left_drag_box, point_at, remap,
+    selected_text,
 };
 
 const WM_TIMELINE_GET_TOP_LINE: u32 = WM_APP + 100;
@@ -160,15 +164,29 @@ unsafe extern "system" fn timeline_window_proc(
             InvalidateRect(hwnd, null(), 1);
             0
         }
+        // The pointer is a hand over a link, as in mIRC.
+        WM_SETCURSOR
+            if (lparam & 0xffff) as u32 == HTCLIENT && timeline_link_under_cursor(hwnd) =>
+        {
+            SetCursor(LoadCursorW(null_mut(), IDC_HAND));
+            1
+        }
         // The second click of a double-click: it selects as a click does,
-        // and on a quote line goes to the quoted message. It marks nothing.
+        // and follows a link, or on a quote line goes to the quoted message.
+        // It marks nothing.
         WM_LBUTTONDBLCLK => {
             select_timeline_row(hwnd, lparam);
+            let frame = frame_window_for(hwnd);
+            if let Some((text, kind)) = timeline_link_at(hwnd, client_point(lparam)) {
+                if let Err(message) = open_link(frame, &text, kind) {
+                    show_error_message(frame, "Link", &message);
+                }
+                return 0;
+            }
             let y = ((lparam >> 16) as i16) as i32;
             let on_quote = timeline_source_row_index_at_client_y(hwnd, y).is_some_and(|index| {
                 timeline_state_ref(hwnd).source_rows[index].kind == TimelineRowKind::ReplyQuote
             });
-            let frame = frame_window_for(hwnd);
             if on_quote && let Err(message) = go_to_original_of_selected_message(frame) {
                 show_error_message(frame, "Message", &message);
             }
@@ -334,6 +352,22 @@ pub(super) unsafe fn timeline_text_hit(
     );
     ReleaseDC(hwnd, hdc);
     point
+}
+
+/// The link under client `at`, if a character of one is there: its text
+/// and what it opens.
+unsafe fn timeline_link_at(hwnd: HWND, at: (i32, i32)) -> Option<(String, LinkKind)> {
+    let point = timeline_text_hit(hwnd, at, exact_point_at)?;
+    let text = &timeline_state_ref(hwnd).source_rows[point.row].logical_text;
+    let link = link_at(text, point.offset)?;
+    Some((text[link.range].to_owned(), link.kind))
+}
+
+unsafe fn timeline_link_under_cursor(hwnd: HWND) -> bool {
+    let mut cursor = POINT::default();
+    assert_ne!(GetCursorPos(&mut cursor), 0, "the cursor has a position");
+    ScreenToClient(hwnd, &mut cursor);
+    timeline_link_at(hwnd, (cursor.x, cursor.y)).is_some()
 }
 
 /// Starts marking at client `at`, if the timeline has rows there: plain

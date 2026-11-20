@@ -1,5 +1,7 @@
 //! Automation dumps of the UI state, the model and the menus.
 
+use std::ops::Range;
+
 use super::*;
 
 pub(super) unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenuState, String> {
@@ -405,14 +407,21 @@ unsafe fn dump_active_timeline(timeline: HWND) -> UiActiveTimeline {
         .skip(state.top_line)
         .take(visible_rows)
         .map(|(line_index, line)| {
-            let (text, styles, indent) = match &line.visual {
+            let (text, styles, indent, links) = match &line.visual {
                 TimelinePaintLineVisual::Text {
                     text,
                     styles,
                     indent,
-                    ..
-                } => (text.clone(), styles.clone(), *indent),
-                TimelinePaintLineVisual::ImageSlot => (String::new(), Vec::new(), 0),
+                    range,
+                } => (
+                    text.clone(),
+                    styles.clone(),
+                    *indent,
+                    line.source_row_index.map_or_else(Vec::new, |row| {
+                        dump_line_links(&state.source_rows[row].logical_text, range)
+                    }),
+                ),
+                TimelinePaintLineVisual::ImageSlot => (String::new(), Vec::new(), 0, Vec::new()),
             };
             UiTimelineLine {
                 text,
@@ -429,6 +438,7 @@ unsafe fn dump_active_timeline(timeline: HWND) -> UiActiveTimeline {
                         + state.line_height / 2,
                 },
                 text_left: TIMELINE_LEFT_PADDING + indent,
+                links,
             }
         })
         .collect();
@@ -436,6 +446,20 @@ unsafe fn dump_active_timeline(timeline: HWND) -> UiActiveTimeline {
         top_line: state.top_line,
         visible_lines,
     }
+}
+
+/// The links of a row's `text` that its line showing `range` shows, at
+/// offsets in the line.
+fn dump_line_links(text: &str, range: &Range<usize>) -> Vec<UiTimelineLink> {
+    hotlinks::links(text)
+        .into_iter()
+        .filter(|link| link.range.start < range.end && range.start < link.range.end)
+        .map(|link| UiTimelineLink {
+            start: link.range.start.max(range.start) - range.start,
+            end: link.range.end.min(range.end) - range.start,
+            url: text[link.range].to_owned(),
+        })
+        .collect()
 }
 
 fn ui_timeline_line_kind(kind: &TimelineRowKind) -> UiTimelineLineKind {
@@ -1067,6 +1091,7 @@ pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_recovery_commands: submitted_recovery_commands_from_state(state),
         submitted_setup_recovery_commands: submitted_setup_recovery_commands_from_state(state),
         submitted_room_list_requests: submitted_room_list_requests_from_state(state),
+        opened_links: state.opened_links.clone(),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
     }
