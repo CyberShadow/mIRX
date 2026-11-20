@@ -246,7 +246,7 @@ unsafe fn dump_switchbar_state(hwnd: HWND) -> Result<SwitchbarState, String> {
             }
             Ok(SwitchbarItem {
                 identity: view_identity_from_view_id(view_id),
-                title: switchbar_button_text(state, view_id),
+                title: view_short_title(&state.model, view_id),
                 active: view_identity_from_view_id(view_id) == active,
                 activity: state.room_activity.get(view_id).copied(),
                 rect: ui_rect(rect),

@@ -10792,7 +10792,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
     );
     assert_eq!(
         find_switchbar_item(&initial_state, &room_identity("!alpha:example")).title,
-        "Alpha [@1 !2 *1 M]"
+        "Alpha"
     );
     assert_switchbar_activity(&initial_state, &room_identity("!beta:example"), None);
     assert_switchbar_activity(
@@ -10800,10 +10800,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
         &room_identity("!alpha:example"),
         Some(ViewActivityLevel::Highlight),
     );
-    assert!(navigation_contains(
-        &initial_state.navigation,
-        "Alpha [@1 !2 *1 M]"
-    ));
+    assert!(navigation_contains(&initial_state.navigation, "Alpha"));
     assert_eq!(
         find_ui_room(&initial_state, "!beta:example"),
         &UiRoomState {
@@ -10865,13 +10862,10 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
     );
     assert_eq!(
         find_switchbar_item(&activated_state, &room_identity("!alpha:example")).title,
-        "Alpha [@1 !2 *1 M]"
+        "Alpha"
     );
     assert_switchbar_activity(&activated_state, &room_identity("!alpha:example"), None);
-    assert!(navigation_contains(
-        &activated_state.navigation,
-        "Alpha [@1 !2 *1 M]"
-    ));
+    assert!(navigation_contains(&activated_state.navigation, "Alpha"));
     assert_eq!(
         find_ui_room(&activated_state, "!alpha:example"),
         &UiRoomState {

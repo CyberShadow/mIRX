@@ -365,9 +365,9 @@ use navigation::{
     handle_tree_selection, insert_tree_item, ordered_view_ids, read_tree_item_text,
     rebuild_switchbar, refresh_switchbar_state, refresh_tree_activity_colors,
     select_navigation_path, select_navigation_view, select_room, select_tree_item,
-    selected_tree_item, show_navigation_room_context_menu, switchbar_button_text,
-    switchbar_custom_draw, sync_views_and_tree, tree_custom_draw, view_caption,
-    view_id_from_identity, view_identity_from_view_id,
+    selected_tree_item, show_navigation_room_context_menu, switchbar_custom_draw,
+    sync_views_and_tree, tree_custom_draw, view_caption, view_id_from_identity,
+    view_identity_from_view_id, view_short_title,
 };
 use nick_completion::{NickCompletion, member_mention_text};
 use nick_list::{

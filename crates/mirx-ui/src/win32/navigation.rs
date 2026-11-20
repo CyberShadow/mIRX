@@ -3,33 +3,6 @@
 
 use super::*;
 
-fn append_room_read_state_tokens(label: &mut String, read_state: Option<&RoomReadState>) {
-    let Some(read_state) = read_state else {
-        return;
-    };
-
-    let mut tokens = Vec::new();
-    if read_state.num_mentions > 0 {
-        tokens.push(format!("@{}", read_state.num_mentions));
-    }
-    if read_state.num_notifications > 0 {
-        tokens.push(format!("!{}", read_state.num_notifications));
-    }
-    if read_state.num_unread > 0 {
-        tokens.push(format!("*{}", read_state.num_unread));
-    }
-    if read_state.marked_unread {
-        tokens.push("M".to_owned());
-    }
-    if tokens.is_empty() {
-        return;
-    }
-
-    label.push_str(" [");
-    label.push_str(&tokens.join(" "));
-    label.push(']');
-}
-
 /// A room's name, as the treebar, switchbar and caption show it. An invite
 /// is marked, since mIRC has no invite windows to tell it by.
 fn room_tree_label(room: &RoomSummary) -> String {
@@ -38,12 +11,6 @@ fn room_tree_label(room: &RoomSummary) -> String {
     } else {
         room.display_name.clone()
     }
-}
-
-fn room_navigation_label(model: &UiModel, room: &RoomSummary) -> String {
-    let mut label = room_tree_label(room);
-    append_room_read_state_tokens(&mut label, model.room_read_states.get(&room.room_id));
-    label
 }
 
 fn space_tree_label(space: &RoomSummary) -> String {
@@ -84,8 +51,9 @@ pub(super) fn view_caption(model: &UiModel, view_id: &ViewId) -> String {
     }
 }
 
-/// The short title the switchbar and treebar show.
-fn view_short_title(model: &UiModel, view_id: &ViewId) -> String {
+/// The short title the switchbar and treebar show: the window's name only,
+/// as in mIRC, where unread state shows by colour alone.
+pub(super) fn view_short_title(model: &UiModel, view_id: &ViewId) -> String {
     if let Some((room_id, thread_root_event_id)) = view_id.thread_key() {
         return format!(
             "Thread: {}",
@@ -109,19 +77,6 @@ fn view_short_title(model: &UiModel, view_id: &ViewId) -> String {
         }
         ViewId::Thread { .. } => unreachable!("thread views are handled above"),
         ViewId::RoomList => ROOM_LIST_TITLE.to_owned(),
-    }
-}
-
-pub(super) fn switchbar_button_text(state: &WindowState, view_id: &ViewId) -> String {
-    match view_id {
-        ViewId::Room(room_id) => {
-            let room = room_by_id(&state.model.rooms, room_id)
-                .expect("room switchbar button must target an existing room");
-            room_navigation_label(&state.model, room)
-        }
-        ViewId::Status | ViewId::Thread { .. } | ViewId::RoomList => {
-            view_short_title(&state.model, view_id)
-        }
     }
 }
 
@@ -514,7 +469,7 @@ fn room_nav_item(model: &UiModel, room: &RoomSummary) -> NavItem {
         _ => Vec::new(),
     };
     NavItem {
-        label: room_navigation_label(model, room),
+        label: room_tree_label(room),
         view: Some(ViewId::Room(room.room_id.clone())),
         children,
     }
@@ -600,7 +555,7 @@ pub(super) unsafe fn rebuild_switchbar(hwnd: HWND) -> Result<(), String> {
         let state = state_ref(hwnd);
         view_ids
             .iter()
-            .map(|view_id| wide_null(&switchbar_button_text(state, view_id)))
+            .map(|view_id| wide_null(&view_short_title(&state.model, view_id)))
             .collect::<Vec<_>>()
     };
     let button_states = {
@@ -1043,92 +998,98 @@ mod tests {
         assert_eq!(room_tree_label(&invite), "Lobby [invite]");
     }
 
+    /// The read state colours a room's buttons (core_events covers each
+    /// level and the mute caps) but never changes its label: mIRC shows
+    /// unread state by colour alone.
     #[test]
-    fn room_navigation_label_appends_read_state_suffix_to_the_name() {
+    fn room_labels_stay_the_bare_name_while_read_state_colours_them() {
         let mut state = test_state();
-        let mut direct_room = room("!direct:example", "Direct", true);
-        direct_room.is_direct = true;
-        direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
-        state.model.rooms = vec![direct_room];
-        state.model.room_read_states.insert(
-            "!direct:example".to_owned(),
-            RoomReadState {
-                room_id: "!direct:example".to_owned(),
-                latest_active_event_id: Some("$latest".to_owned()),
-                fully_read_event_id: Some("$fully-read".to_owned()),
-                marked_unread: true,
-                num_unread: 3,
-                num_notifications: 2,
-                num_mentions: 1,
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state.model.room_views.insert(
+            "!room:example".to_owned(),
+            RoomViewModel {
+                threads: BTreeMap::from([(
+                    "$thread-root".to_owned(),
+                    ThreadViewModel {
+                        label: "root msg".to_owned(),
+                    },
+                )]),
+                ..RoomViewModel::default()
             },
         );
 
+        apply_core_event(
+            &mut state,
+            room_read_state(
+                "!room:example",
+                Some("$latest"),
+                Some("$fully-read"),
+                true,
+                3,
+                2,
+                1,
+            ),
+        )
+        .unwrap();
+
         assert_eq!(
-            room_navigation_label(&state.model, &state.model.rooms[0]),
-            "Direct [@1 !2 *3 M]"
+            state.room_activity.get(&room_view_id("!room:example")),
+            Some(&ViewActivityLevel::Highlight)
+        );
+        assert_eq!(
+            view_short_title(&state.model, &room_view_id("!room:example")),
+            "Room"
+        );
+        assert_eq!(
+            view_short_title(
+                &state.model,
+                &thread_view_id("!room:example", "$thread-root")
+            ),
+            "Thread: root msg"
+        );
+        assert_eq!(
+            navigation_layout(&state.model),
+            nav_view(
+                "Status",
+                ViewId::Status,
+                vec![nav_view(
+                    "Room",
+                    room_view_id("!room:example"),
+                    vec![nav_view(
+                        "root msg",
+                        thread_view_id("!room:example", "$thread-root"),
+                        Vec::new()
+                    )]
+                )]
+            )
         );
     }
 
     #[test]
-    fn room_navigation_label_handles_sparse_and_absent_read_state() {
-        let mut state = test_state();
-        state.model.rooms = vec![room("!todo:example", "Todo", false)];
+    fn notifications_alone_or_a_marked_unread_room_colour_it_as_a_message() {
+        for (marked_unread, num_notifications) in [(false, 1), (true, 0)] {
+            let mut state = test_state();
+            state.model.rooms = vec![room("!room:example", "Room", false)];
+            apply_core_event(
+                &mut state,
+                room_read_state(
+                    "!room:example",
+                    None,
+                    None,
+                    marked_unread,
+                    0,
+                    num_notifications,
+                    0,
+                ),
+            )
+            .unwrap();
 
-        assert_eq!(
-            room_navigation_label(&state.model, &state.model.rooms[0]),
-            "Todo"
-        );
-
-        state.model.room_read_states.insert(
-            "!todo:example".to_owned(),
-            RoomReadState {
-                room_id: "!todo:example".to_owned(),
-                latest_active_event_id: None,
-                fully_read_event_id: None,
-                marked_unread: true,
-                num_unread: 0,
-                num_notifications: 0,
-                num_mentions: 0,
-            },
-        );
-        assert_eq!(
-            room_navigation_label(&state.model, &state.model.rooms[0]),
-            "Todo [M]"
-        );
-
-        state.model.room_read_states.insert(
-            "!todo:example".to_owned(),
-            RoomReadState {
-                room_id: "!todo:example".to_owned(),
-                latest_active_event_id: None,
-                fully_read_event_id: None,
-                marked_unread: false,
-                num_unread: 7,
-                num_notifications: 0,
-                num_mentions: 0,
-            },
-        );
-        assert_eq!(
-            room_navigation_label(&state.model, &state.model.rooms[0]),
-            "Todo [*7]"
-        );
-
-        state.model.room_read_states.insert(
-            "!todo:example".to_owned(),
-            RoomReadState {
-                room_id: "!todo:example".to_owned(),
-                latest_active_event_id: Some("$latest".to_owned()),
-                fully_read_event_id: Some("$latest".to_owned()),
-                marked_unread: false,
-                num_unread: 0,
-                num_notifications: 0,
-                num_mentions: 0,
-            },
-        );
-        assert_eq!(
-            room_navigation_label(&state.model, &state.model.rooms[0]),
-            "Todo"
-        );
+            assert_eq!(
+                state.room_activity.get(&room_view_id("!room:example")),
+                Some(&ViewActivityLevel::Message),
+                "marked {marked_unread}, notifications {num_notifications}"
+            );
+        }
     }
 
     #[test]
@@ -1483,60 +1444,12 @@ mod tests {
     }
 
     #[test]
-    fn switchbar_button_text_includes_room_read_suffix_without_changing_other_titles() {
+    fn view_short_title_names_status_by_the_user_id() {
         let mut state = test_state();
-        let mut direct_room = room("!room:example", "Room", true);
-        direct_room.is_direct = true;
-        direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
-        state.model.rooms = vec![direct_room];
-        state.model.room_read_states.insert(
-            "!room:example".to_owned(),
-            RoomReadState {
-                room_id: "!room:example".to_owned(),
-                latest_active_event_id: Some("$latest".to_owned()),
-                fully_read_event_id: Some("$fully-read".to_owned()),
-                marked_unread: true,
-                num_unread: 3,
-                num_notifications: 2,
-                num_mentions: 1,
-            },
-        );
-        state
-            .room_activity
-            .insert(room_view_id("!room:example"), ViewActivityLevel::Message);
-        state.model.room_views.insert(
-            "!room:example".to_owned(),
-            RoomViewModel {
-                threads: BTreeMap::from([(
-                    "$thread-root".to_owned(),
-                    ThreadViewModel {
-                        label: "root msg".to_owned(),
-                    },
-                )]),
-                ..RoomViewModel::default()
-            },
-        );
-        state.room_activity.insert(
-            thread_view_id("!room:example", "$thread-root"),
-            ViewActivityLevel::Message,
-        );
-
-        assert_eq!(
-            view_short_title(&state.model, &room_view_id("!room:example")),
-            "Room"
-        );
-        assert_eq!(
-            switchbar_button_text(&state, &room_view_id("!room:example")),
-            "Room [@1 !2 *3 M]"
-        );
-        assert_eq!(
-            switchbar_button_text(&state, &thread_view_id("!room:example", "$thread-root")),
-            "Thread: root msg"
-        );
-        assert_eq!(switchbar_button_text(&state, &ViewId::Status), "Status");
+        assert_eq!(view_short_title(&state.model, &ViewId::Status), "Status");
         state.model.own_user_id = Some("@me:example".to_owned());
         assert_eq!(
-            switchbar_button_text(&state, &ViewId::Status),
+            view_short_title(&state.model, &ViewId::Status),
             "@me:example"
         );
     }
@@ -1761,30 +1674,18 @@ mod tests {
     }
 
     #[test]
-    fn caught_up_zero_read_state_clears_navigation_suffixes() {
+    fn caught_up_zero_read_state_clears_the_room_colour() {
         let mut state = test_state();
         state.model.rooms = vec![room("!room:example", "Room", false)];
 
         apply_core_event(
             &mut state,
-            room_read_state(
-                "!room:example",
-                Some("$latest"),
-                Some("$fully-read"),
-                true,
-                3,
-                2,
-                1,
-            ),
+            room_read_state("!room:example", None, None, false, 3, 0, 0),
         )
         .unwrap();
         assert_eq!(
-            room_navigation_label(&state.model, &state.model.rooms[0]),
-            "Room [@1 !2 *3 M]"
-        );
-        assert_eq!(
-            switchbar_button_text(&state, &room_view_id("!room:example")),
-            "Room [@1 !2 *3 M]"
+            state.room_activity.get(&room_view_id("!room:example")),
+            Some(&ViewActivityLevel::Message)
         );
 
         apply_core_event(
@@ -1801,11 +1702,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            room_navigation_label(&state.model, &state.model.rooms[0]),
-            "Room"
+            state.room_activity.get(&room_view_id("!room:example")),
+            None
         );
         assert_eq!(
-            switchbar_button_text(&state, &room_view_id("!room:example")),
+            view_short_title(&state.model, &room_view_id("!room:example")),
             "Room"
         );
     }

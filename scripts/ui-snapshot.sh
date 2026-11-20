@@ -2426,7 +2426,7 @@ configure_case_expectations() {
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
         --expect-switchbar-item 'room:!beta:example::Beta'
-        --expect-switchbar-item 'room:!alpha:example::Alpha [@1 !2 *1 M]'
+        --expect-switchbar-item 'room:!alpha:example::Alpha'
       )
       switchbar_activity_expect_args=(
         --expect-switchbar-activity 'room:!alpha:example::highlight'
@@ -2436,7 +2436,7 @@ configure_case_expectations() {
         --expect-no-switchbar-activity 'status'
       )
       navigation_expect_args=(
-        --expect-navigation-text 'Alpha [@1 !2 *1 M]'
+        --expect-navigation-text 'Alpha'
       )
       expect_switchbar_active='room:!beta:example'
       ;;
@@ -2468,9 +2468,6 @@ configure_case_expectations() {
       )
       navigation_expect_args=(
         --expect-navigation-text 'Alpha'
-      )
-      navigation_forbid_args=(
-        --expect-no-navigation-text 'Alpha [@1 !2 *1 M]'
       )
       expect_switchbar_active='room:!beta:example'
       ;;
