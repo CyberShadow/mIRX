@@ -562,6 +562,14 @@ async fn enter_session(
     let session_update_task = matrix::start_session_update_task(client.clone(), event_tx.clone());
     let send_queue_update_task =
         matrix::start_send_queue_update_task(client.clone(), current_user_id, event_tx.clone());
+    // Before the first sync: the event cache counts unread messages, here
+    // those of the initial sync, and does so in its own task, so the
+    // read-state task must already be listening when it is done.
+    client
+        .event_cache()
+        .subscribe()
+        .expect("the session's client is alive");
+    let read_state_updates = client.room_info_notable_update_receiver();
     let rooms = matrix::initial_room_sync(&client).await;
     let room_members = if rooms.is_ok() {
         Some(matrix::summarize_joined_room_members(&client).await)
@@ -591,9 +599,13 @@ async fn enter_session(
         },
         Err(err) => emit_matrix_error(event_tx, operation, err),
     }
-    let room_read_state_update_task =
-        start_room_read_state_update_task_or_placeholder(&client, event_tx);
-    let room_list_update_task = start_room_list_update_task_or_placeholder(&client, event_tx);
+    let room_read_state_update_task = matrix::start_room_read_state_update_task(
+        client.clone(),
+        event_tx.clone(),
+        read_state_updates,
+    );
+    let room_list_update_task =
+        matrix::start_room_list_update_task(client.clone(), event_tx.clone());
     match matrix::summarize_e2ee_status(&client, BackupServerStatusMode::Fetch).await {
         Ok(status) => emit_event(event_tx, Event::E2eeStatus(status)),
         Err(err) => emit_matrix_error(event_tx, Operation::E2eeStatus, err),
@@ -1792,50 +1804,6 @@ fn emit_initial_room_snapshot(
     }
 }
 
-fn start_room_read_state_update_task_or_placeholder(
-    client: &Client,
-    event_tx: &EventSender,
-) -> TokioJoinHandle<()> {
-    match matrix::start_room_read_state_update_task(client.clone(), event_tx.clone()) {
-        Ok(task) => task,
-        Err(err) => {
-            emit_event(
-                event_tx,
-                Event::Error(CoreErrorEvent {
-                    operation: Operation::RoomReadState,
-                    room_id: None,
-                    message: format!(
-                        "failed to subscribe Matrix event cache for room read-state updates: {err}"
-                    ),
-                }),
-            );
-            tokio::task::spawn_local(async {})
-        }
-    }
-}
-
-fn start_room_list_update_task_or_placeholder(
-    client: &Client,
-    event_tx: &EventSender,
-) -> TokioJoinHandle<()> {
-    match matrix::start_room_list_update_task(client.clone(), event_tx.clone()) {
-        Ok(task) => task,
-        Err(err) => {
-            emit_event(
-                event_tx,
-                Event::Error(CoreErrorEvent {
-                    operation: Operation::RoomList,
-                    room_id: None,
-                    message: format!(
-                        "failed to subscribe Matrix event cache for room-list updates: {err}"
-                    ),
-                }),
-            );
-            tokio::task::spawn_local(async {})
-        }
-    }
-}
-
 pub(crate) fn emit_event(event_tx: &EventSender, event: Event) {
     let _ = event_tx.send(event);
 }
@@ -1896,15 +1864,16 @@ mod tests {
 
     use super::{
         AccountLists, EventSender, WorkerState, emit_initial_room_snapshot, handle_command,
-        handle_login, handle_start_sync, handle_stop_sync, run_worker, shutdown_state,
+        handle_login, handle_restore_session, handle_start_sync, handle_stop_sync, run_worker,
+        shutdown_state,
     };
     use crate::api::CoreConfig;
     use crate::api::{
         AcceptRoomInviteRequest, BanRoomMemberRequest, Command, CreateDirectRoomRequest,
         CreateRoomRequest, CreateRoomVisibility, Event, HighlightWord, JoinRoomRequest,
-        KickRoomMemberRequest, LoginMethod, LoginRequest, Operation, RoomJoined, RoomMemberRank,
-        RoomMemberSummary, RoomMembers, RoomMembership, RoomNotificationMode, RoomReadState,
-        RoomSummary, SyncStopReason,
+        KickRoomMemberRequest, LoginMethod, LoginRequest, Operation, RestoreSessionRequest,
+        RoomJoined, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership,
+        RoomNotificationMode, RoomReadState, RoomSummary, SyncStopReason,
     };
     use matrix_sdk::{
         ruma::{
@@ -3026,6 +2995,168 @@ mod tests {
             );
             assert!(!events.contains(&Event::SyncStarted), "{events:?}");
             assert!(sync_task_is_none(&state));
+            shutdown_state(&mut state).await;
+        });
+    }
+
+    /// The mock login's user and Bob, joined, as state or member events.
+    fn logged_in_user_room_members<T>() -> Vec<Raw<T>> {
+        ["@cheeky_monkey:matrix.org", "@bob:example.org"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, user_id)| {
+                serde_json::json!({
+                    "type": "m.room.member", "state_key": user_id, "sender": user_id,
+                    "event_id": format!("$member-{index}:example.org"),
+                    "origin_server_ts": 1u64, "content": { "membership": "join" }
+                })
+            })
+            .map(|member| Raw::from_json_string(member.to_string()).expect("raw member event"))
+            .collect()
+    }
+
+    fn bob_message(event_id: &str) -> Raw<matrix_sdk::ruma::events::AnySyncTimelineEvent> {
+        Raw::from_json_string(
+            serde_json::json!({
+                "type": "m.room.message",
+                "content": { "msgtype": "m.text", "body": "unread" },
+                "event_id": event_id,
+                "sender": "@bob:example.org",
+                "origin_server_ts": 1700000000000u64
+            })
+            .to_string(),
+        )
+        .expect("raw timeline event")
+    }
+
+    /// The events emitted until now and in the next half second, while the
+    /// session's tasks (and the SDK's event cache) run.
+    async fn settled_events(event_rx: &mpsc::Receiver<Event>) -> Vec<Event> {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        drain_events(event_rx)
+    }
+
+    fn read_states_of<'a>(events: &'a [Event], room_id: &str) -> Vec<&'a RoomReadState> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::RoomReadState(read_state) if read_state.room_id == room_id => {
+                    Some(read_state)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The SDK's event cache counts unread messages, those of the session's
+    /// first sync included, and keeps the counts in its store
+    /// (`RoomInfo.read_receipts`): a restored session reports them before
+    /// any new event arrives, so the treebar and switchbar colours come back
+    /// after a restart.
+    #[test]
+    fn restore_reports_stored_unread_counts_without_new_events() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            mock_server.mock_versions().ok().mount().await;
+            mock_server.mock_login().ok().mount().await;
+            mock_server
+                .mock_room_state_encryption()
+                .expect_any_access_token()
+                .plain()
+                .mount()
+                .await;
+            mock_server
+                .mock_get_members()
+                .expect_any_access_token()
+                .ok(logged_in_user_room_members())
+                .mount()
+                .await;
+            let room_id = room_id();
+            let first_sync = mock_server
+                .mock_sync()
+                .ok(|builder| {
+                    builder.add_joined_room(
+                        JoinedRoomBuilder::new(room_id.as_ref())
+                            .add_state_bulk(logged_in_user_room_members())
+                            .add_timeline_event(bob_message("$one:example.org"))
+                            .add_timeline_event(bob_message("$two:example.org")),
+                    );
+                })
+                .mount_as_scoped()
+                .await;
+            let profile = tempfile::TempDir::new().expect("temporary profile directory");
+            let config = CoreConfig {
+                profile_dir: profile.path().join("profile"),
+                store_passphrase: "test-store-passphrase".to_owned(),
+            };
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = WorkerState::NoClient;
+            assert!(
+                !handle_login(
+                    &config,
+                    &event_tx,
+                    &mut state,
+                    login_request(&mock_server, false)
+                )
+                .await
+            );
+            let events = settled_events(&event_rx).await;
+            let stored = (*read_states_of(&events, room_id.as_str())
+                .last()
+                .unwrap_or_else(|| panic!("RoomReadState in {events:?}")))
+            .clone();
+            assert_eq!(
+                (
+                    stored.num_unread,
+                    stored.num_notifications,
+                    stored.num_mentions
+                ),
+                (2, 2, 0),
+                "{events:?}"
+            );
+            let (session, homeserver_url) = events
+                .iter()
+                .find_map(|event| match event {
+                    Event::LoggedIn {
+                        session,
+                        homeserver_url,
+                    } => Some((session.clone(), homeserver_url.clone())),
+                    _ => None,
+                })
+                .expect("LoggedIn");
+            shutdown_state(&mut state).await;
+            drop(first_sync);
+
+            mock_server
+                .mock_sync()
+                .ok(|builder| {
+                    builder.add_joined_room(JoinedRoomBuilder::new(room_id.as_ref()));
+                })
+                .mount()
+                .await;
+            assert!(
+                !handle_restore_session(
+                    &config,
+                    &event_tx,
+                    &mut state,
+                    RestoreSessionRequest {
+                        homeserver_url,
+                        session,
+                        start_sync: false,
+                    },
+                )
+                .await
+            );
+            let events = settled_events(&event_rx).await;
+            let synced_rooms =
+                event_position(&events, |event| matches!(event, Event::SyncedRooms(_)))
+                    .unwrap_or_else(|| panic!("SyncedRooms in {events:?}"));
+            let restored = read_states_of(&events[synced_rooms..], room_id.as_str());
+            assert!(!restored.is_empty(), "{events:?}");
+            assert!(
+                restored.iter().all(|read_state| **read_state == stored),
+                "{events:?}"
+            );
             shutdown_state(&mut state).await;
         });
     }

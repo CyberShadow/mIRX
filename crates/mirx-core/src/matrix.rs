@@ -104,12 +104,13 @@ use matrix_sdk::{
     utils::UrlOrQuery,
 };
 use matrix_sdk_base::{
-    RoomInfoNotableUpdateReasons, RoomState, deserialized_responses::DisplayName,
-    read_receipts::RoomReadReceipts,
+    RoomInfoNotableUpdate, RoomInfoNotableUpdateReasons, RoomState,
+    deserialized_responses::DisplayName, read_receipts::RoomReadReceipts,
 };
 use matrix_sdk_crypto::CrossSigningStatus;
 use mime::Mime;
 use serde::Deserialize;
+use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use url::Url;
 
@@ -3222,21 +3223,22 @@ pub(crate) fn start_sync_task(client: Client, events: EventSender) -> JoinHandle
     })
 }
 
+/// Emits a joined room's read state whenever it changes. `updates` is taken
+/// before the session's first sync: the event cache counts that sync's unread
+/// messages in its own task, possibly after the initial snapshot was read,
+/// and the change must still reach the UI.
 pub(crate) fn start_room_read_state_update_task(
     client: Client,
     events: EventSender,
-) -> Result<JoinHandle<()>, matrix_sdk::event_cache::EventCacheError> {
-    client.event_cache().subscribe()?;
-    let mut updates = client.room_info_notable_update_receiver();
-
-    Ok(tokio::task::spawn_local(async move {
+    mut updates: broadcast::Receiver<RoomInfoNotableUpdate>,
+) -> JoinHandle<()> {
+    tokio::task::spawn_local(async move {
         loop {
-            match updates.recv().await {
+            let read_states = match updates.recv().await {
                 Ok(update) => {
                     if !room_read_update_is_relevant(update.reasons) {
                         continue;
                     }
-
                     let Some(room) = client
                         .joined_rooms()
                         .into_iter()
@@ -3244,40 +3246,28 @@ pub(crate) fn start_room_read_state_update_task(
                     else {
                         continue;
                     };
-
-                    if events
-                        .send(Event::RoomReadState(room_read_state_from_room(&room)))
-                        .is_err()
-                    {
-                        break;
-                    }
+                    vec![room_read_state_from_room(&room)]
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    if events
-                        .send(Event::Error(CoreErrorEvent {
-                            operation: Operation::RoomReadState,
-                            room_id: None,
-                            message: "missed Matrix room read-state update".to_owned(),
-                        }))
-                        .is_err()
-                    {
-                        break;
-                    }
+                Err(broadcast::error::RecvError::Closed) => break,
+                // A read state is a snapshot: resending every room's makes
+                // up for the missed updates.
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    summarize_joined_room_read_states(&client)
+                }
+            };
+            for read_state in read_states {
+                if events.send(Event::RoomReadState(read_state)).is_err() {
+                    return;
                 }
             }
         }
-    }))
+    })
 }
 
-pub(crate) fn start_room_list_update_task(
-    client: Client,
-    events: EventSender,
-) -> Result<JoinHandle<()>, matrix_sdk::event_cache::EventCacheError> {
-    client.event_cache().subscribe()?;
+pub(crate) fn start_room_list_update_task(client: Client, events: EventSender) -> JoinHandle<()> {
     let mut updates = client.room_info_notable_update_receiver();
 
-    Ok(tokio::task::spawn_local(async move {
+    tokio::task::spawn_local(async move {
         loop {
             match updates.recv().await {
                 Ok(update) => {
@@ -3298,7 +3288,7 @@ pub(crate) fn start_room_list_update_task(
                 ),
             }
         }
-    }))
+    })
 }
 
 pub(crate) fn start_session_update_task(client: Client, events: EventSender) -> JoinHandle<()> {
@@ -10899,8 +10889,7 @@ mod tests {
                 })
                 .await;
             let (events, event_rx) = mpsc::channel();
-            let task = super::start_room_list_update_task(client.clone(), events)
-                .expect("start the room-list task");
+            let task = super::start_room_list_update_task(client.clone(), events);
 
             mock_server
                 .mock_sync()
@@ -11091,8 +11080,8 @@ mod tests {
     }
 
     /// The SDK's event cache clears every room when the ignore list changes;
-    /// the room-list and read-state tasks that subscribe to it, and the
-    /// timeline handlers, keep working after it.
+    /// the room-list and read-state tasks, and the timeline handlers, keep
+    /// working after it.
     #[test]
     fn ignored_user_list_change_keeps_core_tasks_alive() {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -11111,10 +11100,13 @@ mod tests {
             mock_server.sync_joined_room(&client, &room_id()).await;
             let (events, event_rx) = mpsc::channel();
             register_event_handlers(&client, events.clone());
-            let read_state_task = super::start_room_read_state_update_task(client.clone(), events.clone())
-                .expect("start the read-state task");
-            let room_list_task = super::start_room_list_update_task(client.clone(), events)
-                .expect("start the room-list task");
+            client.event_cache().subscribe().expect("subscribe the event cache");
+            let read_state_task = super::start_room_read_state_update_task(
+                client.clone(),
+                events.clone(),
+                client.room_info_notable_update_receiver(),
+            );
+            let room_list_task = super::start_room_list_update_task(client.clone(), events);
 
             sync_ignored_users(&mock_server, &client, &["@spam:localhost"]).await;
             mock_server
