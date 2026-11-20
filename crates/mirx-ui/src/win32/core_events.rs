@@ -612,7 +612,7 @@ pub(super) fn apply_core_event(state: &mut WindowState, event: Event) -> Result<
                     echo_lines_in_active_view(state, [error.to_string()]);
                 }
                 ErrorDestination::Room(room_id) => match state.model.room_views.get_mut(room_id) {
-                    Some(room_view) => room_view.echo.push(now, None, context_line(&line)),
+                    Some(room_view) => room_view.push_echo(now, None, context_line(&line)),
                     // The room was left, or never synced.
                     None => log_status(state, StatusLineKind::Error, line),
                 },
@@ -2630,6 +2630,7 @@ mod tests {
                 members: Vec::new(),
                 history: RoomHistoryBackfillState::default(),
                 echo: EchoLog::default(),
+                arrivals: RoomArrivals::default(),
             },
         );
         state.model.last_activity = Some(LastMessageActivity {

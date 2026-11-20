@@ -5,8 +5,9 @@
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct EchoLine {
-    /// Unique within the room's echo, so identical lines stay distinct.
-    pub(super) sequence: u64,
+    /// The line's place in the room's arrival order (`RoomArrivals`):
+    /// unique within the room, so identical lines stay distinct.
+    pub(super) arrival: u64,
     pub(super) timestamp_ms: u64,
     /// The thread window the line was printed in; `None` for the room window.
     pub(super) thread_root: Option<String>,
@@ -17,18 +18,27 @@ pub(super) struct EchoLine {
 #[derive(Debug, Default, Clone)]
 pub(super) struct EchoLog {
     lines: Vec<EchoLine>,
-    next_sequence: u64,
 }
 
 impl EchoLog {
-    pub(super) fn push(&mut self, timestamp_ms: u64, thread_root: Option<String>, text: String) {
+    /// Use `RoomViewModel::push_echo`, which numbers the line.
+    pub(super) fn push(
+        &mut self,
+        arrival: u64,
+        timestamp_ms: u64,
+        thread_root: Option<String>,
+        text: String,
+    ) {
+        assert!(
+            self.lines.last().is_none_or(|last| last.arrival < arrival),
+            "echo lines arrive in order"
+        );
         self.lines.push(EchoLine {
-            sequence: self.next_sequence,
+            arrival,
             timestamp_ms,
             thread_root,
             text,
         });
-        self.next_sequence += 1;
     }
 
     /// The lines of the room window (`None`) or of one thread window.
@@ -53,16 +63,16 @@ mod tests {
 
     fn texts<'a>(lines: impl Iterator<Item = &'a EchoLine>) -> Vec<(u64, &'a str)> {
         lines
-            .map(|line| (line.sequence, line.text.as_str()))
+            .map(|line| (line.arrival, line.text.as_str()))
             .collect()
     }
 
     #[test]
     fn lines_are_per_window_and_room_clear_keeps_thread_lines() {
         let mut log = EchoLog::default();
-        log.push(1, None, "room".to_owned());
-        log.push(2, Some("$root".to_owned()), "thread".to_owned());
-        log.push(3, None, "room".to_owned());
+        log.push(0, 1, None, "room".to_owned());
+        log.push(1, 2, Some("$root".to_owned()), "thread".to_owned());
+        log.push(2, 3, None, "room".to_owned());
 
         assert_eq!(texts(log.lines_for(None)), vec![(0, "room"), (2, "room")]);
         assert_eq!(texts(log.lines_for(Some("$root"))), vec![(1, "thread")]);
@@ -71,7 +81,7 @@ mod tests {
         log.clear_room_window();
         assert_eq!(texts(log.lines_for(None)), vec![]);
         assert_eq!(texts(log.lines_for(Some("$root"))), vec![(1, "thread")]);
-        log.push(4, None, "after".to_owned());
+        log.push(3, 4, None, "after".to_owned());
         assert_eq!(texts(log.lines_for(None)), vec![(3, "after")]);
     }
 }

@@ -45,6 +45,69 @@ pub(super) struct RoomViewModel {
     pub(super) members: Vec<RoomMemberSummary>,
     pub(super) history: RoomHistoryBackfillState,
     pub(super) echo: EchoLog,
+    pub(super) arrivals: RoomArrivals,
+}
+
+/// The order in which a room's lines arrived live: its activities from
+/// sync, local echoes and synthetic events, and its echo lines, numbered in
+/// one sequence. History scrolled back to did not arrive, so it has no
+/// number; that is what keeps it out of the logs.
+#[derive(Debug, Default, Clone)]
+pub(super) struct RoomArrivals {
+    next: u64,
+    /// The arrival of each live activity, by activity ID.
+    by_activity: BTreeMap<String, u64>,
+    /// The first arrival no closed window of the room has shown: where an
+    /// automatic log of its next window starts.
+    unshown_from: u64,
+}
+
+impl RoomArrivals {
+    fn take_next(&mut self) -> u64 {
+        let arrival = self.next;
+        self.next += 1;
+        arrival
+    }
+
+    fn stamp(&mut self, activity_id: &str) {
+        let arrival = self.take_next();
+        let earlier = self.by_activity.insert(activity_id.to_owned(), arrival);
+        assert_eq!(earlier, None, "activity {activity_id} arrived twice");
+    }
+
+    /// An activity that took another's place keeps its arrival, if it had
+    /// one: a sent message is the line the user typed.
+    fn carry(&mut self, from_activity_id: &str, to_activity_id: &str) {
+        if let Some(arrival) = self.by_activity.remove(from_activity_id) {
+            let earlier = self.by_activity.insert(to_activity_id.to_owned(), arrival);
+            assert_eq!(
+                earlier, None,
+                "activity {to_activity_id} took the place of {from_activity_id} but had arrived"
+            );
+        }
+    }
+
+    fn forget(&mut self, activity_id: &str) {
+        self.by_activity.remove(activity_id);
+    }
+
+    pub(super) fn of(&self, activity_id: &str) -> Option<u64> {
+        self.by_activity.get(activity_id).copied()
+    }
+
+    /// The arrival the next line will have.
+    pub(super) fn next(&self) -> u64 {
+        self.next
+    }
+
+    pub(super) fn unshown_from(&self) -> u64 {
+        self.unshown_from
+    }
+
+    /// The room's window went away, having shown everything so far.
+    pub(super) fn window_closed(&mut self) {
+        self.unshown_from = self.next;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +192,14 @@ impl RoomViewModel {
         self.reactions_by_target.clear();
         // Only pending messages stay, and they have no event to be edited.
         self.edited_event_ids.clear();
+        let kept = self
+            .activities
+            .iter()
+            .map(|activity| activity.activity_id.as_str())
+            .collect::<BTreeSet<_>>();
+        self.arrivals
+            .by_activity
+            .retain(|activity_id, _| kept.contains(activity_id.as_str()));
         self.echo.clear_room_window();
         self.retain_preview_media_for_visible_activities();
         self.rebuild_threads();
@@ -170,19 +241,36 @@ impl RoomViewModel {
             | RoomActivityKind::Audio(_)
             | RoomActivityKind::Video(_)
             | RoomActivityKind::UnsupportedMessage(_)
-            | RoomActivityKind::UnableToDecrypt(_) => self.activities.push(activity),
+            | RoomActivityKind::UnableToDecrypt(_) => self.push_live(activity),
             RoomActivityKind::StateNotice(notice) => {
                 if let RoomStateNoticeContent::Topic { topic } = &notice.content {
                     self.topic = Some(topic.clone());
                 }
-                self.activities.push(activity);
+                self.push_live(activity);
             }
             RoomActivityKind::Redacted(redacted) => {
                 self.remove_reactions_for_target(&redacted.event_id);
-                self.activities.push(activity);
+                self.push_live(activity);
             }
         }
         self.rebuild_threads();
+    }
+
+    fn push_live(&mut self, activity: RoomActivity) {
+        self.arrivals.stamp(&activity.activity_id);
+        self.activities.push(activity);
+    }
+
+    /// Prints a command's line in the room window (`None`) or a thread
+    /// window: it arrives like any other line.
+    pub(super) fn push_echo(
+        &mut self,
+        timestamp_ms: u64,
+        thread_root: Option<String>,
+        text: String,
+    ) {
+        let arrival = self.arrivals.take_next();
+        self.echo.push(arrival, timestamp_ms, thread_root, text);
     }
 
     pub(super) fn apply_history_backfill(&mut self, room_id: &str, backfill: RoomHistoryBackfill) {
@@ -206,6 +294,7 @@ impl RoomViewModel {
                         continue;
                     }
 
+                    // History did not arrive: no arrival.
                     self.activities.insert(prepended_count, *activity);
                     prepended_count += 1;
                     changed = true;
@@ -393,9 +482,11 @@ impl RoomViewModel {
         event_id: Option<&str>,
     ) {
         if let Some(index) = self.find_message_activity_index(transaction_id, event_id) {
+            self.arrivals
+                .carry(&self.activities[index].activity_id, &activity.activity_id);
             self.activities[index] = activity;
         } else {
-            self.activities.push(activity);
+            self.push_live(activity);
         }
     }
 
@@ -448,6 +539,15 @@ impl RoomViewModel {
             .as_ref()
             .map(|(_, _, _, _, _, body)| body.clone());
 
+        // The synced copy goes; the line the user typed stays, arrived when
+        // it was typed.
+        if let Some((duplicate_activity_id, ..)) = &duplicate_event {
+            self.arrivals.forget(duplicate_activity_id);
+        }
+        self.arrivals.carry(
+            &self.activities[transaction_index].activity_id,
+            &new_activity_id,
+        );
         let activity = self
             .activities
             .get_mut(transaction_index)
@@ -831,6 +931,23 @@ impl RoomViewModel {
                 RoomActivityUpdateTarget::Transaction { .. },
                 RoomActivityUpdateKind::ReactionRemoved { .. },
             ) => Err("reaction removal requires an event target".to_owned()),
+        }
+    }
+
+    /// Every arrival is of an activity the room has, and was handed out.
+    #[cfg(test)]
+    fn assert_arrivals_consistent(&self) {
+        for (activity_id, arrival) in &self.arrivals.by_activity {
+            assert!(
+                self.activities
+                    .iter()
+                    .any(|activity| activity.activity_id == *activity_id),
+                "arrival of a missing activity {activity_id}"
+            );
+            assert!(
+                *arrival < self.arrivals.next,
+                "arrival {arrival} not handed out"
+            );
         }
     }
 
@@ -1919,5 +2036,139 @@ mod tests {
                 send_state: RoomMessageSendState::Sent,
             })
         );
+    }
+
+    fn arrivals(room_view: &RoomViewModel) -> Vec<(&str, Option<u64>)> {
+        room_view.assert_arrivals_consistent();
+        room_view
+            .activities
+            .iter()
+            .map(|activity| {
+                (
+                    activity.activity_id.as_str(),
+                    room_view.arrivals.of(&activity.activity_id),
+                )
+            })
+            .collect()
+    }
+
+    fn utd(event_id: &str) -> RoomActivity {
+        let Event::RoomActivity(activity) =
+            unable_to_decrypt_activity("!ops:example", event_id, "@bob:example", 1_700_000_000_000)
+        else {
+            unreachable!()
+        };
+        *activity
+    }
+
+    fn sent(event_id: &str, body: &str) -> RoomActivity {
+        sent_message_activity("!ops:example", event_id, None, body, 1_700_000_000_000)
+    }
+
+    #[test]
+    fn live_activities_arrive_in_order_and_history_does_not_arrive() {
+        let mut room_view = RoomViewModel::default();
+        room_view.apply_activity(sent("$a", "a"));
+        room_view.apply_activity(utd("$b"));
+        room_view.apply_history_backfill(
+            "!ops:example",
+            RoomHistoryBackfill {
+                room_id: "!ops:example".to_owned(),
+                start: "t1".to_owned(),
+                end: None,
+                events: vec![RoomHistoryBackfillEvent::Activity(Box::new(sent(
+                    "$old", "old",
+                )))],
+            },
+        );
+        assert_eq!(
+            arrivals(&room_view),
+            [("event:$old", None), ("event:$a", Some(0)), ("$b", Some(1)),]
+        );
+        assert_eq!(room_view.arrivals.next(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "arrived twice")]
+    fn an_activity_arrives_once() {
+        let mut room_view = RoomViewModel::default();
+        room_view.apply_activity(utd("$b"));
+        room_view.apply_activity(utd("$b"));
+    }
+
+    #[test]
+    fn a_sent_message_keeps_the_arrival_of_its_pending_echo() {
+        // Sent by update: the pending line becomes the event.
+        let mut room_view = RoomViewModel::default();
+        room_view.apply_activity(pending_message_activity("!ops:example", "t1", "hi"));
+        room_view.apply_activity(sent("$other", "other"));
+        let Event::RoomActivityUpdate(update) = outgoing_sent("!ops:example", "t1", "$hi") else {
+            unreachable!()
+        };
+        room_view.mark_message_sent(update);
+        assert_eq!(
+            arrivals(&room_view),
+            [("event:$hi", Some(0)), ("event:$other", Some(1))]
+        );
+
+        // Sent by update after its synced copy arrived: the copy goes.
+        let mut room_view = RoomViewModel::default();
+        room_view.apply_activity(pending_message_activity("!ops:example", "t1", "hi"));
+        room_view.apply_activity(sent("$hi", "hi"));
+        let Event::RoomActivityUpdate(update) = outgoing_sent("!ops:example", "t1", "$hi") else {
+            unreachable!()
+        };
+        room_view.mark_message_sent(update);
+        assert_eq!(arrivals(&room_view), [("event:$hi", Some(0))]);
+
+        // Replaced by the synced event carrying its transaction.
+        let mut room_view = RoomViewModel::default();
+        room_view.apply_activity(pending_message_activity("!ops:example", "t1", "hi"));
+        room_view.apply_activity(sent("$other", "other"));
+        room_view.apply_activity(sent_message_activity(
+            "!ops:example",
+            "$hi",
+            Some("t1"),
+            "hi",
+            1_700_000_000_000,
+        ));
+        assert_eq!(
+            arrivals(&room_view),
+            [("event:$hi", Some(0)), ("event:$other", Some(1))]
+        );
+        assert_eq!(room_view.arrivals.next(), 2);
+    }
+
+    #[test]
+    fn clear_keeps_only_the_pending_arrivals_and_echo_shares_the_count() {
+        let mut room_view = RoomViewModel::default();
+        room_view.apply_activity(sent("$a", "a"));
+        room_view.push_echo(1_700_000_000_000, None, "* echo".to_owned());
+        room_view.apply_activity(pending_message_activity("!ops:example", "t1", "hi"));
+        room_view.clear_visible_entries();
+        assert_eq!(arrivals(&room_view), [("txn:t1", Some(2))]);
+        room_view.push_echo(1_700_000_000_000, None, "* after".to_owned());
+        assert_eq!(
+            room_view
+                .echo
+                .lines_for(None)
+                .map(|line| line.arrival)
+                .collect::<Vec<_>>(),
+            [3]
+        );
+        assert_eq!(room_view.arrivals.next(), 4);
+    }
+
+    #[test]
+    fn a_closed_window_has_shown_everything_that_arrived() {
+        let mut room_view = RoomViewModel::default();
+        assert_eq!(room_view.arrivals.unshown_from(), 0);
+        room_view.apply_activity(sent("$a", "a"));
+        room_view.push_echo(1_700_000_000_000, None, "* echo".to_owned());
+        room_view.arrivals.window_closed();
+        assert_eq!(room_view.arrivals.unshown_from(), 2);
+        room_view.apply_activity(sent("$b", "b"));
+        assert_eq!(room_view.arrivals.unshown_from(), 2);
+        assert_eq!(room_view.arrivals.of("event:$b"), Some(2));
     }
 }

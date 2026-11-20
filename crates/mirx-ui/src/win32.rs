@@ -400,8 +400,6 @@ use room_list_window::{
     add_room_list_columns, apply_public_rooms_page, dump_room_list, ensure_room_list_view,
     handle_room_list_notify, refresh_room_list_rows, start_room_list,
 };
-#[cfg(test)]
-use room_model::ThreadViewModel;
 use room_model::{
     LastMessageActivity, MessageReplacementFields, ReplyTarget, ReplyTargetState,
     RoomHistoryBackfillState, RoomHistoryBackfillStatus, RoomPreviewMediaState, RoomViewModel,
@@ -415,6 +413,8 @@ use room_model::{
     sendable_room_by_id, validate_synthetic_room_activity_events, view_id_is_valid,
     view_id_is_valid_for_rooms, window_message,
 };
+#[cfg(test)]
+use room_model::{RoomArrivals, ThreadViewModel};
 use room_targets::{RoomTargetError, resolve_room};
 use self_test::run_self_test;
 use settings::{Bar, FontSetting, SETTINGS_FILE_NAME, SettingsStore};

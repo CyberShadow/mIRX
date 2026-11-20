@@ -50,6 +50,11 @@ impl StatusLog {
         &self.lines
     }
 
+    /// The sequence the next line will have.
+    pub(super) fn next_sequence(&self) -> u64 {
+        self.next_sequence
+    }
+
     /// `/clear`: the sequence keeps counting, so no later line reuses an
     /// identity.
     pub(super) fn clear(&mut self) {

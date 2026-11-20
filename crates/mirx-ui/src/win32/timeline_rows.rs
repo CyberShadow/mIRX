@@ -101,9 +101,10 @@ pub(super) struct TimelineRow {
     pub(super) user_links: Vec<RowUserLink>,
     pub(super) layout: TimelineRowLayout,
     pub(super) image_state: Option<TimelineImageState>,
-    /// When the line happened, in Unix milliseconds: an activity's server
-    /// time, an echo or Status line's arrival. `None` for context rows.
-    pub(super) timestamp_ms: Option<u64>,
+    /// The line's place in its window's arrival order: a live activity's
+    /// room arrival, an echo line's, a Status line's sequence. `None` for
+    /// context rows and for history (backfill), which did not arrive.
+    pub(super) arrival: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,7 +127,7 @@ impl TimelineRow {
             user_links: Vec::new(),
             layout: TimelineRowLayout::FullWidth,
             image_state: None,
-            timestamp_ms: None,
+            arrival: None,
         }
     }
 
@@ -140,7 +141,7 @@ impl TimelineRow {
             user_links: Vec::new(),
             layout: TimelineRowLayout::Log,
             image_state: None,
-            timestamp_ms: None,
+            arrival: None,
         }
     }
 
@@ -149,8 +150,8 @@ impl TimelineRow {
         self
     }
 
-    pub(super) fn at(mut self, timestamp_ms: u64) -> Self {
-        self.timestamp_ms = Some(timestamp_ms);
+    pub(super) fn arrived(mut self, arrival: Option<u64>) -> Self {
+        self.arrival = arrival;
         self
     }
 
@@ -384,7 +385,7 @@ fn push_room_activity_row(
         .with_user_links(user_links)
         .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
         .with_event_id(room_activity_event_id(activity))
-        .at(activity.timestamp_ms);
+        .arrived(room_view.arrivals.of(&activity.activity_id));
     row.image_state = image_state;
     rows.push(row);
 
@@ -793,9 +794,9 @@ fn echo_row(line: &EchoLine, timestamps: TimestampStyle) -> TimelineRow {
     let prefix = timestamps.prefix(line.timestamp_ms);
     TimelineRow::log(TimelineRowKind::Info, format!("{prefix}{}", line.text))
         .with_identity(TimelineRowIdentity::EchoLine {
-            sequence: line.sequence,
+            sequence: line.arrival,
         })
-        .at(line.timestamp_ms)
+        .arrived(Some(line.arrival))
 }
 
 pub(super) fn build_thread_timeline_rows(
@@ -946,7 +947,7 @@ pub(super) fn build_status_timeline_rows(
             let prefix = timestamps.prefix(line.timestamp_ms);
             TimelineRow::log(kind, format!("{prefix}{}", line.text))
                 .with_identity(TimelineRowIdentity::status_line(line.sequence))
-                .at(line.timestamp_ms)
+                .arrived(Some(line.sequence))
         })
         .collect()
 }
@@ -3521,6 +3522,39 @@ mod tests {
     }
 
     #[test]
+    fn an_activity_row_carries_its_arrival_and_history_none() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(&mut state, timeline("!ops:example", "live")).unwrap();
+        let room_view = state.model.room_views.get_mut("!ops:example").unwrap();
+        room_view.apply_history_backfill(
+            "!ops:example",
+            RoomHistoryBackfill {
+                room_id: "!ops:example".to_owned(),
+                start: "t1".to_owned(),
+                end: None,
+                events: vec![RoomHistoryBackfillEvent::Activity(Box::new(
+                    sent_message_activity("!ops:example", "$old", None, "old", 1_600_000_000_000),
+                ))],
+            },
+        );
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let arrivals = rows
+            .iter()
+            .filter_map(|row| match &row.identity {
+                TimelineRowIdentity::ActivityPrimary { activity_id } => {
+                    Some((activity_id.as_str(), row.arrival))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            arrivals,
+            [("event:$old", None), ("event:$!ops:example:live", Some(0))]
+        );
+    }
+
+    #[test]
     fn echo_lines_merge_into_the_room_timeline_by_time() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
@@ -3534,12 +3568,12 @@ mod tests {
             )
             .unwrap();
         }
-        let echo = &mut state.model.room_views.get_mut("!ops:example").unwrap().echo;
-        echo.push(1_700_000_000_000, None, "* before".to_owned());
-        echo.push(1_700_000_120_000, None, "* between".to_owned());
+        let echo = state.model.room_views.get_mut("!ops:example").unwrap();
+        echo.push_echo(1_700_000_000_000, None, "* before".to_owned());
+        echo.push_echo(1_700_000_120_000, None, "* between".to_owned());
         // A tie stays after the activity the user already saw.
-        echo.push(1_700_000_180_000, None, "* tie".to_owned());
-        echo.push(1_700_000_240_000, None, "* tie".to_owned());
+        echo.push_echo(1_700_000_180_000, None, "* tie".to_owned());
+        echo.push_echo(1_700_000_240_000, None, "* tie".to_owned());
 
         let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
         let texts = project_timeline_rows(&rows);
@@ -3562,8 +3596,9 @@ mod tests {
         assert_eq!(
             identities,
             vec![
-                TimelineRowIdentity::EchoLine { sequence: 2 },
-                TimelineRowIdentity::EchoLine { sequence: 3 },
+                // The two messages arrived first.
+                TimelineRowIdentity::EchoLine { sequence: 4 },
+                TimelineRowIdentity::EchoLine { sequence: 5 },
             ]
         );
     }
@@ -3589,14 +3624,12 @@ mod tests {
         )
         .unwrap();
         let room_view = state.model.room_views.get_mut("!ops:example").unwrap();
-        room_view.echo.push(
+        room_view.push_echo(
             1_700_000_200_000,
             Some("$thread-root".to_owned()),
             "* /clear: nothing to clear in thread view".to_owned(),
         );
-        room_view
-            .echo
-            .push(1_700_000_200_000, None, "* room line".to_owned());
+        room_view.push_echo(1_700_000_200_000, None, "* room line".to_owned());
 
         let thread_lines = project_timeline_rows(&build_thread_timeline_rows(
             &state.model,

@@ -533,6 +533,7 @@ pub(super) fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState
         .filter_map(|view_id| {
             let view = state.views.remove(&view_id)?;
             state.hwnd_views.remove(&(view.child as isize));
+            room_window_gone(state, &view_id);
             Some(view)
         })
         .collect::<Vec<_>>();
@@ -868,6 +869,19 @@ pub(super) unsafe fn room_content_member_list(content: HWND) -> HWND {
     room_content_state_ref(content).members
 }
 
+/// A window left the views: if it was a room's, the room's next window
+/// logs automatically from the lines this one did not show. The mark lives
+/// in the room's view model, with the arrivals it counts, so a sign-out
+/// resets both; a room without one has had nothing arrive, so its next
+/// window starts at the first arrival anyway.
+fn room_window_gone(state: &mut WindowState, view_id: &ViewId) {
+    if let ViewId::Room(room_id) = view_id
+        && let Some(room_view) = state.model.room_views.get_mut(room_id)
+    {
+        room_view.arrivals.window_closed();
+    }
+}
+
 fn unregister_view_by_child(state: &mut WindowState, child: HWND) -> Option<ViewId> {
     let view_id = state.hwnd_views.remove(&(child as isize))?;
     let removed = state
@@ -876,6 +890,7 @@ fn unregister_view_by_child(state: &mut WindowState, child: HWND) -> Option<View
         .expect("HWND-to-view registry must match tracked views");
     state.find_states.remove(&view_id);
     cancel_original_jump_for_view(state, &view_id);
+    room_window_gone(state, &view_id);
     assert_eq!(
         removed.child, child,
         "tracked child HWND must match registry"

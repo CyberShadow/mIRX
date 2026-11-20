@@ -2,11 +2,12 @@
 //! profile, each session framed by `Session Start:`, `Session Ident:` and
 //! `Session Close:` lines.
 //!
-//! A log records what happens while it is on: each line once, when it first
-//! shows, as mIRC can only log what it printed. Lines from before the
-//! session (history scrolled back to, or sent again by the server after a
-//! restart) are not news and are never written. Edits and redactions do not
-//! rewrite a logged line.
+//! A log records what arrives while it is on: each line once, when it first
+//! shows, as mIRC can only log what it printed. Lines are kept by their
+//! place in the window's arrival order (`TimelineRow::arrival`), never by
+//! server time: history scrolled back to did not arrive and is never
+//! written, while a late event or one from a skewed clock is. Edits and
+//! redactions do not rewrite a logged line.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -125,26 +126,27 @@ fn session_ident(model: &UiModel, view_id: &ViewId) -> String {
 /// Which of a window's lines a log session writes, and which it wrote.
 #[derive(Debug)]
 struct LogDiff {
-    started_ms: u64,
+    /// The first arrival the log covers.
+    from: u64,
     written: BTreeSet<TimelineRowIdentity>,
 }
 
 impl LogDiff {
-    fn new(started_ms: u64) -> Self {
+    fn new(from: u64) -> Self {
         Self {
-            started_ms,
+            from,
             written: BTreeSet::new(),
         }
     }
 
-    /// The text lines of `rows` the log has not written: lines (rows with a
-    /// time: messages, events, echo and Status lines) from the session on,
-    /// once each. A message waiting to be sent is not said yet, and is
-    /// written once it is.
+    /// The text lines of `rows` the log has not written: lines that arrived
+    /// (messages, events, echo and Status lines) from `from` on, once each.
+    /// A message waiting to be sent is not said yet, and is written once it
+    /// is.
     fn lines(&mut self, rows: &[TimelineRow], strip_codes: bool) -> Vec<String> {
         let mut lines = Vec::new();
         for row in rows {
-            let Some(timestamp_ms) = row.timestamp_ms else {
+            let Some(arrival) = row.arrival else {
                 continue;
             };
             let unsent = matches!(
@@ -155,10 +157,7 @@ impl LogDiff {
                     ..
                 }
             );
-            if timestamp_ms < self.started_ms
-                || unsent
-                || !self.written.insert(row.identity.clone())
-            {
+            if arrival < self.from || unsent || !self.written.insert(row.identity.clone()) {
                 continue;
             }
             let text = if strip_codes {
@@ -187,10 +186,12 @@ pub(super) struct LogSession {
 
 impl LogSession {
     /// Opens `path` for appending, creating it and its folder, and writes
-    /// the session's start; a blank line parts it from the one before.
+    /// the session's start; a blank line parts it from the one before. The
+    /// session writes the lines that arrive from `from` on.
     fn start(
         path: PathBuf,
         ident: &str,
+        from: u64,
         clock: UiClock,
         local_time: LocalTimeFn,
     ) -> io::Result<Self> {
@@ -212,7 +213,7 @@ impl LogSession {
         Ok(Self {
             path,
             file,
-            diff: LogDiff::new(started_ms),
+            diff: LogDiff::new(from),
             clock,
             local_time,
         })
@@ -267,8 +268,9 @@ fn log_rows(state: &WindowState, view_id: &ViewId) -> Vec<TimelineRow> {
     }
 }
 
-/// Starts logging Status or a room window.
-fn start_view_log(state: &mut WindowState, view_id: &ViewId) -> Result<(), String> {
+/// Starts logging Status or a room window, from the line that arrives as
+/// `from` on.
+fn start_view_log(state: &mut WindowState, view_id: &ViewId, from: u64) -> Result<(), String> {
     if state.render_state_mode {
         return Err("logging is unavailable in render-state mode".to_owned());
     }
@@ -276,7 +278,7 @@ fn start_view_log(state: &mut WindowState, view_id: &ViewId) -> Result<(), Strin
         .join(LOGS_SUBDIR)
         .join(format!("{}.log", log_file_stem(&state.model, view_id)));
     let ident = session_ident(&state.model, view_id);
-    let session = LogSession::start(path.clone(), &ident, state.clock, state.local_time)
+    let session = LogSession::start(path.clone(), &ident, from, state.clock, state.local_time)
         .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
     state
         .views
@@ -300,7 +302,19 @@ pub(super) fn set_view_logging(
     let line = match (on, logged_path) {
         (true, Some(path)) => return Ok(format!("* Logging is already on: {path}")),
         (true, None) => {
-            start_view_log(state, view_id)?;
+            // From now on: the next line.
+            let from = match view_id {
+                ViewId::Status => state.model.status_log.next_sequence(),
+                ViewId::Room(room_id) => state
+                    .model
+                    .room_views
+                    .get(room_id)
+                    .map_or(0, |room_view| room_view.arrivals.next()),
+                ViewId::Thread { .. } | ViewId::RoomList => {
+                    unreachable!("only Status and room windows log")
+                }
+            };
+            start_view_log(state, view_id, from)?;
             format!(
                 "* Logging on: {}",
                 view_log_path(state, view_id).expect("the log just started")
@@ -332,7 +346,10 @@ pub(super) fn logging_is_line(state: &WindowState, view_id: &ViewId) -> String {
 }
 
 /// mIRC's Automatically log: a room window decides once, when it is first
-/// shown as a joined channel or query, from the Options of that moment.
+/// shown as a joined channel or query, from the Options of that moment. Its
+/// log starts where the room's last window stopped showing lines: the
+/// message that reopens a closed query, the lines of the batch that joined
+/// the room and those received while mirx was closed are all in it.
 pub(super) fn decide_auto_log(state: &mut WindowState, view_id: &ViewId) {
     let ViewId::Room(room_id) = view_id else {
         unreachable!("only room windows log automatically")
@@ -352,7 +369,12 @@ pub(super) fn decide_auto_log(state: &mut WindowState, view_id: &ViewId) {
         .get_mut(view_id)
         .expect("the room window exists");
     view.log = ViewLog::Off;
-    if on && let Err(error) = start_view_log(state, view_id) {
+    let from = state
+        .model
+        .room_views
+        .get(room_id)
+        .map_or(0, |room_view| room_view.arrivals.unshown_from());
+    if on && let Err(error) = start_view_log(state, view_id, from) {
         echo_lines_in_view(state, view_id, [format!("* Logging: {error}")]);
     }
     check_logging_items(state, view_id);
@@ -533,14 +555,14 @@ mod tests {
         let rows = [
             TimelineRow::log(TimelineRowKind::Info, "* héllo wörld".to_owned())
                 .with_identity(TimelineRowIdentity::status_line(1))
-                .at(1_700_000_000_000),
+                .arrived(Some(1)),
         ];
         let mut session =
-            LogSession::start(path.clone(), "Rust (#rust:x)", clock, utc_local_time).unwrap();
+            LogSession::start(path.clone(), "Rust (#rust:x)", 0, clock, utc_local_time).unwrap();
         session.write_new_lines(&rows, false).unwrap();
         drop(session);
         let session =
-            LogSession::start(path.clone(), "Rust (#rust:x)", clock, utc_local_time).unwrap();
+            LogSession::start(path.clone(), "Rust (#rust:x)", 2, clock, utc_local_time).unwrap();
         drop(session);
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
@@ -556,28 +578,41 @@ mod tests {
         fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
     }
 
-    const START_MS: u64 = 1_700_000_000_000;
+    const FROM: u64 = 10;
 
-    fn line(sequence: u64, timestamp_ms: u64, text: &str) -> TimelineRow {
+    fn line(arrival: u64, text: &str) -> TimelineRow {
         TimelineRow::log(TimelineRowKind::Info, text.to_owned())
-            .with_identity(TimelineRowIdentity::EchoLine { sequence })
-            .at(timestamp_ms)
+            .with_identity(TimelineRowIdentity::EchoLine { sequence: arrival })
+            .arrived(Some(arrival))
     }
 
     #[test]
     fn a_line_is_written_once_and_only_from_the_session_on() {
-        let mut diff = LogDiff::new(START_MS);
+        let mut diff = LogDiff::new(FROM);
         let mut rows = vec![
-            line(1, START_MS - 1, "before"),
+            line(FROM - 1, "before"),
             TimelineRow::full_width(TimelineRowKind::Plain, "context".to_owned()),
-            line(2, START_MS, "at the start"),
+            line(FROM, "at the start"),
         ];
         assert_eq!(diff.lines(&rows, false), ["at the start"]);
         assert!(diff.lines(&rows, false).is_empty());
-        rows.push(line(3, START_MS + 5, "two\r\nlines"));
+        rows.push(line(FROM + 5, "two\r\nlines"));
         // The same line again, restamped: still logged once.
         rows[2].logical_text = "[10:00] at the start".to_owned();
         assert_eq!(diff.lines(&rows, false), ["two", "lines"]);
+    }
+
+    #[test]
+    fn history_did_not_arrive_and_is_never_written() {
+        let mut diff = LogDiff::new(0);
+        let history = message_row(
+            "event:$old",
+            TimelineMessageSendState::Sent,
+            "<bob> old",
+            Vec::new(),
+        )
+        .arrived(None);
+        assert!(diff.lines(&[history], false).is_empty());
     }
 
     fn message_row(
@@ -597,12 +632,12 @@ mod tests {
         )
         .with_styles(styles)
         .with_identity(TimelineRowIdentity::activity_primary(activity_id))
-        .at(START_MS + 1)
+        .arrived(Some(FROM + 1))
     }
 
     #[test]
     fn a_message_is_logged_once_it_is_sent() {
-        let mut diff = LogDiff::new(START_MS);
+        let mut diff = LogDiff::new(FROM);
         let pending = message_row(
             "local:1",
             TimelineMessageSendState::Pending,
@@ -643,9 +678,9 @@ mod tests {
             bold,
         );
         assert_eq!(
-            LogDiff::new(START_MS).lines(std::slice::from_ref(&row), false),
+            LogDiff::new(FROM).lines(std::slice::from_ref(&row), false),
             ["<me> \u{2}bold"]
         );
-        assert_eq!(LogDiff::new(START_MS).lines(&[row], true), ["<me> bold"]);
+        assert_eq!(LogDiff::new(FROM).lines(&[row], true), ["<me> bold"]);
     }
 }

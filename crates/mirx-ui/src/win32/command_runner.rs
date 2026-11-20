@@ -590,8 +590,7 @@ pub(super) fn echo_lines_in_view(
                 .room_views
                 .entry(room_id.clone())
                 .or_default()
-                .echo
-                .push(now, None, text),
+                .push_echo(now, None, text),
             ViewId::Thread {
                 room_id,
                 thread_root_event_id,
@@ -600,8 +599,7 @@ pub(super) fn echo_lines_in_view(
                 .room_views
                 .get_mut(room_id)
                 .expect("a thread window's room must have a view")
-                .echo
-                .push(now, Some(thread_root_event_id.clone()), text),
+                .push_echo(now, Some(thread_root_event_id.clone()), text),
         }
     }
 }

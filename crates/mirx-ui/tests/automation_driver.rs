@@ -5498,7 +5498,8 @@ fn log_command_logs_a_windows_new_lines_until_turned_off() -> Result<(), Box<dyn
     let said_at = now_ms();
     app.append_synthetic_events(&serde_json::to_string(&vec![
         text_event("!beta:example", "@bob:example", said_at, "logged hello"),
-        // From before the log: history, not news.
+        // Sent long ago, but it arrived while the log was on: a late event
+        // is logged, with its server time.
         text_event(
             "!beta:example",
             "@bob:example",
@@ -5538,10 +5539,12 @@ fn log_command_logs_a_windows_new_lines_until_turned_off() -> Result<(), Box<dyn
             format!("* Logging on: {path}").as_str(),
             format!("* Logging is already on: {path}").as_str(),
             "<@bob:example> logged hello",
+            "<@bob:example> older line",
             format!("* Logging is on: {path}").as_str(),
         ]
     );
     assert!(lines[2].starts_with(&utc_hh_nn(said_at)), "{lines:?}");
+    assert!(lines[3].starts_with("[22:13] "), "{lines:?}");
 
     // Turned on again, the log goes on after a blank line.
     type_commands(&app, &["/log on"])?;
@@ -5664,6 +5667,8 @@ fn rooms_log_automatically_as_the_options_say_and_exit_closes_the_logs()
         Event::SyncedRooms(rooms),
         text_event("!beta:example", "@bob:example", said_at, "beta news"),
         text_event("!alpha:example", "@alice:example", said_at, "alpha news"),
+        // In the batch that joined it, before its window decided.
+        text_event("!invite:example", "@bob:example", said_at, "lobby hello"),
     ])?)?;
     app.wait_idle(Duration::from_secs(5))?;
     assert!(
@@ -5686,6 +5691,8 @@ fn rooms_log_automatically_as_the_options_say_and_exit_closes_the_logs()
         [
             "Session Start: *".to_owned(),
             "Session Ident: Beta (!beta:example)".to_owned(),
+            // Loaded before Beta's window decided: it arrived all the same.
+            "[22:13] <@bob:example> beta first".to_owned(),
             format!("{} <@bob:example> beta news", utc_hh_nn(said_at)),
             "Session Close: *".to_owned(),
         ]
@@ -5693,9 +5700,10 @@ fn rooms_log_automatically_as_the_options_say_and_exit_closes_the_logs()
     assert_eq!(
         read_log(&log_file_path(&local_app_data, "!invite.example"))?,
         [
-            "Session Start: *",
-            "Session Ident: Lobby (!invite:example)",
-            "Session Close: *",
+            "Session Start: *".to_owned(),
+            "Session Ident: Lobby (!invite:example)".to_owned(),
+            format!("{} <@bob:example> lobby hello", utc_hh_nn(said_at)),
+            "Session Close: *".to_owned(),
         ]
     );
     assert!(!log_file_path(&local_app_data, "@alice.example").exists());
@@ -5706,6 +5714,60 @@ fn rooms_log_automatically_as_the_options_say_and_exit_closes_the_logs()
     assert_eq!(view_log(&app, &beta)?, None);
     assert!(view_log(&app, &alpha)?.is_some());
     drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn a_closed_query_reopened_by_a_message_logs_it() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    write_logging_settings(&local_app_data, "queries=on\r\n")?;
+    let (app, local_app_data) = launch_close_lifecycle_app_in(local_app_data)?;
+    let alpha = room_identity("!alpha:example");
+    assert!(view_log(&app, &alpha)?.is_some());
+    close_view_without_prompt(&app, &alpha)?;
+    assert!(
+        !app.dump_ui_state()?
+            .mdi
+            .views
+            .iter()
+            .any(|view| view.identity == alpha)
+    );
+    // Its server time is older than the window it opens: server time
+    // does not decide.
+    app.append_synthetic_events(&serde_json::to_string(&vec![text_event(
+        "!alpha:example",
+        "@alice:example",
+        1_700_000_120_000,
+        "back again",
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(view_log(&app, &alpha)?.is_some(), "the reopened query logs");
+    let status = app.close(Duration::from_secs(30))?;
+    assert!(status.success(), "mirx exited with {status}");
+
+    let log = read_log(&log_file_path(&local_app_data, "@alice.example"))?;
+    let session = [
+        "Session Start: *".to_owned(),
+        "Session Ident: Alpha (@alice:example)".to_owned(),
+    ];
+    assert_eq!(
+        log,
+        [
+            session.as_slice(),
+            &[
+                "[22:14] <@alice:example> alpha first".to_owned(),
+                "Session Close: *".to_owned(),
+                String::new(),
+            ],
+            session.as_slice(),
+            &[
+                "[22:15] <@alice:example> back again".to_owned(),
+                "Session Close: *".to_owned(),
+            ],
+        ]
+        .concat()
+    );
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
