@@ -1150,7 +1150,7 @@ mod tests {
             },
             kind: RoomActivityUpdateKind::MessageFailed {
                 message: message.to_owned(),
-                recoverable: true,
+                recoverable: false,
             },
         })
     }
@@ -1323,6 +1323,72 @@ mod tests {
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] <@alice:example> hello".to_owned(),
             ]
+        );
+    }
+
+    fn outgoing_waiting(room_id: &str, transaction_id: &str) -> Event {
+        Event::RoomActivityUpdate(RoomActivityUpdate {
+            room_id: room_id.to_owned(),
+            target: RoomActivityUpdateTarget::Transaction {
+                transaction_id: transaction_id.to_owned(),
+            },
+            kind: RoomActivityUpdateKind::MessageFailed {
+                message: "error sending request".to_owned(),
+                recoverable: true,
+            },
+        })
+    }
+
+    /// A send the connection stopped stays in the core's queue: the row
+    /// waits, unmarked, through further failures and a /clear, and becomes
+    /// the sent line.
+    #[test]
+    fn a_message_waiting_for_the_connection_becomes_the_sent_line() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            outgoing_queued("!ops:example", "txn-1", "hello"),
+        )
+        .unwrap();
+        state.room_activity.clear();
+        for _ in 0..2 {
+            apply_core_event(&mut state, outgoing_waiting("!ops:example", "txn-1")).unwrap();
+        }
+        assert_eq!(
+            render_room_lines(&state, "!ops:example"),
+            vec![
+                "* Now talking in Ops (!ops:example)".to_owned(),
+                "[22:13] <@alice:example> hello (waiting to send)".to_owned(),
+            ]
+        );
+        assert_eq!(state.room_activity.get(&room_view_id("!ops:example")), None);
+        state
+            .model
+            .room_views
+            .get_mut("!ops:example")
+            .expect("the room's view")
+            .clear_visible_entries();
+
+        apply_core_event(
+            &mut state,
+            outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
+        )
+        .unwrap();
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| &view.activities),
+            Some(&vec![sent_message_activity(
+                "!ops:example",
+                "$event:example.org",
+                Some("txn-1"),
+                "hello",
+                1_700_000_000_000,
+            )])
         );
     }
 
@@ -1866,7 +1932,7 @@ mod tests {
                 body: "waves".to_owned(),
                 send_state: RoomMessageSendState::Failed {
                     message: "send failed".to_owned(),
-                    recoverable: true,
+                    recoverable: false,
                 },
             })
         );

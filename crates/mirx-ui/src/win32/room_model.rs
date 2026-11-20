@@ -183,14 +183,12 @@ impl RoomViewModel {
         self.activities.retain(|activity| {
             matches!(
                 &activity.kind,
-                RoomActivityKind::Message(RoomMessageActivity {
-                    send_state: RoomMessageSendState::Pending,
-                    ..
-                })
+                RoomActivityKind::Message(RoomMessageActivity { send_state, .. })
+                    if is_queued(send_state)
             )
         });
         self.reactions_by_target.clear();
-        // Only pending messages stay, and they have no event to be edited.
+        // Only queued messages stay, and they have no event to be edited.
         self.edited_event_ids.clear();
         let kept = self
             .activities
@@ -798,15 +796,17 @@ impl RoomViewModel {
             .position(|activity| room_activity_event_id(activity) == Some(event_id))
     }
 
+    /// The row of a message still in the core's send queue (`is_queued`):
+    /// a `MessageSent` or `MessageFailed` comes for it.
     fn find_pending_message_activity_index(&self, transaction_id: &str) -> Option<usize> {
         self.activities.iter().position(|activity| {
             matches!(
                 &activity.kind,
                 RoomActivityKind::Message(RoomMessageActivity {
                     transaction_id: Some(existing_transaction_id),
-                    send_state: RoomMessageSendState::Pending,
+                    send_state,
                     ..
-                }) if existing_transaction_id == transaction_id
+                }) if existing_transaction_id == transaction_id && is_queued(send_state)
             )
         })
     }
@@ -1318,13 +1318,31 @@ pub(super) fn room_activity_target_view_id(activity: &RoomActivity) -> ViewId {
     room_activity_view_id(&activity.room_id, activity.relation.as_ref())
 }
 
+/// A message the server refused wants the user's attention; one waiting
+/// for the connection is no news yet.
 pub(super) fn room_activity_update_marks_inactive_room(update: &RoomActivityUpdate) -> bool {
     matches!(
         (&update.target, &update.kind),
         (
             RoomActivityUpdateTarget::Transaction { .. },
-            RoomActivityUpdateKind::MessageFailed { .. }
+            RoomActivityUpdateKind::MessageFailed {
+                recoverable: false,
+                ..
+            }
         )
+    )
+}
+
+/// Whether the message is still in the core's send queue: on its way, or
+/// waiting for the connection to come back after a recoverable failure.
+pub(super) fn is_queued(send_state: &RoomMessageSendState) -> bool {
+    matches!(
+        send_state,
+        RoomMessageSendState::Pending
+            | RoomMessageSendState::Failed {
+                recoverable: true,
+                ..
+            }
     )
 }
 

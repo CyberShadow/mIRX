@@ -254,11 +254,18 @@ pub(super) enum TimelineImageState {
     },
 }
 
+/// A message waiting for the connection is still on its way: dim, and not
+/// logged until it is sent.
 fn timeline_message_send_state(send_state: &RoomMessageSendState) -> TimelineMessageSendState {
     match send_state {
-        RoomMessageSendState::Pending => TimelineMessageSendState::Pending,
+        RoomMessageSendState::Pending
+        | RoomMessageSendState::Failed {
+            recoverable: true, ..
+        } => TimelineMessageSendState::Pending,
         RoomMessageSendState::Sent => TimelineMessageSendState::Sent,
-        RoomMessageSendState::Failed { .. } => TimelineMessageSendState::Failed,
+        RoomMessageSendState::Failed {
+            recoverable: false, ..
+        } => TimelineMessageSendState::Failed,
     }
 }
 
@@ -549,7 +556,12 @@ fn activity_line_text(
                     " (edited)"
                 }
                 RoomMessageSendState::Sent => "",
-                RoomMessageSendState::Failed { .. } => " (failed)",
+                RoomMessageSendState::Failed {
+                    recoverable: true, ..
+                } => " (waiting to send)",
+                RoomMessageSendState::Failed {
+                    recoverable: false, ..
+                } => " (failed)",
             };
             let line = message_line(
                 timestamp,
@@ -1013,6 +1025,24 @@ mod tests {
 
     use super::super::test_fixtures::*;
     use super::*;
+
+    /// A message waiting for the connection is drawn and logged as one on
+    /// its way: dim, and written once it is sent.
+    #[test]
+    fn only_a_refused_message_is_a_failed_row() {
+        let failed = |recoverable| RoomMessageSendState::Failed {
+            message: "failed".to_owned(),
+            recoverable,
+        };
+        assert_eq!(
+            timeline_message_send_state(&failed(true)),
+            TimelineMessageSendState::Pending
+        );
+        assert_eq!(
+            timeline_message_send_state(&failed(false)),
+            TimelineMessageSendState::Failed
+        );
+    }
 
     fn incoming_reaction_removed(
         room_id: &str,

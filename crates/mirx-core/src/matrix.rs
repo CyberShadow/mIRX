@@ -1,8 +1,9 @@
 use std::borrow::Cow;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
+use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
@@ -3206,6 +3207,7 @@ pub(crate) fn start_sync_task(
     client: Client,
     events: EventSender,
     initial_snapshot: InitialSnapshot,
+    paused_sends: PausedSendRooms,
 ) -> JoinHandle<()> {
     tokio::task::spawn_local(async move {
         let connected = Cell::new(false);
@@ -3215,6 +3217,7 @@ pub(crate) fn start_sync_task(
                 let events = events.clone();
                 let connected = &connected;
                 let initial_snapshot = &initial_snapshot;
+                let paused_sends = &paused_sends;
                 async move {
                     let response = result?;
                     if !connected.replace(true) {
@@ -3223,6 +3226,8 @@ pub(crate) fn start_sync_task(
                         initial_snapshot.emit_if_pending(&client, &events).await;
                         emit_event(&events, Event::SyncConnected);
                     }
+                    // The server answers again.
+                    paused_sends.resume(&client);
                     emit_member_snapshots_after_sync(&client, &response, &events).await;
                     Ok(LoopCtrl::Continue)
                 }
@@ -3231,6 +3236,30 @@ pub(crate) fn start_sync_task(
         let err = result.expect_err("the sync callback never breaks the loop");
         emit_event(&events, Event::SyncStopped(sync_stop_reason(&err)));
     })
+}
+
+/// Rooms whose send queue a recoverable error stopped (the network, the
+/// server): their requests stay queued, and the next sync response, which
+/// shows the server answers again, starts the queues again. Shared by the
+/// send queue's update task and the session's sync tasks.
+#[derive(Clone, Default)]
+pub(crate) struct PausedSendRooms(Rc<RefCell<BTreeSet<OwnedRoomId>>>);
+
+impl PausedSendRooms {
+    fn pause(&self, room_id: OwnedRoomId) {
+        self.0.borrow_mut().insert(room_id);
+    }
+
+    fn resume(&self, client: &Client) {
+        for room_id in std::mem::take(&mut *self.0.borrow_mut()) {
+            // A room left and forgotten meanwhile has no queue left.
+            if let Some(room) = client.get_room(&room_id) {
+                // Per room: the client-wide switch would also scan the store
+                // for every room with unsent requests.
+                room.send_queue().set_enabled(true);
+            }
+        }
+    }
 }
 
 /// Only a token the server no longer accepts is final; mIRC retries any
@@ -3342,6 +3371,7 @@ pub(crate) fn start_send_queue_update_task(
     client: Client,
     current_user_id: String,
     events: EventSender,
+    paused_sends: PausedSendRooms,
 ) -> JoinHandle<()> {
     let mut updates = client.send_queue().subscribe();
     let pending = Arc::new(Mutex::new(BTreeMap::new()));
@@ -3366,6 +3396,20 @@ pub(crate) fn start_send_queue_update_task(
         loop {
             match updates.recv().await {
                 Ok(update) => {
+                    if let RoomSendQueueUpdate::SendError { is_recoverable, .. } = &update.update {
+                        // The SDK stops the room's queue at any send error.
+                        if *is_recoverable {
+                            paused_sends.pause(update.room_id.clone());
+                        } else {
+                            // The request is wedged and the queue skips it:
+                            // the room's later sends go now.
+                            client
+                                .get_room(&update.room_id)
+                                .expect("the SDK reports send errors of known rooms")
+                                .send_queue()
+                                .set_enabled(true);
+                        }
+                    }
                     let room_id = update.room_id.to_string();
                     match own_room_user_profile(&client, &update.room_id, &current_user_id)
                         .await
@@ -3453,10 +3497,40 @@ fn map_send_queue_update(
                 | None => Vec::new(),
             })
         }
+        // The request stays queued and goes once the connection is back
+        // (`PausedSendRooms`): nothing failed yet, so no error, and its
+        // `SentEvent` still finds its kind. Edits, reactions and redactions
+        // show nothing until then.
         RoomSendQueueUpdate::SendError {
             transaction_id,
             error,
-            is_recoverable,
+            is_recoverable: true,
+        } => {
+            let transaction_id = transaction_id.to_string();
+            Ok(match pending_outgoing_kind(pending, &transaction_id) {
+                Some(PendingOutgoingKind::Message) => {
+                    vec![Event::RoomActivityUpdate(RoomActivityUpdate {
+                        room_id,
+                        target: RoomActivityUpdateTarget::Transaction { transaction_id },
+                        kind: RoomActivityUpdateKind::MessageFailed {
+                            message: error.to_string(),
+                            recoverable: true,
+                        },
+                    })]
+                }
+                Some(
+                    PendingOutgoingKind::MessageEdit { .. }
+                    | PendingOutgoingKind::Reaction { .. }
+                    | PendingOutgoingKind::Redaction { .. },
+                )
+                | None => Vec::new(),
+            })
+        }
+        // The SDK wedged the request: it will not be sent.
+        RoomSendQueueUpdate::SendError {
+            transaction_id,
+            error,
+            is_recoverable: false,
         } => {
             let transaction_id = transaction_id.to_string();
             let message = error.to_string();
@@ -3467,7 +3541,7 @@ fn map_send_queue_update(
                         target: RoomActivityUpdateTarget::Transaction { transaction_id },
                         kind: RoomActivityUpdateKind::MessageFailed {
                             message: message.clone(),
-                            recoverable: is_recoverable,
+                            recoverable: false,
                         },
                     }),
                     Event::Error(CoreErrorEvent {
@@ -3694,6 +3768,17 @@ fn insert_pending_outgoing_kind(
         .lock()
         .expect("lock pending outgoing registry")
         .insert(transaction_id, kind);
+}
+
+fn pending_outgoing_kind(
+    pending: &PendingOutgoingRegistry,
+    transaction_id: &str,
+) -> Option<PendingOutgoingKind> {
+    pending
+        .lock()
+        .expect("lock pending outgoing registry")
+        .get(transaction_id)
+        .cloned()
 }
 
 fn take_pending_outgoing_kind(
@@ -12449,8 +12534,72 @@ mod tests {
         );
     }
 
+    /// A send the network or the server stopped stays queued: a message
+    /// shows it is waiting, and nothing is an error yet. The kind stays for
+    /// the `SentEvent` once the queue goes again.
     #[test]
-    fn send_queue_error_maps_to_failed_activity_update_and_error_surface() {
+    fn recoverable_send_errors_keep_the_request_queued() {
+        for (kind, expected) in [
+            (
+                PendingOutgoingKind::Message,
+                vec![Event::RoomActivityUpdate(RoomActivityUpdate {
+                    room_id: "!room:example.org".to_owned(),
+                    target: RoomActivityUpdateTarget::Transaction {
+                        transaction_id: "txn-1".to_owned(),
+                    },
+                    kind: RoomActivityUpdateKind::MessageFailed {
+                        message: "offline".to_owned(),
+                        recoverable: true,
+                    },
+                })],
+            ),
+            (
+                PendingOutgoingKind::MessageEdit {
+                    target_event_id: "$target:example.org".to_owned(),
+                },
+                Vec::new(),
+            ),
+            (
+                PendingOutgoingKind::Reaction {
+                    target_event_id: "$target:example.org".to_owned(),
+                    key: "+1".to_owned(),
+                },
+                Vec::new(),
+            ),
+            (
+                PendingOutgoingKind::Redaction {
+                    redacts: "$reaction:example.org".to_owned(),
+                },
+                Vec::new(),
+            ),
+        ] {
+            let pending = pending_outgoing_registry();
+            insert_pending_outgoing_kind(&pending, "txn-1".to_owned(), kind.clone());
+
+            let events = map_send_queue_update(
+                SendQueueUpdate {
+                    room_id: room_id(),
+                    update: RoomSendQueueUpdate::SendError {
+                        transaction_id: transaction_id(),
+                        error: Arc::new(matrix_sdk::Error::from(std::io::Error::other("offline"))),
+                        is_recoverable: true,
+                    },
+                },
+                &profile("@alice:example.org"),
+                &pending,
+            )
+            .expect("map recoverable send error");
+
+            assert_eq!(events, expected, "{kind:?}");
+            assert_eq!(
+                pending.lock().expect("lock pending registry").get("txn-1"),
+                Some(&kind)
+            );
+        }
+    }
+
+    #[test]
+    fn refused_send_maps_to_failed_activity_update_and_error_surface() {
         let pending = pending_outgoing_registry();
         insert_pending_outgoing_kind(&pending, "txn-1".to_owned(), PendingOutgoingKind::Message);
         let events = map_send_queue_update(
@@ -12461,7 +12610,7 @@ mod tests {
                     error: Arc::new(matrix_sdk::Error::from(std::io::Error::other(
                         "send failed",
                     ))),
-                    is_recoverable: true,
+                    is_recoverable: false,
                 },
             },
             &profile("@alice:example.org"),
@@ -12479,7 +12628,7 @@ mod tests {
                     },
                     kind: RoomActivityUpdateKind::MessageFailed {
                         message: "send failed".to_owned(),
-                        recoverable: true,
+                        recoverable: false,
                     },
                 }),
                 Event::Error(CoreErrorEvent {
@@ -12492,7 +12641,7 @@ mod tests {
     }
 
     #[test]
-    fn edit_send_queue_error_emits_typed_error_only() {
+    fn refused_edit_emits_typed_error_only() {
         let pending = pending_outgoing_registry();
         insert_pending_outgoing_kind(
             &pending,
@@ -12510,7 +12659,7 @@ mod tests {
                     error: Arc::new(matrix_sdk::Error::from(std::io::Error::other(
                         "edit send failed",
                     ))),
-                    is_recoverable: true,
+                    is_recoverable: false,
                 },
             },
             &profile("@alice:example.org"),
@@ -12529,7 +12678,7 @@ mod tests {
     }
 
     #[test]
-    fn reaction_send_queue_error_emits_typed_error_only() {
+    fn refused_reaction_emits_typed_error_only() {
         let pending = pending_outgoing_registry();
         insert_pending_outgoing_kind(
             &pending,
@@ -12548,7 +12697,7 @@ mod tests {
                     error: Arc::new(matrix_sdk::Error::from(std::io::Error::other(
                         "reaction send failed",
                     ))),
-                    is_recoverable: true,
+                    is_recoverable: false,
                 },
             },
             &profile("@alice:example.org"),
@@ -12567,7 +12716,7 @@ mod tests {
     }
 
     #[test]
-    fn redaction_send_queue_error_emits_typed_error_only() {
+    fn refused_redaction_emits_typed_error_only() {
         let pending = pending_outgoing_registry();
         insert_pending_outgoing_kind(
             &pending,
@@ -12585,7 +12734,7 @@ mod tests {
                     error: Arc::new(matrix_sdk::Error::from(std::io::Error::other(
                         "redaction send failed",
                     ))),
-                    is_recoverable: true,
+                    is_recoverable: false,
                 },
             },
             &profile("@alice:example.org"),

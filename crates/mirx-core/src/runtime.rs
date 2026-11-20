@@ -24,7 +24,9 @@ use crate::api::{
     SetupE2eeRecoveryRequest, SyncStopReason, UnbanRoomMemberRequest, VerificationFlowId,
 };
 use crate::loopback::{self, LoopbackListener, LoopbackRedirect};
-use crate::matrix::{self, BackupServerStatusMode, BrowserFlow, HomeserverSpec, MatrixCoreError};
+use crate::matrix::{
+    self, BackupServerStatusMode, BrowserFlow, HomeserverSpec, MatrixCoreError, PausedSendRooms,
+};
 
 pub(crate) type EventSender = mpsc::Sender<Event>;
 
@@ -119,6 +121,8 @@ enum WorkerState {
         client: Client,
         /// Given to every sync task, which emits it if it is pending.
         initial_snapshot: InitialSnapshot,
+        /// Shared by the send queue's update task and every sync task.
+        paused_sends: PausedSendRooms,
         sync_task: Option<TokioJoinHandle<()>>,
         session_update_task: TokioJoinHandle<()>,
         send_queue_update_task: TokioJoinHandle<()>,
@@ -565,8 +569,13 @@ async fn enter_session(
         .respawn_tasks_for_rooms_with_unsent_requests()
         .await;
     let session_update_task = matrix::start_session_update_task(client.clone(), event_tx.clone());
-    let send_queue_update_task =
-        matrix::start_send_queue_update_task(client.clone(), current_user_id, event_tx.clone());
+    let paused_sends = PausedSendRooms::default();
+    let send_queue_update_task = matrix::start_send_queue_update_task(
+        client.clone(),
+        current_user_id,
+        event_tx.clone(),
+        paused_sends.clone(),
+    );
     // Before the first sync: the event cache counts unread messages, here
     // those of the initial sync, and does so in its own task, so the
     // read-state task must already be listening when it is done.
@@ -611,6 +620,7 @@ async fn enter_session(
     *state = WorkerState::Ready {
         client,
         initial_snapshot,
+        paused_sends,
         sync_task: None,
         session_update_task,
         send_queue_update_task,
@@ -630,6 +640,7 @@ fn handle_start_sync(event_tx: &EventSender, state: &mut WorkerState) -> bool {
     let WorkerState::Ready {
         client,
         initial_snapshot,
+        paused_sends,
         sync_task,
         ..
     } = state
@@ -658,6 +669,7 @@ fn handle_start_sync(event_tx: &EventSender, state: &mut WorkerState) -> bool {
         client.clone(),
         event_tx.clone(),
         initial_snapshot.clone(),
+        paused_sends.clone(),
     ));
     emit_event(event_tx, Event::SyncStarted);
     false
@@ -1593,6 +1605,7 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
     let WorkerState::Ready {
         client,
         initial_snapshot: _,
+        paused_sends: _,
         sync_task,
         session_update_task,
         send_queue_update_task,
@@ -1653,6 +1666,7 @@ async fn shutdown_state(state: &mut WorkerState) {
         WorkerState::Ready {
             client: _,
             initial_snapshot: _,
+            paused_sends: _,
             sync_task,
             session_update_task,
             send_queue_update_task,
@@ -1915,9 +1929,9 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::{
-        AccountLists, EventSender, InitialSnapshot, RoomSnapshot, WorkerState, handle_command,
-        handle_login, handle_restore_session, handle_start_sync, handle_stop_sync, run_worker,
-        shutdown_state,
+        AccountLists, EventSender, InitialSnapshot, PausedSendRooms, RoomSnapshot, WorkerState,
+        handle_command, handle_login, handle_restore_session, handle_start_sync, handle_stop_sync,
+        run_worker, shutdown_state,
     };
     use crate::api::CoreConfig;
     use crate::api::{
@@ -1927,9 +1941,13 @@ mod tests {
         RoomJoined, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership,
         RoomNotificationMode, RoomReadState, RoomSummary, SyncStopReason,
     };
+    use crate::api::{
+        RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
+        RoomMessagePresentationKind, SendMessageRequest,
+    };
     use matrix_sdk::{
         ruma::{
-            OwnedRoomId,
+            OwnedEventId, OwnedRoomId,
             events::{AnySyncStateEvent, room::member::RoomMemberEvent},
             serde::Raw,
         },
@@ -1990,6 +2008,7 @@ mod tests {
         WorkerState::Ready {
             client,
             initial_snapshot: InitialSnapshot::pending(false),
+            paused_sends: PausedSendRooms::default(),
             sync_task: None,
             room_list_update_task: tokio::task::spawn_local(async {}),
             room_read_state_update_task: tokio::task::spawn_local(async {}),
@@ -2552,6 +2571,7 @@ mod tests {
             let mut state = WorkerState::Ready {
                 client,
                 initial_snapshot: InitialSnapshot::pending(false),
+                paused_sends: PausedSendRooms::default(),
                 sync_task: Some(existing_task),
                 room_list_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 room_read_state_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
@@ -2730,6 +2750,7 @@ mod tests {
             let mut state = WorkerState::Ready {
                 client,
                 initial_snapshot: InitialSnapshot::pending(false),
+                paused_sends: PausedSendRooms::default(),
                 sync_task: None,
                 room_list_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 room_read_state_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
@@ -3367,6 +3388,247 @@ mod tests {
                 !events.iter().any(|event| matches!(
                     event,
                     Event::HighlightWords(_) | Event::IgnoredUsers(_)
+                )),
+                "{events:?}"
+            );
+            shutdown_state(&mut state).await;
+        });
+    }
+
+    /// A signed-in session (no sync yet) in a joined room, whose sends
+    /// `send` answers.
+    async fn session_in_a_room(
+        mock_server: &MatrixMockServer,
+        config: &CoreConfig,
+        event_tx: &EventSender,
+    ) -> WorkerState {
+        mock_server.mock_versions().ok().mount().await;
+        mock_server.mock_login().ok().mount().await;
+        mock_server
+            .mock_room_state_encryption()
+            .expect_any_access_token()
+            .plain()
+            .mount()
+            .await;
+        mock_server
+            .mock_get_members()
+            .expect_any_access_token()
+            .ok(logged_in_user_room_members())
+            .mount()
+            .await;
+        mock_server
+            .mock_sync()
+            .ok(|builder| {
+                builder.add_joined_room(
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(logged_in_user_room_members()),
+                );
+            })
+            .mount()
+            .await;
+        let mut state = WorkerState::NoClient;
+        assert!(
+            !handle_login(
+                config,
+                event_tx,
+                &mut state,
+                login_request(mock_server, false)
+            )
+            .await
+        );
+        state
+    }
+
+    fn send_line(body: &str) -> Command {
+        Command::SendMessage(SendMessageRequest {
+            room_id: room_id().to_string(),
+            presentation: RoomMessagePresentationKind::Text,
+            body: body.to_owned(),
+            styles: Vec::new(),
+            thread: None,
+            reply: None,
+        })
+    }
+
+    /// Waits for the event `matches` picks, collecting every event until
+    /// then.
+    async fn events_until(
+        event_rx: &mpsc::Receiver<Event>,
+        matches: impl Fn(&Event) -> bool,
+    ) -> Vec<Event> {
+        let mut events = Vec::new();
+        loop {
+            let event = next_event(event_rx).await;
+            let done = matches(&event);
+            events.push(event);
+            if done {
+                return events;
+            }
+        }
+    }
+
+    fn message_update(event: &Event) -> Option<(&str, &RoomActivityUpdateKind)> {
+        match event {
+            Event::RoomActivityUpdate(RoomActivityUpdate {
+                target: RoomActivityUpdateTarget::Transaction { transaction_id },
+                kind,
+                ..
+            }) => Some((transaction_id, kind)),
+            _ => None,
+        }
+    }
+
+    fn local_echo_transaction(events: &[Event], body: &str) -> String {
+        events
+            .iter()
+            .find_map(|event| match event {
+                Event::RoomActivity(activity) => match &activity.kind {
+                    RoomActivityKind::Message(message) if message.body == body => {
+                        message.transaction_id.clone()
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("the local echo of {body:?} in {events:?}"))
+    }
+
+    /// A line typed while the server is unreachable waits in the queue, is
+    /// no error, and goes by itself after the next sync response.
+    #[test]
+    fn a_send_the_network_stopped_goes_after_the_next_sync_response() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            let profile = tempfile::TempDir::new().expect("temporary profile directory");
+            let config = CoreConfig {
+                profile_dir: profile.path().join("profile"),
+                store_passphrase: "test-store-passphrase".to_owned(),
+            };
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = session_in_a_room(&mock_server, &config, &event_tx).await;
+            // The session's own events, the E2EE status's included.
+            settled_events(&event_rx).await;
+            let unavailable = mock_server
+                .mock_room_send()
+                .respond_with(wiremock::ResponseTemplate::new(503))
+                .mount_as_scoped()
+                .await;
+
+            assert!(!handle_command(send_line("hello"), &config, &event_tx, &mut state).await);
+            let events = events_until(&event_rx, |event| {
+                matches!(
+                    message_update(event),
+                    Some((_, RoomActivityUpdateKind::MessageFailed { .. }))
+                )
+            })
+            .await;
+            let transaction_id = local_echo_transaction(&events, "hello");
+            assert!(
+                matches!(
+                    message_update(events.last().expect("the failure")),
+                    Some((id, RoomActivityUpdateKind::MessageFailed { recoverable: true, .. }))
+                        if id == transaction_id
+                ),
+                "{events:?}"
+            );
+            assert!(
+                !events.iter().any(|event| matches!(event, Event::Error(_))),
+                "{events:?}"
+            );
+
+            drop(unavailable);
+            mock_server
+                .mock_room_send()
+                .ok(OwnedEventId::try_from("$sent:example.org").expect("valid event id"))
+                .mount()
+                .await;
+            // Nothing resumes the queue but a sync response.
+            let events = settled_events(&event_rx).await;
+            assert!(
+                !events.iter().any(|event| message_update(event).is_some()),
+                "{events:?}"
+            );
+
+            assert!(!handle_start_sync(&event_tx, &mut state));
+            let events = events_until(&event_rx, |event| message_update(event).is_some()).await;
+            assert_eq!(
+                message_update(events.last().expect("the send")),
+                Some((
+                    transaction_id.as_str(),
+                    &RoomActivityUpdateKind::MessageSent {
+                        event_id: "$sent:example.org".to_owned()
+                    }
+                )),
+                "{events:?}"
+            );
+            shutdown_state(&mut state).await;
+        });
+    }
+
+    /// A send the server refused is final, and does not hold up the room's
+    /// next line.
+    #[test]
+    fn a_refused_send_fails_and_the_next_line_goes() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            let profile = tempfile::TempDir::new().expect("temporary profile directory");
+            let config = CoreConfig {
+                profile_dir: profile.path().join("profile"),
+                store_passphrase: "test-store-passphrase".to_owned(),
+            };
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = session_in_a_room(&mock_server, &config, &event_tx).await;
+            // The session's own events, the E2EE status's included.
+            settled_events(&event_rx).await;
+            let refused = mock_server
+                .mock_room_send()
+                .respond_with(wiremock::ResponseTemplate::new(403).set_body_json(
+                    serde_json::json!({ "errcode": "M_FORBIDDEN", "error": "not here" }),
+                ))
+                .mount_as_scoped()
+                .await;
+
+            assert!(!handle_command(send_line("refused"), &config, &event_tx, &mut state).await);
+            let events = events_until(&event_rx, |event| matches!(event, Event::Error(_))).await;
+            let transaction_id = local_echo_transaction(&events, "refused");
+            assert!(
+                events.iter().any(|event| matches!(
+                    message_update(event),
+                    Some((id, RoomActivityUpdateKind::MessageFailed { recoverable: false, .. }))
+                        if id == transaction_id
+                )),
+                "{events:?}"
+            );
+            assert!(
+                matches!(
+                    events.last(),
+                    Some(Event::Error(error)) if error.operation == Operation::SendMessage
+                ),
+                "{events:?}"
+            );
+
+            drop(refused);
+            mock_server
+                .mock_room_send()
+                .ok(OwnedEventId::try_from("$next:example.org").expect("valid event id"))
+                .mount()
+                .await;
+            assert!(!handle_command(send_line("next"), &config, &event_tx, &mut state).await);
+            let events = events_until(&event_rx, |event| {
+                matches!(
+                    message_update(event),
+                    Some((_, RoomActivityUpdateKind::MessageSent { .. }))
+                )
+            })
+            .await;
+            let next = local_echo_transaction(&events, "next");
+            assert_eq!(
+                message_update(events.last().expect("the send")),
+                Some((
+                    next.as_str(),
+                    &RoomActivityUpdateKind::MessageSent {
+                        event_id: "$next:example.org".to_owned()
+                    }
                 )),
                 "{events:?}"
             );

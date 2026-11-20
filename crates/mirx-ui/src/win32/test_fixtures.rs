@@ -481,7 +481,7 @@ pub(super) fn failed_message_activity_with_presentation(
             user_links: Vec::new(),
             send_state: RoomMessageSendState::Failed {
                 message: message.to_owned(),
-                recoverable: true,
+                recoverable: false,
             },
         }),
     }

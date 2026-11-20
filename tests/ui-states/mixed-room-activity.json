@@ -196,7 +196,7 @@
       "kind": {
         "type": "message_failed",
         "message": "send failed",
-        "recoverable": true
+        "recoverable": false
       }
     }
   }

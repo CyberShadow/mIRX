@@ -2820,7 +2820,7 @@ fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn 
             1_700_000_000_000,
             "hello",
         ),
-        message_failed_update_event("!ops:example", "txn-1", "send failed", true),
+        message_failed_update_event("!ops:example", "txn-1", "send failed", false),
         Event::Error(mirx_core::CoreErrorEvent {
             operation: mirx_core::Operation::SendMessage,
             room_id: Some("!ops:example".to_owned()),
@@ -2844,7 +2844,7 @@ fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn 
             "txn-1",
             "hello",
             "send failed",
-            true,
+            false,
         )]
     );
 
@@ -11237,7 +11237,7 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
                     body: "failed local echo".to_owned(),
                     send_state: RoomMessageSendState::Failed {
                         message: "send failed".to_owned(),
-                        recoverable: true,
+                        recoverable: false,
                     },
                 }),
             },
