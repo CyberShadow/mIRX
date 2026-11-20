@@ -571,6 +571,9 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             .options_dialog
             .map(|dialog| options_dialog::dump(dialog))
             .transpose()?,
+        colors_dialog: state
+            .colors_dialog
+            .map(|dialog| colors_dialog::dump(dialog)),
         ignored_users: state.model.ignored_users.clone(),
         active_timeline: match &state.active_view {
             ViewId::RoomList => None,

@@ -292,6 +292,10 @@ configure_case_expectations() {
           ordered_actions=(dialog:options:Display)
           expect_dialog_title='mirx Options'
           ;;
+        dialog-colors)
+          ordered_actions=(dialog:colors)
+          expect_dialog_title='mirx Colors'
+          ;;
         dialog-select-server)
           ordered_actions=(dialog:select_server)
           expect_dialog_title='Select Server'
@@ -2376,7 +2380,14 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!active:example'
       ;;
-    membership-changes)
+    # colors-dark: the membership lines and a nick list after a dark scheme
+    # through the Colors dialog: every surface follows it.
+    membership-changes|colors-dark)
+      if [[ "$case_name" == colors-dark ]]; then
+        ordered_actions=(
+          'colors:background=1,normal=0,editbox=1,editbox_text=0,listbox=1,listbox_text=0,treebar=1,treebar_text=0,join=9,part=11,kick=4,mode=8,nick=13,topic=10,invite=7'
+        )
+      fi
       expect_selected='!membership:example'
       expect_active_view='room:!membership:example'
       room_expect_args=(

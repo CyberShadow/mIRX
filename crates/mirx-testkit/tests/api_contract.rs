@@ -963,6 +963,7 @@ fn data_models_round_trip_through_json() {
             visible_row_click_points: vec![UiPoint { x: 6, y: 7 }],
             top_row: 0,
         }),
+        colors_dialog: None,
         options_dialog: Some(UiOptionsDialog {
             tree: vec!["Display".to_owned()],
             selected: "Display".to_owned(),
@@ -1264,6 +1265,7 @@ fn data_models_round_trip_through_json() {
                 "highlight_controls_enabled": true,
                 "highlight_delete_enabled": true,
             },
+            "colors_dialog": null,
             "active_timeline": {
                 "top_line": 0,
                 "visible_lines": [{
@@ -6791,6 +6793,7 @@ fn switchbar_helpers_find_items_and_active_item() {
         compose_target: None,
         room_list: None,
         options_dialog: None,
+        colors_dialog: None,
         active_timeline: None,
         ignored_users: None,
     };

@@ -212,6 +212,11 @@ pub(super) unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
             key: u16::from(b'O'),
             cmd: MENU_ID_TOOLS_OPTIONS as u16,
         },
+        ACCEL {
+            fVirt: FALT | FVIRTKEY,
+            key: u16::from(b'K'),
+            cmd: MENU_ID_TOOLS_COLORS as u16,
+        },
     ]
     .into_iter()
     .chain(window_key_accelerators())
@@ -783,6 +788,7 @@ unsafe fn menu_command_result(
         ),
         MENU_ID_HELP_ABOUT => ("Help", show_about_dialog(hwnd).map(|()| Some(()))),
         MENU_ID_TOOLS_OPTIONS => ("Options", run_options_dialog(hwnd).map(|()| Some(()))),
+        MENU_ID_TOOLS_COLORS => ("Colors", run_colors_dialog(hwnd).map(|()| Some(()))),
         MENU_ID_VIEW_SWITCHBAR | MENU_ID_VIEW_TREEBAR => {
             let bar = view_menu_bar(command_id).expect("View items show and hide a bar");
             let command = if state_ref(hwnd).settings.settings().bar_shown(bar) {
@@ -885,6 +891,7 @@ pub(super) enum DialogGesture {
 pub(super) fn dialog_gesture(dialog: AutomationDialog) -> DialogGesture {
     match dialog {
         AutomationDialog::Options => DialogGesture::MenuCommand(MENU_ID_TOOLS_OPTIONS),
+        AutomationDialog::Colors => DialogGesture::MenuCommand(MENU_ID_TOOLS_COLORS),
         AutomationDialog::SelectServer => DialogGesture::MenuCommand(MENU_ID_FILE_SELECT_SERVER),
         AutomationDialog::About => DialogGesture::MenuCommand(MENU_ID_HELP_ABOUT),
         // Commands > Join room... is the menu's first item.

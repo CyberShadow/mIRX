@@ -61,6 +61,8 @@ pub(super) const MENU_ID_MEMBER_OP: usize = 40045;
 pub(super) const MENU_ID_MEMBER_DEOP: usize = 40046;
 pub(super) const MENU_ID_MEMBER_VOICE: usize = 40047;
 pub(super) const MENU_ID_MEMBER_DEVOICE: usize = 40048;
+/// Colors..., which Alt+K sends, as in mIRC.
+pub(super) const MENU_ID_TOOLS_COLORS: usize = 40049;
 /// The window keys' command ids: accelerators with no menu item, in the
 /// gap below the Commands menu's. Alt+n sends `ACCEL_ID_WINDOW_FIRST + n - 1`.
 pub(super) const ACCEL_ID_WINDOW_FIRST: usize = 40080;
@@ -214,6 +216,10 @@ pub(super) const TOOLS_MENU: &[MenuEntry] = &[
     },
     Separator,
     Item {
+        id: MENU_ID_TOOLS_COLORS,
+        label: "&Colors...\tAlt+K",
+    },
+    Item {
         id: MENU_ID_TOOLS_OPTIONS,
         label: "&Options...\tAlt+O",
     },
@@ -279,9 +285,9 @@ pub(super) fn window_key(command_id: usize) -> Option<WindowKey> {
     })
 }
 
-/// The menubar's menus, left to right. No mnemonic is `E`, `L`, `O`, `X`
-/// or a digit: Alt+E is Select Server, Alt+L List rooms, Alt+O Options,
-/// Alt+X maximizes and Alt+1..9 switch windows, as in mIRC.
+/// The menubar's menus, left to right. No mnemonic is `E`, `K`, `L`, `O`,
+/// `X` or a digit: Alt+E is Select Server, Alt+K Colors, Alt+L List rooms,
+/// Alt+O Options, Alt+X maximizes and Alt+1..9 switch windows, as in mIRC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BarMenu {
     File,
@@ -701,11 +707,15 @@ mod tests {
     }
 
     #[test]
-    fn tools_ends_with_options() {
+    fn tools_ends_with_colors_and_options() {
         assert_eq!(
-            TOOLS_MENU[TOOLS_MENU.len() - 2..],
+            TOOLS_MENU[TOOLS_MENU.len() - 3..],
             [
                 Separator,
+                Item {
+                    id: MENU_ID_TOOLS_COLORS,
+                    label: "&Colors...\tAlt+K",
+                },
                 Item {
                     id: MENU_ID_TOOLS_OPTIONS,
                     label: "&Options...\tAlt+O",

@@ -180,6 +180,7 @@ mod automation_host;
 mod clipboard;
 mod cmap;
 mod colors;
+mod colors_dialog;
 mod command_runner;
 mod commands;
 mod compose;
@@ -295,8 +296,9 @@ use dialogs::{
 };
 use dialogs::{
     SubmittedSetupE2eeRecovery, create_child_window, pack_size_lparam, register_dialog_classes,
-    run_modal_dialog, run_options_dialog, show_about_dialog, show_e2ee_recovery_key,
-    show_login_dialog, show_recover_e2ee_dialog, show_setup_e2ee_dialog, show_single_field_dialog,
+    run_colors_dialog, run_modal_dialog, run_options_dialog, show_about_dialog,
+    show_e2ee_recovery_key, show_login_dialog, show_recover_e2ee_dialog, show_setup_e2ee_dialog,
+    show_single_field_dialog,
 };
 use echo::{EchoLine, EchoLog};
 use errors::{ErrorDestination, error_destination};
@@ -316,8 +318,9 @@ use fonts::{
 #[cfg(test)]
 use frame::window_class_is;
 use frame::{
-    create_main_window, frame_status_text, frame_window_for, init_common_controls, layout_controls,
-    message_loop, refresh_status_bar, register_frame_class, set_switchbar_button_width,
+    apply_color_scheme, create_main_window, frame_status_text, frame_window_for,
+    init_common_controls, layout_controls, message_loop, refresh_status_bar, register_frame_class,
+    set_switchbar_button_width,
 };
 #[cfg(test)]
 use frame_menus::active_message_action_state;
@@ -355,7 +358,7 @@ use menus::{
     MENU_ID_MESSAGE_SAVE_ATTACHMENT, MENU_ID_RECOVER_E2EE, MENU_ID_ROOM_ACCEPT_INVITE,
     MENU_ID_ROOM_NOTIFY_ALL, MENU_ID_ROOM_NOTIFY_MENTIONS, MENU_ID_ROOM_NOTIFY_MUTE,
     MENU_ID_ROOM_PART, MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY,
-    MENU_ID_TOOLS_OPTIONS, MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL,
+    MENU_ID_TOOLS_COLORS, MENU_ID_TOOLS_OPTIONS, MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL,
     MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS, MENU_ID_VIEW_SWITCHBAR,
     MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE,
     MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry,
@@ -667,6 +670,8 @@ struct WindowState {
     last_attachment_save: Option<AttachmentSaveResult>,
     /// The Options dialog while it is open, for the automation dump.
     options_dialog: Option<HWND>,
+    /// The Colors dialog while it is open, for the automation dump.
+    colors_dialog: Option<HWND>,
 }
 
 /// Where Status lines get their arrival time. Render-state snapshots must not
@@ -847,6 +852,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         pending_attachment_saves: BTreeMap::new(),
         last_attachment_save: None,
         options_dialog: None,
+        colors_dialog: None,
     });
 
     let hwnd = create_main_window(instance, state, frame_size_for_command(&command))?;

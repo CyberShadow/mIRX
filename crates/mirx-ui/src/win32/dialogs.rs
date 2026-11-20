@@ -127,7 +127,7 @@ pub(super) struct SingleFieldDialogState {
 }
 
 /// Every mirx dialog's class and window procedure.
-const DIALOG_CLASSES: [(&str, WNDPROC); 7] = [
+const DIALOG_CLASSES: [(&str, WNDPROC); 8] = [
     (LOGIN_DIALOG_CLASS_NAME, Some(login_dialog_window_proc)),
     (
         RECOVER_E2EE_DIALOG_CLASS_NAME,
@@ -150,6 +150,7 @@ const DIALOG_CLASSES: [(&str, WNDPROC); 7] = [
         options_dialog::OPTIONS_DIALOG_CLASS_NAME,
         Some(options_dialog::window_proc),
     ),
+    colors_dialog::DIALOG_CLASS,
 ];
 
 /// Registers every dialog class on the button face, the colour labels and
@@ -178,7 +179,7 @@ pub(super) fn register_dialog_classes(instance: *mut c_void) -> Result<(), Strin
             return Err(last_os_error(&format!("RegisterClassExW {name}")));
         }
     }
-    Ok(())
+    colors_dialog::register_control_classes(instance)
 }
 
 /// Creates a dialog of `class` over `owner` and shows it, as a dialog
@@ -1049,6 +1050,24 @@ pub(super) unsafe fn run_options_dialog(hwnd: HWND) -> Result<(), String> {
         enqueue_command(state_mut(hwnd), command)?;
     }
     set_local_command_status(hwnd, status.to_owned())
+}
+
+/// Tools > Colors... (Alt+K): a changed scheme OK saved is saved and
+/// drawn at once in every window.
+pub(super) unsafe fn run_colors_dialog(hwnd: HWND) -> Result<(), String> {
+    let current = state_ref(hwnd).settings.settings().colors.clone();
+    let dialog = colors_dialog::ColorsDialog::open(hwnd, &current)?;
+    state_mut(hwnd).colors_dialog = Some(dialog.hwnd());
+    let saved = dialog.run();
+    state_mut(hwnd).colors_dialog = None;
+    match saved {
+        Some(scheme) if scheme != current => {
+            apply_color_scheme(hwnd, scheme)?;
+            set_local_command_status(hwnd, "colors saved".to_owned())
+        }
+        // Cancel, or OK with nothing changed.
+        Some(_) | None => Ok(()),
+    }
 }
 
 /// Help > About mirx: modal over `owner`; OK, Enter and Esc close it.

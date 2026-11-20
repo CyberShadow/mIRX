@@ -1,12 +1,14 @@
-//! mIRC's colour scheme: which of the 16 palette colours each part of
-//! every window takes.
+//! mIRC's colour scheme (Tools > Colors, Alt+K): which of the 16 palette
+//! colours each part of every window takes, and the palette boxes the
+//! Colors dialog draws.
 //!
 //! The scheme holds palette indices, as mIRC's does: the palette itself is
 //! fixed, so a colour code typed in a message means the same colour to
 //! every reader whatever their scheme.
 
 use mirx_core::TextColor;
-use windows_sys::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, HBRUSH};
+use windows_sys::Win32::Foundation::RECT;
+use windows_sys::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, FillRect, HBRUSH, HDC};
 
 use super::mirc_format::MIRC_PALETTE;
 
@@ -38,6 +40,11 @@ impl PaletteIndex {
         } else {
             Err("colors must be 0-15")
         }
+    }
+
+    /// Every index, 0 to 15.
+    pub(super) fn all() -> impl Iterator<Item = Self> {
+        (0..PALETTE_COLORS as u8).map(Self)
     }
 
     pub(super) fn get(self) -> u8 {
@@ -121,6 +128,34 @@ impl ColorItem {
         Self::Treebar,
         Self::TreebarText,
     ];
+
+    /// Its name in the Colors dialog, as mIRC's.
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Background => "Background",
+            Self::Action => "Action text",
+            Self::Highlight => "Highlight text",
+            Self::Info => "Info text",
+            Self::Invite => "Invite text",
+            Self::Join => "Join text",
+            Self::Kick => "Kick text",
+            Self::Mode => "Mode text",
+            Self::Nick => "Nick text",
+            Self::Normal => "Normal text",
+            Self::Notice => "Notice text",
+            Self::Other => "Other text",
+            Self::Own => "Own text",
+            Self::Part => "Part text",
+            Self::Topic => "Topic text",
+            Self::Editbox => "Editbox",
+            Self::EditboxText => "Editbox text",
+            Self::Listbox => "Listbox",
+            Self::ListboxText => "Listbox text",
+            Self::Gray => "Gray text",
+            Self::Treebar => "Treebar",
+            Self::TreebarText => "Treebar text",
+        }
+    }
 
     /// Its key in `mirx.ini [colors]`, and its name in the automation dump.
     pub(super) fn ini_key(self) -> &'static str {
@@ -235,6 +270,154 @@ impl Default for ColorScheme {
     }
 }
 
+/// Black or white, whichever reads on `background`: a palette box's number.
+pub(super) fn contrasting_text(background: TextColor) -> TextColor {
+    // Rec. 601 luma, in thousandths.
+    let luma = 299 * u32::from(background.red)
+        + 587 * u32::from(background.green)
+        + 114 * u32::from(background.blue);
+    if luma >= 128_000 {
+        MIRC_PALETTE[1]
+    } else {
+        MIRC_PALETTE[0]
+    }
+}
+
+/// How the 16 boxes lie: two rows of eight, as in mIRC's Colors dialog.
+pub(super) const PALETTE_COLUMNS: i32 = 8;
+const PALETTE_ROWS: i32 = PALETTE_COLORS as i32 / PALETTE_COLUMNS;
+/// The space between two boxes.
+const PALETTE_GAP: i32 = 2;
+
+/// The box of each palette colour in a `width` by `height` area, in index
+/// order, apart by a gap; the remainder is spread over the last row and
+/// column.
+pub(super) fn palette_cell_rects(width: i32, height: i32) -> [RECT; PALETTE_COLORS] {
+    let cell_width = (width - PALETTE_GAP * (PALETTE_COLUMNS - 1)) / PALETTE_COLUMNS;
+    let cell_height = (height - PALETTE_GAP * (PALETTE_ROWS - 1)) / PALETTE_ROWS;
+    assert!(
+        cell_width > 0 && cell_height > 0,
+        "a palette is big enough for its boxes"
+    );
+    std::array::from_fn(|index| {
+        let (row, column) = (
+            index as i32 / PALETTE_COLUMNS,
+            index as i32 % PALETTE_COLUMNS,
+        );
+        let left = column * (cell_width + PALETTE_GAP);
+        let top = row * (cell_height + PALETTE_GAP);
+        RECT {
+            left,
+            top,
+            right: left + cell_width,
+            bottom: top + cell_height,
+        }
+    })
+}
+
+/// The palette box at `(x, y)`; `None` between boxes and outside them.
+pub(super) fn palette_cell_at(
+    cells: &[RECT; PALETTE_COLORS],
+    x: i32,
+    y: i32,
+) -> Option<PaletteIndex> {
+    PaletteIndex::all().find(|index| {
+        let cell = &cells[usize::from(index.get())];
+        (cell.left..cell.right).contains(&x) && (cell.top..cell.bottom).contains(&y)
+    })
+}
+
+/// The palette index an arrow, Home or End key moves `from` to, in the
+/// two rows of eight; the keys stop at the first and last box.
+pub(super) fn palette_key_move(from: PaletteIndex, key: PaletteKey) -> PaletteIndex {
+    let from = i32::from(from.get());
+    let last = PALETTE_COLORS as i32 - 1;
+    let to = match key {
+        PaletteKey::Left => from - 1,
+        PaletteKey::Right => from + 1,
+        PaletteKey::Up => from - PALETTE_COLUMNS,
+        PaletteKey::Down => from + PALETTE_COLUMNS,
+        PaletteKey::Home => 0,
+        PaletteKey::End => last,
+    };
+    index(to.clamp(0, last) as u8)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum PaletteKey {
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+}
+
+unsafe fn fill_rect(hdc: HDC, rect: &RECT, color: u32) {
+    let brush = CreateSolidBrush(color);
+    assert!(!brush.is_null(), "CreateSolidBrush must succeed");
+    FillRect(hdc, rect, brush);
+    DeleteObject(brush);
+}
+
+/// Paints the palette boxes `cells` holds, each with a thin black frame.
+/// `framed` gets mIRC's thick black-and-white frame: the selected colour.
+/// `numbered` writes each box's index in it, in black or white, as the
+/// Ctrl+K colour index does; the DC's font and background mode are the
+/// caller's.
+pub(super) unsafe fn paint_palette_cells(
+    hdc: HDC,
+    cells: &[RECT],
+    first: PaletteIndex,
+    framed: Option<PaletteIndex>,
+    numbered: bool,
+) {
+    use windows_sys::Win32::Graphics::Gdi::{
+        DT_CENTER, DT_SINGLELINE, DT_VCENTER, DrawTextW, SetTextColor,
+    };
+    for (offset, cell) in cells.iter().enumerate() {
+        let index = index(first.get() + offset as u8);
+        fill_rect(hdc, cell, rgb(0, 0, 0));
+        let inner = inset(cell, 1);
+        fill_rect(hdc, &inner, index.colorref());
+        if framed == Some(index) {
+            let white = inset(cell, 1);
+            frame(hdc, &white, rgb(0xff, 0xff, 0xff));
+            frame(hdc, &inset(cell, 2), rgb(0, 0, 0));
+        }
+        if numbered {
+            let mut text = index.get().to_string().encode_utf16().collect::<Vec<_>>();
+            let mut rect = *cell;
+            SetTextColor(hdc, colorref(contrasting_text(index.color())));
+            DrawTextW(
+                hdc,
+                text.as_mut_ptr(),
+                text.len() as i32,
+                &mut rect,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+            );
+        }
+    }
+}
+
+fn inset(rect: &RECT, by: i32) -> RECT {
+    RECT {
+        left: rect.left + by,
+        top: rect.top + by,
+        right: rect.right - by,
+        bottom: rect.bottom - by,
+    }
+}
+
+/// A one-pixel frame just inside `rect`.
+unsafe fn frame(hdc: HDC, rect: &RECT, color: u32) {
+    use windows_sys::Win32::Graphics::Gdi::FrameRect;
+    let brush = CreateSolidBrush(color);
+    assert!(!brush.is_null(), "CreateSolidBrush must succeed");
+    FrameRect(hdc, rect, brush);
+    DeleteObject(brush);
+}
+
 /// The brushes the scheme's background items paint with: what the
 /// timeline fills with, and what `WM_CTLCOLOREDIT`/`WM_CTLCOLORLISTBOX`
 /// hand the editboxes and nick lists. Made from one scheme, deleted on
@@ -303,16 +486,21 @@ mod tests {
         assert_eq!(PaletteIndex::new(0).map(PaletteIndex::get), Ok(0));
         assert_eq!(PaletteIndex::new(15).map(PaletteIndex::get), Ok(15));
         assert_eq!(PaletteIndex::new(16), Err("colors must be 0-15"));
+        assert_eq!(PaletteIndex::all().count(), 16);
         assert_eq!(index(4).colorref(), rgb(0xff, 0, 0));
         assert_eq!(index(12).colorref(), rgb(0, 0, 0xfc));
     }
 
     #[test]
-    fn items_are_in_declaration_order_with_unique_keys() {
+    fn items_are_in_declaration_order_with_unique_names() {
         for (position, item) in ColorItem::ALL.into_iter().enumerate() {
             assert_eq!(item as usize, position);
             assert_eq!(ColorItem::from_ini_key(item.ini_key()), Some(item));
         }
+        let mut labels = ColorItem::ALL.map(ColorItem::label).to_vec();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), COLOR_ITEMS);
         let mut keys = ColorItem::ALL.map(ColorItem::ini_key).to_vec();
         keys.sort_unstable();
         keys.dedup();
@@ -333,6 +521,59 @@ mod tests {
             assert_eq!(scheme.get(item), expected);
         }
         assert_eq!(scheme.colorref(ColorItem::Join), rgb(0, 0xfc, 0));
+    }
+
+    #[test]
+    fn every_cell_centre_hits_its_cell_and_gaps_hit_none() {
+        let cells = palette_cell_rects(8 * 20 + 7 * 2, 2 * 20 + 2);
+        let cell = cells[9];
+        assert_eq!(
+            (cell.left, cell.top, cell.right, cell.bottom),
+            (22, 22, 42, 42)
+        );
+        for index in PaletteIndex::all() {
+            let cell = cells[usize::from(index.get())];
+            let (x, y) = ((cell.left + cell.right) / 2, (cell.top + cell.bottom) / 2);
+            assert_eq!(palette_cell_at(&cells, x, y), Some(index));
+        }
+        // The gap after box 0, below row one, and outside.
+        assert_eq!(palette_cell_at(&cells, 20, 5), None);
+        assert_eq!(palette_cell_at(&cells, 5, 21), None);
+        assert_eq!(palette_cell_at(&cells, -1, 5), None);
+        assert_eq!(palette_cell_at(&cells, 5, 42), None);
+    }
+
+    #[test]
+    fn palette_keys_move_within_two_rows_of_eight() {
+        let at = |from, key| palette_key_move(index(from), key).get();
+        assert_eq!(at(3, PaletteKey::Right), 4);
+        assert_eq!(at(3, PaletteKey::Left), 2);
+        assert_eq!(at(3, PaletteKey::Down), 11);
+        assert_eq!(at(11, PaletteKey::Up), 3);
+        assert_eq!(at(3, PaletteKey::Up), 0);
+        assert_eq!(at(0, PaletteKey::Left), 0);
+        assert_eq!(at(15, PaletteKey::Right), 15);
+        assert_eq!(at(12, PaletteKey::Down), 15);
+        assert_eq!(at(9, PaletteKey::Home), 0);
+        assert_eq!(at(2, PaletteKey::End), 15);
+    }
+
+    #[test]
+    fn numbers_are_white_on_dark_boxes_and_black_on_light_ones() {
+        for dark in [1, 2, 5, 12] {
+            assert_eq!(
+                contrasting_text(index(dark).color()),
+                MIRC_PALETTE[0],
+                "{dark}"
+            );
+        }
+        for light in [0, 8, 15] {
+            assert_eq!(
+                contrasting_text(index(light).color()),
+                MIRC_PALETTE[1],
+                "{light}"
+            );
+        }
     }
 
     #[test]

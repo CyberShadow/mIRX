@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 50;
+pub(crate) const PROTOCOL_VERSION: u32 = 51;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -670,6 +670,8 @@ pub(crate) struct ArrangeWindowsArgs {
 pub(crate) enum AutomationDialog {
     /// Tools > Options...
     Options,
+    /// Tools > Colors...
+    Colors,
     /// File > Select Server...
     SelectServer,
     /// Help > About mirx
@@ -1026,6 +1028,8 @@ pub(crate) struct UiState {
     pub(crate) room_list: Option<UiRoomList>,
     /// The Options dialog while it is open, read back from its controls.
     pub(crate) options_dialog: Option<UiOptionsDialog>,
+    /// The Colors dialog while it is open.
+    pub(crate) colors_dialog: Option<UiColorsDialog>,
     /// The active window's timeline; the Rooms List has none.
     pub(crate) active_timeline: Option<UiActiveTimeline>,
     /// The account's ignore list as the server last listed it; `None`
@@ -1235,6 +1239,28 @@ pub(crate) struct UiColorItem {
     pub(crate) index: u8,
     /// `#rrggbb`.
     pub(crate) color: String,
+}
+
+/// The Colors dialog: what it shows, and where to click it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiColorsDialog {
+    /// The picked item's `mirx.ini` key.
+    pub(crate) selected: String,
+    /// The scheme as edited.
+    pub(crate) items: Vec<UiColorItem>,
+    /// Palette boxes 0-15, in the palette control's client coordinates.
+    pub(crate) palette_cells: Vec<UiRect>,
+    /// Where a click in the preview picks each item, in its order.
+    pub(crate) preview_items: Vec<UiColorsPreviewItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiColorsPreviewItem {
+    pub(crate) item: String,
+    /// In the preview control's client coordinates.
+    pub(crate) click_point: UiPoint,
 }
 
 /// Options > Display's Event, Message and Highlight palette indices.
@@ -3287,8 +3313,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_50() {
-        assert_eq!(PROTOCOL_VERSION, 50);
+    fn protocol_version_is_51() {
+        assert_eq!(PROTOCOL_VERSION, 51);
     }
 
     #[test]
@@ -4649,6 +4675,7 @@ mod tests {
     fn open_dialog_parses_each_dialog_and_rejects_unknown_ones() {
         for (dialog, expected) in [
             ("options", AutomationDialog::Options),
+            ("colors", AutomationDialog::Colors),
             ("select_server", AutomationDialog::SelectServer),
             ("about", AutomationDialog::About),
             ("commands_join", AutomationDialog::CommandsJoin),
@@ -4669,7 +4696,7 @@ mod tests {
             );
         }
         for request in [
-            br#"{"id":"open","args":{"dialog":"colors"}}"#.as_slice(),
+            br#"{"id":"open","args":{"dialog":"no_such"}}"#.as_slice(),
             br#"{"id":"open","args":{"dialog":"select-server"}}"#.as_slice(),
             br#"{"id":"open","args":{}}"#.as_slice(),
             br#"{"id":"open"}"#.as_slice(),
@@ -5242,7 +5269,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":50,
+                    "protocol_version":51,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5878,6 +5905,24 @@ mod tests {
                         highlight_controls_enabled: true,
                         highlight_delete_enabled: false,
                     }),
+                    colors_dialog: Some(super::UiColorsDialog {
+                        selected: "normal".to_owned(),
+                        items: vec![super::UiColorItem {
+                            item: "normal".to_owned(),
+                            index: 1,
+                            color: "#000000".to_owned(),
+                        }],
+                        palette_cells: vec![super::UiRect {
+                            x: 0,
+                            y: 0,
+                            width: 20,
+                            height: 20,
+                        }],
+                        preview_items: vec![super::UiColorsPreviewItem {
+                            item: "join".to_owned(),
+                            click_point: super::UiPoint { x: 80, y: 11 },
+                        }],
+                    }),
                     active_timeline: Some(super::UiActiveTimeline {
                         top_line: 2,
                         visible_lines: vec![super::UiTimelineLine {
@@ -6058,6 +6103,12 @@ mod tests {
                         "highlight_items":["deploy"],
                         "highlight_controls_enabled":true,
                         "highlight_delete_enabled":false
+                    },
+                    "colors_dialog":{
+                        "selected":"normal",
+                        "items":[{"item":"normal","index":1,"color":"#000000"}],
+                        "palette_cells":[{"x":0,"y":0,"width":20,"height":20}],
+                        "preview_items":[{"item":"join","click_point":{"x":80,"y":11}}]
                     },
                     "active_timeline":{
                         "top_line":2,

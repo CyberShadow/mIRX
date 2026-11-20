@@ -46,9 +46,9 @@ use mirx_testkit::{
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
     SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
     SubmittedUserCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
-    UiActiveTimeline, UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState,
-    UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState, UiRoomReadState,
-    UiRoomState, UiState, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
+    UiActiveTimeline, UiColorItem, UiColorsDialog, UiComposeTarget, UiComposeTargetKind, UiError,
+    UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState,
+    UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
     UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionKind,
     VerificationState, ViewActivityLevel, ViewIdentity,
 };
@@ -68,11 +68,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_TAB,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BM_SETCHECK, CS_DBLCLKS, EnumThreadWindows, FindWindowExW, FindWindowW, GCL_STYLE,
-    GUITHREADINFO, GW_OWNER, GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect,
-    GetDlgCtrlID, GetDlgItem, GetGUIThreadInfo, GetLastActivePopup, GetScrollInfo, GetWindow,
-    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES,
-    IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN,
+    BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, EnumThreadWindows, FindWindowExW,
+    FindWindowW, GCL_STYLE, GUITHREADINFO, GW_OWNER, GWL_STYLE, GetClassLongPtrW, GetClassNameW,
+    GetClientRect, GetDlgCtrlID, GetDlgItem, GetGUIThreadInfo, GetLastActivePopup, GetScrollInfo,
+    GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK,
+    IDYES, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN,
     LBS_OWNERDRAWFIXED, PostMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO,
     SIF_ALL, SMTO_NORMAL, SPI_GETWHEELSCROLLLINES, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW,
     SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, SystemParametersInfoW,
@@ -2985,7 +2985,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 50);
+    assert_eq!(version.protocol_version, 51);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -4747,9 +4747,15 @@ fn maximized_state_carries_across_activation() -> Result<(), Box<dyn std::error:
 /// An `--automation` app with a channel (Beta), a query with @alice
 /// (Alpha) and an invite (Lobby), for the window close lifecycle.
 fn launch_close_lifecycle_app() -> Result<(GuiTestApp, PathBuf), Box<dyn std::error::Error>> {
+    launch_close_lifecycle_app_in(unique_local_app_data_path())
+}
+
+/// `launch_close_lifecycle_app` with the app data of an earlier run.
+fn launch_close_lifecycle_app_in(
+    local_app_data: PathBuf,
+) -> Result<(GuiTestApp, PathBuf), Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
-    let local_app_data = unique_local_app_data_path();
     let app = launch_app_with_options(
         &exe_path,
         &[OsString::from("--automation")],
@@ -13435,6 +13441,236 @@ fn options_dialog_rejects_a_bad_field_and_cancel_changes_nothing()
     assert_eq!(after.timestamp, before.timestamp);
     assert_eq!(after.switchbar, before.switchbar);
     assert!(!settings_file_path(&local_app_data).exists());
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+const MENU_ID_TOOLS_COLORS: usize = 40049;
+const COLORS_PREVIEW_ID: i32 = 6501;
+const COLORS_ITEM_ID: i32 = 6502;
+const COLORS_PALETTE_ID: i32 = 6503;
+const COLORS_RESET_ID: i32 = 6504;
+
+/// Waits for the Colors dialog to be open and shown, and returns it.
+fn wait_for_colors_dialog(app: &MirxApp) -> Result<HWND, Box<dyn std::error::Error>> {
+    let dialog = wait_for_window(&wide_null("mirxWin32ColorsDialog"), "Colors dialog")?;
+    app.wait_for_ui_state("the Colors dialog", Duration::from_secs(5), |ui_state| {
+        ui_state.colors_dialog.is_some()
+    })?;
+    assert_eq!(unsafe { read_window_text(dialog) }, "mirx Colors");
+    Ok(dialog)
+}
+
+/// Opens Tools > Colors... from another thread, which the menu command
+/// blocks until the dialog closes.
+fn open_colors_from_menu(app: &MirxApp) -> std::thread::JoinHandle<()> {
+    let frame_value = app.automation_frame_hwnd();
+    std::thread::spawn(move || unsafe {
+        SendMessageW(
+            frame_value as HWND,
+            WM_COMMAND,
+            MENU_ID_TOOLS_COLORS as WPARAM,
+            0,
+        );
+    })
+}
+
+fn colors_dialog_state(app: &MirxApp) -> Result<UiColorsDialog, Box<dyn std::error::Error>> {
+    Ok(app
+        .dump_ui_state()?
+        .colors_dialog
+        .ok_or("the Colors dialog is open")?)
+}
+
+fn color_index(items: &[UiColorItem], key: &str) -> u8 {
+    items
+        .iter()
+        .find(|item| item.item == key)
+        .unwrap_or_else(|| panic!("no colour item {key}"))
+        .index
+}
+
+/// Waits until the open dialog has `item` picked and set to `index`.
+fn wait_for_colors_item(
+    app: &MirxApp,
+    item: &str,
+    index: u8,
+) -> Result<(), Box<dyn std::error::Error>> {
+    app.wait_for_ui_state(
+        &format!("{item} picked and set to {index}"),
+        Duration::from_secs(5),
+        |ui_state| {
+            ui_state.colors_dialog.as_ref().is_some_and(|dialog| {
+                dialog.selected == item && color_index(&dialog.items, item) == index
+            })
+        },
+    )?;
+    Ok(())
+}
+
+/// Picks `item` in the dialog's drop-down, as choosing it there does.
+fn pick_colors_item_in_list(dialog: HWND, item_position: usize) {
+    let combo = unsafe { GetDlgItem(dialog, COLORS_ITEM_ID) };
+    unsafe { SendMessageW(combo, CB_SETCURSEL, item_position, 0) };
+    let wparam = ((CBN_SELCHANGE as usize) << 16) | COLORS_ITEM_ID as usize;
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, wparam, combo as isize) },
+        0
+    );
+}
+
+/// Clicks palette box `index` of the open dialog.
+fn click_colors_palette(
+    app: &MirxApp,
+    dialog: HWND,
+    index: u8,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let cell = colors_dialog_state(app)?.palette_cells[usize::from(index)];
+    let point = UiPoint {
+        x: cell.x + cell.width / 2,
+        y: cell.y + cell.height / 2,
+    };
+    post_left_click(
+        unsafe { GetDlgItem(dialog, COLORS_PALETTE_ID) },
+        &point,
+        false,
+    );
+    Ok(())
+}
+
+/// The colour of the active view's line containing `text`.
+fn active_line_color(app: &MirxApp, text: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let timeline = app
+        .dump_ui_state()?
+        .active_timeline
+        .ok_or("a view is active")?;
+    let line = timeline
+        .visible_lines
+        .iter()
+        .find(|line| line.text.contains(text))
+        .ok_or_else(|| format!("{text:?} is on screen"))?;
+    Ok(line.color.clone())
+}
+
+#[test]
+fn colors_dialog_recolours_every_window_and_persists() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    activate_switchbar_item_by_command(&app, &room_identity("!beta:example"))?;
+    assert_eq!(active_line_color(&app, "beta first")?, "#000000");
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe { SetForegroundWindow(frame) };
+    press_keys(&[VK_MENU, u16::from(b'K')]);
+    let dialog = wait_for_colors_dialog(&app)?;
+    let colors = colors_dialog_state(&app)?;
+    assert_eq!(colors.selected, "normal");
+    assert_eq!(colors.items, app.dump_ui_state()?.colors.items);
+    assert_eq!(colors.palette_cells.len(), 16);
+
+    // A click on a sample line picks its item; a palette box sets it.
+    let preview_point = |key: &str| {
+        colors
+            .preview_items
+            .iter()
+            .find(|item| item.item == key)
+            .unwrap_or_else(|| panic!("the preview shows {key}"))
+            .click_point
+    };
+    let preview = unsafe { GetDlgItem(dialog, COLORS_PREVIEW_ID) };
+    post_left_click(preview, &preview_point("own"), false);
+    wait_for_colors_item(&app, "own", color_index(&colors.items, "own"))?;
+    post_left_click(preview, &preview_point("normal"), false);
+    wait_for_colors_item(&app, "normal", 1)?;
+    click_colors_palette(&app, dialog, 4)?;
+    wait_for_colors_item(&app, "normal", 4)?;
+    // So does the drop-down.
+    pick_colors_item_in_list(dialog, 0);
+    wait_for_colors_item(&app, "background", 0)?;
+    click_colors_palette(&app, dialog, 1)?;
+    wait_for_colors_item(&app, "background", 1)?;
+    // Nothing changes until OK.
+    assert_eq!(active_line_color(&app, "beta first")?, "#000000");
+
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Colors dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.colors_dialog, None);
+    assert_eq!(ui_state.status_bar.text, "colors saved");
+    assert_eq!(color_index(&ui_state.colors.items, "normal"), 4);
+    assert_eq!(color_index(&ui_state.colors.items, "background"), 1);
+    assert_eq!(active_line_color(&app, "beta first")?, "#ff0000");
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    for line in ["[colors]\r\nbackground=1\r\n", "normal=4\r\n"] {
+        assert!(ini.contains(line), "{line:?} in {ini:?}");
+    }
+    let saved = ui_state.colors;
+    drop(app);
+
+    let (app, _) = launch_close_lifecycle_app_in(local_app_data.clone())?;
+    assert_eq!(app.dump_ui_state()?.colors, saved);
+    activate_switchbar_item_by_command(&app, &room_identity("!beta:example"))?;
+    assert_eq!(active_line_color(&app, "beta first")?, "#ff0000");
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn colors_dialog_cancel_changes_nothing_and_reset_restores_mircs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let classic = app.dump_ui_state()?.colors;
+
+    // Cancel keeps nothing it set.
+    let menu_thread = open_colors_from_menu(&app);
+    let dialog = wait_for_colors_dialog(&app)?;
+    click_colors_palette(&app, dialog, 9)?;
+    wait_for_colors_item(&app, "normal", 9)?;
+    post_options_command(dialog, IDCANCEL)?;
+    wait_for_window_gone(dialog, "Colors dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.dump_ui_state()?.colors, classic);
+    assert!(!settings_file_path(&local_app_data).exists());
+
+    // OK with nothing changed saves nothing.
+    let menu_thread = open_colors_from_menu(&app);
+    let dialog = wait_for_colors_dialog(&app)?;
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Colors dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+    assert!(!settings_file_path(&local_app_data).exists());
+
+    let menu_thread = open_colors_from_menu(&app);
+    let dialog = wait_for_colors_dialog(&app)?;
+    click_colors_palette(&app, dialog, 9)?;
+    wait_for_colors_item(&app, "normal", 9)?;
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Colors dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(color_index(&app.dump_ui_state()?.colors.items, "normal"), 9);
+
+    // Reset shows mIRC's colours, and OK saves them.
+    let menu_thread = open_colors_from_menu(&app);
+    let dialog = wait_for_colors_dialog(&app)?;
+    assert_eq!(color_index(&colors_dialog_state(&app)?.items, "normal"), 9);
+    post_options_command(dialog, COLORS_RESET_ID)?;
+    app.wait_for_ui_state("the reset scheme", Duration::from_secs(5), |ui_state| {
+        ui_state
+            .colors_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.items == classic.items)
+    })?;
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Colors dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.dump_ui_state()?.colors, classic);
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    assert!(ini.contains("normal=1\r\n"), "{ini:?}");
+
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())

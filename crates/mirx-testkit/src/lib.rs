@@ -1248,6 +1248,8 @@ pub struct UiState {
     pub room_list: Option<UiRoomList>,
     /// The Options dialog while it is open, read back from its controls.
     pub options_dialog: Option<UiOptionsDialog>,
+    /// The Colors dialog while it is open.
+    pub colors_dialog: Option<UiColorsDialog>,
     /// The active window's timeline; the Rooms List has none.
     pub active_timeline: Option<UiActiveTimeline>,
     /// The account's ignore list as the server last listed it; `None`
@@ -1467,6 +1469,28 @@ pub struct UiColorItem {
     pub index: u8,
     /// `#rrggbb`.
     pub color: String,
+}
+
+/// The Colors dialog: what it shows, and where to click it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiColorsDialog {
+    /// The picked item's `mirx.ini` key.
+    pub selected: String,
+    /// The scheme as edited.
+    pub items: Vec<UiColorItem>,
+    /// Palette boxes 0-15, in the palette control's client coordinates.
+    pub palette_cells: Vec<UiRect>,
+    /// Where a click in the preview picks each item, in its order.
+    pub preview_items: Vec<UiColorsPreviewItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiColorsPreviewItem {
+    pub item: String,
+    /// In the preview control's client coordinates.
+    pub click_point: UiPoint,
 }
 
 /// Options > Display's Event, Message and Highlight palette indices.
@@ -1911,6 +1935,8 @@ pub enum MdiWindowState {
 pub enum AutomationDialog {
     /// Tools > Options...
     Options,
+    /// Tools > Colors...
+    Colors,
     /// File > Select Server...
     SelectServer,
     /// Help > About mirx

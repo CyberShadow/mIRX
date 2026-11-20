@@ -106,6 +106,10 @@ mod cli {
         WindowState(ViewIdentity, MdiWindowState),
         /// Collapses a treebar item, as its button does.
         Collapse(NavigationNodeKey),
+        /// Gives Colors dialog items palette indices, by `mirx.ini` key, as
+        /// the user does: the item drop-down, a click on the palette box
+        /// and OK.
+        Colors(Vec<(String, u8)>),
         /// Opens a dialog, and for Options shows the page at the tree path.
         /// The dialog disables the frame, so this is the last action.
         Dialog {
@@ -743,11 +747,12 @@ mod cli {
             "  --trigger-history-backfill",
             "  --append-events <path>",
             "  --find-active-view <query>",
-            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>> (repeatable)",
+            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>|colors:<item>=<index>[,...]> (repeatable)",
+            "  <item> is a Colors dialog item's mirx.ini key such as join or editbox_text, and <index> a palette index 0-15",
             "  <node> is a treebar item: space:<room_id> for a space folder, or a view identity",
             "  <arrangement> is cascade, tile_horizontal, tile_vertical, or arrange_icons",
             "  <state> is maximized, normal, or minimized",
-            "  <dialog> is options, select_server, about, commands_join, recover_e2ee, setup_e2ee_recovery, or close_active_view; it must be the last action",
+            "  <dialog> is options, colors, select_server, about, commands_join, recover_e2ee, setup_e2ee_recovery, or close_active_view; it must be the last action",
             "  <options page> is an Options tree path such as IRC/Messages",
             "  <point> is <line>,<offset>: a byte offset into the text of a visible line of the active timeline, from 0; the drag is not released, and it must be the last action",
             "  --expect-active-find-history <local_only|loading|exhausted|failed>",
@@ -825,6 +830,18 @@ mod cli {
                 dialog,
                 options_page: options_page.map(str::to_owned),
             });
+        }
+        if let Some(pairs) = value.strip_prefix("colors:") {
+            return pairs
+                .split(',')
+                .map(|pair| {
+                    let (key, index) = pair.split_once('=')?;
+                    let index = index.parse::<u8>().ok().filter(|index| *index < 16)?;
+                    (!key.is_empty()).then(|| (key.to_owned(), index))
+                })
+                .collect::<Option<Vec<_>>>()
+                .map(Action::Colors)
+                .ok_or_else(invalid);
         }
         if let Some(points) = value.strip_prefix("drag:") {
             let (from, to) = points.split_once(':').ok_or_else(invalid)?;
@@ -1084,7 +1101,7 @@ mod cli {
             assert!(usage().contains("--select-view <identity> (repeatable)"));
             assert!(usage().contains("--append-events <path>"));
             assert!(usage().contains(
-                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>> (repeatable)"
+                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>|colors:<item>=<index>[,...]> (repeatable)"
             ));
             assert!(usage().contains(
                 "--expect-navigation-node <node>::<expanded|collapsed>::<event|message|highlight|none>"
@@ -1401,9 +1418,39 @@ mod cli {
         }
 
         #[test]
+        fn parse_args_reads_colors_actions() {
+            let config = parse_args(
+                ["--action", "colors:join=4,background=1"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+            assert_eq!(
+                config.actions,
+                [Action::Colors(vec![
+                    ("join".to_owned(), 4),
+                    ("background".to_owned(), 1)
+                ])]
+            );
+            for bad in [
+                "colors:",
+                "colors:join",
+                "colors:join=16",
+                "colors:=4",
+                "colors:join=4,",
+                "colors:join=x",
+            ] {
+                assert!(
+                    parse_args(["--action", bad].into_iter().map(str::to_owned)).is_err(),
+                    "{bad}"
+                );
+            }
+        }
+
+        #[test]
         fn parse_args_rejects_bad_dialog_actions() {
             for args in [
-                &["--action", "dialog:colors"][..],
+                &["--action", "dialog:no_such"][..],
                 &["--action", "dialog:select-server"],
                 &["--action", "dialog:about:Display"],
                 &["--action", "dialog:options:"],
@@ -2268,10 +2315,11 @@ mod windows_main {
         UiFindHistorySearchState, UiState, Verification, VerificationState, ViewIdentity,
     };
 
-    use windows_sys::Win32::Foundation::{HWND, WPARAM};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SMTO_NORMAL, SendMessageTimeoutW, WM_LBUTTONDOWN, WM_MOUSEMOVE,
+        CB_SETCURSEL, CBN_SELCHANGE, GetDlgItem, IDOK, IsWindow, PostMessageW, SMTO_NORMAL,
+        SendMessageTimeoutW, WM_COMMAND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     };
 
     use crate::cli::{
@@ -2435,6 +2483,9 @@ mod windows_main {
                 }
                 Action::Drag { from, to } => {
                     drag_text(&app, *from, *to)?;
+                }
+                Action::Colors(pairs) => {
+                    set_colors(&app, &config, pairs)?;
                 }
             }
         }
@@ -3224,6 +3275,93 @@ mod windows_main {
             ));
         }
         Ok(())
+    }
+
+    /// The Colors dialog's item drop-down and palette.
+    const COLORS_ITEM_ID: i32 = 6502;
+    const COLORS_PALETTE_ID: i32 = 6503;
+
+    /// Sends `message` to `hwnd` and waits for it to be handled.
+    fn send(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Result<(), String> {
+        let mut result = 0;
+        let sent = unsafe {
+            SendMessageTimeoutW(
+                hwnd,
+                message,
+                wparam,
+                lparam,
+                SMTO_NORMAL,
+                5_000,
+                &mut result,
+            )
+        };
+        if sent == 0 {
+            return Err(format!(
+                "message {message:#x} was not handled: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Opens Colors, gives each item its index through the drop-down and
+    /// a click on the palette, and presses OK.
+    fn set_colors(app: &MirxApp, config: &Config, pairs: &[(String, u8)]) -> Result<(), String> {
+        let opened = open_dialog(app, config, AutomationDialog::Colors, &None)?;
+        let dialog = opened.hwnd as HWND;
+        let (combo, palette) = unsafe {
+            (
+                GetDlgItem(dialog, COLORS_ITEM_ID),
+                GetDlgItem(dialog, COLORS_PALETTE_ID),
+            )
+        };
+        let colors_dialog = || -> Result<_, String> {
+            app.dump_ui_state()
+                .map_err(|error| format!("DUMP_UI_STATE failed: {error}"))?
+                .colors_dialog
+                .ok_or_else(|| "the Colors dialog is not open".to_owned())
+        };
+        for (key, index) in pairs {
+            let shown = colors_dialog()?;
+            let position = shown
+                .items
+                .iter()
+                .position(|item| item.item == *key)
+                .ok_or_else(|| format!("colors: the Colors dialog has no item {key:?}"))?;
+            send(combo, CB_SETCURSEL, position, 0)?;
+            send(
+                dialog,
+                WM_COMMAND,
+                ((CBN_SELCHANGE as usize) << 16) | COLORS_ITEM_ID as usize,
+                combo as LPARAM,
+            )?;
+            let cell = shown.palette_cells[usize::from(*index)];
+            let centre = (cell.x + cell.width / 2, cell.y + cell.height / 2);
+            send_mouse(palette, WM_LBUTTONDOWN, MK_LBUTTON, centre)?;
+            send_mouse(palette, WM_LBUTTONUP, 0, centre)?;
+            let edited = colors_dialog()?;
+            if edited.selected != *key || edited.items[position].index != *index {
+                return Err(format!(
+                    "colors: {key}={index} did not take: picked {:?}, {:?}",
+                    edited.selected, edited.items[position]
+                ));
+            }
+        }
+        if unsafe { PostMessageW(dialog, WM_COMMAND, IDOK as WPARAM, 0) } == 0 {
+            return Err(format!(
+                "posting OK to the Colors dialog failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let deadline = std::time::Instant::now() + config.find_timeout;
+        while unsafe { IsWindow(dialog) } != 0 {
+            if std::time::Instant::now() > deadline {
+                return Err("the Colors dialog did not close on OK".to_owned());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        app.wait_idle(config.wait_idle)
+            .map_err(|error| format!("WAIT_IDLE after the Colors dialog failed: {error}"))
     }
 
     fn open_dialog(

@@ -873,6 +873,7 @@ pub(super) fn test_state() -> WindowState {
         pending_attachment_saves: BTreeMap::new(),
         last_attachment_save: None,
         options_dialog: None,
+        colors_dialog: None,
     }
 }
 
