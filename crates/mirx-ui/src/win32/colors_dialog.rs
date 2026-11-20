@@ -20,11 +20,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBN_SELCHANGE,
-    CBS_DROPDOWNLIST, DLGC_WANTARROWS, DefWindowProcW, DestroyWindow, GetClientRect, GetDlgItem,
-    GetParent, IDC_ARROW, IDCANCEL, IDOK, LoadCursorW, MoveWindow, RegisterClassExW, SendMessageW,
-    WM_COMMAND, WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_NCCREATE, WM_NCDESTROY,
-    WM_PAINT, WM_SETFOCUS, WNDCLASSEXW, WNDPROC, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP,
-    WS_VISIBLE, WS_VSCROLL,
+    CBS_DROPDOWNLIST, DLGC_WANTARROWS, DefWindowProcW, GetClientRect, GetDlgItem, GetParent,
+    IDC_ARROW, IDCANCEL, IDOK, LoadCursorW, MoveWindow, RegisterClassExW, SendMessageW, WM_COMMAND,
+    WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
+    WM_SETFOCUS, WNDCLASSEXW, WNDPROC, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
 
 use super::colors::{
@@ -33,7 +33,7 @@ use super::colors::{
 };
 use super::dialogs::{
     DIALOG_BUTTON_HEIGHT, DIALOG_BUTTON_WIDTH, DIALOG_EDIT_HEIGHT, DIALOG_GAP, DIALOG_MARGIN,
-    create_modal_dialog, dialog_text_size,
+    create_modal_dialog, dialog_text_size, end_modal_dialog,
 };
 use super::window_data::{self, WindowData};
 use super::{
@@ -482,10 +482,10 @@ unsafe extern "system" fn window_proc(
             match id {
                 _ if id == IDOK as usize => {
                     state.saved = Some(state.scheme.clone());
-                    DestroyWindow(hwnd);
+                    end_modal_dialog(hwnd);
                 }
                 _ if id == IDCANCEL as usize => {
-                    DestroyWindow(hwnd);
+                    end_modal_dialog(hwnd);
                 }
                 // mIRC's default colours; nothing is saved until OK.
                 _ if id == usize::from(COLORS_RESET_ID) => {

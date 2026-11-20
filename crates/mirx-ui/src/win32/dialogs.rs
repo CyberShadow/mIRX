@@ -11,9 +11,9 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::SystemServices::SS_CENTER;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, DC_HASDEFID, DM_GETDEFID, EnumChildWindows, GetNextDlgTabItem, IDCANCEL,
-    IsDialogMessageW, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WINDOW_STYLE, WM_NEXTDLGCTL,
-    WNDPROC,
+    AdjustWindowRectEx, DC_HASDEFID, DM_GETDEFID, EnumChildWindows, GW_OWNER, GetNextDlgTabItem,
+    GetWindow, IDCANCEL, IsDialogMessageW, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
+    WINDOW_STYLE, WM_NEXTDLGCTL, WNDPROC,
 };
 use windows_sys::core::BOOL;
 
@@ -473,11 +473,11 @@ unsafe extern "system" fn login_dialog_window_proc(
                         .result
                         .lock()
                         .expect("login dialog result mutex poisoned") = Some(form);
-                    DestroyWindow(hwnd);
+                    end_modal_dialog(hwnd);
                     0
                 }
                 LOGIN_DIALOG_CANCEL_ID | ESC_CANCEL_ID => {
-                    DestroyWindow(hwnd);
+                    end_modal_dialog(hwnd);
                     0
                 }
                 _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -485,7 +485,7 @@ unsafe extern "system" fn login_dialog_window_proc(
         }
         DM_GETDEFID => default_button(LOGIN_DIALOG_OK_ID),
         WM_CLOSE => {
-            DestroyWindow(hwnd);
+            end_modal_dialog(hwnd);
             0
         }
         WM_NCDESTROY => {
@@ -529,12 +529,12 @@ unsafe extern "system" fn recover_e2ee_dialog_window_proc(
                         .lock()
                         .expect("recover e2ee dialog result mutex poisoned") =
                         Some(RecoverE2eeForm { recovery_secret });
-                    DestroyWindow(hwnd);
+                    end_modal_dialog(hwnd);
                     0
                 }
                 RECOVER_E2EE_DIALOG_CANCEL_ID | ESC_CANCEL_ID => {
                     clear_recover_e2ee_dialog_secret(hwnd);
-                    DestroyWindow(hwnd);
+                    end_modal_dialog(hwnd);
                     0
                 }
                 _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -543,7 +543,7 @@ unsafe extern "system" fn recover_e2ee_dialog_window_proc(
         DM_GETDEFID => default_button(RECOVER_E2EE_DIALOG_OK_ID),
         WM_CLOSE => {
             clear_recover_e2ee_dialog_secret(hwnd);
-            DestroyWindow(hwnd);
+            end_modal_dialog(hwnd);
             0
         }
         WM_NCDESTROY => {
@@ -586,12 +586,12 @@ unsafe extern "system" fn setup_e2ee_dialog_window_proc(
                         passphrase: (!passphrase.is_empty()).then_some(passphrase),
                         wait_for_backups_to_upload,
                     });
-                DestroyWindow(hwnd);
+                end_modal_dialog(hwnd);
                 0
             }
             SETUP_E2EE_DIALOG_CANCEL_ID | ESC_CANCEL_ID => {
                 clear_setup_e2ee_dialog_passphrase(hwnd);
-                DestroyWindow(hwnd);
+                end_modal_dialog(hwnd);
                 0
             }
             _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -599,7 +599,7 @@ unsafe extern "system" fn setup_e2ee_dialog_window_proc(
         DM_GETDEFID => default_button(SETUP_E2EE_DIALOG_OK_ID),
         WM_CLOSE => {
             clear_setup_e2ee_dialog_passphrase(hwnd);
-            DestroyWindow(hwnd);
+            end_modal_dialog(hwnd);
             0
         }
         WM_NCDESTROY => {
@@ -626,7 +626,7 @@ unsafe extern "system" fn recovery_key_handoff_dialog_window_proc(
             ) =>
         {
             clear_recovery_key_handoff_dialog_key(hwnd);
-            DestroyWindow(hwnd);
+            end_modal_dialog(hwnd);
             0
         }
         DM_GETDEFID => default_button(RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID),
@@ -644,7 +644,7 @@ unsafe extern "system" fn recovery_key_handoff_dialog_window_proc(
         }
         WM_CLOSE => {
             clear_recovery_key_handoff_dialog_key(hwnd);
-            DestroyWindow(hwnd);
+            end_modal_dialog(hwnd);
             0
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -674,11 +674,11 @@ unsafe extern "system" fn single_field_dialog_window_proc(
                         .expect("single-field dialog result mutex poisoned") = Some(
                         read_window_text(GetDlgItem(hwnd, SINGLE_FIELD_DIALOG_EDIT_ID.into())),
                     );
-                    DestroyWindow(hwnd);
+                    end_modal_dialog(hwnd);
                     0
                 }
                 SINGLE_FIELD_DIALOG_CANCEL_ID | ESC_CANCEL_ID => {
-                    DestroyWindow(hwnd);
+                    end_modal_dialog(hwnd);
                     0
                 }
                 _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -686,7 +686,7 @@ unsafe extern "system" fn single_field_dialog_window_proc(
         }
         DM_GETDEFID => default_button(SINGLE_FIELD_DIALOG_OK_ID),
         WM_CLOSE => {
-            DestroyWindow(hwnd);
+            end_modal_dialog(hwnd);
             0
         }
         WM_NCDESTROY => {
@@ -707,7 +707,7 @@ unsafe extern "system" fn about_dialog_window_proc(
 ) -> LRESULT {
     match message {
         WM_COMMAND if matches!(wparam & 0xffff, ABOUT_DIALOG_OK_ID | ESC_CANCEL_ID) => {
-            DestroyWindow(hwnd);
+            end_modal_dialog(hwnd);
             0
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -1089,6 +1089,7 @@ pub(super) unsafe fn show_about_dialog(owner: HWND) -> Result<(), String> {
 /// accelerators do not apply. `IsDialogMessageW` gives the dialog a
 /// dialog's keys: Tab and Shift+Tab move between its controls, Enter
 /// presses the button its `DM_GETDEFID` names and Esc sends `IDCANCEL`.
+/// The dialog closes with `end_modal_dialog`, which enables `owner` again.
 pub(super) unsafe fn run_modal_dialog(owner: HWND, dialog: HWND) {
     EnableWindow(owner, 0);
     let mut message = MSG::default();
@@ -1096,7 +1097,7 @@ pub(super) unsafe fn run_modal_dialog(owner: HWND, dialog: HWND) {
         if GetMessageW(&mut message, null_mut(), 0, 0) <= 0 {
             // The application is quitting: close the dialog, and leave the
             // quit for the frame's loop.
-            DestroyWindow(dialog);
+            end_modal_dialog(dialog);
             PostQuitMessage(message.wParam as i32);
             break;
         }
@@ -1105,7 +1106,16 @@ pub(super) unsafe fn run_modal_dialog(owner: HWND, dialog: HWND) {
             DispatchMessageW(&message);
         }
     }
-    EnableWindow(owner, 1);
+}
+
+/// Closes a dialog that `run_modal_dialog` runs, as `EndDialog` does: the
+/// owner is enabled *before* the dialog goes. Destroying the active window
+/// activates another one, and a disabled owner cannot be it, so the
+/// activation would leave the app (under Wine, nothing is active and keys
+/// typed next are lost).
+pub(super) unsafe fn end_modal_dialog(dialog: HWND) {
+    EnableWindow(GetWindow(dialog, GW_OWNER), 1);
+    DestroyWindow(dialog);
 }
 
 unsafe fn login_dialog_state(hwnd: HWND) -> &'static LoginDialogState {

@@ -71,15 +71,16 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, EnumThreadWindows, FindWindowExW,
     FindWindowW, GCL_STYLE, GUITHREADINFO, GW_OWNER, GWL_STYLE, GetClassLongPtrW, GetClassNameW,
-    GetClientRect, GetDlgCtrlID, GetDlgItem, GetGUIThreadInfo, GetLastActivePopup, GetScrollInfo,
-    GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK,
-    IDYES, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN,
-    LBS_OWNERDRAWFIXED, PostMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO,
-    SIF_ALL, SMTO_NORMAL, SPI_GETWHEELSCROLLLINES, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW,
-    SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, SystemParametersInfoW,
-    WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
+    GetClientRect, GetDlgCtrlID, GetDlgItem, GetForegroundWindow, GetGUIThreadInfo,
+    GetLastActivePopup, GetScrollInfo, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES, IsWindow, IsWindowVisible, LB_GETCOUNT,
+    LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN, LBS_OWNERDRAWFIXED, PostMessageW, SB_BOTTOM,
+    SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SMTO_NORMAL,
+    SPI_GETWHEELSCROLLLINES, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW, SendMessageW,
+    SetForegroundWindow, SetWindowPos, SetWindowTextW, SystemParametersInfoW, WM_CHAR, WM_COMMAND,
+    WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PASTE, WM_SETTEXT,
+    WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -8413,11 +8414,15 @@ fn window_keys_switch_windows() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(unsafe { read_window_text(ops_edit) }, "draft");
     assert_compose_has_focus(&app);
 
-    // A modal dialog's keys are its own.
+    // A modal dialog's keys are its own. Esc closes it as input queued after
+    // Alt+1 (a posted IDCANCEL would close it before Alt+1 is read, and the
+    // frame, active again, would take Alt+1).
     press_keys(&alt(b'O'));
     let dialog = wait_for_options_dialog(&app)?;
     press_keys(&alt(b'1'));
-    close_dialog(&app, dialog)?;
+    press_keys(&[VK_ESCAPE]);
+    wait_for_window_gone(dialog, "Options dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.dump_ui_state()?.mdi.active, ops);
     Ok(())
 }
@@ -12964,6 +12969,10 @@ fn alt_l_lists_matching_rooms_and_closing_the_window_drops_the_listing()
     unsafe { SetForegroundWindow(frame) };
     press_keys(&[VK_MENU, u16::from(b'L')]);
     answer_commands_prompt("rust")?;
+    // Closing a modal dialog gives the activation back to the frame, so the
+    // next keys reach it (a dialog destroyed while the frame was still
+    // disabled left nothing active, and the second Alt+L was lost).
+    assert_eq!(unsafe { GetForegroundWindow() }, frame);
     app.wait_idle(Duration::from_secs(5))?;
     assert!(status_view_contains(
         &app,

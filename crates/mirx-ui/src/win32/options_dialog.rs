@@ -25,13 +25,12 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CB_ADDSTRING,
-    CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, CBS_OWNERDRAWFIXED, DefWindowProcW,
-    DestroyWindow, ES_NUMBER, GWL_STYLE, GetDlgCtrlID, GetWindowLongPtrW, IDCANCEL, IDOK,
-    LB_ADDSTRING, LB_ERR, LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT,
-    LBN_SELCHANGE, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, MB_ICONERROR, MB_OK, MessageBoxW, MoveWindow,
-    SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WM_COMMAND, WM_DRAWITEM, WM_MEASUREITEM,
-    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE,
-    WS_VSCROLL,
+    CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, CBS_OWNERDRAWFIXED, DefWindowProcW, ES_NUMBER,
+    GWL_STYLE, GetDlgCtrlID, GetWindowLongPtrW, IDCANCEL, IDOK, LB_ADDSTRING, LB_ERR, LB_GETCOUNT,
+    LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT, LBN_SELCHANGE, LBS_NOINTEGRALHEIGHT,
+    LBS_NOTIFY, MB_ICONERROR, MB_OK, MessageBoxW, MoveWindow, SW_HIDE, SW_SHOW, SendMessageW,
+    ShowWindow, WM_COMMAND, WM_DRAWITEM, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY,
+    WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use mirx_core::HighlightWord;
@@ -41,7 +40,7 @@ use super::colors::{PALETTE_COLORS, PaletteIndex, paint_palette_cells};
 use super::dialogs::{
     DIALOG_BUTTON_HEIGHT, DIALOG_BUTTON_WIDTH, DIALOG_CHECKBOX_HEIGHT, DIALOG_EDIT_EX_STYLE,
     DIALOG_EDIT_HEIGHT, DIALOG_EDIT_STYLE, DIALOG_GAP, DIALOG_LABEL_GAP, DIALOG_MARGIN,
-    controls_extent, create_modal_dialog, dialog_text_size,
+    controls_extent, create_modal_dialog, dialog_text_size, end_modal_dialog,
 };
 use super::options::{
     FIRST_PAGE, HighlightChanges, HighlightList, OPTIONS_TREE, OptionsField, OptionsForm,
@@ -718,7 +717,7 @@ unsafe fn handle_ok(hwnd: HWND) {
                     .map(HighlightList::changes)
                     .unwrap_or_default(),
             });
-            DestroyWindow(hwnd);
+            end_modal_dialog(hwnd);
         }
         Err(error) => {
             select_page(hwnd, error.field.page());
@@ -824,7 +823,7 @@ pub(super) unsafe extern "system" fn window_proc(
             0
         }
         WM_COMMAND if wparam & 0xffff == IDCANCEL as usize => {
-            DestroyWindow(hwnd);
+            end_modal_dialog(hwnd);
             0
         }
         WM_MEASUREITEM => {
