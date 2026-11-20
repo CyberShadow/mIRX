@@ -92,6 +92,12 @@ if [ "$resource_types" != "$expected_types" ]; then
   exit 1
 fi
 
+# The manifest asks for themed common controls (comctl32 v6).
+if [ "$(grep -a -c 'Microsoft.Windows.Common-Controls' "$exe_path")" -lt 1 ]; then
+  echo "dll-gate failed: the manifest's Common-Controls 6.0 dependency is missing" >&2
+  exit 1
+fi
+
 # The manifest declares Windows 10/11.
 if [ "$(grep -a -c '8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a' "$exe_path")" -lt 1 ]; then
   echo "dll-gate failed: the manifest's Windows 10/11 supportedOS is missing" >&2

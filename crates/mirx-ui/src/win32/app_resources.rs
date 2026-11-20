@@ -4,16 +4,17 @@
 use std::mem::zeroed;
 use std::ptr::null;
 
-use windows_sys::Win32::Foundation::HMODULE;
+use windows_sys::Win32::Foundation::{HMODULE, S_OK};
 use windows_sys::Win32::Graphics::Gdi::{BITMAP, DeleteObject, GetObjectW};
 use windows_sys::Win32::System::LibraryLoader::{
-    FindResourceW, GetModuleHandleW, LoadResource, LockResource, SizeofResource,
+    FindResourceW, GetModuleHandleW, GetProcAddress, LoadResource, LockResource, SizeofResource,
 };
+use windows_sys::Win32::UI::Shell::{DLLGETVERSIONPROC, DLLVERSIONINFO};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DestroyIcon, GetIconInfo, ICONINFO, IMAGE_ICON, IsProcessDPIAware, LoadImageW, RT_GROUP_ICON,
     RT_VERSION,
 };
-use windows_sys::core::PCWSTR;
+use windows_sys::core::{PCWSTR, s, w};
 
 use super::app_icon::APP_ICON_ID;
 
@@ -145,6 +146,25 @@ fn version_info_names_mirx_and_the_crate_version() {
             .expect("a ProductName value");
     let value = utf16("mirx");
     assert_eq!(&words[value_start..value_start + value.len()], value);
+}
+
+#[test]
+fn common_controls_are_version_6() {
+    // The manifest's dependency activates the side-by-side comctl32 6; the
+    // system32 one is 5.x. Its DllGetVersion export says which one loaded.
+    unsafe {
+        let comctl32 = GetModuleHandleW(w!("comctl32.dll"));
+        assert!(!comctl32.is_null(), "comctl32 is loaded");
+        let get_version: DLLGETVERSIONPROC = std::mem::transmute(
+            GetProcAddress(comctl32, s!("DllGetVersion")).expect("comctl32 exports DllGetVersion"),
+        );
+        let mut info = DLLVERSIONINFO {
+            cbSize: size_of::<DLLVERSIONINFO>() as u32,
+            ..Default::default()
+        };
+        assert_eq!(get_version.unwrap()(&mut info), S_OK);
+        assert_eq!(info.dwMajorVersion, 6);
+    }
 }
 
 #[test]
