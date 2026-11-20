@@ -2218,6 +2218,7 @@ dependencies = [
  "matrix-sdk-crypto",
  "matrix-sdk-test",
  "mime",
+ "ruma-html",
  "serde",
  "serde_json",
  "tempfile",

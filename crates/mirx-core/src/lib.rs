@@ -1,5 +1,6 @@
 mod api;
 mod matrix;
+mod rich_text;
 mod runtime;
 
 pub const APP_NAME: &str = "mirx";

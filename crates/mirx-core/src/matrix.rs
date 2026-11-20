@@ -66,9 +66,10 @@ use matrix_sdk::{
                 encryption::RoomEncryptionEventContent,
                 member::{MembershipChange, MembershipState, OriginalSyncRoomMemberEvent},
                 message::{
-                    AudioInfo, FileInfo, MessageType, OriginalSyncRoomMessageEvent,
-                    Relation as MessageContentRelation, Relation as MessageRelation,
-                    RoomMessageEventContent, RoomMessageEventContentWithoutRelation, VideoInfo,
+                    AudioInfo, FileInfo, FormattedBody, MessageFormat, MessageType,
+                    OriginalSyncRoomMessageEvent, Relation as MessageContentRelation,
+                    Relation as MessageRelation, RoomMessageEventContent,
+                    RoomMessageEventContentWithoutRelation, VideoInfo,
                     sanitize::remove_plain_reply_fallback,
                 },
                 power_levels::{
@@ -126,6 +127,7 @@ use crate::api::{
     VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
     VerificationStateEvent,
 };
+use crate::rich_text::{StyledText, styled_text_from_html};
 use crate::runtime::{EventSender, emit_event};
 
 #[derive(Debug)]
@@ -1881,10 +1883,10 @@ fn room_activity_from_sync_message(
 ) -> Option<RoomActivity> {
     let relation = room_activity_relation_from_message(event);
 
-    if let Some((presentation, body)) =
-        room_message_presentation_and_body_from_message_type(&event.content.msgtype)
-    {
-        let body = strip_reply_fallback(relation.as_ref(), body);
+    if let Some((presentation, text)) = room_message_presentation_and_text_from_message_type(
+        &event.content.msgtype,
+        relation.as_ref(),
+    ) {
         return Some(RoomActivity {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{}", event.event_id),
@@ -1900,8 +1902,8 @@ fn room_activity_from_sync_message(
                     .map(ToString::to_string),
                 sender,
                 presentation,
-                body,
-                styles: Vec::new(),
+                body: text.body,
+                styles: text.styles,
                 send_state: RoomMessageSendState::Sent,
             }),
         });
@@ -2001,8 +2003,13 @@ fn room_activity_update_from_sync_message_replacement(
     event: &OriginalSyncRoomMessageEvent,
     replacement: &MessageReplacement,
 ) -> Option<RoomActivityUpdate> {
-    let (presentation, body) =
-        room_message_presentation_and_body_from_message_type(&replacement.new_content.msgtype)?;
+    // The replacement's own content is a `* `-prefixed fallback for
+    // clients without edits (the SDK even writes a `* ` formatted body
+    // there); the edit is `m.new_content`, which has no relation.
+    let (presentation, text) = room_message_presentation_and_text_from_message_type(
+        &replacement.new_content.msgtype,
+        None,
+    )?;
 
     Some(RoomActivityUpdate {
         room_id: room_id.to_owned(),
@@ -2014,8 +2021,8 @@ fn room_activity_update_from_sync_message_replacement(
             sender: event.sender.to_string(),
             timestamp_ms: event.origin_server_ts.get().into(),
             presentation,
-            body,
-            styles: Vec::new(),
+            body: text.body,
+            styles: text.styles,
         },
     })
 }
@@ -2183,25 +2190,55 @@ fn room_video_info_from_matrix(info: &VideoInfo) -> RoomVideoInfo {
     }
 }
 
-fn room_message_presentation_and_body_from_message_type(
+/// A text, notice or emote message's presentation and text: its HTML
+/// `formatted_body` when it has one with text, else its plain body without
+/// a reply fallback for `relation`. HTML loses its rich reply fallback
+/// whatever the relation, as the sanitizer drops every `<mx-reply>`.
+fn room_message_presentation_and_text_from_message_type(
     message_type: &MessageType,
-) -> Option<(RoomMessagePresentationKind, String)> {
-    match message_type {
-        MessageType::Text(text) => Some((RoomMessagePresentationKind::Text, text.body.clone())),
-        MessageType::Notice(notice) => {
-            Some((RoomMessagePresentationKind::Notice, notice.body.clone()))
-        }
-        MessageType::Emote(emote) => Some((RoomMessagePresentationKind::Emote, emote.body.clone())),
+    relation: Option<&RoomActivityRelation>,
+) -> Option<(RoomMessagePresentationKind, StyledText)> {
+    let (presentation, body, formatted) = match message_type {
+        MessageType::Text(text) => (
+            RoomMessagePresentationKind::Text,
+            &text.body,
+            text.formatted.as_ref(),
+        ),
+        MessageType::Notice(notice) => (
+            RoomMessagePresentationKind::Notice,
+            &notice.body,
+            notice.formatted.as_ref(),
+        ),
+        MessageType::Emote(emote) => (
+            RoomMessagePresentationKind::Emote,
+            &emote.body,
+            emote.formatted.as_ref(),
+        ),
         MessageType::Image(_)
         | MessageType::Audio(_)
         | MessageType::File(_)
         | MessageType::Video(_)
         | MessageType::Location(_)
         | MessageType::VerificationRequest(_)
-        | MessageType::_Custom(_) => None,
+        | MessageType::_Custom(_) => return None,
         // ruma marks MessageType as non_exhaustive, so a final fallback is required.
-        _ => None,
+        _ => return None,
+    };
+    let text = formatted
+        .and_then(styled_text_from_formatted_body)
+        .unwrap_or_else(|| StyledText::plain(strip_reply_fallback(relation, body.clone())));
+    Some((presentation, text))
+}
+
+/// An HTML formatted body's text, or `None` for another format or HTML
+/// without text (only a reply fallback, say): the plain body is then the
+/// sender's own rendering of it.
+fn styled_text_from_formatted_body(formatted: &FormattedBody) -> Option<StyledText> {
+    if formatted.format != MessageFormat::Html {
+        return None;
     }
+    let text = styled_text_from_html(&formatted.body);
+    (!text.body.is_empty()).then_some(text)
 }
 
 fn unsupported_room_message_body(message_type: &MessageType) -> Option<(String, String)> {
@@ -3482,7 +3519,7 @@ fn take_pending_outgoing_kind(
 #[derive(Debug, PartialEq, Eq)]
 struct LocalEchoMessageDetails {
     presentation: RoomMessagePresentationKind,
-    body: String,
+    text: StyledText,
     relation: Option<RoomActivityRelation>,
 }
 
@@ -3495,9 +3532,9 @@ fn map_local_message_activity(
 ) -> Result<Option<RoomActivity>, MatrixCoreError> {
     let Some(LocalEchoMessageDetails {
         presentation,
-        body,
+        text,
         relation,
-    }) = message_presentation_and_body_from_serialized_event(serialized_event)?
+    }) = message_presentation_and_text_from_serialized_event(serialized_event)?
     else {
         return Ok(None);
     };
@@ -3514,25 +3551,19 @@ fn map_local_message_activity(
             transaction_id: Some(transaction_id),
             sender: own_profile.clone(),
             presentation,
-            body,
-            styles: Vec::new(),
+            body: text.body,
+            styles: text.styles,
             send_state: RoomMessageSendState::Pending,
         }),
     }))
 }
 
-fn message_presentation_and_body_from_serialized_event(
+fn message_presentation_and_text_from_serialized_event(
     serialized_event: &SerializableEventContent,
 ) -> Result<Option<LocalEchoMessageDetails>, MatrixCoreError> {
     let AnyMessageLikeEventContent::RoomMessage(content) = serialized_event
         .deserialize()
         .map_err(|err| MatrixCoreError::new(format!("failed to deserialize local echo: {err}")))?
-    else {
-        return Ok(None);
-    };
-
-    let Some((presentation, body)) =
-        room_message_presentation_and_body_from_message_type(&content.msgtype)
     else {
         return Ok(None);
     };
@@ -3552,9 +3583,15 @@ fn message_presentation_and_body_from_serialized_event(
         _ => None,
     };
 
+    let Some((presentation, text)) =
+        room_message_presentation_and_text_from_message_type(&content.msgtype, relation.as_ref())
+    else {
+        return Ok(None);
+    };
+
     Ok(Some(LocalEchoMessageDetails {
         presentation,
-        body: strip_reply_fallback(relation.as_ref(), body),
+        text,
         relation,
     }))
 }
@@ -4355,7 +4392,7 @@ mod tests {
         list_public_rooms, map_cross_signing_status, map_decimals, map_e2ee_backup_state,
         map_e2ee_recovery_state, map_emoji_array, map_emoji_short_auth_string, map_local_echo,
         map_local_message_activity, map_send_queue_update, member_target_display_name,
-        message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
+        message_presentation_and_text_from_serialized_event, outgoing_events_from_local_echo_event,
         own_room_user_profile, owned_event_id_from_str, power_levels_change,
         reaction_event_content, read_file_bytes, register_event_handlers, remove_highlight_word,
         reply_mention_user_ids, restore_session, room_activity_from_sync_member,
@@ -4380,6 +4417,8 @@ mod tests {
         PublicRoomsPage, PublicRoomsResult, RoomNotificationMode, RoomSummary, SendFileRequest,
         SetRoomNotificationModeRequest, UserProfile,
     };
+    use crate::api::{TextColor, TextStyle, TextStyleSpan};
+    use crate::rich_text::StyledText;
 
     #[test]
     fn joined_member_snapshots_use_sdk_members_and_default_power_levels() {
@@ -6516,6 +6555,204 @@ mod tests {
     }
 
     fn sync_message_body(content: serde_json::Value) -> String {
+        let (presentation_and_body, styles) = sync_message_text(content);
+        assert_eq!(styles, Vec::new(), "a plain message");
+        presentation_and_body.1
+    }
+
+    fn bold() -> TextStyle {
+        TextStyle {
+            bold: true,
+            ..TextStyle::default()
+        }
+    }
+
+    fn style_span(start: usize, end: usize, style: TextStyle) -> TextStyleSpan {
+        TextStyleSpan { start, end, style }
+    }
+
+    #[test]
+    fn sync_messages_show_their_html_formatted_body() {
+        assert_eq!(
+            sync_message_text(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "**deploy** at [noon](https://example.org/plan)",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<strong>deploy</strong> at <a href=\"https://example.org/plan\">noon</a>"
+            })),
+            (
+                (
+                    RoomMessagePresentationKind::Text,
+                    "deploy at noon (https://example.org/plan)".to_owned()
+                ),
+                vec![style_span(0, 6, bold())]
+            )
+        );
+        let red = TextStyle {
+            foreground: Some(TextColor {
+                red: 0xff,
+                green: 0,
+                blue: 0,
+            }),
+            ..TextStyle::default()
+        };
+        assert_eq!(
+            sync_message_text(serde_json::json!({
+                "msgtype": "m.notice",
+                "body": "build failed",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "build <font color=\"#ff0000\">failed</font>"
+            })),
+            (
+                (
+                    RoomMessagePresentationKind::Notice,
+                    "build failed".to_owned()
+                ),
+                vec![style_span(6, 12, red)]
+            )
+        );
+        assert_eq!(
+            sync_message_text(serde_json::json!({
+                "msgtype": "m.emote",
+                "body": "waves _hard_",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "waves <em>hard</em>"
+            })),
+            (
+                (RoomMessagePresentationKind::Emote, "waves hard".to_owned()),
+                vec![style_span(
+                    6,
+                    10,
+                    TextStyle {
+                        italic: true,
+                        ..TextStyle::default()
+                    }
+                )]
+            )
+        );
+    }
+
+    #[test]
+    fn sync_messages_in_another_format_or_without_html_text_show_the_plain_body() {
+        assert_eq!(
+            sync_message_body(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "**plain**",
+                "format": "org.example.custom",
+                "formatted_body": "<b>not html</b>"
+            })),
+            "**plain**"
+        );
+        assert_eq!(
+            sync_message_body(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "> <@alice:example.org> hi\n\nalt text only",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply><blockquote>hi</blockquote></mx-reply><img src=\"https://example.org/x.png\">",
+                "m.relates_to": { "m.in_reply_to": { "event_id": "$hi:example.org" } }
+            })),
+            "alt text only"
+        );
+    }
+
+    #[test]
+    fn sync_html_replies_drop_mx_reply_but_keep_a_quote_like_start() {
+        assert_eq!(
+            sync_message_text(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "> <@alice:example.org> hi\n\n**hello**",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply><blockquote><a href=\"https://matrix.to/#/!r:example.org/$hi:example.org\">In reply to</a> <a href=\"https://matrix.to/#/@alice:example.org\">@alice:example.org</a><br>hi</blockquote></mx-reply><b>hello</b>",
+                "m.relates_to": { "m.in_reply_to": { "event_id": "$hi:example.org" } }
+            })),
+            (
+                (RoomMessagePresentationKind::Text, "hello".to_owned()),
+                vec![style_span(0, 5, bold())]
+            )
+        );
+        // The plain fallback is stripped from plain bodies only: HTML text
+        // that reads like one is the sender's text.
+        assert_eq!(
+            sync_message_text(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "quoted",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "&gt; &lt;@carol:example.org&gt; said<br><br>this",
+                "m.relates_to": { "m.in_reply_to": { "event_id": "$hi:example.org" } }
+            })),
+            (
+                (
+                    RoomMessagePresentationKind::Text,
+                    "> <@carol:example.org> said\n\nthis".to_owned()
+                ),
+                Vec::new()
+            )
+        );
+    }
+
+    #[test]
+    fn sync_html_edits_take_the_new_content_not_the_fallback() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.text",
+                "body": "* edited **body**",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "* ",
+                "m.new_content": {
+                    "msgtype": "m.text",
+                    "body": "edited **body**",
+                    "format": "org.matrix.custom.html",
+                    "formatted_body": "edited <b>body</b>"
+                },
+                "m.relates_to": {
+                    "rel_type": "m.replace",
+                    "event_id": "$original:example.org"
+                }
+            },
+            "event_id": "$edit:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000001000u64
+        }))
+        .expect("deserialize sync html replacement event");
+
+        assert_eq!(
+            sync_message_replacement_update(&event).map(|update| update.kind),
+            Some(RoomActivityUpdateKind::MessageReplaced {
+                replacement_event_id: "$edit:example.org".to_owned(),
+                sender: "@alice:example.org".to_owned(),
+                timestamp_ms: 1_700_000_001_000,
+                presentation: RoomMessagePresentationKind::Text,
+                body: "edited body".to_owned(),
+                styles: vec![style_span(7, 11, bold())],
+            })
+        );
+    }
+
+    #[test]
+    fn local_echoes_of_html_messages_carry_their_styles() {
+        let content = RoomMessageEventContent::text_html("hi **there**", "hi <b>there</b>");
+        let serialized_event =
+            SerializableEventContent::new(&AnyMessageLikeEventContent::RoomMessage(content))
+                .expect("serialize html text event");
+
+        assert_eq!(
+            message_presentation_and_text_from_serialized_event(&serialized_event)
+                .expect("read local echo text"),
+            Some(LocalEchoMessageDetails {
+                presentation: RoomMessagePresentationKind::Text,
+                text: StyledText {
+                    body: "hi there".to_owned(),
+                    styles: vec![style_span(3, 8, bold())],
+                },
+                relation: None,
+            })
+        );
+    }
+
+    fn sync_message_text(
+        content: serde_json::Value,
+    ) -> ((RoomMessagePresentationKind, String), Vec<TextStyleSpan>) {
         let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
             "type": "m.room.message",
             "content": content,
@@ -6534,7 +6771,7 @@ mod tests {
         let RoomActivityKind::Message(message) = activity.kind else {
             panic!("expected a message activity");
         };
-        message.body
+        ((message.presentation, message.body), message.styles)
     }
 
     #[test]
@@ -11184,11 +11421,11 @@ mod tests {
                 .expect("serialize threaded text event");
 
         assert_eq!(
-            message_presentation_and_body_from_serialized_event(&serialized_event)
+            message_presentation_and_text_from_serialized_event(&serialized_event)
                 .expect("read local echo body"),
             Some(LocalEchoMessageDetails {
                 presentation: RoomMessagePresentationKind::Text,
-                body: "hello from thread".to_owned(),
+                text: StyledText::plain("hello from thread".to_owned()),
                 relation: Some(RoomActivityRelation::Thread {
                     thread_root_event_id: "$thread-root:example.org".to_owned(),
                     in_reply_to_event_id: Some("$thread-1:example.org".to_owned()),
@@ -11214,11 +11451,11 @@ mod tests {
                 .expect("serialize reply text event");
 
         assert_eq!(
-            message_presentation_and_body_from_serialized_event(&serialized_event)
+            message_presentation_and_text_from_serialized_event(&serialized_event)
                 .expect("read local echo body"),
             Some(LocalEchoMessageDetails {
                 presentation: RoomMessagePresentationKind::Text,
-                body: "hello in reply".to_owned(),
+                text: StyledText::plain("hello in reply".to_owned()),
                 relation: Some(RoomActivityRelation::Reply {
                     in_reply_to_event_id: "$parent:example.org".to_owned(),
                 }),
@@ -11340,7 +11577,7 @@ mod tests {
             .expect("serialize image event");
 
         assert_eq!(
-            message_presentation_and_body_from_serialized_event(&serialized_event)
+            message_presentation_and_text_from_serialized_event(&serialized_event)
                 .expect("read local echo body"),
             None
         );
