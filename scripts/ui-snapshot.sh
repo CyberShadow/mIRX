@@ -1771,7 +1771,13 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!rich:example'
       ;;
-    hotlinks)
+    hotlinks|hotlinks-selection)
+      if [[ "$case_name" == hotlinks-selection ]]; then
+        # Marks from the path of the wrapped address (visible line 8, after
+        # "https://example.org/") into the next row, up to "C#" (line 10);
+        # the button stays down, so the mark stays on screen.
+        ordered_actions=(drag:8,20:10,18)
+      fi
       expect_selected='!links:example'
       expect_active_view='room:!links:example'
       room_expect_args=(

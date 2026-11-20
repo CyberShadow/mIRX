@@ -108,6 +108,30 @@ mod cli {
             dialog: AutomationDialog,
             options_page: Option<String>,
         },
+        /// Presses the left button on the active timeline at one point and
+        /// moves to another, marking the text between them. The button is
+        /// never released (a release copies the mark and clears it), so this
+        /// is the last action.
+        Drag {
+            from: TextPoint,
+            to: TextPoint,
+        },
+    }
+
+    impl Action {
+        /// Whether nothing may follow this action: a dialog disables the
+        /// frame, and a drag holds the mouse.
+        fn is_terminal(&self) -> bool {
+            matches!(self, Action::Dialog { .. } | Action::Drag { .. })
+        }
+    }
+
+    /// A character boundary on screen: `offset` bytes into the text of the
+    /// active timeline's visible line `line`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct TextPoint {
+        pub(crate) line: usize,
+        pub(crate) offset: usize,
     }
 
     /// Parses a protocol enum from its wire name, so the CLI names cannot
@@ -621,20 +645,24 @@ mod cli {
             }
         }
 
+        let terminal_actions = config
+            .actions
+            .iter()
+            .filter(|action| action.is_terminal())
+            .count();
+        if terminal_actions > 1
+            || (terminal_actions == 1 && !config.actions.last().is_some_and(Action::is_terminal))
+        {
+            return Err(format!(
+                "a dialog: or drag: action must be the only one and the last: a dialog disables the frame, and a drag holds the mouse\n{}",
+                usage()
+            ));
+        }
         let dialog_actions = config
             .actions
             .iter()
             .filter(|action| matches!(action, Action::Dialog { .. }))
             .count();
-        if dialog_actions > 1
-            || (dialog_actions == 1
-                && !matches!(config.actions.last(), Some(Action::Dialog { .. })))
-        {
-            return Err(format!(
-                "a dialog: action must be the only one and the last: the dialog disables the frame\n{}",
-                usage()
-            ));
-        }
         if config.expect_dialog_title.is_some() && dialog_actions == 0 {
             return Err(format!(
                 "--expect-dialog-title needs a dialog: action\n{}",
@@ -654,11 +682,12 @@ mod cli {
             "  --trigger-history-backfill",
             "  --append-events <path>",
             "  --find-active-view <query>",
-            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|dialog:<dialog>[:<options page>]> (repeatable)",
+            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|dialog:<dialog>[:<options page>]|drag:<point>:<point>> (repeatable)",
             "  <arrangement> is cascade, tile_horizontal, tile_vertical, or arrange_icons",
             "  <state> is maximized, normal, or minimized",
             "  <dialog> is options, select_server, about, commands_join, recover_e2ee, setup_e2ee_recovery, or close_active_view; it must be the last action",
             "  <options page> is an Options tree path such as IRC/Messages",
+            "  <point> is <line>,<offset>: a byte offset into the text of a visible line of the active timeline, from 0; the drag is not released, and it must be the last action",
             "  --expect-active-find-history <local_only|loading|exhausted|failed>",
             "  --expect-active-find-selected-text <substring>",
             "  --expect-selected <room_id>",
@@ -732,6 +761,20 @@ mod cli {
             return Ok(Action::Dialog {
                 dialog,
                 options_page: options_page.map(str::to_owned),
+            });
+        }
+        if let Some(points) = value.strip_prefix("drag:") {
+            let (from, to) = points.split_once(':').ok_or_else(invalid)?;
+            let point = |text: &str| {
+                let (line, offset) = text.split_once(',')?;
+                Some(TextPoint {
+                    line: line.parse().ok()?,
+                    offset: offset.parse().ok()?,
+                })
+            };
+            return Ok(Action::Drag {
+                from: point(from).ok_or_else(invalid)?,
+                to: point(to).ok_or_else(invalid)?,
             });
         }
         if let Some(target) = value.strip_prefix("window-state:") {
@@ -956,7 +999,7 @@ mod cli {
         use super::{
             Action, FrameBar, MdiPlacementExpectation, MdiTitleExpectation,
             NavigationActivityExpectation, RoomMembershipExpectation, RoomReadTargetExpectation,
-            RoomTagExpectation, RoomUnreadExpectation, SwitchbarActivityExpectation,
+            RoomTagExpectation, RoomUnreadExpectation, SwitchbarActivityExpectation, TextPoint,
             ViewExpectation, format_view_identity, parse_args, parse_view_expectation,
             parse_view_identity_arg, usage,
         };
@@ -974,7 +1017,7 @@ mod cli {
             assert!(usage().contains("--select-view <identity> (repeatable)"));
             assert!(usage().contains("--append-events <path>"));
             assert!(usage().contains(
-                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|dialog:<dialog>[:<options page>]> (repeatable)"
+                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|dialog:<dialog>[:<options page>]|drag:<point>:<point>> (repeatable)"
             ));
             assert!(usage().contains("--expect-dialog-title <title> (needs a dialog: action)"));
             assert!(usage().contains("--expect-mdi-placement <identity>::<state>"));
@@ -1300,6 +1343,51 @@ mod cli {
                 &["--action", "dialog:about", "--action", "dialog:options"],
                 &["--expect-dialog-title", "About mirx"],
                 &["--action", "dialog:about", "--expect-dialog-title"],
+            ] {
+                assert!(
+                    parse_args(args.iter().map(|arg| (*arg).to_owned())).is_err(),
+                    "{args:?} must be rejected"
+                );
+            }
+        }
+
+        #[test]
+        fn parse_args_accepts_a_last_drag_action() {
+            let config = parse_args(
+                ["--action", "find:needle", "--action", "drag:3,12:5,0"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+            assert_eq!(
+                config.actions,
+                [
+                    Action::Find("needle".to_owned()),
+                    Action::Drag {
+                        from: TextPoint {
+                            line: 3,
+                            offset: 12
+                        },
+                        to: TextPoint { line: 5, offset: 0 },
+                    }
+                ]
+            );
+        }
+
+        #[test]
+        fn parse_args_rejects_bad_drag_actions() {
+            for args in [
+                &["--action", "drag:"][..],
+                &["--action", "drag:3,12"],
+                &["--action", "drag:3:5"],
+                &["--action", "drag:3,12:5,"],
+                &["--action", "drag:-1,0:5,0"],
+                &["--action", "drag:3,12:5,0:7,0"],
+                // The drag holds the mouse: nothing may follow it.
+                &["--action", "drag:3,12:5,0", "--action", "find:needle"],
+                &["--action", "drag:3,12:5,0", "--action", "drag:1,0:2,0"],
+                &["--action", "drag:3,12:5,0", "--action", "dialog:about"],
+                &["--action", "dialog:about", "--action", "drag:3,12:5,0"],
             ] {
                 assert!(
                     parse_args(args.iter().map(|arg| (*arg).to_owned())).is_err(),
@@ -2048,7 +2136,15 @@ mod windows_main {
         UiFindHistorySearchState, UiState, Verification, VerificationState, ViewIdentity,
     };
 
-    use crate::cli::{Action, Config, FrameBar, ViewExpectation, format_view_identity, parse_args};
+    use windows_sys::Win32::Foundation::{HWND, WPARAM};
+    use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SMTO_NORMAL, SendMessageTimeoutW, WM_LBUTTONDOWN, WM_MOUSEMOVE,
+    };
+
+    use crate::cli::{
+        Action, Config, FrameBar, TextPoint, ViewExpectation, format_view_identity, parse_args,
+    };
 
     impl Config {
         fn requires_ui_state(&self) -> bool {
@@ -2196,6 +2292,9 @@ mod windows_main {
                     options_page,
                 } => {
                     opened_dialog = Some(open_dialog(&app, &config, *dialog, options_page)?);
+                }
+                Action::Drag { from, to } => {
+                    drag_text(&app, *from, *to)?;
                 }
             }
         }
@@ -2878,6 +2977,89 @@ mod windows_main {
 
     /// Opens `dialog`, shows its Options page, and has it paint before the
     /// screen is captured.
+    /// Presses at `from` and moves to `to` on the active timeline, through
+    /// the mouse messages the timeline handles, and leaves the button down.
+    fn drag_text(app: &MirxApp, from: TextPoint, to: TextPoint) -> Result<(), String> {
+        let ui_state = app
+            .dump_ui_state()
+            .map_err(|error| format!("DUMP_UI_STATE before drag failed: {error}"))?;
+        let font = &ui_state.text_font;
+        if font.face != "Fixedsys" {
+            return Err(format!(
+                "drag: points are computed for the fixed-pitch Fixedsys, not {:?}",
+                font.face
+            ));
+        }
+        let timeline = ui_state
+            .active_timeline
+            .ok_or("drag: needs an active timeline")?;
+        let client_point = |point: TextPoint| -> Result<(i32, i32), String> {
+            let line = timeline.visible_lines.get(point.line).ok_or_else(|| {
+                format!(
+                    "drag: line {} is not among the {} visible lines",
+                    point.line,
+                    timeline.visible_lines.len()
+                )
+            })?;
+            let before = line.text.get(..point.offset).ok_or_else(|| {
+                format!(
+                    "drag: offset {} is not a boundary of line {} {:?}",
+                    point.offset, point.line, line.text
+                )
+            })?;
+            if !before.is_ascii() {
+                return Err(format!(
+                    "drag: the text before offset {} of line {} {:?} must be ASCII",
+                    point.offset, point.line, line.text
+                ));
+            }
+            let width = font.average_char_width;
+            // A quarter character in: on the boundary's side of the
+            // character's middle, whatever rounding the hit test does.
+            Ok((
+                line.text_left + point.offset as i32 * width + width / 4,
+                line.click_point.y,
+            ))
+        };
+        let from = client_point(from)?;
+        let to = client_point(to)?;
+        let hwnd = app
+            .active_timeline_hwnd()
+            .map_err(|error| format!("ACTIVE_TIMELINE_HWND failed: {error}"))?
+            as HWND;
+        send_mouse(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, from)?;
+        send_mouse(hwnd, WM_MOUSEMOVE, MK_LBUTTON, to)
+    }
+
+    /// Sends a mouse message to `hwnd` and waits for it to be handled.
+    fn send_mouse(
+        hwnd: HWND,
+        message: u32,
+        buttons: u32,
+        (x, y): (i32, i32),
+    ) -> Result<(), String> {
+        let lparam = ((y as u16 as isize) << 16) | x as u16 as isize;
+        let mut result = 0;
+        let sent = unsafe {
+            SendMessageTimeoutW(
+                hwnd,
+                message,
+                buttons as WPARAM,
+                lparam,
+                SMTO_NORMAL,
+                5_000,
+                &mut result,
+            )
+        };
+        if sent == 0 {
+            return Err(format!(
+                "drag: mouse message {message:#x} was not handled: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+
     fn open_dialog(
         app: &MirxApp,
         config: &Config,

@@ -1,0 +1,246 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!links:example",
+        "display_name": "Links",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": "#links:example",
+        "alt_aliases": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!rust:example",
+        "display_name": "Rust",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": "#rust:matrix.org",
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!links:example",
+      "activity_id": "event:$links-0",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$links-0",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "the spec is at https://spec.matrix.org/latest/ for anyone asking",
+        "styles": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!links:example",
+      "activity_id": "event:$links-1",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$links-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "mirror on www.example.org.",
+        "styles": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!links:example",
+      "activity_id": "event:$links-2",
+      "timestamp_ms": 1700000120000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$links-2",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "see docs (https://example.org/docs)",
+        "styles": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!links:example",
+      "activity_id": "event:$links-3",
+      "timestamp_ms": 1700000180000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$links-3",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "join https://matrix.to/#/%23rust%3Amatrix.org or #rust:matrix.org, ask https://matrix.to/#/@bob:example",
+        "styles": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!links:example",
+      "activity_id": "event:$links-4",
+      "timestamp_ms": 1700000240000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$links-4",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "logs: https://example.org/a/very/long/path/that/wraps/over/the/edge/of/the/window/to/the/next/line/index.html then more",
+        "styles": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!links:example",
+      "activity_id": "event:$links-5",
+      "timestamp_ms": 1700000300000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$links-5",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "C# is not a link, nor is issue#12",
+        "styles": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!links:example",
+      "activity_id": "event:$links-6",
+      "timestamp_ms": 1700000360000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$links-6",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "elsewhere: https://matrix.to/#/%23elsewhere%3Aexample.org?via=example.org",
+        "styles": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!links:example",
+      "members": [
+        {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false,
+          "is_own_user": true,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        }
+      ]
+    }
+  }
+]
