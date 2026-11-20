@@ -9,7 +9,9 @@ mod cli {
     use std::time::Duration;
 
     use mirx_core::RoomMembership;
-    use mirx_testkit::{MdiArrangement, MdiWindowState, ViewActivityLevel, ViewIdentity};
+    use mirx_testkit::{
+        AutomationDialog, MdiArrangement, MdiWindowState, ViewActivityLevel, ViewIdentity,
+    };
 
     const DEFAULT_FIND_TIMEOUT: Duration = Duration::from_secs(10);
     const DEFAULT_WAIT_IDLE: Duration = Duration::from_secs(5);
@@ -60,6 +62,8 @@ mod cli {
         pub(crate) expect_room_unreads: Vec<RoomUnreadExpectation>,
         pub(crate) expect_mdi_placements: Vec<MdiPlacementExpectation>,
         pub(crate) expect_mdi_titles: Vec<MdiTitleExpectation>,
+        /// The title of the dialog the (last) `dialog:` action opened.
+        pub(crate) expect_dialog_title: Option<String>,
     }
 
     /// A frame bar that View shows and hides.
@@ -98,6 +102,12 @@ mod cli {
         Append(String),
         Arrange(MdiArrangement),
         WindowState(ViewIdentity, MdiWindowState),
+        /// Opens a dialog, and for Options shows the page at the tree path.
+        /// The dialog disables the frame, so this is the last action.
+        Dialog {
+            dialog: AutomationDialog,
+            options_page: Option<String>,
+        },
     }
 
     /// Parses a protocol enum from its wire name, so the CLI names cannot
@@ -596,6 +606,12 @@ mod cli {
                         .expect_mdi_titles
                         .push(parse_mdi_title_expectation(&value)?);
                 }
+                "--expect-dialog-title" => {
+                    config.expect_dialog_title = Some(
+                        args.next()
+                            .ok_or_else(|| "missing value for --expect-dialog-title".to_owned())?,
+                    );
+                }
                 "--help" => {
                     return Err(usage());
                 }
@@ -603,6 +619,27 @@ mod cli {
                     return Err(format!("unknown argument: {other}\n{}", usage()));
                 }
             }
+        }
+
+        let dialog_actions = config
+            .actions
+            .iter()
+            .filter(|action| matches!(action, Action::Dialog { .. }))
+            .count();
+        if dialog_actions > 1
+            || (dialog_actions == 1
+                && !matches!(config.actions.last(), Some(Action::Dialog { .. })))
+        {
+            return Err(format!(
+                "a dialog: action must be the only one and the last: the dialog disables the frame\n{}",
+                usage()
+            ));
+        }
+        if config.expect_dialog_title.is_some() && dialog_actions == 0 {
+            return Err(format!(
+                "--expect-dialog-title needs a dialog: action\n{}",
+                usage()
+            ));
         }
 
         Ok(config)
@@ -617,9 +654,11 @@ mod cli {
             "  --trigger-history-backfill",
             "  --append-events <path>",
             "  --find-active-view <query>",
-            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>> (repeatable)",
+            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|dialog:<dialog>[:<options page>]> (repeatable)",
             "  <arrangement> is cascade, tile_horizontal, tile_vertical, or arrange_icons",
             "  <state> is maximized, normal, or minimized",
+            "  <dialog> is options, select_server, about, commands_join, recover_e2ee, setup_e2ee_recovery, or close_active_view; it must be the last action",
+            "  <options page> is an Options tree path such as IRC/Messages",
             "  --expect-active-find-history <local_only|loading|exhausted|failed>",
             "  --expect-active-find-selected-text <substring>",
             "  --expect-selected <room_id>",
@@ -658,6 +697,7 @@ mod cli {
             "  --expect-no-navigation-activity <identity>",
             "  --expect-mdi-placement <identity>::<state>",
             "  --expect-mdi-title <identity>::<caption>",
+            "  --expect-dialog-title <title> (needs a dialog: action)",
         ]
         .join("\n")
     }
@@ -677,6 +717,22 @@ mod cli {
             return parse_wire_name(arrangement)
                 .map(Action::Arrange)
                 .ok_or_else(invalid);
+        }
+        if let Some(target) = value.strip_prefix("dialog:") {
+            let (name, options_page) = match target.split_once(':') {
+                Some((name, page)) => (name, Some(page)),
+                None => (target, None),
+            };
+            let dialog = parse_wire_name(name).ok_or_else(invalid)?;
+            if options_page
+                .is_some_and(|page| page.is_empty() || dialog != AutomationDialog::Options)
+            {
+                return Err(invalid());
+            }
+            return Ok(Action::Dialog {
+                dialog,
+                options_page: options_page.map(str::to_owned),
+            });
         }
         if let Some(target) = value.strip_prefix("window-state:") {
             let (identity, state) = target.rsplit_once('=').ok_or_else(invalid)?;
@@ -905,7 +961,9 @@ mod cli {
             parse_view_identity_arg, usage,
         };
         use mirx_core::RoomMembership;
-        use mirx_testkit::{MdiArrangement, MdiWindowState, ViewActivityLevel, ViewIdentity};
+        use mirx_testkit::{
+            AutomationDialog, MdiArrangement, MdiWindowState, ViewActivityLevel, ViewIdentity,
+        };
         use std::time::Duration;
 
         #[test]
@@ -916,8 +974,9 @@ mod cli {
             assert!(usage().contains("--select-view <identity> (repeatable)"));
             assert!(usage().contains("--append-events <path>"));
             assert!(usage().contains(
-                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>> (repeatable)"
+                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|dialog:<dialog>[:<options page>]> (repeatable)"
             ));
+            assert!(usage().contains("--expect-dialog-title <title> (needs a dialog: action)"));
             assert!(usage().contains("--expect-mdi-placement <identity>::<state>"));
             assert!(usage().contains("--expect-mdi-title <identity>::<caption>"));
             assert!(
@@ -1173,6 +1232,80 @@ mod cli {
                 )
                 .is_err()
             );
+        }
+
+        #[test]
+        fn parse_args_accepts_a_last_dialog_action_and_its_title() {
+            for (action, expected) in [
+                (
+                    "dialog:options:IRC/Messages",
+                    Action::Dialog {
+                        dialog: AutomationDialog::Options,
+                        options_page: Some("IRC/Messages".to_owned()),
+                    },
+                ),
+                (
+                    "dialog:options",
+                    Action::Dialog {
+                        dialog: AutomationDialog::Options,
+                        options_page: None,
+                    },
+                ),
+                (
+                    "dialog:select_server",
+                    Action::Dialog {
+                        dialog: AutomationDialog::SelectServer,
+                        options_page: None,
+                    },
+                ),
+                (
+                    "dialog:close_active_view",
+                    Action::Dialog {
+                        dialog: AutomationDialog::CloseActiveView,
+                        options_page: None,
+                    },
+                ),
+            ] {
+                let config = parse_args(
+                    [
+                        "--action",
+                        "arrange:cascade",
+                        "--action",
+                        action,
+                        "--expect-dialog-title",
+                        "mirx Options",
+                    ]
+                    .into_iter()
+                    .map(str::to_owned),
+                )
+                .unwrap();
+                assert_eq!(
+                    config.actions,
+                    [Action::Arrange(MdiArrangement::Cascade), expected]
+                );
+                assert_eq!(config.expect_dialog_title.as_deref(), Some("mirx Options"));
+            }
+        }
+
+        #[test]
+        fn parse_args_rejects_bad_dialog_actions() {
+            for args in [
+                &["--action", "dialog:colors"][..],
+                &["--action", "dialog:select-server"],
+                &["--action", "dialog:about:Display"],
+                &["--action", "dialog:options:"],
+                &["--action", "dialog:"],
+                // The dialog disables the frame: nothing may follow it.
+                &["--action", "dialog:about", "--action", "arrange:cascade"],
+                &["--action", "dialog:about", "--action", "dialog:options"],
+                &["--expect-dialog-title", "About mirx"],
+                &["--action", "dialog:about", "--expect-dialog-title"],
+            ] {
+                assert!(
+                    parse_args(args.iter().map(|arg| (*arg).to_owned())).is_err(),
+                    "{args:?} must be rejected"
+                );
+            }
         }
 
         #[test]
@@ -1911,8 +2044,8 @@ mod windows_main {
     use std::process::ExitCode;
 
     use mirx_testkit::{
-        ComposeKey, MdiView, MirxApp, NavigationNode, RoomActivity, UiFindHistorySearchState,
-        UiState, Verification, VerificationState, ViewIdentity,
+        AutomationDialog, ComposeKey, MdiView, MirxApp, ModalDialog, NavigationNode, RoomActivity,
+        UiFindHistorySearchState, UiState, Verification, VerificationState, ViewIdentity,
     };
 
     use crate::cli::{Action, Config, FrameBar, ViewExpectation, format_view_identity, parse_args};
@@ -2014,6 +2147,7 @@ mod windows_main {
                 .map_err(|error| format!("WAIT_IDLE after FIND_ACTIVE_VIEW failed: {error}"))?;
         }
 
+        let mut opened_dialog = None;
         for action in &config.actions {
             match action {
                 Action::Find(query) => {
@@ -2057,7 +2191,26 @@ mod windows_main {
                         format!("WAIT_IDLE after SET_VIEW_WINDOW_STATE failed: {error}")
                     })?;
                 }
+                Action::Dialog {
+                    dialog,
+                    options_page,
+                } => {
+                    opened_dialog = Some(open_dialog(&app, &config, *dialog, options_page)?);
+                }
             }
+        }
+
+        if let Some(expected_title) = config.expect_dialog_title.as_deref() {
+            let opened = opened_dialog
+                .as_ref()
+                .expect("parse_args requires a dialog action with --expect-dialog-title");
+            if opened.title != expected_title {
+                return Err(format!(
+                    "dialog title assertion failed: expected {expected_title:?}, found {:?}",
+                    opened.title
+                ));
+            }
+            println!("PASS dialog {expected_title:?}");
         }
 
         let model = app
@@ -2721,6 +2874,41 @@ mod windows_main {
         }
 
         Ok(())
+    }
+
+    /// Opens `dialog`, shows its Options page, and has it paint before the
+    /// screen is captured.
+    fn open_dialog(
+        app: &MirxApp,
+        config: &Config,
+        dialog: AutomationDialog,
+        options_page: &Option<String>,
+    ) -> Result<ModalDialog, String> {
+        app.open_dialog(dialog)
+            .map_err(|error| format!("OPEN_DIALOG failed: {error}"))?;
+        let opened = app
+            .wait_for_modal_dialog(config.find_timeout)
+            .map_err(|error| format!("no dialog opened for {dialog:?}: {error}"))?;
+        if let Some(path) = options_page {
+            app.select_options_page(path)
+                .map_err(|error| format!("SELECT_OPTIONS_PAGE failed: {error}"))?;
+            let selected = app
+                .dump_ui_state()
+                .map_err(|error| format!("DUMP_UI_STATE failed: {error}"))?
+                .options_dialog
+                .ok_or_else(|| "the Options dialog is not open".to_owned())?
+                .selected;
+            if &selected != path {
+                return Err(format!(
+                    "Options page assertion failed: expected {path:?}, found {selected:?}"
+                ));
+            }
+        }
+        app.redraw_window(opened.hwnd)
+            .map_err(|error| format!("redrawing the dialog failed: {error}"))?;
+        app.wait_idle(config.wait_idle)
+            .map_err(|error| format!("WAIT_IDLE after OPEN_DIALOG failed: {error}"))?;
+        Ok(opened)
     }
 
     fn find_view<'a>(ui_state: &'a UiState, identity: &ViewIdentity) -> Option<&'a MdiView> {

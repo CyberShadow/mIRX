@@ -214,6 +214,7 @@ configure_case_expectations() {
   verification_text_expect_args=()
   mdi_placement_expect_args=()
   mdi_title_expect_args=()
+  expect_dialog_title=
 
   case "$case_name" in
     mdi-tiled|mdi-cascaded|mdi-minimized)
@@ -265,6 +266,57 @@ configure_case_expectations() {
             --expect-mdi-placement 'room:!lobby:example::normal'
             --expect-mdi-placement 'room:!ops:example::minimized'
           )
+          ;;
+      esac
+      ;;
+
+    # Each dialog opens over the same small room window.
+    dialog-*)
+      expect_selected='!topic:example'
+      expect_active_view='room:!topic:example'
+      case "$case_name" in
+        dialog-options-connect)
+          ordered_actions=(dialog:options:Connect/Options)
+          expect_dialog_title='mirx Options'
+          ;;
+        dialog-options-messages)
+          ordered_actions=(dialog:options:IRC/Messages)
+          expect_dialog_title='mirx Options'
+          ;;
+        dialog-options-highlight)
+          ordered_actions=(dialog:options:IRC/Highlight)
+          expect_dialog_title='mirx Options'
+          ;;
+        dialog-options-display)
+          ordered_actions=(dialog:options:Display)
+          expect_dialog_title='mirx Options'
+          ;;
+        dialog-select-server)
+          ordered_actions=(dialog:select_server)
+          expect_dialog_title='Select Server'
+          ;;
+        dialog-about)
+          ordered_actions=(dialog:about)
+          expect_dialog_title='About mirx'
+          ;;
+        dialog-commands-join)
+          ordered_actions=(dialog:commands_join)
+          expect_dialog_title='Join room'
+          ;;
+        dialog-recover-e2ee)
+          ordered_actions=(dialog:recover_e2ee)
+          expect_dialog_title='Recover E2EE'
+          ;;
+        dialog-setup-e2ee)
+          ordered_actions=(dialog:setup_e2ee_recovery)
+          expect_dialog_title='Set Up E2EE Recovery'
+          ;;
+        dialog-close-confirm)
+          ordered_actions=(dialog:close_active_view)
+          expect_dialog_title='mirx'
+          ;;
+        *)
+          die "no expectations configured for snapshot case: $case_name"
           ;;
       esac
       ;;
@@ -2888,6 +2940,9 @@ run_case() {
   fi
   if [[ -n "${expect_switchbar_rows:-}" ]]; then
     driver_args+=(--expect-switchbar-rows "$expect_switchbar_rows")
+  fi
+  if [[ -n "${expect_dialog_title:-}" ]]; then
+    driver_args+=(--expect-dialog-title "$expect_dialog_title")
   fi
   driver_args+=("${frame_bar_hidden_expect_args[@]}")
 
