@@ -35,3 +35,4 @@ cd "$root_dir"
 
 cargo test --target x86_64-pc-windows-gnu -p mirx-ui --test automation_driver "$@"
 cargo test --target x86_64-pc-windows-gnu -p mirx-ui --test mdi_child_reactivation "$@"
+cargo test --target x86_64-pc-windows-gnu -p mirx-ui --test verify_duplicate_navigation_labels "$@"
