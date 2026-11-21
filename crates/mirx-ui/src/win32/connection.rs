@@ -165,8 +165,8 @@ pub(super) fn connect_action(
 pub(super) enum DisconnectAction {
     /// Stop syncing and keep the session.
     StopSync,
-    /// Stop waiting for the browser, as mIRC's Disconnect cancels a
-    /// connect in progress.
+    /// Stop the sign-in or restore in progress, or the wait for the
+    /// browser, as mIRC's Disconnect cancels a connect in progress.
     CancelSignIn,
     /// Stop retrying, as mIRC's `/quit` does.
     CancelReconnect,
@@ -177,11 +177,11 @@ pub(super) fn disconnect_action(
 ) -> Result<DisconnectAction, &'static str> {
     match connection {
         ConnectionState::Syncing => Ok(DisconnectAction::StopSync),
-        ConnectionState::WaitingForBrowser => Ok(DisconnectAction::CancelSignIn),
-        ConnectionState::WaitingToReconnect => Ok(DisconnectAction::CancelReconnect),
-        ConnectionState::SignedOut | ConnectionState::SigningIn | ConnectionState::SignedIn => {
-            Err("not connected")
+        ConnectionState::SigningIn | ConnectionState::WaitingForBrowser => {
+            Ok(DisconnectAction::CancelSignIn)
         }
+        ConnectionState::WaitingToReconnect => Ok(DisconnectAction::CancelReconnect),
+        ConnectionState::SignedOut | ConnectionState::SignedIn => Err("not connected"),
     }
 }
 
@@ -373,15 +373,17 @@ mod tests {
     #[test]
     fn disconnect_stops_sync_or_cancels_the_sign_in_and_only_a_signed_out_account_signs_in() {
         assert_eq!(disconnect_action(Syncing), Ok(DisconnectAction::StopSync));
-        assert_eq!(
-            disconnect_action(WaitingForBrowser),
-            Ok(DisconnectAction::CancelSignIn)
-        );
+        for connecting in [SigningIn, WaitingForBrowser] {
+            assert_eq!(
+                disconnect_action(connecting),
+                Ok(DisconnectAction::CancelSignIn)
+            );
+        }
         assert_eq!(
             disconnect_action(WaitingToReconnect),
             Ok(DisconnectAction::CancelReconnect)
         );
-        for connection in [SignedOut, SigningIn, SignedIn] {
+        for connection in [SignedOut, SignedIn] {
             assert_eq!(disconnect_action(connection), Err("not connected"));
         }
         assert_eq!(check_sign_in(SignedOut), Ok(()));

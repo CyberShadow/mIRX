@@ -663,7 +663,7 @@ mod tests {
             file_menu_state(ConnectionState::SigningIn),
             FileMenuState {
                 connect: false,
-                disconnect: false,
+                disconnect: true,
                 select_server: false,
                 log_out: false,
             }

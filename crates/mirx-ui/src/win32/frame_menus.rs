@@ -1243,7 +1243,7 @@ pub(super) unsafe fn connect(hwnd: HWND, server: Option<&str>) -> Result<bool, S
 }
 
 /// File > Disconnect and `/quit`: stop syncing and keep the session, stop
-/// waiting for a browser sign-in, or stop retrying.
+/// a sign-in in progress, or stop retrying.
 pub(super) unsafe fn disconnect(hwnd: HWND) -> Result<(), String> {
     let command = match connection::disconnect_action(state_ref(hwnd).model.connection)? {
         DisconnectAction::StopSync => Command::StopSync,
