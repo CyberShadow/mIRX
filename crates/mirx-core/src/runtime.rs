@@ -1698,7 +1698,7 @@ async fn handle_reset_e2ee_identity(
             None
         }
         (Ok(matrix::IdentityResetAuth::Password { session }), Some(password)) => {
-            Some(matrix::identity_reset_password(client, session, password))
+            Some(matrix::password_auth(client, session, password))
         }
         (Ok(matrix::IdentityResetAuth::Password { .. }), None) => {
             let err = matrix::identity_reset_error(&"your server asks for your account password");

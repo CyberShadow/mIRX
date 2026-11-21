@@ -1383,19 +1383,15 @@ pub(crate) fn identity_reset_error(err: &dyn Display) -> MatrixCoreError {
     MatrixCoreError::new(format!("failed to reset your E2EE identity: {err}"))
 }
 
-/// Why the server did not take a reset's new identity: the server's own
-/// word on a refused password, which the SDK's error only calls
-/// "User-Interactive Authentication required".
+/// Why the server did not take a reset's new identity, in the server's own
+/// words when it refused the password.
 pub(crate) fn identity_reset_failure(err: &RecoveryError) -> MatrixCoreError {
     match err {
         RecoveryError::Sdk(matrix_sdk::Error::Timeout) => identity_reset_error(
             &"the server did not accept it within 2 minutes; /e2ee reset to try again",
         ),
-        RecoveryError::Sdk(sdk_err) => match sdk_err
-            .as_uiaa_response()
-            .and_then(|info| info.auth_error.as_ref())
-        {
-            Some(refusal) => identity_reset_error(&refusal.message),
+        RecoveryError::Sdk(sdk_err) => match sdk_err.as_uiaa_response().and_then(uiaa_refusal) {
+            Some(refusal) => identity_reset_error(&refusal),
             None => identity_reset_error(err),
         },
         RecoveryError::BackupExistsOnServer | RecoveryError::SecretStorage(_) => {
@@ -1420,51 +1416,66 @@ pub(crate) fn identity_reset_auth(
         CrossSigningResetAuthType::OAuth(info) => Ok(IdentityResetAuth::Browser {
             url: info.approval_url.to_string(),
         }),
-        CrossSigningResetAuthType::Uiaa(info) => {
-            // Any other stage would make the SDK ask again and again,
-            // until it gives up after two minutes.
-            if info
-                .flows
-                .iter()
-                .any(|flow| flow.stages == [uiaa::AuthType::Password])
-            {
-                Ok(IdentityResetAuth::Password {
-                    session: info.session.clone(),
-                })
-            } else {
-                let flows = info
-                    .flows
-                    .iter()
-                    .map(|flow| {
-                        flow.stages
-                            .iter()
-                            .map(|stage| stage.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" + ")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", or ");
-                Err(identity_reset_error(&format!(
-                    "your server asks to confirm with {flows}; mirx can confirm with your password only"
-                )))
-            }
-        }
+        // Any other stage would make the SDK ask again and again, until it
+        // gives up after two minutes.
+        CrossSigningResetAuthType::Uiaa(info) => password_uiaa_session(info)
+            .map(|session| IdentityResetAuth::Password { session })
+            .map_err(|refusal| identity_reset_error(&refusal)),
     }
 }
 
+/// The user-interactive auth session to answer with the account password,
+/// when the server offers a flow of exactly `m.login.password`. Otherwise
+/// the refusal, naming the server's flows: mirx confirms nothing else.
+pub(crate) fn password_uiaa_session(info: &uiaa::UiaaInfo) -> Result<Option<String>, String> {
+    if info
+        .flows
+        .iter()
+        .any(|flow| flow.stages == [uiaa::AuthType::Password])
+    {
+        return Ok(info.session.clone());
+    }
+    let flows = info
+        .flows
+        .iter()
+        .map(|flow| {
+            flow.stages
+                .iter()
+                .map(|stage| stage.as_str())
+                .collect::<Vec<_>>()
+                .join(" + ")
+        })
+        .collect::<Vec<_>>()
+        .join(", or ");
+    Err(format!(
+        "your server asks to confirm with {flows}; mirx can confirm with your password only"
+    ))
+}
+
 /// The password answer to the server's user-interactive auth `session`.
-pub(crate) fn identity_reset_password(
+pub(crate) fn password_auth(
     client: &Client,
     session: Option<String>,
     password: String,
 ) -> uiaa::AuthData {
-    let user_id = client.user_id().expect("a reset runs signed in");
+    let user_id = client
+        .user_id()
+        .expect("user-interactive auth runs signed in");
     let mut password = uiaa::Password::new(
         uiaa::UserIdentifier::Matrix(uiaa::MatrixUserIdentifier::new(user_id.to_string())),
         password,
     );
     password.session = session;
     uiaa::AuthData::Password(password)
+}
+
+/// The server's reason for refusing an auth answer ("Invalid password"),
+/// which the SDK's error only calls "User-Interactive Authentication
+/// required".
+pub(crate) fn uiaa_refusal(info: &uiaa::UiaaInfo) -> Option<&str> {
+    info.auth_error
+        .as_ref()
+        .map(|refusal| refusal.message.as_str())
 }
 
 /// Reads your identity back from the server after a reset that did not
