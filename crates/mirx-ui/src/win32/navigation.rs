@@ -252,8 +252,8 @@ pub(super) unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
             &state.closed_queries,
         )
     };
-    refresh_tree(hwnd);
-    rebuild_switchbar(hwnd)?;
+    sync_tree(hwnd);
+    sync_switchbar(hwnd)?;
     refresh_status_bar(hwnd)?;
     if active_view == state_ref(hwnd).active_view {
         show_view(hwnd, &active_view, None).map(drop)
@@ -262,10 +262,17 @@ pub(super) unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
     }
 }
 
-unsafe fn refresh_tree(hwnd: HWND) {
+/// Rebuilds the treebar if its items changed; otherwise only repaints it,
+/// for the activity colours, which custom draw reads.
+unsafe fn sync_tree(hwnd: HWND) {
     let state = state_mut(hwnd);
     let tree = state.controls.tree;
     if tree.is_null() {
+        return;
+    }
+    let layout = navigation_layout(&state.model);
+    if state.applied_navigation.as_ref() == Some(&layout) {
+        InvalidateRect(tree, null(), 1);
         return;
     }
 
@@ -294,8 +301,8 @@ unsafe fn refresh_tree(hwnd: HWND) {
     state.tree_items.clear();
     state.primary_tree_items.clear();
 
-    let layout = navigation_layout(&state.model);
     insert_nav_item(state, TVI_ROOT, &layout, &collapsed);
+    state.applied_navigation = Some(layout);
     // A caret whose node went is set again by the activation that follows.
     if let Some((node, occurrence)) = caret
         && let Some(item) = tree_items_of(state, tree, &node).get(occurrence)
@@ -733,7 +740,34 @@ pub(super) fn cycled_window(
     .cloned()
 }
 
-pub(super) unsafe fn rebuild_switchbar(hwnd: HWND) -> Result<(), String> {
+/// Rebuilds the switchbar if its buttons (windows or labels) changed;
+/// otherwise only checks the active window's button and repaints, for the
+/// activity colours.
+pub(super) unsafe fn sync_switchbar(hwnd: HWND) -> Result<(), String> {
+    let (view_ids, labels) = {
+        let state = state_ref(hwnd);
+        let view_ids = ordered_view_ids(state);
+        let labels = view_ids
+            .iter()
+            .map(|view_id| view_short_title(&state.model, view_id))
+            .collect::<Vec<_>>();
+        (view_ids, labels)
+    };
+    let state = state_ref(hwnd);
+    if state.switchbar_views == view_ids && state.switchbar_labels == labels {
+        refresh_switchbar_state(hwnd)
+    } else {
+        rebuild_switchbar(hwnd, view_ids, labels)
+    }
+}
+
+/// Replaces every switchbar button with one per `view_ids`, labelled
+/// `labels`.
+unsafe fn rebuild_switchbar(
+    hwnd: HWND,
+    view_ids: Vec<ViewId>,
+    labels: Vec<String>,
+) -> Result<(), String> {
     let switchbar = state_ref(hwnd).controls.switchbar;
     if switchbar.is_null() {
         return Err("switchbar control was not created".to_owned());
@@ -753,7 +787,6 @@ pub(super) unsafe fn rebuild_switchbar(hwnd: HWND) -> Result<(), String> {
         }
     }
 
-    let view_ids = ordered_view_ids(state_ref(hwnd));
     let button_count = view_ids.len();
     if SWITCHBAR_COMMAND_FIRST
         .checked_add(button_count.saturating_sub(1))
@@ -762,13 +795,10 @@ pub(super) unsafe fn rebuild_switchbar(hwnd: HWND) -> Result<(), String> {
         return Err("switchbar command range exhausted".to_owned());
     }
 
-    let labels = {
-        let state = state_ref(hwnd);
-        view_ids
-            .iter()
-            .map(|view_id| wide_null(&view_short_title(&state.model, view_id)))
-            .collect::<Vec<_>>()
-    };
+    let wide_labels = labels
+        .iter()
+        .map(|label| wide_null(label))
+        .collect::<Vec<_>>();
     let button_states = {
         let state = state_ref(hwnd);
         view_ids
@@ -784,15 +814,17 @@ pub(super) unsafe fn rebuild_switchbar(hwnd: HWND) -> Result<(), String> {
             idCommand: (SWITCHBAR_COMMAND_FIRST + index) as i32,
             fsState: button_states[index],
             fsStyle: (BTNS_CHECK | BTNS_SHOWTEXT) as u8,
-            iString: labels[index].as_ptr() as isize,
+            iString: wide_labels[index].as_ptr() as isize,
             ..TBBUTTON::default()
         })
         .collect::<Vec<_>>();
 
     // `switchbar_views` mirrors the buttons, indexed by command id: switch
     // it while the toolbar is empty, so a paint never sees a button without
-    // its view.
-    state_mut(hwnd).switchbar_views = view_ids;
+    // its view. `switchbar_labels` goes with it.
+    let state = state_mut(hwnd);
+    state.switchbar_views = view_ids;
+    state.switchbar_labels = labels;
     if !buttons.is_empty()
         && SendMessageW(
             switchbar,
@@ -808,7 +840,7 @@ pub(super) unsafe fn rebuild_switchbar(hwnd: HWND) -> Result<(), String> {
     refresh_switchbar_state(hwnd)
 }
 
-pub(super) unsafe fn refresh_switchbar_state(hwnd: HWND) -> Result<(), String> {
+unsafe fn refresh_switchbar_state(hwnd: HWND) -> Result<(), String> {
     let switchbar = state_ref(hwnd).controls.switchbar;
     if switchbar.is_null() {
         return Err("switchbar control was not created".to_owned());
@@ -1267,6 +1299,91 @@ mod tests {
 
     use super::super::test_fixtures::*;
     use super::*;
+
+    /// A frame showing rooms A and B, A active, synced once.
+    unsafe fn with_two_room_frame(test: impl FnOnce(HWND)) {
+        with_test_frame(600, 400, |hwnd| {
+            state_mut(hwnd).model.rooms = vec![
+                room("!a:example", "A", false),
+                room("!b:example", "B", false),
+            ];
+            sync_views_and_tree(hwnd).unwrap();
+            activate_view(hwnd, &room_view_id("!a:example"), None).unwrap();
+            test(hwnd);
+        });
+    }
+
+    /// The treebar and switchbar rebuilds so far.
+    unsafe fn chrome_rebuilds(hwnd: HWND) -> (u64, u64) {
+        let counters = &state_ref(hwnd).refresh_counters;
+        (counters.treebar_rebuilds(), counters.switchbar_rebuilds())
+    }
+
+    #[test]
+    fn navigation_sync_rebuilds_only_on_layout_change() {
+        unsafe {
+            with_two_room_frame(|hwnd| {
+                let (tree, _) = chrome_rebuilds(hwnd);
+                sync_views_and_tree(hwnd).unwrap();
+                assert_eq!(chrome_rebuilds(hwnd).0, tree);
+
+                // New activity only colours the item.
+                apply_core_event(state_mut(hwnd), timeline("!b:example", "hello")).unwrap();
+                sync_views_and_tree(hwnd).unwrap();
+                assert_eq!(chrome_rebuilds(hwnd).0, tree);
+                let state = state_ref(hwnd);
+                let item = state.primary_tree_items[&room_view_id("!b:example")];
+                assert_eq!(
+                    tree_item_activity(state, item, || true),
+                    Some(ViewActivityLevel::Message)
+                );
+
+                state_mut(hwnd).model.rooms[1].display_name = "Bee".to_owned();
+                sync_views_and_tree(hwnd).unwrap();
+                assert_eq!(chrome_rebuilds(hwnd).0, tree + 1);
+                assert_eq!(
+                    read_tree_item_text(
+                        state_ref(hwnd).controls.tree,
+                        state_ref(hwnd).primary_tree_items[&room_view_id("!b:example")]
+                    )
+                    .unwrap(),
+                    "Bee"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn switchbar_sync_rebuilds_only_on_button_change() {
+        unsafe {
+            with_two_room_frame(|hwnd| {
+                let (_, switchbar) = chrome_rebuilds(hwnd);
+                sync_views_and_tree(hwnd).unwrap();
+                apply_core_event(state_mut(hwnd), timeline("!b:example", "hello")).unwrap();
+                sync_views_and_tree(hwnd).unwrap();
+                // Activating a window with activity clears it: a repaint.
+                activate_view(hwnd, &room_view_id("!b:example"), None).unwrap();
+                assert_eq!(chrome_rebuilds(hwnd).1, switchbar);
+
+                state_mut(hwnd).model.rooms[1].display_name = "Bee".to_owned();
+                sync_views_and_tree(hwnd).unwrap();
+                assert_eq!(chrome_rebuilds(hwnd).1, switchbar + 1);
+
+                // A new window adds its button.
+                state_mut(hwnd)
+                    .model
+                    .rooms
+                    .push(query("!q:example", "Q", "@q:example"));
+                sync_views_and_tree(hwnd).unwrap();
+                assert_eq!(chrome_rebuilds(hwnd).1, switchbar + 2);
+                assert!(
+                    state_ref(hwnd)
+                        .switchbar_views
+                        .contains(&room_view_id("!q:example"))
+                );
+            });
+        }
+    }
 
     #[test]
     fn room_tree_label_has_no_e2ee_or_query_markers() {

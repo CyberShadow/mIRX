@@ -856,6 +856,8 @@ pub(super) fn test_state() -> WindowState {
         find_states: BTreeMap::new(),
         pending_original_jump: None,
         switchbar_views: Vec::new(),
+        switchbar_labels: Vec::new(),
+        applied_navigation: None,
         room_activity: BTreeMap::new(),
         room_activity_read_targets: BTreeMap::new(),
         closed_queries: BTreeSet::new(),

@@ -216,6 +216,14 @@ fn append(app: &MirxApp, events: &[Event]) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+/// No work at all.
+const NOTHING: UiRefreshCounters = UiRefreshCounters {
+    timeline_row_builds: 0,
+    rows_wrapped: 0,
+    treebar_rebuilds: 0,
+    switchbar_rebuilds: 0,
+};
+
 /// The counts between two dumps.
 fn delta(before: &UiState, after: &UiState) -> UiRefreshCounters {
     let (before, after) = (before.refresh_counters, after.refresh_counters);
@@ -287,8 +295,7 @@ mod with_two_hundred_rooms {
         let before = app.dump_ui_state()?;
         let counts = delta(&before, &app.dump_ui_state()?);
         eprintln!("an idle dump: {counts:?}");
-        assert_eq!(counts.timeline_row_builds, 0);
-        assert_eq!(counts.rows_wrapped, 0);
+        assert_eq!(counts, NOTHING);
         Ok(())
     }
 
@@ -310,8 +317,14 @@ mod with_two_hundred_rooms {
         let after = app.dump_ui_state()?;
         let counts = delta(&before, &after);
         eprintln!("a message in a background room: {counts:?}");
-        assert_eq!(counts.timeline_row_builds, 1);
-        assert_eq!(counts.rows_wrapped, 1);
+        assert_eq!(
+            counts,
+            UiRefreshCounters {
+                timeline_row_builds: 1,
+                rows_wrapped: 1,
+                ..NOTHING
+            }
+        );
         assert_eq!(
             room_state(&after, 117).timeline_row_builds,
             room_state(&before, 117).timeline_row_builds + 1
@@ -343,9 +356,14 @@ mod with_two_hundred_rooms {
         )?;
         let counts = delta(&before, &app.dump_ui_state()?);
         eprintln!("typing: {counts:?}");
-        assert_eq!(counts.timeline_row_builds, 1);
         // The typing line is not a log line: it is clipped, not wrapped.
-        assert_eq!(counts.rows_wrapped, 0);
+        assert_eq!(
+            counts,
+            UiRefreshCounters {
+                timeline_row_builds: 1,
+                ..NOTHING
+            }
+        );
         Ok(())
     }
 
@@ -357,9 +375,17 @@ mod with_two_hundred_rooms {
         let renamed = app.dump_ui_state()?;
         let counts = delta(&before, &renamed);
         eprintln!("a rename: {counts:?}");
-        // Its caption and "Now talking in" line name it.
-        assert_eq!(counts.timeline_row_builds, 1);
-        assert_eq!(counts.rows_wrapped, 1);
+        // Its caption and "Now talking in" line name it, and so do its
+        // treebar item and switchbar button.
+        assert_eq!(
+            counts,
+            UiRefreshCounters {
+                timeline_row_builds: 1,
+                rows_wrapped: 1,
+                treebar_rebuilds: 1,
+                switchbar_rebuilds: 1,
+            }
+        );
         assert!(
             find_navigation(&renamed.navigation, &room_view(42))
                 .is_some_and(|node| node.text == "Renamed")
@@ -368,8 +394,7 @@ mod with_two_hundred_rooms {
         append(&app, &[synced_rooms(Some((42, "Renamed")))])?;
         let counts = delta(&renamed, &app.dump_ui_state()?);
         eprintln!("the same room list again: {counts:?}");
-        assert_eq!(counts.timeline_row_builds, 0);
-        assert_eq!(counts.rows_wrapped, 0);
+        assert_eq!(counts, NOTHING);
         Ok(())
     }
 
@@ -392,8 +417,14 @@ mod with_two_hundred_rooms {
         let after = app.dump_ui_state()?;
         let counts = delta(&before, &after);
         eprintln!("a message in the active window: {counts:?}");
-        assert_eq!(counts.timeline_row_builds, 1);
-        assert_eq!(counts.rows_wrapped, 1);
+        assert_eq!(
+            counts,
+            UiRefreshCounters {
+                timeline_row_builds: 1,
+                rows_wrapped: 1,
+                ..NOTHING
+            }
+        );
         // The window followed its newest line.
         let last_line = after
             .active_timeline
@@ -417,12 +448,14 @@ mod with_two_hundred_rooms {
         let after = app.dump_ui_state()?;
         let counts = delta(&before, &after);
         eprintln!("restoring the active window: {counts:?}");
-        // A resize rewraps; it builds no rows.
-        assert_eq!(counts.timeline_row_builds, 0);
-        // Every row of the window is a log row: each wraps once more.
+        // A resize rewraps, and builds nothing. Every row of the window is
+        // a log row: each wraps once more.
         assert_eq!(
-            counts.rows_wrapped,
-            view_lines(&after, &room_view(0)).len() as u64
+            counts,
+            UiRefreshCounters {
+                rows_wrapped: view_lines(&after, &room_view(0)).len() as u64,
+                ..NOTHING
+            }
         );
         Ok(())
     }

@@ -1279,18 +1279,11 @@ pub(super) unsafe fn refresh_every_view_content(hwnd: HWND) -> Result<(), String
     Ok(())
 }
 
-struct AppliedActivation {
-    child: HWND,
-    cleared_view_activity: bool,
-    rebuild_switchbar_after_activation: bool,
-}
-
 unsafe fn apply_view_activation_state(
     hwnd: HWND,
     view_id: &ViewId,
     preferred_tree_item: Option<isize>,
-) -> Result<AppliedActivation, String> {
-    let rebuild_switchbar_after_activation = !state_ref(hwnd).switchbar_views.contains(view_id);
+) -> Result<HWND, String> {
     let child = match view_id {
         ViewId::Status => {
             state_mut(hwnd).model.selected_room = None;
@@ -1315,7 +1308,7 @@ unsafe fn apply_view_activation_state(
             ensure_thread_view(hwnd, room_id, thread_root_event_id)?
         }
     };
-    let cleared_view_activity = handle_view_activation(state_mut(hwnd), view_id)?;
+    handle_view_activation(state_mut(hwnd), view_id)?;
 
     let previous_active = state_ref(hwnd).active_view.clone();
     let newly_active = {
@@ -1355,22 +1348,14 @@ unsafe fn apply_view_activation_state(
         select_tree_item(hwnd, view_id, preferred_tree_item, newly_active);
     }
 
-    Ok(AppliedActivation {
-        child,
-        cleared_view_activity,
-        rebuild_switchbar_after_activation,
-    })
+    Ok(child)
 }
 
-unsafe fn finish_view_activation_chrome(
-    hwnd: HWND,
-    applied: &AppliedActivation,
-) -> Result<(), String> {
-    if applied.cleared_view_activity || applied.rebuild_switchbar_after_activation {
-        rebuild_switchbar(hwnd)?;
-    } else {
-        refresh_switchbar_state(hwnd)?;
-    }
+/// The switchbar and status bar after an activation: a window new to the
+/// switchbar adds its button, and the checked button and activity colours
+/// follow.
+unsafe fn finish_view_activation_chrome(hwnd: HWND) -> Result<(), String> {
+    sync_switchbar(hwnd)?;
     refresh_status_bar(hwnd)?;
     Ok(())
 }
@@ -1393,17 +1378,17 @@ pub(super) unsafe fn show_view(
     view_id: &ViewId,
     preferred_tree_item: Option<isize>,
 ) -> Result<HWND, String> {
-    let applied = apply_view_activation_state(hwnd, view_id, preferred_tree_item)?;
+    let child = apply_view_activation_state(hwnd, view_id, preferred_tree_item)?;
 
     let mdi_client = state_ref(hwnd).controls.mdi_client;
-    SendMessageW(mdi_client, WM_MDIACTIVATE, applied.child as WPARAM, 0);
+    SendMessageW(mdi_client, WM_MDIACTIVATE, child as WPARAM, 0);
     // Activating a minimized window must show it, as in mIRC. MDI itself
     // keeps a maximized window's successor maximized.
-    if IsIconic(applied.child) != 0 {
-        SendMessageW(mdi_client, WM_MDIRESTORE, applied.child as WPARAM, 0);
+    if IsIconic(child) != 0 {
+        SendMessageW(mdi_client, WM_MDIRESTORE, child as WPARAM, 0);
     }
-    finish_view_activation_chrome(hwnd, &applied)?;
-    Ok(applied.child)
+    finish_view_activation_chrome(hwnd)?;
+    Ok(child)
 }
 
 unsafe fn handle_native_mdi_child_activation(child: HWND) -> Result<(), String> {
@@ -1416,9 +1401,9 @@ unsafe fn handle_native_mdi_child_activation(child: HWND) -> Result<(), String> 
         return Ok(());
     }
 
-    let applied = apply_view_activation_state(frame, &view_id, None)?;
-    finish_view_activation_chrome(frame, &applied)?;
-    SetFocus(mdi_child_focus(applied.child));
+    let child = apply_view_activation_state(frame, &view_id, None)?;
+    finish_view_activation_chrome(frame)?;
+    SetFocus(mdi_child_focus(child));
     Ok(())
 }
 

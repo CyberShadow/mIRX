@@ -384,16 +384,16 @@ use menus::{
     window_key,
 };
 #[cfg(test)]
-use navigation::{NavItem, navigation_layout};
+use navigation::navigation_layout;
 use navigation::{
-    NavNode, ROOM_LIST_TITLE, TreeItem, cycled_window, dump_navigation_tree,
+    NavItem, NavNode, ROOM_LIST_TITLE, TreeItem, cycled_window, dump_navigation_tree,
     dump_selected_navigation_path, expand_tree_item, handle_tree_selection, insert_tree_item,
-    nth_window, ordered_view_ids, read_tree_item_text, rebuild_switchbar, refresh_switchbar_state,
-    refresh_tree_activity_colors, select_navigation_path, select_navigation_view, select_room,
-    select_tree_item, selected_tree_item, set_navigation_expanded,
-    show_navigation_room_context_menu, switchbar_custom_draw, sync_views_and_tree,
-    tree_custom_draw, tree_expansion_changed, view_caption, view_id_from_identity,
-    view_identity_from_view_id, view_short_title,
+    nth_window, ordered_view_ids, read_tree_item_text, refresh_tree_activity_colors,
+    select_navigation_path, select_navigation_view, select_room, select_tree_item,
+    selected_tree_item, set_navigation_expanded, show_navigation_room_context_menu,
+    switchbar_custom_draw, sync_switchbar, sync_views_and_tree, tree_custom_draw,
+    tree_expansion_changed, view_caption, view_id_from_identity, view_identity_from_view_id,
+    view_short_title,
 };
 use nick_completion::{NickCompletion, member_mention_text};
 use nick_list::{
@@ -680,7 +680,12 @@ struct WindowState {
     find_states: BTreeMap<ViewId, ViewFindState>,
     /// The Go to Original waiting for older history; one at a time.
     pending_original_jump: Option<replies::OriginalJump>,
+    /// The switchbar's buttons' windows, indexed by command id, and their
+    /// labels; only `rebuild_switchbar` sets them, both together.
     switchbar_views: Vec<ViewId>,
+    switchbar_labels: Vec<String>,
+    /// The treebar's items as `sync_tree` last built them.
+    applied_navigation: Option<NavItem>,
     room_activity: BTreeMap<ViewId, ViewActivityLevel>,
     /// Joined queries whose window the user closed. Like mIRC's closed query
     /// windows, they stay closed until a new message from the other side or
@@ -922,6 +927,8 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         find_states: BTreeMap::new(),
         pending_original_jump: None,
         switchbar_views: Vec::new(),
+        switchbar_labels: Vec::new(),
+        applied_navigation: None,
         room_activity: BTreeMap::new(),
         closed_queries: BTreeSet::new(),
         room_activity_read_targets: BTreeMap::new(),
