@@ -496,6 +496,47 @@ fn send_identity_reset_command(
     Ok(())
 }
 
+/// A room key file the UI asked the core to write or read, for the
+/// automation dump; never its passphrase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SubmittedRoomKeyTransfer {
+    pub(super) transfer: RoomKeyTransfer,
+    pub(super) path: String,
+}
+
+/// Sends a room key file's export or import past `recorded_commands`,
+/// which would keep the passphrase, and says so in Status: deriving the
+/// file's key takes a moment.
+pub(super) fn submit_room_key_transfer(
+    state: &mut WindowState,
+    transfer: RoomKeyTransfer,
+    path: String,
+    passphrase: String,
+) -> Result<(), String> {
+    let (command, line) = match transfer {
+        RoomKeyTransfer::Export => (
+            Command::ExportRoomKeys(ExportRoomKeysRequest {
+                path: path.clone(),
+                passphrase,
+            }),
+            status_log::exporting_room_keys(&path),
+        ),
+        RoomKeyTransfer::Import => (
+            Command::ImportRoomKeys(ImportRoomKeysRequest {
+                path: path.clone(),
+                passphrase,
+            }),
+            status_log::importing_room_keys(&path),
+        ),
+    };
+    send_unrecorded_command(state, command)?;
+    log_status(state, StatusLineKind::Info, line);
+    state
+        .submitted_room_key_transfers
+        .push(SubmittedRoomKeyTransfer { transfer, path });
+    Ok(())
+}
+
 /// What `/devices delete` and `/devices rename` asked the core; never the
 /// password.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -645,6 +686,71 @@ mod tests {
         );
         assert!(!format!("{:?}", state.submitted_setup_e2ee_recovery).contains("secret phrase"));
         assert!(state.recorded_commands.is_empty());
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn room_key_transfers_enqueue_say_so_and_record_only_their_files() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+
+        submit_room_key_transfer(
+            &mut state,
+            RoomKeyTransfer::Export,
+            "C:\\keys.txt".to_owned(),
+            "correct horse".to_owned(),
+        )
+        .unwrap();
+        submit_room_key_transfer(
+            &mut state,
+            RoomKeyTransfer::Import,
+            "D:\\keys.txt".to_owned(),
+            "correct horse".to_owned(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state.submitted_room_key_transfers,
+            vec![
+                SubmittedRoomKeyTransfer {
+                    transfer: RoomKeyTransfer::Export,
+                    path: "C:\\keys.txt".to_owned(),
+                },
+                SubmittedRoomKeyTransfer {
+                    transfer: RoomKeyTransfer::Import,
+                    path: "D:\\keys.txt".to_owned(),
+                },
+            ]
+        );
+        assert!(
+            state.recorded_commands.is_empty(),
+            "they hold the passphrase"
+        );
+        assert_eq!(
+            state
+                .model
+                .status_log
+                .lines()
+                .iter()
+                .map(|line| (line.kind, line.text.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    StatusLineKind::Info,
+                    "* Exporting room keys to C:\\keys.txt..."
+                ),
+                (
+                    StatusLineKind::Info,
+                    "* Importing room keys from D:\\keys.txt..."
+                ),
+            ]
+        );
 
         handle
             .command_sender()

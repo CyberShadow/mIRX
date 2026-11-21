@@ -8,12 +8,12 @@ use windows_sys::Win32::Foundation::ERROR_CLASS_ALREADY_EXISTS;
 use windows_sys::Win32::Graphics::Gdi::{
     COLOR_BTNFACE, DEFAULT_GUI_FONT, DT_CALCRECT, DT_WORDBREAK, DrawTextW, GetStockObject,
 };
-use windows_sys::Win32::System::SystemServices::SS_CENTER;
+use windows_sys::Win32::System::SystemServices::{SS_CENTER, SS_NOPREFIX, SS_PATHELLIPSIS};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, DC_HASDEFID, DM_GETDEFID, EnumChildWindows, GW_OWNER, GetNextDlgTabItem,
-    GetWindow, IDCANCEL, IsDialogMessageW, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
-    WINDOW_STYLE, WM_NEXTDLGCTL, WNDPROC, WS_EX_DLGMODALFRAME,
+    AdjustWindowRectEx, DC_HASDEFID, DM_GETDEFID, EN_CHANGE, EnumChildWindows, GW_OWNER,
+    GetNextDlgTabItem, GetWindow, IDCANCEL, IsDialogMessageW, SWP_NOACTIVATE, SWP_NOZORDER,
+    SetWindowPos, WINDOW_STYLE, WM_NEXTDLGCTL, WNDPROC, WS_EX_DLGMODALFRAME,
 };
 use windows_sys::core::BOOL;
 
@@ -23,6 +23,7 @@ const SETUP_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32SetupE2eeDialog";
 const RESET_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32ResetE2eeDialog";
 const SIGN_OUT_SESSION_DIALOG_CLASS_NAME: &str = "mirxWin32SignOutSessionDialog";
 const RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME: &str = "mirxWin32RecoveryKeyHandoffDialog";
+const ROOM_KEYS_DIALOG_CLASS_NAME: &str = "mirxWin32RoomKeysDialog";
 pub(super) const SINGLE_FIELD_DIALOG_CLASS_NAME: &str = "mirxWin32SingleFieldDialog";
 pub(super) const ABOUT_DIALOG_CLASS_NAME: &str = "mirxWin32AboutDialog";
 
@@ -57,6 +58,10 @@ const ABOUT_DIALOG_LINES: [(u16, &str); 5] = [
     (5023, "Licensed under the Apache License 2.0"),
 ];
 pub(super) const ABOUT_DIALOG_OK_ID: usize = 5024;
+const ROOM_KEYS_DIALOG_PASSPHRASE_ID: u16 = 5025;
+const ROOM_KEYS_DIALOG_CONFIRMATION_ID: u16 = 5026;
+const ROOM_KEYS_DIALOG_OK_ID: usize = 5027;
+const ROOM_KEYS_DIALOG_CANCEL_ID: usize = 5028;
 /// What `IsDialogMessageW` sends for Esc: every dialog takes it as its
 /// Cancel button.
 const ESC_CANCEL_ID: usize = IDCANCEL as usize;
@@ -74,6 +79,7 @@ const SINGLE_FIELD_DIALOG_WIDTH: i32 = 260;
 const RECOVERY_KEY_HANDOFF_DIALOG_WIDTH: i32 = 320;
 /// Wide enough for a confirmation's warning to wrap to a few lines.
 const CONFIRM_DIALOG_WIDTH: i32 = 320;
+const ROOM_KEYS_DIALOG_WIDTH: i32 = 320;
 
 /// Windows' dialog metrics at a dialog's DPI, in pixels: what the dialog
 /// units of mIRC's MS Shell Dlg 8 resource dialogs come to.
@@ -212,12 +218,24 @@ pub(super) struct SubmittedSetupE2eeRecovery {
     pub(super) wait_for_backups_to_upload: bool,
 }
 
+/// What an exported key file gives whoever holds it, which the export
+/// dialog says.
+const EXPORT_ROOM_KEYS_WARNING: &str =
+    "Anyone with this file and the passphrase can read your encrypted messages.";
+
+struct RoomKeysDialogState {
+    /// An export asks for the passphrase twice.
+    transfer: RoomKeyTransfer,
+    /// The passphrase, once OK is pressed.
+    result: Arc<Mutex<Option<String>>>,
+}
+
 pub(super) struct SingleFieldDialogState {
     pub(super) result: Arc<Mutex<Option<String>>>,
 }
 
 /// Every mirx dialog's class and window procedure.
-const DIALOG_CLASSES: [(&str, WNDPROC); 10] = [
+const DIALOG_CLASSES: [(&str, WNDPROC); 11] = [
     (LOGIN_DIALOG_CLASS_NAME, Some(login_dialog_window_proc)),
     (
         RECOVER_E2EE_DIALOG_CLASS_NAME,
@@ -244,6 +262,10 @@ const DIALOG_CLASSES: [(&str, WNDPROC); 10] = [
         Some(single_field_dialog_window_proc),
     ),
     (ABOUT_DIALOG_CLASS_NAME, Some(about_dialog_window_proc)),
+    (
+        ROOM_KEYS_DIALOG_CLASS_NAME,
+        Some(room_keys_dialog_window_proc),
+    ),
     (
         options_dialog::OPTIONS_DIALOG_CLASS_NAME,
         Some(options_dialog::window_proc),
@@ -469,6 +491,16 @@ impl DialogColumn {
         self.add(
             (STATIC_CLASS_NAME, text, style, 0, id),
             (self.metrics.margin, self.width, height),
+            self.metrics.label_gap,
+        )
+    }
+
+    /// A file's path on one line, its middle elided if it is too long.
+    unsafe fn path(&mut self, path: &str) -> Result<HWND, String> {
+        let (_, line_height) = dialog_text_size("File", self.width);
+        self.add(
+            (STATIC_CLASS_NAME, path, SS_PATHELLIPSIS | SS_NOPREFIX, 0, 0),
+            (self.metrics.margin, self.width, line_height),
             self.metrics.label_gap,
         )
     }
@@ -740,6 +772,60 @@ unsafe extern "system" fn setup_e2ee_dialog_window_proc(
         }
         WM_NCDESTROY => {
             window_data::drop_owned::<SetupE2eeRecoveryDialogState>(hwnd);
+            0
+        }
+        _ => DefWindowProcW(hwnd, message, wparam, lparam),
+    }
+}
+
+/// The room key file dialog: OK is enabled only while the passphrase (and,
+/// for an export, its confirmation) will do, so it needs no message box.
+unsafe extern "system" fn room_keys_dialog_window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        WM_NCCREATE => {
+            window_data::adopt_create_param::<RoomKeysDialogState>(hwnd, lparam);
+            // Sets the window text from the CreateWindowExW title.
+            DefWindowProcW(hwnd, message, wparam, lparam)
+        }
+        WM_COMMAND if (wparam >> 16) as u32 == EN_CHANGE => {
+            EnableWindow(
+                GetDlgItem(hwnd, ROOM_KEYS_DIALOG_OK_ID as i32),
+                room_keys_dialog_passphrase(hwnd).is_some().into(),
+            );
+            0
+        }
+        WM_COMMAND => match wparam & 0xffff {
+            ROOM_KEYS_DIALOG_OK_ID => {
+                let passphrase = room_keys_dialog_passphrase(hwnd)
+                    .expect("OK is enabled only for a passphrase that will do");
+                clear_room_keys_dialog_passphrase(hwnd);
+                *room_keys_dialog_state(hwnd)
+                    .result
+                    .lock()
+                    .expect("room keys dialog result mutex poisoned") = Some(passphrase);
+                end_modal_dialog(hwnd);
+                0
+            }
+            ROOM_KEYS_DIALOG_CANCEL_ID | ESC_CANCEL_ID => {
+                clear_room_keys_dialog_passphrase(hwnd);
+                end_modal_dialog(hwnd);
+                0
+            }
+            _ => DefWindowProcW(hwnd, message, wparam, lparam),
+        },
+        DM_GETDEFID => default_button(ROOM_KEYS_DIALOG_OK_ID),
+        WM_CLOSE => {
+            clear_room_keys_dialog_passphrase(hwnd);
+            end_modal_dialog(hwnd);
+            0
+        }
+        WM_NCDESTROY => {
+            window_data::drop_owned::<RoomKeysDialogState>(hwnd);
             0
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -1057,6 +1143,65 @@ pub(super) unsafe fn show_setup_e2ee_dialog(
     Ok(result
         .lock()
         .expect("setup e2ee dialog result mutex poisoned")
+        .clone())
+}
+
+unsafe fn create_room_keys_dialog(
+    owner: HWND,
+    transfer: RoomKeyTransfer,
+    path: &str,
+    result: Arc<Mutex<Option<String>>>,
+) -> Result<HWND, String> {
+    let mut state = window_data::CreateParam::new(RoomKeysDialogState { transfer, result });
+    create_modal_dialog(
+        owner,
+        ROOM_KEYS_DIALOG_CLASS_NAME,
+        room_keys_dialog_title(transfer),
+        state.as_param(),
+        |dialog| {
+            let mut column = DialogColumn::standard(dialog, ROOM_KEYS_DIALOG_WIDTH);
+            column.label("File", 0, 0)?;
+            column.path(path)?;
+            column.y += column.metrics.gap - column.metrics.label_gap;
+            column.label("Passphrase", 0, 0)?;
+            column.edit(ROOM_KEYS_DIALOG_PASSPHRASE_ID, "", ES_PASSWORD as u32)?;
+            if transfer == RoomKeyTransfer::Export {
+                column.label("Confirm passphrase", 0, 0)?;
+                column.edit(ROOM_KEYS_DIALOG_CONFIRMATION_ID, "", ES_PASSWORD as u32)?;
+                column.label(EXPORT_ROOM_KEYS_WARNING, 0, 0)?;
+            }
+            column.buttons(&[
+                (ROOM_KEYS_DIALOG_OK_ID, "OK"),
+                (ROOM_KEYS_DIALOG_CANCEL_ID, "Cancel"),
+            ])?;
+            // No passphrase yet.
+            EnableWindow(GetDlgItem(dialog, ROOM_KEYS_DIALOG_OK_ID as i32), 0);
+            Ok(())
+        },
+    )
+}
+
+/// The title of a room key file's dialogs.
+pub(super) fn room_keys_dialog_title(transfer: RoomKeyTransfer) -> &'static str {
+    match transfer {
+        RoomKeyTransfer::Export => "Export Room Keys",
+        RoomKeyTransfer::Import => "Import Room Keys",
+    }
+}
+
+/// The passphrase of the room key file at `path`; `None` if cancelled.
+pub(super) unsafe fn show_room_keys_dialog(
+    owner: HWND,
+    transfer: RoomKeyTransfer,
+    path: &str,
+) -> Result<Option<String>, String> {
+    let result = Arc::new(Mutex::new(None));
+    let dialog = create_room_keys_dialog(owner, transfer, path, Arc::clone(&result))?;
+    SetFocus(GetDlgItem(dialog, ROOM_KEYS_DIALOG_PASSPHRASE_ID.into()));
+    run_modal_dialog(owner, dialog);
+    Ok(result
+        .lock()
+        .expect("room keys dialog result mutex poisoned")
         .clone())
 }
 
@@ -1456,6 +1601,32 @@ unsafe fn clear_setup_e2ee_dialog_passphrase(hwnd: HWND) {
     set_window_text(GetDlgItem(hwnd, SETUP_E2EE_DIALOG_PASSPHRASE_ID.into()), "");
 }
 
+unsafe fn room_keys_dialog_state(hwnd: HWND) -> &'static RoomKeysDialogState {
+    window_data::get(hwnd).expect("the room keys dialog has its state")
+}
+
+/// The typed passphrase, if it will do: not empty and, for an export,
+/// typed the same twice.
+unsafe fn room_keys_dialog_passphrase(hwnd: HWND) -> Option<String> {
+    let field = |id: u16| read_window_text(GetDlgItem(hwnd, id.into()));
+    let passphrase = field(ROOM_KEYS_DIALOG_PASSPHRASE_ID);
+    let confirmed = match room_keys_dialog_state(hwnd).transfer {
+        RoomKeyTransfer::Export => field(ROOM_KEYS_DIALOG_CONFIRMATION_ID) == passphrase,
+        RoomKeyTransfer::Import => true,
+    };
+    (!passphrase.is_empty() && confirmed).then_some(passphrase)
+}
+
+unsafe fn clear_room_keys_dialog_passphrase(hwnd: HWND) {
+    set_window_text(GetDlgItem(hwnd, ROOM_KEYS_DIALOG_PASSPHRASE_ID.into()), "");
+    if room_keys_dialog_state(hwnd).transfer == RoomKeyTransfer::Export {
+        set_window_text(
+            GetDlgItem(hwnd, ROOM_KEYS_DIALOG_CONFIRMATION_ID.into()),
+            "",
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
@@ -1716,6 +1887,130 @@ mod tests {
     }
 
     #[test]
+    fn room_key_dialogs_enable_ok_only_for_a_passphrase_that_will_do() {
+        unsafe {
+            with_test_frame(600, 400, |frame| {
+                register_dialog_classes(GetModuleHandleW(null())).unwrap();
+                for transfer in [RoomKeyTransfer::Export, RoomKeyTransfer::Import] {
+                    let dialog =
+                        create_room_keys_dialog(frame, transfer, "C:\\keys.txt", Arc::default())
+                            .unwrap();
+                    let ok = GetDlgItem(dialog, ROOM_KEYS_DIALOG_OK_ID as i32);
+                    let passphrase = GetDlgItem(dialog, ROOM_KEYS_DIALOG_PASSPHRASE_ID.into());
+                    let confirmation = GetDlgItem(dialog, ROOM_KEYS_DIALOG_CONFIRMATION_ID.into());
+                    assert_eq!(IsWindowEnabled(ok), 0, "{transfer:?}: no passphrase yet");
+                    set_window_text(passphrase, "correct horse");
+                    match transfer {
+                        RoomKeyTransfer::Export => {
+                            assert_eq!(IsWindowEnabled(ok), 0, "not confirmed yet");
+                            set_window_text(confirmation, "correct hors");
+                            assert_eq!(IsWindowEnabled(ok), 0, "confirmed wrong");
+                            set_window_text(confirmation, "correct horse");
+                            assert_ne!(IsWindowEnabled(ok), 0, "confirmed");
+                        }
+                        RoomKeyTransfer::Import => {
+                            assert!(confirmation.is_null(), "an import asks once");
+                            assert_ne!(IsWindowEnabled(ok), 0, "a passphrase");
+                        }
+                    }
+                    set_window_text(passphrase, "");
+                    assert_eq!(IsWindowEnabled(ok), 0, "{transfer:?}: emptied");
+                    DestroyWindow(dialog);
+                }
+            });
+        }
+    }
+
+    /// Types `pass` into the export dialog twice and presses Enter.
+    unsafe extern "system" fn confirm_an_export_passphrase(
+        frame: HWND,
+        _message: u32,
+        timer: usize,
+        _time: u32,
+    ) {
+        KillTimer(frame, timer);
+        let dialog = owned_dialog(frame, ROOM_KEYS_DIALOG_CLASS_NAME);
+        for id in [
+            ROOM_KEYS_DIALOG_PASSPHRASE_ID,
+            ROOM_KEYS_DIALOG_CONFIRMATION_ID,
+        ] {
+            set_window_text(GetDlgItem(dialog, id.into()), "pass");
+        }
+        PostMessageW(
+            GetDlgItem(dialog, ROOM_KEYS_DIALOG_CONFIRMATION_ID.into()),
+            WM_KEYDOWN,
+            VK_RETURN_KEY,
+            0,
+        );
+    }
+
+    /// Types `pass` into the import dialog, then cancels it.
+    unsafe extern "system" fn cancel_an_import_passphrase(
+        frame: HWND,
+        _message: u32,
+        timer: usize,
+        _time: u32,
+    ) {
+        KillTimer(frame, timer);
+        let dialog = owned_dialog(frame, ROOM_KEYS_DIALOG_CLASS_NAME);
+        set_window_text(
+            GetDlgItem(dialog, ROOM_KEYS_DIALOG_PASSPHRASE_ID.into()),
+            "pass",
+        );
+        PostMessageW(dialog, WM_COMMAND, ROOM_KEYS_DIALOG_CANCEL_ID, 0);
+    }
+
+    #[test]
+    fn a_room_key_dialog_gives_its_passphrase_only_from_ok() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                register_dialog_classes(GetModuleHandleW(null())).unwrap();
+                SetTimer(hwnd, 1, 0, Some(confirm_an_export_passphrase));
+                assert_eq!(
+                    show_room_keys_dialog(hwnd, RoomKeyTransfer::Export, "C:\\keys.txt").unwrap(),
+                    Some("pass".to_owned())
+                );
+                SetTimer(hwnd, 1, 0, Some(cancel_an_import_passphrase));
+                assert_eq!(
+                    show_room_keys_dialog(hwnd, RoomKeyTransfer::Import, "C:\\keys.txt").unwrap(),
+                    None
+                );
+                assert_ne!(IsWindowEnabled(hwnd), 0, "closing it enables the frame");
+            });
+        }
+    }
+
+    #[test]
+    fn a_room_key_dialog_clears_its_passphrases() {
+        unsafe {
+            with_test_frame(600, 400, |frame| {
+                register_dialog_classes(GetModuleHandleW(null())).unwrap();
+                let dialog = create_room_keys_dialog(
+                    frame,
+                    RoomKeyTransfer::Export,
+                    "C:\\keys.txt",
+                    Arc::default(),
+                )
+                .unwrap();
+                let edits = [
+                    ROOM_KEYS_DIALOG_PASSPHRASE_ID,
+                    ROOM_KEYS_DIALOG_CONFIRMATION_ID,
+                ]
+                .map(|id| GetDlgItem(dialog, id.into()));
+                for edit in edits {
+                    set_window_text(edit, "hunter2");
+                }
+                // What every way of closing it does first.
+                clear_room_keys_dialog_passphrase(dialog);
+                for edit in edits {
+                    assert_eq!(read_window_text(edit), "");
+                }
+                DestroyWindow(dialog);
+            });
+        }
+    }
+
+    #[test]
     fn a_dialog_centres_on_its_owner() {
         let owner = RECT {
             left: 100,
@@ -1824,6 +2119,20 @@ mod tests {
                     create_single_field_dialog(frame, "Find", "Find", "", Arc::default()).unwrap(),
                     create_recovery_key_handoff_dialog(frame, "EsTc abcd efgh").unwrap(),
                     create_about_dialog(frame).unwrap(),
+                    create_room_keys_dialog(
+                        frame,
+                        RoomKeyTransfer::Export,
+                        "C:\\keys.txt",
+                        Arc::default(),
+                    )
+                    .unwrap(),
+                    create_room_keys_dialog(
+                        frame,
+                        RoomKeyTransfer::Import,
+                        "C:\\keys.txt",
+                        Arc::default(),
+                    )
+                    .unwrap(),
                     options.hwnd(),
                 ];
                 for dialog in dialogs {

@@ -20,10 +20,11 @@ use mirx_core::{
     CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
     CreateRoomRequest, CreateRoomVisibility, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeIdentityResetOutcome, E2eeRecoveryState, E2eeSessionState,
-    E2eeStatus, EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
-    HighlightWord, HistoryFrom, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
-    LeaveRoomRequest, LoginMethod, LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation,
-    PublicRoomsPage, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
+    E2eeStatus, EditMessageRequest, Event, ExportRoomKeysRequest, FetchRoomEventRequest,
+    FetchRoomMediaRequest, HighlightWord, HistoryFrom, ImportRoomKeysRequest,
+    InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, LoginMethod,
+    LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoomsPage,
+    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
     ResetE2eeIdentityRequest, RestoreSessionRequest, RetryDecryptionRequest, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
@@ -153,15 +154,15 @@ use crate::{
         DumpE2eeRecoverySetupResult, DumpIdentityWarning, DumpIdentityWarningKind,
         DumpMemberMenuState, DumpMemberModerationAction, DumpMemberPowerRole,
         DumpMembershipCommandAction, DumpMessageMenuState, DumpModel, DumpRoomActivity,
-        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMenuState,
-        DumpRoomMessageActivityLine, DumpRoomPreviewMediaState, DumpRoomReactionSummary,
-        DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand, DumpSubmittedFileCommand,
-        DumpSubmittedHistoryCommand, DumpSubmittedIdentityReset,
+        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomKeyTransferDirection,
+        DumpRoomMenuState, DumpRoomMessageActivityLine, DumpRoomPreviewMediaState,
+        DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand,
+        DumpSubmittedFileCommand, DumpSubmittedHistoryCommand, DumpSubmittedIdentityReset,
         DumpSubmittedMemberModerationCommand, DumpSubmittedMembershipCommand,
         DumpSubmittedMessageCommand, DumpSubmittedNotificationCommand,
         DumpSubmittedPowerLevelCommand, DumpSubmittedProfileCommand, DumpSubmittedReactionCommand,
         DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
-        DumpSubmittedReplyThreadTarget, DumpSubmittedRoomListRequest,
+        DumpSubmittedReplyThreadTarget, DumpSubmittedRoomKeyTransfer, DumpSubmittedRoomListRequest,
         DumpSubmittedRoomTopicCommand, DumpSubmittedSessionCommand,
         DumpSubmittedSetupRecoveryCommand, DumpSubmittedUserCommand,
         DumpSubmittedVerificationAction, DumpSubmittedVerificationRequest, DumpUserCommandAction,
@@ -204,6 +205,7 @@ mod dialogs;
 mod dpi;
 mod echo;
 mod errors;
+mod file_dialogs;
 mod find;
 mod fonts;
 mod frame;
@@ -253,12 +255,12 @@ mod window_buffer;
 mod window_data;
 
 use account::{
-    CRASH_LOG_FILE_NAME, PROFILE_SUBDIR, SubmittedIdentityReset, SubmittedSessionCommand,
-    delete_saved_session, load_or_create_store_passphrase, profile_dir, save_session, session_path,
-    submit_cancel_identity_reset, submit_device_rename, submit_device_sign_out,
-    submit_identity_reset, submit_login, submit_logout, submit_recover_e2ee,
-    submit_restore_saved_session, submit_restore_session, submit_setup_e2ee_recovery,
-    submit_start_sync,
+    CRASH_LOG_FILE_NAME, PROFILE_SUBDIR, SubmittedIdentityReset, SubmittedRoomKeyTransfer,
+    SubmittedSessionCommand, delete_saved_session, load_or_create_store_passphrase, profile_dir,
+    save_session, session_path, submit_cancel_identity_reset, submit_device_rename,
+    submit_device_sign_out, submit_identity_reset, submit_login, submit_logout,
+    submit_recover_e2ee, submit_restore_saved_session, submit_restore_session,
+    submit_room_key_transfer, submit_setup_e2ee_recovery, submit_start_sync,
 };
 #[cfg(test)]
 use account::{SAVED_SESSION_VERSION, SESSION_FILE_NAME, SavedSession, load_saved_session};
@@ -293,8 +295,8 @@ use command_runner::{
 };
 use commands::{
     BarCommand, CommandError, ComposeSubmission, CreateRoomArgs, E2eeSlashCommand, FontCommand,
-    LogCommand, SlashCommand, TimestampCommand, VerificationAction, local_command_history_entry,
-    parse_compose_submission,
+    LogCommand, RoomKeyTransfer, SlashCommand, TimestampCommand, VerificationAction,
+    local_command_history_entry, parse_compose_submission,
 };
 #[cfg(test)]
 use compose::submit_compose_from_edit;
@@ -321,12 +323,14 @@ use dialogs::{
 };
 use dialogs::{
     SubmittedSetupE2eeRecovery, create_child_window, pack_size_lparam, register_dialog_classes,
-    run_colors_dialog, run_modal_dialog, run_options_dialog, show_about_dialog,
-    show_e2ee_recovery_key, show_login_dialog, show_recover_e2ee_dialog, show_reset_e2ee_dialog,
-    show_setup_e2ee_dialog, show_sign_out_session_dialog, show_single_field_dialog,
+    room_keys_dialog_title, run_colors_dialog, run_modal_dialog, run_options_dialog,
+    show_about_dialog, show_e2ee_recovery_key, show_login_dialog, show_recover_e2ee_dialog,
+    show_reset_e2ee_dialog, show_room_keys_dialog, show_setup_e2ee_dialog,
+    show_sign_out_session_dialog, show_single_field_dialog,
 };
 use echo::{EchoLine, EchoLog};
 use errors::{ErrorDestination, error_destination};
+use file_dialogs::FileDialog;
 #[cfg(test)]
 use find::build_view_find_state;
 use find::{
@@ -355,11 +359,12 @@ use frame_menus::{
     handle_window_key_command, invoke_menu_command_for_automation,
     invoke_navigation_context_menu_for_automation, invoke_timeline_context_menu_for_automation,
     log_out, open_dialog_for_automation, refresh_menu_popup, refresh_message_menu_state,
-    refresh_room_menu_state, refresh_tools_menu_state, select_timeline_event_for_automation,
-    selected_message_quote_target, selected_timeline_event_id,
-    selected_timeline_event_id_for_automation, selected_timeline_media_attachment,
-    show_context_menu, show_recover_e2ee_menu_dialog, show_reset_e2ee_menu_dialog,
-    show_timeline_message_context_menu, timeline_row_is_selected, window_menu_command_id,
+    refresh_room_menu_state, refresh_tools_menu_state, run_room_keys_dialogs,
+    select_timeline_event_for_automation, selected_message_quote_target,
+    selected_timeline_event_id, selected_timeline_event_id_for_automation,
+    selected_timeline_media_attachment, show_context_menu, show_recover_e2ee_menu_dialog,
+    show_reset_e2ee_menu_dialog, show_timeline_message_context_menu, timeline_row_is_selected,
+    window_menu_command_id,
 };
 use identity::IdentityWarning;
 #[cfg(test)]
@@ -378,15 +383,16 @@ use menus::{
     ACCEL_ID_NEXT_CHANNEL, ACCEL_ID_NEXT_QUERY, ACCEL_ID_TOGGLE_MAXIMIZE, ACCEL_ID_TREEBAR_FOCUS,
     ACCEL_ID_WINDOW_FIRST, ACCEL_ID_WINDOW_LAST, ACCEL_ID_WINDOW_NEXT, ACCEL_ID_WINDOW_PREVIOUS,
     BarMenu, COMMANDS_MENU, FILE_MENU, HELP_MENU, MEMBER_CONTROL_MENU, MEMBER_MENU, MENU_BAR,
-    MENU_ID_COMMANDS_FIRST, MENU_ID_COMMANDS_LIST, MENU_ID_FILE_CONNECT, MENU_ID_FILE_DISCONNECT,
-    MENU_ID_FILE_EXIT, MENU_ID_FILE_SELECT_SERVER, MENU_ID_FIND, MENU_ID_HELP_ABOUT,
-    MENU_ID_HELP_TOPICS, MENU_ID_LOGOUT, MENU_ID_MEMBER_ACCEPT_IDENTITY, MENU_ID_MEMBER_BAN,
-    MENU_ID_MEMBER_DEOP, MENU_ID_MEMBER_DEVICES, MENU_ID_MEMBER_DEVOICE, MENU_ID_MEMBER_IGNORE,
-    MENU_ID_MEMBER_KICK, MENU_ID_MEMBER_MENTION, MENU_ID_MEMBER_OP, MENU_ID_MEMBER_QUERY,
-    MENU_ID_MEMBER_UNIGNORE, MENU_ID_MEMBER_VERIFY, MENU_ID_MEMBER_VOICE, MENU_ID_MEMBER_WHOIS,
-    MENU_ID_MESSAGE_EDIT, MENU_ID_MESSAGE_GO_TO_ORIGINAL, MENU_ID_MESSAGE_REACT,
-    MENU_ID_MESSAGE_REDACT, MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_SAVE_ATTACHMENT,
-    MENU_ID_RECOVER_E2EE, MENU_ID_RESET_E2EE, MENU_ID_ROOM_ACCEPT_INVITE, MENU_ID_ROOM_NOTIFY_ALL,
+    MENU_ID_COMMANDS_FIRST, MENU_ID_COMMANDS_LIST, MENU_ID_EXPORT_ROOM_KEYS, MENU_ID_FILE_CONNECT,
+    MENU_ID_FILE_DISCONNECT, MENU_ID_FILE_EXIT, MENU_ID_FILE_SELECT_SERVER, MENU_ID_FIND,
+    MENU_ID_HELP_ABOUT, MENU_ID_HELP_TOPICS, MENU_ID_IMPORT_ROOM_KEYS, MENU_ID_LOGOUT,
+    MENU_ID_MEMBER_ACCEPT_IDENTITY, MENU_ID_MEMBER_BAN, MENU_ID_MEMBER_DEOP,
+    MENU_ID_MEMBER_DEVICES, MENU_ID_MEMBER_DEVOICE, MENU_ID_MEMBER_IGNORE, MENU_ID_MEMBER_KICK,
+    MENU_ID_MEMBER_MENTION, MENU_ID_MEMBER_OP, MENU_ID_MEMBER_QUERY, MENU_ID_MEMBER_UNIGNORE,
+    MENU_ID_MEMBER_VERIFY, MENU_ID_MEMBER_VOICE, MENU_ID_MEMBER_WHOIS, MENU_ID_MESSAGE_EDIT,
+    MENU_ID_MESSAGE_GO_TO_ORIGINAL, MENU_ID_MESSAGE_REACT, MENU_ID_MESSAGE_REDACT,
+    MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_SAVE_ATTACHMENT, MENU_ID_RECOVER_E2EE,
+    MENU_ID_RESET_E2EE, MENU_ID_ROOM_ACCEPT_INVITE, MENU_ID_ROOM_NOTIFY_ALL,
     MENU_ID_ROOM_NOTIFY_MENTIONS, MENU_ID_ROOM_NOTIFY_MUTE, MENU_ID_ROOM_PART,
     MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_TOOLS_COLORS,
     MENU_ID_TOOLS_OPTIONS, MENU_ID_TOOLS_SESSIONS, MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL,
@@ -766,6 +772,7 @@ struct WindowState {
     opened_links: Vec<String>,
     submitted_setup_e2ee_recovery: Vec<SubmittedSetupE2eeRecovery>,
     submitted_identity_resets: Vec<SubmittedIdentityReset>,
+    submitted_room_key_transfers: Vec<SubmittedRoomKeyTransfer>,
     submitted_session_commands: Vec<SubmittedSessionCommand>,
     pending_attachment_saves: BTreeMap<String, PendingAttachmentSave>,
     last_attachment_save: Option<AttachmentSaveResult>,
@@ -1008,6 +1015,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         opened_links: Vec::new(),
         submitted_setup_e2ee_recovery: Vec::new(),
         submitted_identity_resets: Vec::new(),
+        submitted_room_key_transfers: Vec::new(),
         submitted_session_commands: Vec::new(),
         pending_attachment_saves: BTreeMap::new(),
         last_attachment_save: None,

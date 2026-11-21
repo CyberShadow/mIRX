@@ -332,6 +332,15 @@ pub(super) fn verification(event: &VerificationStateEvent) -> Vec<String> {
     lines
 }
 
+/// A room key file is being written: the key derivation takes a moment.
+pub(super) fn exporting_room_keys(path: &str) -> String {
+    format!("Exporting room keys to {path}...")
+}
+
+pub(super) fn importing_room_keys(path: &str) -> String {
+    format!("Importing room keys from {path}...")
+}
+
 pub(super) fn room_keys_exported(path: &str) -> String {
     format!("Room keys exported to {path}. Keep the file and its passphrase safe.")
 }

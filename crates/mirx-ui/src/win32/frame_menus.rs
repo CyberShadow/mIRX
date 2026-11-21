@@ -692,6 +692,18 @@ unsafe fn window_menu_command(
     ("Window", Ok(Some(())))
 }
 
+/// Export or Import Room Keys...: `/e2ee export|import` without a file.
+unsafe fn room_keys_menu_command(
+    hwnd: HWND,
+    transfer: RoomKeyTransfer,
+) -> (&'static str, Result<Option<()>, String>) {
+    let command = SlashCommand::E2ee(E2eeSlashCommand::RoomKeys {
+        transfer,
+        path: None,
+    });
+    ("Tools", run_local_command(hwnd, command).map(|_| Some(())))
+}
+
 unsafe fn menu_command_result(
     hwnd: HWND,
     wparam: WPARAM,
@@ -816,6 +828,8 @@ unsafe fn menu_command_result(
             "Tools",
             show_reset_e2ee_menu_dialog(hwnd).map(|handled| handled.then_some(())),
         ),
+        MENU_ID_EXPORT_ROOM_KEYS => room_keys_menu_command(hwnd, RoomKeyTransfer::Export),
+        MENU_ID_IMPORT_ROOM_KEYS => room_keys_menu_command(hwnd, RoomKeyTransfer::Import),
         MENU_ID_VERIFY_THIS_SESSION => (
             "Tools",
             run_local_command(
@@ -1313,6 +1327,48 @@ pub(super) unsafe fn show_reset_e2ee_menu_dialog(hwnd: HWND) -> Result<bool, Str
     submit_identity_reset(state_mut(hwnd), form.password)?;
     refresh_status_bar(hwnd)?;
     Ok(true)
+}
+
+/// Tools > Export/Import Room Keys... and `/e2ee export|import`: the
+/// Save or Open dialog unless the file is given, then its passphrase, then
+/// the command. Returns the status bar's feedback, `None` if either dialog
+/// is cancelled.
+pub(super) unsafe fn run_room_keys_dialogs(
+    hwnd: HWND,
+    transfer: RoomKeyTransfer,
+    path: Option<String>,
+) -> Result<Option<String>, String> {
+    let title = room_keys_dialog_title(transfer);
+    let path = match path {
+        Some(path) => path,
+        None => {
+            let dialog = match transfer {
+                RoomKeyTransfer::Export => FileDialog::Save {
+                    file_name: "mirx-keys.txt",
+                    folder: None,
+                },
+                RoomKeyTransfer::Import => FileDialog::Open,
+            };
+            match file_dialogs::choose_file(hwnd, title, file_dialogs::TEXT_FILES, dialog)? {
+                Some(path) => path
+                    .into_os_string()
+                    .into_string()
+                    .expect("the dialog's path came from a String"),
+                None => return Ok(None),
+            }
+        }
+    };
+    let Some(passphrase) = show_room_keys_dialog(hwnd, transfer, &path)? else {
+        return Ok(None);
+    };
+    submit_room_key_transfer(state_mut(hwnd), transfer, path, passphrase)?;
+    Ok(Some(
+        match transfer {
+            RoomKeyTransfer::Export => "room key export submitted",
+            RoomKeyTransfer::Import => "room key import submitted",
+        }
+        .to_owned(),
+    ))
 }
 
 unsafe fn show_setup_e2ee_menu_dialog(hwnd: HWND) -> Result<bool, String> {

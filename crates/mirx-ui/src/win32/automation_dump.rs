@@ -1180,6 +1180,22 @@ fn submitted_identity_reset_commands_from_state(
         .collect()
 }
 
+fn submitted_room_key_transfers_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedRoomKeyTransfer> {
+    state
+        .submitted_room_key_transfers
+        .iter()
+        .map(|submitted| DumpSubmittedRoomKeyTransfer {
+            direction: match submitted.transfer {
+                RoomKeyTransfer::Export => DumpRoomKeyTransferDirection::Export,
+                RoomKeyTransfer::Import => DumpRoomKeyTransferDirection::Import,
+            },
+            path: submitted.path.clone(),
+        })
+        .collect()
+}
+
 /// By room, then user: both maps are ordered.
 fn dump_identity_warnings(model: &UiModel) -> Vec<DumpIdentityWarning> {
     model
@@ -1247,6 +1263,7 @@ pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_recovery_commands: submitted_recovery_commands_from_state(state),
         submitted_setup_recovery_commands: submitted_setup_recovery_commands_from_state(state),
         submitted_identity_reset_commands: submitted_identity_reset_commands_from_state(state),
+        submitted_room_key_transfers: submitted_room_key_transfers_from_state(state),
         submitted_session_commands: state
             .submitted_session_commands
             .iter()

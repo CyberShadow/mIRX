@@ -2446,7 +2446,11 @@ mod tests {
         );
         assert_eq!(
             arrivals(&room_view),
-            [("event:$old", None), ("event:$a", Some(0)), ("$b", Some(1)),]
+            [
+                ("event:$old", None),
+                ("event:$a", Some(0)),
+                ("event:$b", Some(1))
+            ]
         );
         assert_eq!(room_view.arrivals.next(), 2);
     }

@@ -443,6 +443,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_identity_reset_commands: Vec<SubmittedIdentityReset>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_room_key_transfers: Vec<SubmittedRoomKeyTransfer>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_session_commands: Vec<SubmittedSessionCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_room_list_requests: Vec<SubmittedRoomListRequest>,
@@ -685,6 +687,22 @@ pub struct SubmittedSetupRecoveryCommand {
 pub enum SubmittedIdentityReset {
     Reset { password_redacted: bool },
     Cancel,
+}
+
+/// A room key file export or import (`/e2ee export|import`); never the
+/// passphrase.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedRoomKeyTransfer {
+    pub direction: RoomKeyTransferDirection,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomKeyTransferDirection {
+    Export,
+    Import,
 }
 
 /// A `/devices delete` or `/devices rename`; never the password.

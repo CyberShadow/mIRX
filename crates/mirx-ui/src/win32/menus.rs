@@ -71,6 +71,10 @@ pub(super) const MENU_ID_MEMBER_DEVICES: usize = 40052;
 pub(super) const MENU_ID_MEMBER_VERIFY: usize = 40053;
 pub(super) const MENU_ID_RESET_E2EE: usize = 40054;
 pub(super) const MENU_ID_MEMBER_ACCEPT_IDENTITY: usize = 40055;
+/// Export Room Keys..., which runs `/e2ee export`.
+pub(super) const MENU_ID_EXPORT_ROOM_KEYS: usize = 40056;
+/// Import Room Keys..., which runs `/e2ee import`.
+pub(super) const MENU_ID_IMPORT_ROOM_KEYS: usize = 40057;
 /// The window keys' command ids: accelerators with no menu item, in the
 /// gap below the Commands menu's. Alt+n sends `ACCEL_ID_WINDOW_FIRST + n - 1`.
 pub(super) const ACCEL_ID_WINDOW_FIRST: usize = 40080;
@@ -208,6 +212,14 @@ pub(super) const TOOLS_MENU: &[MenuEntry] = &[
     Item {
         id: MENU_ID_RESET_E2EE,
         label: "Rese&t E2EE Identity...",
+    },
+    Item {
+        id: MENU_ID_EXPORT_ROOM_KEYS,
+        label: "E&xport Room Keys...",
+    },
+    Item {
+        id: MENU_ID_IMPORT_ROOM_KEYS,
+        label: "I&mport Room Keys...",
     },
     Item {
         id: MENU_ID_VERIFY_THIS_SESSION,

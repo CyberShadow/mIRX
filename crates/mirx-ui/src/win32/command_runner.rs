@@ -499,6 +499,9 @@ pub(super) unsafe fn run_slash_command(
                 refresh_status_bar(hwnd)?;
                 Ok(None)
             }
+            E2eeSlashCommand::RoomKeys { transfer, path } => {
+                run_room_keys_dialogs(hwnd, transfer, path)
+            }
         },
         SlashCommand::Help { topic } => {
             echo_in_active_view(hwnd, commands::help_lines(topic.as_deref())?)?;

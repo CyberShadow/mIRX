@@ -37,19 +37,19 @@ use mirx_testkit::{
     Model, NavigationNode, NavigationNodeKey, NavigationPathSegment, Room, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo,
     RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
-    RoomImageActivity, RoomImageInfo, RoomImageMediaState, RoomMediaSource, RoomMemberChange,
-    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomTag, SessionAuth, ShownTip, SpaceChild, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedFileCommand,
+    RoomImageActivity, RoomImageInfo, RoomImageMediaState, RoomKeyTransferDirection,
+    RoomMediaSource, RoomMemberChange, RoomMessageActivity, RoomMessageActivityLine,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SessionAuth, ShownTip, SpaceChild,
+    StoredSession, SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedFileCommand,
     SubmittedHistoryCommand, SubmittedIdentityReset, SubmittedMemberModerationCommand,
     SubmittedMembershipCommand, SubmittedMessageCommand, SubmittedNotificationCommand,
     SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
     SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
-    SubmittedReplyThreadTarget, SubmittedRoomListRequest, SubmittedRoomTopicCommand,
-    SubmittedSessionCommand, SubmittedSetupRecoveryCommand, SubmittedUserCommand,
-    SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem, TestkitError,
-    UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
+    SubmittedReplyThreadTarget, SubmittedRoomKeyTransfer, SubmittedRoomListRequest,
+    SubmittedRoomTopicCommand, SubmittedSessionCommand, SubmittedSetupRecoveryCommand,
+    SubmittedUserCommand, SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem,
+    TestkitError, UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
     UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
     UiFindState, UiLoggingOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
     UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
@@ -68,9 +68,9 @@ use windows_sys::Win32::UI::Controls::{
     EM_GETSEL, EM_SETSEL, TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_CONTROL, VK_DOWN,
-    VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_NEXT, VK_OEM_COMMA, VK_PRIOR, VK_RETURN,
-    VK_RIGHT, VK_SHIFT, VK_TAB, VK_X,
+    INPUT, INPUT_0, INPUT_KEYBOARD, IsWindowEnabled, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
+    VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_NEXT, VK_OEM_COMMA,
+    VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_X,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, DM_GETDEFID, EnumThreadWindows,
@@ -3134,7 +3134,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 68);
+    assert_eq!(version.protocol_version, 69);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -5423,6 +5423,133 @@ fn automation_driver_reset_e2ee_dialog_of_a_browser_session_asks_no_password()
     ] {
         assert!(view_contains(status, line), "{line}: {:?}", status.lines);
     }
+    Ok(())
+}
+
+/// The room key file dialog's controls.
+const ROOM_KEYS_DIALOG_PASSPHRASE_ID: i32 = 5025;
+const ROOM_KEYS_DIALOG_CONFIRMATION_ID: i32 = 5026;
+const ROOM_KEYS_DIALOG_OK_ID: usize = 5027;
+
+/// Runs `/e2ee export|import <path>` and answers its passphrase dialog
+/// (twice for an export) with OK.
+fn transfer_room_keys(
+    app: &MirxApp,
+    command: &str,
+    passphrase: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    app.set_compose_text(command)?;
+    app.open_dialog(AutomationDialog::ComposeReturn)?;
+    let dialog = app.wait_for_modal_dialog(Duration::from_secs(5))?;
+    assert_eq!(dialog.class, "mirxWin32RoomKeysDialog", "{command}");
+    let export = dialog.title == "Export Room Keys";
+    assert!(export || dialog.title == "Import Room Keys", "{dialog:?}");
+    let dialog = dialog.hwnd as HWND;
+    let ok = unsafe { GetDlgItem(dialog, ROOM_KEYS_DIALOG_OK_ID as i32) };
+    assert_eq!(unsafe { IsWindowEnabled(ok) }, 0, "no passphrase yet");
+    let wide = wide_null(passphrase);
+    let mut edits = vec![ROOM_KEYS_DIALOG_PASSPHRASE_ID];
+    if export {
+        edits.push(ROOM_KEYS_DIALOG_CONFIRMATION_ID);
+    }
+    for id in edits {
+        let edit = unsafe { GetDlgItem(dialog, id) };
+        assert!(!edit.is_null(), "{command}: edit {id}");
+        assert_ne!(unsafe { SetWindowTextW(edit, wide.as_ptr()) }, 0);
+    }
+    assert_ne!(
+        unsafe { IsWindowEnabled(ok) },
+        0,
+        "a passphrase that will do"
+    );
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, ROOM_KEYS_DIALOG_OK_ID as WPARAM, 0) },
+        0
+    );
+    wait_for_window_gone(dialog, "room keys dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+/// A real session's room keys go out to a file and back in, through the
+/// passphrase dialog; Status says what happened, and nothing keeps the
+/// passphrase.
+#[test]
+fn automation_driver_room_key_files_export_and_import_through_their_dialog()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    // Not launch_automation_app: the restore starts before the core reports
+    // Started, so the lifecycle never shows core_started.
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    let keys = local_app_data.join("room keys.txt");
+    let path = keys.to_str().expect("a UTF-8 path");
+    let (passphrase, wrong) = ("correct horse battery", "wrong horse battery");
+
+    transfer_room_keys(&app, &format!("/e2ee export {path}"), passphrase)?;
+    wait_for_status_line(
+        &app,
+        &format!("* Exporting room keys to {path}..."),
+        Duration::from_secs(5),
+    )?;
+    wait_for_status_line(
+        &app,
+        &format!("* Room keys exported to {path}. Keep the file and its passphrase safe."),
+        Duration::from_secs(30),
+    )?;
+    assert!(fs::read_to_string(&keys)?.starts_with("-----BEGIN MEGOLM SESSION DATA-----"));
+
+    transfer_room_keys(&app, &format!("/e2ee import {path}"), wrong)?;
+    wait_for_status_line(
+        &app,
+        "* Error during room key import: wrong passphrase, or the file is damaged",
+        Duration::from_secs(30),
+    )?;
+    transfer_room_keys(&app, &format!("/e2ee import {path}"), passphrase)?;
+    // The session holds no room keys: the file has none.
+    wait_for_status_line(
+        &app,
+        &format!("* Imported 0 of 0 room keys from {path}"),
+        Duration::from_secs(30),
+    )?;
+
+    let model = app.dump_model()?;
+    let transfer = |direction| SubmittedRoomKeyTransfer {
+        direction,
+        path: path.to_owned(),
+    };
+    assert_eq!(
+        model.submitted_room_key_transfers,
+        [
+            transfer(RoomKeyTransferDirection::Export),
+            transfer(RoomKeyTransferDirection::Import),
+            transfer(RoomKeyTransferDirection::Import),
+        ]
+    );
+    let dumps = format!(
+        "{}{}",
+        serde_json::to_string(&model)?,
+        serde_json::to_string(&app.dump_ui_state()?)?
+    );
+    assert!(!dumps.contains("horse battery"), "{dumps}");
+
+    // A file is a full path; the reason does not repeat the word.
+    type_commands(&app, &["/e2ee export horse"])?;
+    assert_eq!(
+        app.dump_model()?.status,
+        "* /e2ee: give the file's full path, or none to choose it"
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 
@@ -15741,6 +15868,8 @@ fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
                 ("Set Up E2EE &Recovery...", true),
                 ("Recover &E2EE...", true),
                 ("Rese&t E2EE Identity...", true),
+                ("E&xport Room Keys...", true),
+                ("I&mport Room Keys...", true),
                 ("&Verify This Session", true),
                 ("Sess&ions", true),
                 ("&Accept Verification", false),

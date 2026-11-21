@@ -237,6 +237,20 @@ pub(super) enum E2eeSlashCommand {
         passphrase: Option<String>,
         wait_for_backups_to_upload: bool,
     },
+    /// `/e2ee export|import [file]`: the room key file's passphrase dialog;
+    /// without a file, the Save or Open dialog first. The passphrase is
+    /// never an argument.
+    RoomKeys {
+        transfer: RoomKeyTransfer,
+        path: Option<String>,
+    },
+}
+
+/// Which way room keys go through a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RoomKeyTransfer {
+    Export,
+    Import,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -399,7 +413,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "e2ee",
-        usage: "[status|refresh|recover|reset [cancel]|setup [wait] [passphrase <passphrase>]]",
+        usage: "[status|refresh|recover|reset [cancel]|setup [wait] [passphrase <passphrase>]|export [file]|import [file]]",
         summary: "show or manage end-to-end encryption",
     },
     CommandSpec {
@@ -1004,8 +1018,30 @@ fn parse_e2ee(argument: &str) -> Result<E2eeSlashCommand, CommandError> {
         "reset" if rest.is_empty() => Ok(E2eeSlashCommand::ResetDialog),
         "reset" if rest.eq_ignore_ascii_case("cancel") => Ok(E2eeSlashCommand::ResetCancel),
         "setup" => parse_e2ee_setup(rest).ok_or_else(invalid),
+        "export" => parse_e2ee_room_keys(RoomKeyTransfer::Export, rest),
+        "import" => parse_e2ee_room_keys(RoomKeyTransfer::Import, rest),
         _ => Err(invalid()),
     }
+}
+
+/// `[file]`, the rest of the line, spaces and all. A GUI process has no
+/// current directory worth meaning, and a key file must not land, or be
+/// looked for, anywhere surprising: a file is a full path.
+fn parse_e2ee_room_keys(
+    transfer: RoomKeyTransfer,
+    argument: &str,
+) -> Result<E2eeSlashCommand, CommandError> {
+    let path = match argument {
+        "" => None,
+        path if std::path::Path::new(path).is_absolute() => Some(path.to_owned()),
+        _ => {
+            return Err(CommandError::new(
+                "e2ee",
+                "give the file's full path, or none to choose it",
+            ));
+        }
+    };
+    Ok(E2eeSlashCommand::RoomKeys { transfer, path })
 }
 
 /// `[wait] [passphrase <passphrase>]`.
@@ -1597,6 +1633,29 @@ mod tests {
                 "{input}"
             );
         }
+        for (input, transfer, path) in [
+            ("/e2ee export", RoomKeyTransfer::Export, None),
+            (
+                "/e2ee export C:\\a b\\k.txt",
+                RoomKeyTransfer::Export,
+                Some("C:\\a b\\k.txt"),
+            ),
+            ("/E2EE IMPORT", RoomKeyTransfer::Import, None),
+            (
+                "/e2ee import  D:\\k.txt ",
+                RoomKeyTransfer::Import,
+                Some("D:\\k.txt"),
+            ),
+        ] {
+            assert_eq!(
+                parse(input),
+                Ok(SlashCommand::E2ee(E2eeSlashCommand::RoomKeys {
+                    transfer,
+                    path: path.map(str::to_owned),
+                })),
+                "{input}"
+            );
+        }
         for (input, action) in [
             ("/verify accept", VerificationAction::Accept),
             ("/verify cancel", VerificationAction::Cancel),
@@ -1651,6 +1710,22 @@ mod tests {
         ] {
             let rejected = parse(input);
             assert_eq!(rejected, error("e2ee", "invalid parameters"), "{input}");
+            assert!(!rejected.unwrap_err().to_string().contains("secret"));
+        }
+        // A room key file is a full path; the reason does not repeat the
+        // word, which may be a passphrase typed in the wrong place.
+        for input in [
+            "/e2ee export secret",
+            "/e2ee import secret\\keys.txt",
+            "/e2ee export \\secret.txt",
+            "/e2ee import C:secret.txt",
+        ] {
+            let rejected = parse(input);
+            assert_eq!(
+                rejected,
+                error("e2ee", "give the file's full path, or none to choose it"),
+                "{input}"
+            );
             assert!(!rejected.unwrap_err().to_string().contains("secret"));
         }
     }

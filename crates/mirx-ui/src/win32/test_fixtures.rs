@@ -873,6 +873,7 @@ pub(super) fn test_state() -> WindowState {
         #[cfg(test)]
         submitted_setup_e2ee_recovery: Vec::new(),
         submitted_identity_resets: Vec::new(),
+        submitted_room_key_transfers: Vec::new(),
         submitted_session_commands: Vec::new(),
         pending_attachment_saves: BTreeMap::new(),
         last_attachment_save: None,

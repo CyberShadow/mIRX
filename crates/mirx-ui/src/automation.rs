@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 68;
+pub(crate) const PROTOCOL_VERSION: u32 = 69;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1899,6 +1899,8 @@ pub(crate) struct DumpModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_identity_reset_commands: Vec<DumpSubmittedIdentityReset>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_room_key_transfers: Vec<DumpSubmittedRoomKeyTransfer>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_session_commands: Vec<DumpSubmittedSessionCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_room_list_requests: Vec<DumpSubmittedRoomListRequest>,
@@ -2143,6 +2145,22 @@ pub(crate) struct DumpSubmittedSetupRecoveryCommand {
 pub(crate) enum DumpSubmittedIdentityReset {
     Reset { password_redacted: bool },
     Cancel,
+}
+
+/// A room key file export or import (`/e2ee export|import`); never the
+/// passphrase.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedRoomKeyTransfer {
+    pub(crate) direction: DumpRoomKeyTransferDirection,
+    pub(crate) path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DumpRoomKeyTransferDirection {
+    Export,
+    Import,
 }
 
 /// A `/devices delete` or `/devices rename`; never the password.
@@ -3656,6 +3674,10 @@ mod tests {
                 {"action":"reset","password_redacted":true},
                 {"action":"cancel"}
             ],
+            "submitted_room_key_transfers":[
+                {"direction":"export","path":"C:\\keys.txt"},
+                {"direction":"import","path":"D:\\keys.txt"}
+            ],
             "submitted_session_commands":[
                 {"action":"sign_out","device_id":"PH0NE","password_redacted":true},
                 {"action":"rename","device_id":"PH0NE","display_name":"Work phone"}
@@ -3671,6 +3693,19 @@ mod tests {
                     password_redacted: true
                 },
                 super::DumpSubmittedIdentityReset::Cancel,
+            ]
+        );
+        assert_eq!(
+            model.submitted_room_key_transfers,
+            vec![
+                super::DumpSubmittedRoomKeyTransfer {
+                    direction: super::DumpRoomKeyTransferDirection::Export,
+                    path: "C:\\keys.txt".to_owned(),
+                },
+                super::DumpSubmittedRoomKeyTransfer {
+                    direction: super::DumpRoomKeyTransferDirection::Import,
+                    path: "D:\\keys.txt".to_owned(),
+                },
             ]
         );
         assert_eq!(
@@ -3730,6 +3765,19 @@ mod tests {
                 mirx_testkit::SubmittedIdentityReset::Cancel,
             ]
         );
+        assert_eq!(
+            testkit_model.submitted_room_key_transfers,
+            vec![
+                mirx_testkit::SubmittedRoomKeyTransfer {
+                    direction: mirx_testkit::RoomKeyTransferDirection::Export,
+                    path: "C:\\keys.txt".to_owned(),
+                },
+                mirx_testkit::SubmittedRoomKeyTransfer {
+                    direction: mirx_testkit::RoomKeyTransferDirection::Import,
+                    path: "D:\\keys.txt".to_owned(),
+                },
+            ]
+        );
     }
 
     fn idle_probe(previous_generation: Option<u64>) -> IdleProbe {
@@ -3775,8 +3823,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_68() {
-        assert_eq!(PROTOCOL_VERSION, 68);
+    fn protocol_version_is_69() {
+        assert_eq!(PROTOCOL_VERSION, 69);
     }
 
     #[test]
@@ -5806,7 +5854,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":68,
+                    "protocol_version":69,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5883,6 +5931,7 @@ mod tests {
                     submitted_verification_requests: Vec::new(),
                     identity_warnings: Vec::new(),
                     submitted_identity_reset_commands: Vec::new(),
+                    submitted_room_key_transfers: Vec::new(),
                     submitted_session_commands: Vec::new(),
                     submitted_recovery_commands: Vec::new(),
                     submitted_setup_recovery_commands: Vec::new(),
@@ -6826,6 +6875,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_room_key_transfers: Vec::new(),
             submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
@@ -6926,6 +6976,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_room_key_transfers: Vec::new(),
             submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: vec![DumpSubmittedSetupRecoveryCommand {
@@ -6993,6 +7044,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_room_key_transfers: Vec::new(),
             submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
@@ -7068,6 +7120,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_room_key_transfers: Vec::new(),
             submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
@@ -7170,6 +7223,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_room_key_transfers: Vec::new(),
             submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
@@ -7279,6 +7333,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_room_key_transfers: Vec::new(),
             submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
@@ -7392,6 +7447,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_room_key_transfers: Vec::new(),
             submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
@@ -7535,6 +7591,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_room_key_transfers: Vec::new(),
             submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
@@ -7620,6 +7677,7 @@ mod tests {
                 submitted_verification_requests: Vec::new(),
                 identity_warnings: Vec::new(),
                 submitted_identity_reset_commands: Vec::new(),
+                submitted_room_key_transfers: Vec::new(),
                 submitted_session_commands: Vec::new(),
                 submitted_recovery_commands: Vec::new(),
                 submitted_setup_recovery_commands: Vec::new(),
