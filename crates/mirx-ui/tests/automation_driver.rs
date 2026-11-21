@@ -20123,6 +20123,17 @@ fn slash_whois_prints_server_profile() -> Result<(), Box<dyn std::error::Error>>
             room_id: None,
             message: "no such user @nobody:remote".to_owned(),
         }),
+        // Away and idle: IRC's 301 and 317, before the end.
+        Event::UserProfile(UserProfile {
+            user_id: "@lazy:remote".to_owned(),
+            display_name: Some("Lazy".to_owned()),
+            presence: Some(mirx_core::UserPresence {
+                kind: mirx_core::PresenceKind::Unavailable,
+                status_msg: Some("lunch".to_owned()),
+                last_active_ago_ms: Some(3_725_000),
+                currently_active: Some(false),
+            }),
+        }),
     ])?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
@@ -20140,6 +20151,20 @@ fn slash_whois_prints_server_profile() -> Result<(), Box<dyn std::error::Error>>
             view.lines
         );
     }
+    let lazy: Vec<_> = view_lines_containing(view, "* Lazy ")
+        .into_iter()
+        .map(|line| line.split_once("] ").map_or(line, |(_, text)| text))
+        .collect();
+    assert_eq!(
+        lazy,
+        [
+            "* Lazy is @lazy:remote * Lazy",
+            "* Lazy using remote",
+            "* Lazy is away: lunch",
+            "* Lazy has been idle 1hr 2mins 5secs",
+            "* Lazy End of /WHOIS list",
+        ]
+    );
     assert!(!view_contains(
         find_view(&ui_state, &ViewIdentity::Status),
         "Stranger"

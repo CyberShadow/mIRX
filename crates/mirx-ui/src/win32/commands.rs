@@ -1322,9 +1322,11 @@ pub(super) fn names_lines(room_name: &str, members: &[RoomMemberSummary]) -> Vec
 }
 
 /// `/whois`: the user's server profile, the rooms shared with them (each
-/// with their rank prefix there) and their homeserver. The display name
-/// fills mIRC's "real name" slot; the nick is the one a room knows them
-/// by, else the display name, else the ID.
+/// with their rank prefix there), their homeserver, and whether they are
+/// away and how long idle, in IRC's order (311, 319, 312, 301, 317). The
+/// display name fills mIRC's "real name" slot; the nick is the one a room
+/// knows them by, else the display name, else the ID. Offline prints no
+/// presence: a server without presence says it of everyone.
 pub(super) fn whois_lines(
     profile: &UserProfile,
     room_nick: Option<&str>,
@@ -1352,8 +1354,53 @@ pub(super) fn whois_lines(
         )
     });
     lines.push(format!("* {nick} using {server}"));
+    if let Some(presence) = &profile.presence
+        && presence.kind != PresenceKind::Offline
+    {
+        if presence.kind == PresenceKind::Unavailable {
+            lines.push(match &presence.status_msg {
+                Some(message) => format!("* {nick} is away: {message}"),
+                None => format!("* {nick} is away"),
+            });
+        }
+        if let Some(idle_ms) = presence.last_active_ago_ms
+            && presence.currently_active != Some(true)
+        {
+            lines.push(format!(
+                "* {nick} has been idle {}",
+                duration_text(idle_ms / 1000)
+            ));
+        }
+    }
     lines.push(format!("* {nick} End of /WHOIS list"));
     lines
+}
+
+/// mIRC's `$duration`: `1wk 2days 3hrs 4mins 5secs`, without the units
+/// that are zero, and `0secs` for none.
+pub(super) fn duration_text(secs: u64) -> String {
+    const UNITS: [(u64, &str); 5] = [
+        (7 * 24 * 3600, "wk"),
+        (24 * 3600, "day"),
+        (3600, "hr"),
+        (60, "min"),
+        (1, "sec"),
+    ];
+    if secs == 0 {
+        return "0secs".to_owned();
+    }
+    let mut rest = secs;
+    let mut parts = Vec::new();
+    for (unit_secs, unit) in UNITS {
+        let count = rest / unit_secs;
+        rest %= unit_secs;
+        match count {
+            0 => {}
+            1 => parts.push(format!("1{unit}")),
+            count => parts.push(format!("{count}{unit}s")),
+        }
+    }
+    parts.join(" ")
 }
 
 /// The answer to `/away` and `/back`, as IRC's 306 and 305. An away the
@@ -1529,6 +1576,7 @@ pub(super) fn local_command_history_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mirx_core::UserPresence;
 
     fn error(command: &str, reason: &str) -> Result<SlashCommand, CommandError> {
         Err(CommandError::new(command, reason))
@@ -2738,6 +2786,89 @@ mod tests {
         assert_eq!(
             msg_echo(RoomMessagePresentationKind::Notice, "Alice", "hi"),
             "-> -Alice- hi"
+        );
+    }
+
+    #[test]
+    fn duration_text_reads_like_mircs_duration() {
+        for (secs, text) in [
+            (0, "0secs"),
+            (1, "1sec"),
+            (59, "59secs"),
+            (60, "1min"),
+            (61, "1min 1sec"),
+            (3600, "1hr"),
+            (3725, "1hr 2mins 5secs"),
+            (90061, "1day 1hr 1min 1sec"),
+            (694861, "1wk 1day 1hr 1min 1sec"),
+            (2 * 694861, "2wks 2days 2hrs 2mins 2secs"),
+        ] {
+            assert_eq!(duration_text(secs), text, "{secs}");
+        }
+    }
+
+    #[test]
+    fn whois_says_who_is_away_and_idle_in_ircs_order() {
+        let profile = |kind, status_msg: Option<&str>, idle_ms, currently_active| UserProfile {
+            user_id: "@bob:example".to_owned(),
+            display_name: Some("Bob".to_owned()),
+            presence: Some(UserPresence {
+                kind,
+                status_msg: status_msg.map(str::to_owned),
+                last_active_ago_ms: idle_ms,
+                currently_active,
+            }),
+        };
+        let presence_lines = |profile: &UserProfile| {
+            let lines = whois_lines(profile, None, &[(RoomMemberRank::Member, "Ops")]);
+            // 311, 319, 312 first, and 318 last.
+            assert_eq!(
+                lines[..3],
+                [
+                    "* Bob is @bob:example * Bob",
+                    "* Bob on Ops",
+                    "* Bob using example"
+                ]
+            );
+            assert_eq!(lines.last().unwrap(), "* Bob End of /WHOIS list");
+            lines[3..lines.len() - 1].to_vec()
+        };
+        assert_eq!(
+            presence_lines(&profile(
+                PresenceKind::Unavailable,
+                Some("lunch"),
+                Some(303_999),
+                Some(false)
+            )),
+            ["* Bob is away: lunch", "* Bob has been idle 5mins 3secs"]
+        );
+        assert_eq!(
+            presence_lines(&profile(PresenceKind::Unavailable, None, None, None)),
+            ["* Bob is away"]
+        );
+        assert_eq!(
+            presence_lines(&profile(PresenceKind::Online, None, Some(500), None)),
+            ["* Bob has been idle 0secs"]
+        );
+        // Active now, or offline (what a server without presence says of
+        // everyone): nothing to say.
+        assert!(
+            presence_lines(&profile(
+                PresenceKind::Online,
+                None,
+                Some(9_000),
+                Some(true)
+            ))
+            .is_empty()
+        );
+        assert!(
+            presence_lines(&profile(
+                PresenceKind::Offline,
+                Some("gone"),
+                Some(9_000),
+                None
+            ))
+            .is_empty()
         );
     }
 
