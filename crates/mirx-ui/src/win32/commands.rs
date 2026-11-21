@@ -143,6 +143,11 @@ pub(super) enum SlashCommand {
     SendFile {
         path: Option<String>,
     },
+    /// Saves the active window's buffer; without a file, opens the Save
+    /// dialog.
+    SaveBuf {
+        path: Option<String>,
+    },
     /// Without a body, arms the editbox with the message to edit.
     Edit {
         target_event_id: String,
@@ -295,6 +300,7 @@ impl SlashCommand {
             Self::React { .. } => "react",
             Self::Reply { .. } => "reply",
             Self::SendFile { .. } => "sendfile",
+            Self::SaveBuf { .. } => "savebuf",
             Self::Edit { .. } => "edit",
             Self::Redact { .. } => "redact",
             Self::Unreact { .. } => "unreact",
@@ -520,6 +526,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "reply",
         usage: "<event-id> [message]",
         summary: "reply to a message",
+    },
+    CommandSpec {
+        name: "savebuf",
+        usage: "[file]",
+        summary: "save this window's lines to a file (no file: choose one)",
     },
     CommandSpec {
         name: "sendfile",
@@ -781,6 +792,9 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
             })
         }
         "sendfile" => Ok(SlashCommand::SendFile {
+            path: optional(argument),
+        }),
+        "savebuf" => Ok(SlashCommand::SaveBuf {
             path: optional(argument),
         }),
         "edit" => {
@@ -1843,6 +1857,13 @@ mod tests {
         for input in ["/sendfile", "/sendfile   "] {
             assert_eq!(parse(input), Ok(SlashCommand::SendFile { path: None }));
         }
+        assert_eq!(
+            parse("/savebuf saved ops.txt"),
+            Ok(SlashCommand::SaveBuf {
+                path: Some("saved ops.txt".to_owned()),
+            })
+        );
+        assert_eq!(parse("/savebuf"), Ok(SlashCommand::SaveBuf { path: None }));
     }
 
     #[test]
@@ -1960,6 +1981,7 @@ mod tests {
             "/react $e k",
             "/reply $e t",
             "/sendfile p",
+            "/savebuf f",
             "/edit $e t",
             "/redact $e",
             "/unreact $e",
@@ -2124,6 +2146,7 @@ mod tests {
             "* Commands: /accept /ban /clear /close /create /deop /devices /devoice /e2ee"
         ));
         assert!(lines[0].contains(" /help /identity /ignore "));
+        assert!(lines[0].contains(" /reply /savebuf /sendfile "));
         assert_eq!(lines[1], "* /help <command> for usage");
         assert_eq!(
             help_lines(Some("join")),

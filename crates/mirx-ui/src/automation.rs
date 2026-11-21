@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 66;
+pub(crate) const PROTOCOL_VERSION: u32 = 67;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1100,9 +1100,12 @@ pub(crate) struct UiState {
     /// Tools > Colors and the switchbar's activity colours.
     pub(crate) colors: UiColors,
     /// The labels of the active window's window menu, separators omitted.
+    /// A submenu's items follow it, as `Submenu/Item`.
     pub(crate) active_system_menu_items: Vec<String>,
     /// The labels of the active window's checked window menu items.
     pub(crate) active_system_menu_checked: Vec<String>,
+    /// The labels of the active window's greyed window menu items.
+    pub(crate) active_system_menu_disabled: Vec<String>,
     /// The frame's menubar as opening each menu would show it: MDI's
     /// maximized-child buttons and separators omitted.
     pub(crate) menu_bar: Vec<UiMenu>,
@@ -3767,8 +3770,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_66() {
-        assert_eq!(PROTOCOL_VERSION, 66);
+    fn protocol_version_is_67() {
+        assert_eq!(PROTOCOL_VERSION, 67);
     }
 
     #[test]
@@ -4781,6 +4784,7 @@ mod tests {
             "colors":{"items":[{"item":"background","index":0,"color":"#ffffff"}],"switchbar":{"event":5,"message":4,"highlight":12}},
             "active_system_menu_items":[],
             "active_system_menu_checked":[],
+            "active_system_menu_disabled":[],
             "menu_bar":[],
             "tray":{"icon":false,"hidden":false,"menu":[]},
             "refresh_counters":{"timeline_row_builds":0,"rows_wrapped":0,"treebar_rebuilds":0,"switchbar_rebuilds":0}
@@ -4809,6 +4813,7 @@ mod tests {
             "colors":{"items":[{"item":"background","index":0,"color":"#ffffff"}],"switchbar":{"event":5,"message":4,"highlight":12}},
             "active_system_menu_items":[],
             "active_system_menu_checked":[],
+            "active_system_menu_disabled":[],
             "menu_bar":[],
             "tray":{"icon":false,"hidden":false,"menu":[]},
             "refresh_counters":{"timeline_row_builds":0,"rows_wrapped":0,"treebar_rebuilds":0,"switchbar_rebuilds":0}
@@ -5794,7 +5799,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":66,
+                    "protocol_version":67,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6421,6 +6426,7 @@ mod tests {
                     },
                     active_system_menu_items: vec!["&Restore".to_owned(), "&Font...".to_owned()],
                     active_system_menu_checked: vec![],
+                    active_system_menu_disabled: vec!["&Restore".to_owned()],
                     menu_bar: vec![super::UiMenu {
                         label: "&Help".to_owned(),
                         items: vec![super::UiMenuItem {
@@ -6695,6 +6701,7 @@ mod tests {
                     },
                     "active_system_menu_items":["&Restore","&Font..."],
                     "active_system_menu_checked":[],
+                    "active_system_menu_disabled":["&Restore"],
                     "menu_bar":[{"label":"&Help","items":[{"label":"&Help Topics","enabled":true,"checked":false}]}],
                     "compose_target":{"kind":"reply","event_id":"$question"},
                     "room_list":{

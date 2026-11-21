@@ -2,6 +2,9 @@
 // it. The bin's unit-test harness stays a console program so `cargo test`
 // prints its results.
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+// The UI-state dump tests compare whole `json!` literals, deeper than the
+// default limit expands.
+#![recursion_limit = "256"]
 
 use std::env;
 use std::ffi::{OsStr, OsString};

@@ -29,6 +29,33 @@ unsafe fn execute_slash_command(
     run_slash_command(hwnd, command).map_err(|reason| CommandError::new(name, reason))
 }
 
+/// `/clear`, and the window menu's Buffer > Clear: every line of the
+/// window goes, but a room's messages still queued to send. A thread
+/// window has nothing of its own to clear. Returns the status bar's
+/// feedback.
+pub(super) unsafe fn clear_window(hwnd: HWND, view_id: &ViewId) -> Result<String, String> {
+    match view_id {
+        ViewId::Room(room_id) => {
+            {
+                let state = state_mut(hwnd);
+                if let Some(view) = state.model.room_views.get_mut(room_id) {
+                    view.clear_visible_entries();
+                }
+                prune_decoded_images(state);
+            }
+            refresh_view_content(hwnd, view_id)?;
+            Ok(format!("cleared window: {room_id}"))
+        }
+        ViewId::Thread { .. } => Err("nothing to clear in thread view".to_owned()),
+        ViewId::Status => {
+            state_mut(hwnd).model.status_log.clear();
+            refresh_view_content(hwnd, view_id)?;
+            Ok("cleared window: status".to_owned())
+        }
+        ViewId::RoomList => unreachable!("the Rooms List has no buffer"),
+    }
+}
+
 pub(super) unsafe fn run_slash_command(
     hwnd: HWND,
     command: SlashCommand,
@@ -405,26 +432,17 @@ pub(super) unsafe fn run_slash_command(
             echo_in_active_view(hwnd, [line])?;
             Ok(None)
         }
-        SlashCommand::Clear => match state_ref(hwnd).active_view.clone() {
-            ViewId::Room(room_id) => {
-                {
-                    let state = state_mut(hwnd);
-                    if let Some(view) = state.model.room_views.get_mut(&room_id) {
-                        view.clear_visible_entries();
-                    }
-                    prune_decoded_images(state);
-                }
-                refresh_view_content(hwnd, &ViewId::Room(room_id.clone()))?;
-                Ok(Some(format!("cleared window: {room_id}")))
+        SlashCommand::Clear => {
+            let view_id = state_ref(hwnd).active_view.clone();
+            clear_window(hwnd, &view_id).map(Some)
+        }
+        SlashCommand::SaveBuf { path } => {
+            let view_id = state_ref(hwnd).active_view.clone();
+            match path {
+                Some(path) => save_window_buffer(hwnd, &view_id, Path::new(&path)).map(Some),
+                None => run_save_buffer_dialog(hwnd, &view_id),
             }
-            ViewId::Thread { .. } => Err("nothing to clear in thread view".to_owned()),
-            ViewId::Status => {
-                state_mut(hwnd).model.status_log.clear();
-                refresh_view_content(hwnd, &ViewId::Status)?;
-                Ok(Some("cleared window: status".to_owned()))
-            }
-            ViewId::RoomList => unreachable!("/clear is typed in an editbox"),
-        },
+        }
         SlashCommand::E2ee(command) => match command {
             E2eeSlashCommand::ShowStatus => {
                 let state = state_mut(hwnd);

@@ -83,6 +83,12 @@ const SYSMENU_SEND_FILE_LABEL: &str = "Send &File...";
 /// The window menu's checkable Logging, mIRC's: whether the window logs.
 const SYSMENU_ID_LOGGING: usize = 0x0140;
 const SYSMENU_LOGGING_LABEL: &str = "&Logging";
+/// mIRC's window menu Buffer: Clear (`/clear`) and Save... (`/savebuf`).
+const SYSMENU_BUFFER_LABEL: &str = "&Buffer";
+const SYSMENU_ID_BUFFER_CLEAR: usize = 0x0150;
+const SYSMENU_BUFFER_CLEAR_LABEL: &str = "&Clear";
+const SYSMENU_ID_BUFFER_SAVE: usize = 0x0160;
+const SYSMENU_BUFFER_SAVE_LABEL: &str = "&Save...";
 
 struct MdiChildCreateState {
     view_id: ViewId,
@@ -241,6 +247,28 @@ unsafe extern "system" fn mdi_child_window_proc(
             let frame = frame_window_for(hwnd);
             if let Err(message) = toggle_window_logging(frame, hwnd) {
                 show_error_message(frame, "Logging", &message);
+            }
+            0
+        }
+        WM_SYSCOMMAND if wparam & 0xFFF0 == SYSMENU_ID_BUFFER_CLEAR => {
+            let frame = frame_window_for(hwnd);
+            let view_id = state_ref(frame).hwnd_views[&(hwnd as isize)].clone();
+            if let Err(message) = clear_window(frame, &view_id)
+                .and_then(|status| set_local_command_status(frame, status))
+            {
+                show_error_message(frame, "Clear Buffer", &message);
+            }
+            0
+        }
+        WM_SYSCOMMAND if wparam & 0xFFF0 == SYSMENU_ID_BUFFER_SAVE => {
+            let frame = frame_window_for(hwnd);
+            let view_id = state_ref(frame).hwnd_views[&(hwnd as isize)].clone();
+            let saved = run_save_buffer_dialog(frame, &view_id).and_then(|status| match status {
+                Some(status) => set_local_command_status(frame, status),
+                None => Ok(()),
+            });
+            if let Err(message) = saved {
+                show_error_message(frame, "Save Buffer", &message);
             }
             0
         }
@@ -820,6 +848,12 @@ unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(),
         MF_STRING
     };
     let font_label = wide_null(SYSMENU_FONT_LABEL);
+    let buffer_menu = if view_has_editbox(view_id) {
+        Some(create_buffer_menu(view_id)?)
+    } else {
+        None
+    };
+    let buffer_label = wide_null(SYSMENU_BUFFER_LABEL);
     if AppendMenuW(system_menu, MF_SEPARATOR, 0, null()) == 0
         || (view_has_editbox(view_id)
             && AppendMenuW(system_menu, MF_STRING, SYSMENU_ID_FIND, find_label.as_ptr()) == 0)
@@ -837,15 +871,45 @@ unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(),
                 SYSMENU_ID_LOGGING,
                 logging_label.as_ptr(),
             ) == 0)
+        || buffer_menu.is_some_and(|menu| {
+            AppendMenuW(system_menu, MF_POPUP, menu as usize, buffer_label.as_ptr()) == 0
+        })
         || AppendMenuW(system_menu, MF_STRING, SYSMENU_ID_FONT, font_label.as_ptr()) == 0
     {
         return Err(last_os_error(
-            "AppendMenuW window menu Find Text..., Send File..., Logging and Font...",
+            "AppendMenuW window menu Find Text..., Send File..., Logging, Buffer and Font...",
         ));
     }
 
     layout_mdi_child(child);
     Ok(())
+}
+
+/// A window's Buffer submenu. A thread window has nothing of its own to
+/// clear, as `/clear` there says.
+unsafe fn create_buffer_menu(view_id: &ViewId) -> Result<HMENU, String> {
+    let menu = CreatePopupMenu();
+    if menu.is_null() {
+        return Err(last_os_error("CreatePopupMenu window menu Buffer"));
+    }
+    let clear_flags = match view_id {
+        ViewId::Thread { .. } => MF_STRING | MF_GRAYED,
+        ViewId::Status | ViewId::Room(_) => MF_STRING,
+        ViewId::RoomList => unreachable!("the Rooms List has no buffer"),
+    };
+    append_menu_text(
+        menu,
+        clear_flags,
+        SYSMENU_ID_BUFFER_CLEAR,
+        SYSMENU_BUFFER_CLEAR_LABEL,
+    )?;
+    append_menu_text(
+        menu,
+        MF_STRING,
+        SYSMENU_ID_BUFFER_SAVE,
+        SYSMENU_BUFFER_SAVE_LABEL,
+    )?;
+    Ok(menu)
 }
 
 /// The window menu's Logging: turns the log of the window that owns the

@@ -3103,7 +3103,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 66);
+    assert_eq!(version.protocol_version, 67);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -11674,6 +11674,9 @@ fn send_file_dialog_from_the_window_menu_sends_the_chosen_file()
             "Find &Text...\tCtrl+F",
             "Send &File...",
             "&Logging",
+            "&Buffer",
+            "&Buffer/&Clear",
+            "&Buffer/&Save...",
             "&Font..."
         ]
     );
@@ -23077,6 +23080,197 @@ fn a_message_into_a_full_window_builds_it_twice_and_wraps_one_row()
     assert_eq!(
         app.dump_ui_state()?.refresh_counters,
         after.refresh_counters
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+// The window menu's Buffer, and /savebuf.
+
+const SYSMENU_ID_BUFFER_CLEAR: WPARAM = 0x0150;
+const SYSMENU_ID_BUFFER_SAVE: WPARAM = 0x0160;
+
+fn beta_lines(app: &MirxApp) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    Ok(
+        find_view(&app.dump_ui_state()?, &room_identity("!beta:example"))
+            .lines
+            .clone(),
+    )
+}
+
+/// A window's lines as a saved buffer holds them.
+fn saved_buffer(lines: &[String]) -> String {
+    lines.iter().map(|line| format!("{line}\r\n")).collect()
+}
+
+#[test]
+fn buffer_clear_on_the_window_menu_clears_that_window() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, _server, local_app_data) = launch_buffered_beta_room(5000, 5)?;
+    let ui_state = app.dump_ui_state()?;
+    let items = &ui_state.active_system_menu_items;
+    let logging = items
+        .iter()
+        .position(|item| item == "&Logging")
+        .expect("Beta's window menu has Logging");
+    assert_eq!(
+        items[logging..],
+        [
+            "&Logging",
+            "&Buffer",
+            "&Buffer/&Clear",
+            "&Buffer/&Save...",
+            "&Font..."
+        ]
+    );
+    assert!(
+        !ui_state
+            .active_system_menu_disabled
+            .contains(&"&Buffer/&Clear".to_owned())
+    );
+
+    // It clears the window whose menu it is, not the active one.
+    let beta = view_child_hwnd(&app, &room_identity("!beta:example"))?;
+    app.select_view(ViewIdentity::Status)?;
+    let status_lines = find_view(&app.dump_ui_state()?, &ViewIdentity::Status)
+        .lines
+        .clone();
+    assert_ne!(
+        unsafe { PostMessageW(beta, WM_SYSCOMMAND, SYSMENU_ID_BUFFER_CLEAR, 0) },
+        0
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(beta_buffer_lines(&ui_state), 0);
+    assert!(beta_history_rows(&ui_state).is_empty());
+    assert_eq!(ui_state.status_bar.text, "cleared window: !beta:example");
+    assert_eq!(
+        find_view(&ui_state, &ViewIdentity::Status).lines,
+        status_lines
+    );
+
+    // A thread window has nothing of its own to clear.
+    app.append_synthetic_events(&serde_json::to_string(&vec![
+        message_event_with_event_id(
+            "!beta:example",
+            "$buffer-root",
+            "@bob:example",
+            1_700_002_000_000,
+            CoreRoomMessagePresentationKind::Text,
+            "buffer thread root",
+        ),
+        message_event_with_event_id_and_relation(
+            "!beta:example",
+            "$buffer-reply",
+            "@bob:example",
+            1_700_002_060_000,
+            Some(CoreRoomActivityRelation::Thread {
+                thread_root_event_id: "$buffer-root".to_owned(),
+                in_reply_to_event_id: Some("$buffer-root".to_owned()),
+                is_falling_back: false,
+            }),
+            CoreRoomMessagePresentationKind::Text,
+            "buffer thread reply",
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_view(thread_identity("!beta:example", "$buffer-root"))?;
+    let ui_state = app.dump_ui_state()?;
+    assert!(
+        ui_state
+            .active_system_menu_items
+            .contains(&"&Buffer/&Save...".to_owned())
+    );
+    assert!(
+        ui_state
+            .active_system_menu_disabled
+            .contains(&"&Buffer/&Clear".to_owned()),
+        "{:?}",
+        ui_state.active_system_menu_disabled
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn savebuf_writes_the_window_lines_to_a_file_in_the_logs_folder_or_anywhere()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, _server, local_app_data) = launch_buffered_beta_room(5000, 3)?;
+    let lines = beta_lines(&app)?;
+    type_commands(&app, &["/savebuf saved beta.txt"])?;
+    let saved = local_app_data
+        .join("mirx")
+        .join("ui-shell")
+        .join("logs")
+        .join("saved beta.txt");
+    assert_eq!(fs::read_to_string(&saved)?, saved_buffer(&lines));
+    assert!(lines.iter().any(|line| line.contains("history row 002")));
+    assert_eq!(
+        app.dump_model()?.status,
+        format!("saved buffer: {}", saved.display())
+    );
+
+    let anywhere = local_app_data.join("anywhere.txt");
+    type_commands(&app, &[&format!("/savebuf {}", anywhere.display())])?;
+    assert_eq!(fs::read_to_string(&anywhere)?, saved_buffer(&lines));
+
+    // A file it cannot write says why.
+    type_commands(
+        &app,
+        &[&format!(
+            "/savebuf {}",
+            local_app_data.join("missing").join("x.txt").display()
+        )],
+    )?;
+    let status = app.dump_model()?.status;
+    assert!(status.starts_with("* /savebuf: cannot write "), "{status}");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn buffer_save_on_the_window_menu_saves_through_the_save_dialog()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, _server, local_app_data) = launch_buffered_beta_room(5000, 3)?;
+    let lines = beta_lines(&app)?;
+    let beta = view_child_hwnd(&app, &room_identity("!beta:example"))?;
+    let frame = app.automation_frame_hwnd() as HWND;
+
+    // Cancel saves nothing.
+    assert_ne!(
+        unsafe { PostMessageW(beta, WM_SYSCOMMAND, SYSMENU_ID_BUFFER_SAVE, 0) },
+        0
+    );
+    let (dialog, caption) = wait_for_owned_dialog(frame);
+    assert_eq!(caption, "Save Buffer");
+    let name = unsafe { GetDlgItem(dialog, OPEN_DIALOG_FILE_NAME_ID) };
+    assert!(!name.is_null(), "the Save dialog has its file name box");
+    // The window's log name.
+    assert_eq!(unsafe { read_window_text(name) }, "!beta.example.txt");
+    let status_before = app.dump_model()?.status;
+    answer_message_box(&app, dialog, IDCANCEL)?;
+    assert_eq!(app.dump_model()?.status, status_before);
+
+    assert_ne!(
+        unsafe { PostMessageW(beta, WM_SYSCOMMAND, SYSMENU_ID_BUFFER_SAVE, 0) },
+        0
+    );
+    let (dialog, _) = wait_for_owned_dialog(frame);
+    let saved = local_app_data.join("chosen.txt");
+    let name = unsafe { GetDlgItem(dialog, OPEN_DIALOG_FILE_NAME_ID) };
+    let text = wide_null(saved.to_str().expect("UTF-8 test path"));
+    unsafe { SendMessageW(name, WM_SETTEXT, 0, text.as_ptr() as isize) };
+    answer_message_box(&app, dialog, IDOK)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(fs::read_to_string(&saved)?, saved_buffer(&lines));
+    assert_eq!(
+        app.dump_model()?.status,
+        format!("saved buffer: {}", saved.display())
     );
 
     drop(app);

@@ -24,6 +24,11 @@ pub(super) fn logs_folder_label() -> String {
     format!("%LOCALAPPDATA%\\{PROFILE_SUBDIR}\\{LOGS_SUBDIR}")
 }
 
+/// The logs folder in the profile.
+pub(super) fn logs_dir() -> Result<PathBuf, String> {
+    Ok(profile_dir()?.join(LOGS_SUBDIR))
+}
+
 /// A window's log.
 pub(super) enum ViewLog {
     /// The Rooms List and thread windows: no log of their own. A thread
@@ -76,7 +81,7 @@ fn room_log_name(room: &RoomSummary) -> &str {
 /// The log file's name without `.log`: `status`, or a room's log name as
 /// Windows allows it in a file name (`#rust:matrix.org` is
 /// `#rust.matrix.org`, as mIRC's `#channel.network.log`).
-fn log_file_stem(model: &UiModel, view_id: &ViewId) -> String {
+pub(super) fn log_file_stem(model: &UiModel, view_id: &ViewId) -> String {
     let room_id = match view_id {
         ViewId::Status => return "status".to_owned(),
         ViewId::Room(room_id) => room_id,
@@ -283,9 +288,7 @@ fn start_view_log(state: &mut WindowState, view_id: &ViewId, from: u64) -> Resul
     if state.render_state_mode {
         return Err("logging is unavailable in render-state mode".to_owned());
     }
-    let path = profile_dir()?
-        .join(LOGS_SUBDIR)
-        .join(format!("{}.log", log_file_stem(&state.model, view_id)));
+    let path = logs_dir()?.join(format!("{}.log", log_file_stem(&state.model, view_id)));
     let ident = session_ident(&state.model, view_id);
     let session = LogSession::start(path.clone(), &ident, from, state.clock, state.local_time)
         .map_err(|error| format!("cannot open {}: {error}", path.display()))?;

@@ -970,6 +970,7 @@ fn data_models_round_trip_through_json() {
         },
         active_system_menu_items: vec!["&Restore".to_owned(), "&Font...".to_owned()],
         active_system_menu_checked: vec![],
+        active_system_menu_disabled: vec![],
         menu_bar: vec![UiMenu {
             label: "&File".to_owned(),
             items: vec![UiMenuItem {
@@ -1436,6 +1437,7 @@ fn data_models_round_trip_through_json() {
             },
             "active_system_menu_items": ["&Restore", "&Font..."],
             "active_system_menu_checked": [],
+            "active_system_menu_disabled": [],
             "menu_bar": [{"label": "&File", "items": [{"label": "&Disconnect", "enabled": false, "checked": false}]}],
             "compose_target": {"kind": "edit", "event_id": "$mine:example"},
         })
@@ -7029,6 +7031,7 @@ fn switchbar_helpers_find_items_and_active_item() {
         },
         active_system_menu_items: vec![],
         active_system_menu_checked: vec![],
+        active_system_menu_disabled: vec![],
         menu_bar: vec![],
         compose_target: None,
         room_list: None,

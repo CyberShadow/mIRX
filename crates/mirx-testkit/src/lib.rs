@@ -1334,9 +1334,12 @@ pub struct UiState {
     /// Tools > Colors and the switchbar's activity colours.
     pub colors: UiColors,
     /// The labels of the active window's window menu, separators omitted.
+    /// A submenu's items follow it, as `Submenu/Item`.
     pub active_system_menu_items: Vec<String>,
     /// The labels of the active window's checked window menu items.
     pub active_system_menu_checked: Vec<String>,
+    /// The labels of the active window's greyed window menu items.
+    pub active_system_menu_disabled: Vec<String>,
     /// The frame's menubar as opening each menu would show it: MDI's
     /// maximized-child buttons and separators omitted.
     pub menu_bar: Vec<UiMenu>,
