@@ -4723,6 +4723,7 @@ mod tests {
                         room_id: "!ops:example".to_owned(),
                         latest_active_event_id: Some("$latest:example".to_owned()),
                         fully_read_event_id: Some("$fully-read:example".to_owned()),
+                        fully_read_timestamp_ms: None,
                         marked_unread: true,
                         num_unread: 7,
                         num_notifications: 3,
@@ -4997,6 +4998,7 @@ mod tests {
                 room_id: "!ops:example".to_owned(),
                 latest_active_event_id: Some("$latest:example".to_owned()),
                 fully_read_event_id: Some("$fully-read:example".to_owned()),
+                fully_read_timestamp_ms: None,
                 marked_unread: true,
                 num_unread: 7,
                 num_notifications: 3,
@@ -5015,7 +5017,7 @@ mod tests {
                 "Started",
                 {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]},
                 {"VerificationRequest":{"flow_id":"flow-1","user_id":"@alice:example","direction":{"type":"incoming","from_device":"ALICEDEVICE"}}},
-                {"RoomReadState":{"room_id":"!ops:example","latest_active_event_id":"$latest:example","fully_read_event_id":"$fully-read:example","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}},
+                {"RoomReadState":{"room_id":"!ops:example","latest_active_event_id":"$latest:example","fully_read_event_id":"$fully-read:example","fully_read_timestamp_ms":null,"marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}},
                 {"Error":{"operation":"SendMessage","room_id":"!room:example","message":"send failed"}}
             ])
         );
@@ -5036,6 +5038,7 @@ mod tests {
                         room_id: "!ops:example".to_owned(),
                         latest_active_event_id: Some("$latest:example".to_owned()),
                         fully_read_event_id: Some("$fully-read:example".to_owned()),
+                        fully_read_timestamp_ms: None,
                         marked_unread: true,
                         num_unread: 7,
                         num_notifications: 3,
@@ -5115,7 +5118,7 @@ mod tests {
                 "ok":false,
                 "err":{
                     "code":"invalid_args",
-                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `latest_active_event_id`, `fully_read_event_id`, `marked_unread`, `num_unread`, `num_notifications`, `num_mentions`"
+                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `latest_active_event_id`, `fully_read_event_id`, `fully_read_timestamp_ms`, `marked_unread`, `num_unread`, `num_notifications`, `num_mentions`"
                 }
             })
         );
@@ -7916,6 +7919,7 @@ mod tests {
                 room_id: "!room:example".to_owned(),
                 latest_active_event_id: Some("$latest:example".to_owned()),
                 fully_read_event_id: Some("$fully-read:example".to_owned()),
+                fully_read_timestamp_ms: None,
                 marked_unread: true,
                 num_unread: 7,
                 num_notifications: 3,

@@ -1541,6 +1541,10 @@ pub struct RoomReadState {
     pub room_id: String,
     pub latest_active_event_id: Option<String>,
     pub fully_read_event_id: Option<String>,
+    /// When the read marker's event was sent (`origin_server_ts`), if the
+    /// room's event cache has it: the UI places a marker on an event it
+    /// does not show by this time.
+    pub fully_read_timestamp_ms: Option<u64>,
     pub marked_unread: bool,
     pub num_unread: u64,
     pub num_notifications: u64,

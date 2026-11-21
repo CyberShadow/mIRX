@@ -3467,6 +3467,7 @@ fn room_read_state_event_serializes_to_expected_json_shape() {
         room_id: "!ops:example".to_owned(),
         latest_active_event_id: Some("$latest:example".to_owned()),
         fully_read_event_id: Some("$fully-read:example".to_owned()),
+        fully_read_timestamp_ms: Some(1_700_000_000_000),
         marked_unread: true,
         num_unread: 7,
         num_notifications: 3,
@@ -3480,6 +3481,7 @@ fn room_read_state_event_serializes_to_expected_json_shape() {
                 "room_id": "!ops:example",
                 "latest_active_event_id": "$latest:example",
                 "fully_read_event_id": "$fully-read:example",
+                "fully_read_timestamp_ms": 1700000000000u64,
                 "marked_unread": true,
                 "num_unread": 7,
                 "num_notifications": 3,
@@ -3489,6 +3491,7 @@ fn room_read_state_event_serializes_to_expected_json_shape() {
     );
 }
 
+/// An unknown read marker time may be left out.
 #[test]
 fn room_read_state_event_deserializes_from_expected_json_shape() {
     let json = serde_json::json!({
@@ -3509,6 +3512,7 @@ fn room_read_state_event_deserializes_from_expected_json_shape() {
             room_id: "!ops:example".to_owned(),
             latest_active_event_id: Some("$latest:example".to_owned()),
             fully_read_event_id: Some("$fully-read:example".to_owned()),
+            fully_read_timestamp_ms: None,
             marked_unread: true,
             num_unread: 7,
             num_notifications: 3,

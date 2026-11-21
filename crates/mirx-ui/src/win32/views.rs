@@ -1524,6 +1524,7 @@ mod tests {
                 room_id: "!ops:example".to_owned(),
                 latest_active_event_id: None,
                 fully_read_event_id: Some("$q".to_owned()),
+                fully_read_timestamp_ms: None,
                 marked_unread: false,
                 num_unread: 1,
                 num_notifications: 0,

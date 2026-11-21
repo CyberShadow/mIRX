@@ -210,7 +210,7 @@ impl RoomSnapshot {
             start: snapshots.start(),
             rooms: matrix::summarize_rooms(client).await?,
             room_members: matrix::summarize_joined_room_members(client).await?,
-            room_read_states: matrix::summarize_joined_room_read_states(client),
+            room_read_states: matrix::summarize_joined_room_read_states(client).await,
             account_lists: AccountLists::read(client).await,
         })
     }

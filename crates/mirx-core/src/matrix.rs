@@ -2209,21 +2209,41 @@ pub(crate) fn e2ee_backup_state_task(
     }
 }
 
-pub(crate) fn room_read_state_from_room(room: &Room) -> RoomReadState {
+pub(crate) async fn room_read_state_from_room(room: &Room) -> RoomReadState {
     let receipts = room.read_receipts();
     let fully_read_event_id = room.fully_read_event_id();
+    let fully_read_timestamp_ms = match &fully_read_event_id {
+        Some(event_id) => cached_event_timestamp_ms(room, event_id).await,
+        None => None,
+    };
     room_read_state_from_parts(
         room.room_id().as_str(),
         &receipts,
         fully_read_event_id.as_deref(),
+        fully_read_timestamp_ms,
         room.is_marked_unread(),
     )
+}
+
+/// When `event_id` was sent, if `room`'s event cache has the event, in
+/// memory or in the store; never from the network. The session subscribes
+/// the event cache before its first sync.
+async fn cached_event_timestamp_ms(room: &Room, event_id: &EventId) -> Option<u64> {
+    let (cache, _handles) = room
+        .event_cache()
+        .await
+        .expect("the session subscribes the event cache");
+    // The SDK reads the store infallibly but for its lock; an event it
+    // cannot read is one whose time is not known.
+    let event = cache.find_event(event_id).await.ok().flatten()?;
+    event.timestamp().map(|timestamp| timestamp.get().into())
 }
 
 pub(crate) fn room_read_state_from_parts(
     room_id: &str,
     receipts: &RoomReadReceipts,
     fully_read_event_id: Option<&EventId>,
+    fully_read_timestamp_ms: Option<u64>,
     marked_unread: bool,
 ) -> RoomReadState {
     RoomReadState {
@@ -2233,6 +2253,7 @@ pub(crate) fn room_read_state_from_parts(
             .as_ref()
             .map(|receipt| receipt.event_id.to_string()),
         fully_read_event_id: fully_read_event_id.map(ToString::to_string),
+        fully_read_timestamp_ms,
         marked_unread,
         num_unread: receipts.num_unread,
         num_notifications: receipts.num_notifications,
@@ -2240,12 +2261,12 @@ pub(crate) fn room_read_state_from_parts(
     }
 }
 
-pub(crate) fn summarize_joined_room_read_states(client: &Client) -> Vec<RoomReadState> {
-    client
-        .joined_rooms()
-        .into_iter()
-        .map(|room| room_read_state_from_room(&room))
-        .collect()
+pub(crate) async fn summarize_joined_room_read_states(client: &Client) -> Vec<RoomReadState> {
+    let mut read_states = Vec::new();
+    for room in client.joined_rooms() {
+        read_states.push(room_read_state_from_room(&room).await);
+    }
+    read_states
 }
 
 pub(crate) async fn fetch_room_media(client: &Client, request: FetchRoomMediaRequest) -> RoomMedia {
@@ -4005,13 +4026,13 @@ pub(crate) async fn room_read_state_update_task(
                 else {
                     continue;
                 };
-                vec![room_read_state_from_room(&room)]
+                vec![room_read_state_from_room(&room).await]
             }
             Err(broadcast::error::RecvError::Closed) => break,
             // A read state is a snapshot: resending every room's makes
             // up for the missed updates.
             Err(broadcast::error::RecvError::Lagged(_)) => {
-                summarize_joined_room_read_states(&client)
+                summarize_joined_room_read_states(&client).await
             }
         };
         for read_state in read_states {
@@ -12800,12 +12821,14 @@ mod tests {
                 "!room:example.org",
                 &receipts,
                 Some(fully_read_event_id().as_ref()),
+                Some(1_700_000_000_000),
                 true,
             ),
             RoomReadState {
                 room_id: "!room:example.org".to_owned(),
                 latest_active_event_id: Some("$latest:example.org".to_owned()),
                 fully_read_event_id: Some("$fully-read:example.org".to_owned()),
+                fully_read_timestamp_ms: Some(1_700_000_000_000),
                 marked_unread: true,
                 num_unread: 7,
                 num_notifications: 3,
@@ -12814,16 +12837,89 @@ mod tests {
         );
     }
 
+    /// The read marker's time comes from the room's event cache, and is
+    /// unknown for an event the cache does not have.
+    #[test]
+    fn room_read_state_has_the_read_marker_time_when_the_event_cache_has_it() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            client
+                .event_cache()
+                .subscribe()
+                .expect("subscribe the event cache");
+            let fully_read = |event_id: &str| {
+                Raw::<matrix_sdk::ruma::events::AnyRoomAccountDataEvent>::from_json_string(
+                    serde_json::json!({
+                        "type": "m.fully_read",
+                        "content": { "event_id": event_id },
+                    })
+                    .to_string(),
+                )
+                .expect("fully read marker")
+            };
+            let mut second = text_message_json("$second:localhost", "@bob:localhost", "two");
+            second["origin_server_ts"] = serde_json::json!(1_700_000_005_000u64);
+            mock_server
+                .mock_sync()
+                .ok_and_run(&client, |builder| {
+                    builder.add_joined_room(
+                        JoinedRoomBuilder::new(&room_id())
+                            .add_timeline_event(raw_sync_timeline_event(text_message_json(
+                                "$first:localhost",
+                                "@bob:localhost",
+                                "one",
+                            )))
+                            .add_timeline_event(raw_sync_timeline_event(second))
+                            .add_account_data(fully_read("$second:localhost")),
+                    );
+                })
+                .await;
+            let room = client.get_room(&room_id()).expect("the room");
+            // The event cache takes the sync's events in its own task.
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let mut read_state = super::room_read_state_from_room(&room).await;
+            while read_state.fully_read_timestamp_ms.is_none() {
+                assert!(std::time::Instant::now() < deadline, "{read_state:?}");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                read_state = super::room_read_state_from_room(&room).await;
+            }
+            assert_eq!(read_state.fully_read_timestamp_ms, Some(1_700_000_005_000));
+
+            mock_server
+                .mock_sync()
+                .ok_and_run(&client, |builder| {
+                    builder.add_joined_room(
+                        JoinedRoomBuilder::new(&room_id())
+                            .add_account_data(fully_read("$elsewhere:localhost")),
+                    );
+                })
+                .await;
+            let read_state = super::room_read_state_from_room(&room).await;
+            assert_eq!(
+                read_state.fully_read_event_id.as_deref(),
+                Some("$elsewhere:localhost")
+            );
+            assert_eq!(read_state.fully_read_timestamp_ms, None);
+        });
+    }
+
     #[test]
     fn room_read_state_from_parts_preserves_absent_markers() {
         let receipts = RoomReadReceipts::default();
 
         assert_eq!(
-            room_read_state_from_parts("!room:example.org", &receipts, None, false),
+            room_read_state_from_parts("!room:example.org", &receipts, None, None, false),
             RoomReadState {
                 room_id: "!room:example.org".to_owned(),
                 latest_active_event_id: None,
                 fully_read_event_id: None,
+                fully_read_timestamp_ms: None,
                 marked_unread: false,
                 num_unread: 0,
                 num_notifications: 0,

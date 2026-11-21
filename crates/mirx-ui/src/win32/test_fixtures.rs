@@ -459,6 +459,7 @@ pub(super) fn room_read_state(
         room_id: room_id.to_owned(),
         latest_active_event_id: latest_active_event_id.map(str::to_owned),
         fully_read_event_id: fully_read_event_id.map(str::to_owned),
+        fully_read_timestamp_ms: None,
         marked_unread,
         num_unread,
         num_notifications,

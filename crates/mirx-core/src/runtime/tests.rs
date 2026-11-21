@@ -576,6 +576,7 @@ fn room_read_state(
         room_id: room_id.to_owned(),
         latest_active_event_id: Some(latest_active_event_id.to_owned()),
         fully_read_event_id: Some(fully_read_event_id.to_owned()),
+        fully_read_timestamp_ms: None,
         marked_unread: true,
         num_unread: 2,
         num_notifications: 1,

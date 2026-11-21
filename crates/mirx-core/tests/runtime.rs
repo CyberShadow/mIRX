@@ -2951,6 +2951,7 @@ fn room_read_state_event_round_trips_through_serde() {
         room_id: "!ops:example.org".to_owned(),
         latest_active_event_id: Some("$latest:example.org".to_owned()),
         fully_read_event_id: Some("$fully-read:example.org".to_owned()),
+        fully_read_timestamp_ms: Some(1_700_000_000_000),
         marked_unread: true,
         num_unread: 7,
         num_notifications: 3,
@@ -2960,7 +2961,7 @@ fn room_read_state_event_round_trips_through_serde() {
     let json = serde_json::to_string(&event).expect("serialize room read state event");
     assert_eq!(
         json,
-        r#"{"RoomReadState":{"room_id":"!ops:example.org","latest_active_event_id":"$latest:example.org","fully_read_event_id":"$fully-read:example.org","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}}"#
+        r#"{"RoomReadState":{"room_id":"!ops:example.org","latest_active_event_id":"$latest:example.org","fully_read_event_id":"$fully-read:example.org","fully_read_timestamp_ms":1700000000000,"marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize room read state event");
