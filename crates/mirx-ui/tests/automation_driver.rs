@@ -3563,6 +3563,28 @@ fn wait_for_status_line(
     }
 }
 
+/// Waits for a line in a window: the automation core answers a command
+/// with its refusal at no fixed moment, which `wait_idle` cannot see coming.
+fn wait_for_view_line(
+    app: &MirxApp,
+    identity: &ViewIdentity,
+    line: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        app.wait_idle(Duration::from_secs(5))?;
+        let ui_state = app.dump_ui_state()?;
+        let view = find_view(&ui_state, identity);
+        if view_contains(view, line) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("{identity:?} never showed {line:?}: {:?}", view.lines).into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
 /// Until the sync's first response came: `SyncConnected`.
 fn wait_until_connected(app: &MirxApp) -> Result<(), Box<dyn std::error::Error>> {
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -4706,12 +4728,16 @@ fn automation_driver_slash_verify_starts_verifications() -> Result<(), Box<dyn s
             request("@alice:example", None),
         ]
     );
+    let beta = room_identity("!beta:example");
+    wait_for_view_line(
+        &app,
+        &beta,
+        "* /verify: verification requires an authenticated session",
+    )?;
     let ui_state = app.dump_ui_state()?;
-    let beta = find_view(&ui_state, &room_identity("!beta:example"));
-    assert!(view_contains(beta, "* /verify: no such nick: Nobody"));
     assert!(view_contains(
-        beta,
-        "* /verify: verification requires an authenticated session"
+        find_view(&ui_state, &beta),
+        "* /verify: no such nick: Nobody"
     ));
 
     drop(app);
@@ -4842,13 +4868,16 @@ fn automation_driver_identity_accept_submits_and_refuses_unchanged()
     );
     let events = [Event::UserIdentityAccepted("@bob:example".to_owned())];
     app.append_synthetic_events(&serde_json::to_string(&events)?)?;
-    app.wait_idle(Duration::from_secs(5))?;
+    // The automation core is not signed in.
+    wait_for_view_line(
+        &app,
+        &room_identity("!beta:example"),
+        "* /identity: accepting an identity requires an authenticated session",
+    )?;
     let ui_state = app.dump_ui_state()?;
     let beta = find_view(&ui_state, &room_identity("!beta:example"));
     for line in [
         "* /identity: Alice's identity has not changed",
-        // The automation core is not signed in.
-        "* /identity: accepting an identity requires an authenticated session",
         "* Bob's new identity accepted",
     ] {
         assert!(view_contains(beta, line), "{line}: {:?}", beta.lines);
@@ -5062,13 +5091,16 @@ fn automation_driver_devices_lists_sessions_whois_style() -> Result<(), Box<dyn 
         }),
     ];
     app.append_synthetic_events(&serde_json::to_string(&events)?)?;
-    app.wait_idle(Duration::from_secs(5))?;
+    wait_for_view_line(
+        &app,
+        &room_identity("!beta:example"),
+        "* /devices: listing devices requires an authenticated session",
+    )?;
 
     let ui_state = app.dump_ui_state()?;
     let beta = find_view(&ui_state, &room_identity("!beta:example"));
     for line in [
         "* /devices: no such nick: Nobody",
-        "* /devices: listing devices requires an authenticated session",
         "* Alice sessions:",
         "* Alice L4PT0P \"Laptop\" verified, last seen Fri Nov 20 14:02:11 2026 (this session)",
         "* Alice PH0NE unverified",
@@ -5159,7 +5191,11 @@ fn automation_driver_recover_e2ee_before_auth_never_echoes_secret()
     app.recover_e2ee("sample recovery secret")?;
     app.wait_idle(Duration::from_secs(5))?;
     app.select_status_view()?;
-    app.wait_idle(Duration::from_secs(2))?;
+    wait_for_status_line(
+        &app,
+        "E2EE recovery requires an authenticated session",
+        Duration::from_secs(5),
+    )?;
 
     let model = app.dump_model()?;
     assert_eq!(
@@ -5190,7 +5226,11 @@ fn automation_driver_setup_e2ee_recovery_before_auth_never_echoes_passphrase()
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
 
     app.setup_e2ee_recovery(Some("sample setup passphrase"), true)?;
-    app.wait_idle(Duration::from_secs(5))?;
+    wait_for_status_line(
+        &app,
+        "E2EE recovery setup requires an authenticated session",
+        Duration::from_secs(5),
+    )?;
     let model = app.dump_model()?;
     assert_eq!(
         model.last_error,
