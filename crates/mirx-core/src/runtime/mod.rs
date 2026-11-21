@@ -1,0 +1,322 @@
+use std::cell::Cell;
+use std::error::Error;
+use std::fmt::{self, Display, Formatter};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::thread::{self, JoinHandle};
+
+use matrix_sdk::Client;
+use tokio::runtime::Builder;
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::task::LocalSet;
+
+use crate::api::{
+    Command, CoreConfig, CoreErrorEvent, Event, HighlightWord, Operation, RoomMembers,
+    RoomMembership, RoomReadState, RoomSummary,
+};
+use crate::matrix::{self, MatrixCoreError};
+
+mod commands;
+mod core;
+mod lifecycle;
+#[cfg(test)]
+mod tests;
+
+use self::core::run_worker;
+
+pub(crate) type EventSender = mpsc::Sender<Event>;
+
+/// Sends commands to the core and counts them; clones share the count.
+/// The core answers each command with `Event::CommandHandled` after the
+/// command's own events, so `sent()` minus the acks applied is the number
+/// of commands the core has not answered yet.
+#[derive(Debug, Clone)]
+pub struct CommandSender {
+    sender: UnboundedSender<Command>,
+    sent: Arc<AtomicU64>,
+}
+
+impl CommandSender {
+    pub fn new(sender: UnboundedSender<Command>) -> Self {
+        Self {
+            sender,
+            sent: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub fn send(&self, command: Command) -> Result<(), SendCommandError> {
+        // Counted before it is sent, so no reader ever sees the command's
+        // ack before its count. A failed send means the core is gone: the
+        // command stays unanswered, as it is.
+        self.sent.fetch_add(1, Ordering::Relaxed);
+        self.sender.send(command).map_err(|_| SendCommandError)
+    }
+
+    /// How many commands were sent through this sender and its clones.
+    pub fn sent(&self) -> u64 {
+        self.sent.load(Ordering::Relaxed)
+    }
+}
+
+#[derive(Debug)]
+pub struct CoreHandle {
+    command_sender: CommandSender,
+    events: Receiver<Event>,
+    worker: JoinHandle<()>,
+}
+
+impl CoreHandle {
+    pub fn command_sender(&self) -> &CommandSender {
+        &self.command_sender
+    }
+
+    pub fn events(&self) -> &Receiver<Event> {
+        &self.events
+    }
+
+    pub fn join(self) -> thread::Result<()> {
+        let Self {
+            command_sender,
+            events,
+            worker,
+        } = self;
+        drop(command_sender);
+        drop(events);
+        worker.join()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SendCommandError;
+
+impl Display for SendCommandError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("mirx-core command channel is closed")
+    }
+}
+
+impl Error for SendCommandError {}
+
+#[derive(Debug)]
+pub enum StartError {
+    ThreadSpawn(std::io::Error),
+    RuntimeInitialization(String),
+    WorkerStopped,
+}
+
+impl Display for StartError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ThreadSpawn(err) => write!(f, "failed to spawn mirx-core thread: {err}"),
+            Self::RuntimeInitialization(message) => {
+                write!(f, "failed to initialize mirx-core runtime: {message}")
+            }
+            Self::WorkerStopped => f.write_str("mirx-core worker stopped during startup"),
+        }
+    }
+}
+
+impl Error for StartError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::ThreadSpawn(err) => Some(err),
+            Self::RuntimeInitialization(_) | Self::WorkerStopped => None,
+        }
+    }
+}
+
+pub fn start(config: CoreConfig) -> Result<CoreHandle, StartError> {
+    let (command_tx, command_rx) = unbounded_channel();
+    let (event_tx, event_rx) = mpsc::channel();
+    let (startup_tx, startup_rx) = mpsc::channel();
+
+    let worker = thread::Builder::new()
+        .name("mirx-core".to_owned())
+        .spawn(move || {
+            let runtime = match Builder::new_current_thread().enable_all().build() {
+                Ok(runtime) => runtime,
+                Err(err) => {
+                    let _ = startup_tx.send(Err(err.to_string()));
+                    return;
+                }
+            };
+
+            if startup_tx.send(Ok(())).is_err() {
+                return;
+            }
+
+            let local = LocalSet::new();
+            local.block_on(&runtime, run_worker(config, command_rx, event_tx));
+        })
+        .map_err(StartError::ThreadSpawn)?;
+
+    match startup_rx.recv() {
+        Ok(Ok(())) => Ok(CoreHandle {
+            command_sender: CommandSender::new(command_tx),
+            events: event_rx,
+            worker,
+        }),
+        Ok(Err(message)) => {
+            let _ = worker.join();
+            Err(StartError::RuntimeInitialization(message))
+        }
+        Err(_) => {
+            let _ = worker.join();
+            Err(StartError::WorkerStopped)
+        }
+    }
+}
+
+/// The account-wide lists the first room snapshot carries.
+pub(super) struct AccountLists {
+    highlight_words: Result<Vec<HighlightWord>, MatrixCoreError>,
+    ignored_users: Result<Vec<String>, MatrixCoreError>,
+}
+
+impl AccountLists {
+    pub(super) async fn read(client: &Client) -> Self {
+        Self {
+            highlight_words: matrix::highlight_words(client).await,
+            ignored_users: matrix::ignored_users(client).await,
+        }
+    }
+}
+
+/// A session's first room snapshot: the room list, the account lists, and
+/// every joined room's members and read state. Later changes come as they
+/// happen.
+pub(super) struct RoomSnapshot {
+    rooms: Vec<RoomSummary>,
+    room_members: Vec<RoomMembers>,
+    room_read_states: Vec<RoomReadState>,
+    account_lists: AccountLists,
+}
+
+impl RoomSnapshot {
+    /// After a successful sync: the store has the rooms.
+    pub(super) async fn read(client: &Client) -> Result<Self, MatrixCoreError> {
+        Ok(Self {
+            rooms: matrix::summarize_rooms(client).await?,
+            room_members: matrix::summarize_joined_room_members(client).await?,
+            room_read_states: matrix::summarize_joined_room_read_states(client),
+            account_lists: AccountLists::read(client).await,
+        })
+    }
+
+    pub(super) fn emit(self, event_tx: &EventSender) {
+        let Self {
+            rooms,
+            room_members,
+            room_read_states,
+            account_lists,
+        } = self;
+        let joined_room_ids = rooms
+            .iter()
+            .filter(|room| room.membership == RoomMembership::Join)
+            .map(|room| room.room_id.clone())
+            .collect::<std::collections::HashSet<_>>();
+
+        emit_event(event_tx, Event::SyncedRooms(rooms));
+        match account_lists.highlight_words {
+            Ok(words) => emit_event(event_tx, Event::HighlightWords(words)),
+            Err(err) => emit_matrix_error(event_tx, Operation::HighlightWords, err),
+        }
+        match account_lists.ignored_users {
+            Ok(user_ids) => emit_event(event_tx, Event::IgnoredUsers(user_ids)),
+            Err(err) => emit_matrix_error(event_tx, Operation::IgnoredUsers, err),
+        }
+        for members in room_members {
+            if joined_room_ids.contains(&members.room_id) {
+                emit_event(event_tx, Event::RoomMembers(members));
+            }
+        }
+        for read_state in room_read_states {
+            if joined_room_ids.contains(&read_state.room_id) {
+                emit_event(event_tx, Event::RoomReadState(read_state));
+            }
+        }
+    }
+}
+
+/// Whether the session's first room snapshot is still to come: its initial
+/// sync, or reading the snapshot, failed. Shared by the session's sync
+/// tasks, one at a time.
+#[derive(Clone)]
+pub(crate) struct InitialSnapshot(Rc<Cell<bool>>);
+
+impl InitialSnapshot {
+    pub(super) fn pending(pending: bool) -> Self {
+        Self(Rc::new(Cell::new(pending)))
+    }
+
+    /// At a sync task's first successful response: emits the snapshot if it
+    /// is still to come. Failing to read it leaves it to the next task.
+    pub(crate) async fn emit_if_pending(&self, client: &Client, event_tx: &EventSender) {
+        if !self.0.get() {
+            return;
+        }
+        match RoomSnapshot::read(client).await {
+            Ok(snapshot) => {
+                snapshot.emit(event_tx);
+                self.0.set(false);
+            }
+            Err(err) => emit_matrix_error(event_tx, Operation::RoomList, err),
+        }
+    }
+}
+
+pub(crate) fn emit_event(event_tx: &EventSender, event: Event) {
+    let _ = event_tx.send(event);
+}
+
+pub(super) fn emit_error(
+    event_tx: &EventSender,
+    operation: Operation,
+    room_id: Option<&str>,
+    message: String,
+) {
+    emit_event(
+        event_tx,
+        Event::Error(CoreErrorEvent {
+            operation,
+            room_id: room_id.map(str::to_owned),
+            message,
+        }),
+    );
+}
+
+/// An account-wide operation's refusal.
+pub(super) fn emit_invalid_state(event_tx: &EventSender, operation: Operation, message: &str) {
+    emit_error(event_tx, operation, None, message.to_owned());
+}
+
+/// An account-wide operation's failure.
+pub(super) fn emit_matrix_error(
+    event_tx: &EventSender,
+    operation: Operation,
+    err: MatrixCoreError,
+) {
+    emit_error(event_tx, operation, None, err.to_string());
+}
+
+/// The refusal of a request about a room.
+pub(super) fn emit_room_invalid_state(
+    event_tx: &EventSender,
+    operation: Operation,
+    room_id: &str,
+    message: &str,
+) {
+    emit_error(event_tx, operation, Some(room_id), message.to_owned());
+}
+
+/// The failure of a request about a room.
+pub(super) fn emit_room_matrix_error(
+    event_tx: &EventSender,
+    operation: Operation,
+    room_id: &str,
+    err: MatrixCoreError,
+) {
+    emit_error(event_tx, operation, Some(room_id), err.to_string());
+}
