@@ -104,4 +104,10 @@ if [ "$(grep -a -c '8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a' "$exe_path")" -lt 1 ];
   exit 1
 fi
 
+# The manifest makes mirx system-DPI-aware.
+if ! grep -a -q -E '<dpiAware[^>]*>true</dpiAware>' "$exe_path"; then
+  echo "dll-gate failed: the manifest's system DPI awareness is missing" >&2
+  exit 1
+fi
+
 printf 'dll-gate ok: %s; subsystem GUI; resources: icon, group icon, version, manifest\n' "${imported_dlls[*]}"

@@ -632,6 +632,7 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         status_bar,
         switchbar,
         frame_layout,
+        dpi: Dpi::of_window(hwnd).get(),
         active_find: dump_active_find_state(state),
         rooms: state
             .model

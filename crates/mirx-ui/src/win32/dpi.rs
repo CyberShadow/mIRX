@@ -36,6 +36,10 @@ impl Dpi {
         Self::new(unsafe { GetDpiForSystem() })
     }
 
+    pub(super) fn get(self) -> u32 {
+        self.0
+    }
+
     /// A 96-dpi length at this DPI, rounded to the nearest pixel.
     pub(super) fn px(self, logical: i32) -> i32 {
         assert!(logical >= 0, "layout lengths are not negative");

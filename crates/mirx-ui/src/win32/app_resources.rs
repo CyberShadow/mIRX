@@ -9,6 +9,9 @@ use windows_sys::Win32::Graphics::Gdi::{BITMAP, DeleteObject, GetObjectW};
 use windows_sys::Win32::System::LibraryLoader::{
     FindResourceW, GetModuleHandleW, GetProcAddress, LoadResource, LockResource, SizeofResource,
 };
+use windows_sys::Win32::UI::HiDpi::{
+    DPI_AWARENESS_SYSTEM_AWARE, GetAwarenessFromDpiAwarenessContext, GetThreadDpiAwarenessContext,
+};
 use windows_sys::Win32::UI::Shell::{DLLGETVERSIONPROC, DLLVERSIONINFO};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DestroyIcon, GetIconInfo, ICONINFO, IMAGE_ICON, IsProcessDPIAware, LoadImageW, RT_GROUP_ICON,
@@ -168,8 +171,15 @@ fn common_controls_are_version_6() {
 }
 
 #[test]
-fn process_is_dpi_unaware() {
-    // The manifest says so: the layout is in 96-dpi pixels until DPI scaling
-    // lands, and Windows bitmap-stretches the windows meanwhile.
-    assert_eq!(unsafe { IsProcessDPIAware() }, 0);
+fn process_is_system_dpi_aware() {
+    // The manifest says so, and Windows honours it: the windows are laid out
+    // at the system DPI rather than bitmap-stretched. Without the manifest
+    // the process would be unaware.
+    unsafe {
+        assert_ne!(IsProcessDPIAware(), 0);
+        assert_eq!(
+            GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext()),
+            DPI_AWARENESS_SYSTEM_AWARE
+        );
+    }
 }

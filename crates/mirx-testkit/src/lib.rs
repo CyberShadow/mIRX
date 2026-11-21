@@ -1327,6 +1327,8 @@ pub struct UiState {
     pub status_bar: StatusBarState,
     pub switchbar: SwitchbarState,
     pub frame_layout: UiFrameLayout,
+    /// The frame's dots per inch, which its layout is at.
+    pub dpi: u32,
     pub active_find: Option<UiFindState>,
     pub rooms: Vec<UiRoomState>,
     pub text_font: UiTextFont,

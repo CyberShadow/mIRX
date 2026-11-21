@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 67;
+pub(crate) const PROTOCOL_VERSION: u32 = 68;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1093,6 +1093,8 @@ pub(crate) struct UiState {
     pub(crate) status_bar: StatusBarState,
     pub(crate) switchbar: SwitchbarState,
     pub(crate) frame_layout: UiFrameLayout,
+    /// The frame's dots per inch, which its layout is at.
+    pub(crate) dpi: u32,
     pub(crate) active_find: Option<UiFindState>,
     pub(crate) rooms: Vec<UiRoomState>,
     pub(crate) text_font: UiTextFont,
@@ -3770,8 +3772,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_67() {
-        assert_eq!(PROTOCOL_VERSION, 67);
+    fn protocol_version_is_68() {
+        assert_eq!(PROTOCOL_VERSION, 68);
     }
 
     #[test]
@@ -4777,6 +4779,7 @@ mod tests {
             "status_bar":{"text":"ready"},
             "switchbar":{"rows":1,"items":[]},
             "frame_layout":{"switchbar":{"x":0,"y":0,"width":1008,"height":28},"treebar":{"x":0,"y":28,"width":240,"height":600},"mdi_client":{"x":240,"y":28,"width":768,"height":600}},
+            "dpi":96,
             "active_find":null,
             "rooms":[],
             "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25,"average_char_width":8,"fallback_faces":["Tahoma","Noto Emoji"]},
@@ -4798,6 +4801,7 @@ mod tests {
             "status_bar":{"text":"ready"},
             "switchbar":{"rows":1,"items":[]},
             "frame_layout":{"switchbar":{"x":0,"y":0,"width":1008,"height":28},"treebar":{"x":0,"y":28,"width":240,"height":600},"mdi_client":{"x":240,"y":28,"width":768,"height":600}},
+            "dpi":96,
             "active_find":{
                 "active":{"kind":"room","room_id":"!room:example"},
                 "query":"needle",
@@ -5799,7 +5803,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":67,
+                    "protocol_version":68,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6359,6 +6363,7 @@ mod tests {
                             height: 600,
                         },
                     },
+                    dpi: 96,
                     active_find: Some(UiFindState {
                         active: ViewIdentity::Room {
                             room_id: "!room:example".to_owned(),
@@ -6645,6 +6650,7 @@ mod tests {
                         "treebar":null,
                         "mdi_client":{"x":0,"y":28,"width":1008,"height":600}
                     },
+                    "dpi":96,
                     "active_find":{
                         "active":{"kind":"room","room_id":"!room:example"},
                         "query":"hello",

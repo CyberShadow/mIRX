@@ -903,6 +903,7 @@ fn data_models_round_trip_through_json() {
                 height: 600,
             },
         },
+        dpi: 96,
         active_find: Some(UiFindState {
             active: ViewIdentity::Room {
                 room_id: "!room:example".to_owned(),
@@ -1313,6 +1314,7 @@ fn data_models_round_trip_through_json() {
                 "treebar": {"x": 0, "y": 28, "width": 240, "height": 600},
                 "mdi_client": {"x": 240, "y": 28, "width": 768, "height": 600},
             },
+            "dpi": 96,
             "active_find": {
                 "active": {
                     "kind": "room",
@@ -7002,6 +7004,7 @@ fn switchbar_helpers_find_items_and_active_item() {
                 height: 600,
             },
         },
+        dpi: 96,
         active_find: None,
         rooms: vec![],
         text_font: UiTextFont {

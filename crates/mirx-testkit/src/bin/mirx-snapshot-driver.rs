@@ -51,6 +51,7 @@ mod cli {
         pub(crate) expect_switchbar_active: Option<ViewIdentity>,
         pub(crate) expect_switchbar_rows: Option<u32>,
         pub(crate) expect_frame_bars_hidden: Vec<FrameBar>,
+        pub(crate) expect_dpi: Option<u32>,
         pub(crate) expect_switchbar_activity: Vec<SwitchbarActivityExpectation>,
         pub(crate) expect_no_switchbar_activity: Vec<ViewIdentity>,
         pub(crate) expect_navigation_texts: Vec<String>,
@@ -591,6 +592,17 @@ mod cli {
                         Some(value.parse().ok().filter(|rows| *rows >= 1).ok_or_else(|| {
                             format!(
                                 "invalid --expect-switchbar-rows value {value:?}; expected a row count of at least 1"
+                            )
+                        })?);
+                }
+                "--expect-dpi" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-dpi".to_owned())?;
+                    config.expect_dpi =
+                        Some(value.parse().ok().filter(|dpi| *dpi >= 1).ok_or_else(|| {
+                            format!(
+                                "invalid --expect-dpi value {value:?}; expected dots per inch of at least 1"
                             )
                         })?);
                 }
@@ -1357,16 +1369,13 @@ mod cli {
 
         #[test]
         fn parse_args_rejects_bad_switchbar_rows_and_bars() {
-            for value in ["0", "-1", "two"] {
-                assert!(
-                    parse_args(
-                        ["--expect-switchbar-rows", value]
-                            .into_iter()
-                            .map(str::to_owned)
-                    )
-                    .is_err(),
-                    "{value:?} must be rejected"
-                );
+            for flag in ["--expect-switchbar-rows", "--expect-dpi"] {
+                for value in ["0", "-1", "two"] {
+                    assert!(
+                        parse_args([flag, value].into_iter().map(str::to_owned)).is_err(),
+                        "{flag} {value:?} must be rejected"
+                    );
+                }
             }
             assert!(
                 parse_args(
@@ -1739,6 +1748,8 @@ mod cli {
                     "room:!ops:example",
                     "--expect-switchbar-rows",
                     "2",
+                    "--expect-dpi",
+                    "144",
                     "--expect-frame-bar-hidden",
                     "treebar",
                     "--expect-frame-bar-hidden",
@@ -1823,6 +1834,7 @@ mod cli {
                 })
             );
             assert_eq!(config.expect_switchbar_rows, Some(2));
+            assert_eq!(config.expect_dpi, Some(144));
             assert_eq!(
                 config.expect_frame_bars_hidden,
                 vec![FrameBar::Treebar, FrameBar::Switchbar]
@@ -2369,6 +2381,9 @@ mod windows_main {
 
     use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
+    use windows_sys::Win32::UI::HiDpi::{
+        DPI_AWARENESS_CONTEXT_SYSTEM_AWARE, SetProcessDpiAwarenessContext,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CB_SETCURSEL, CBN_SELCHANGE, GetDlgItem, IDOK, IsWindow, PostMessageW, SMTO_NORMAL,
         SendMessageTimeoutW, WM_COMMAND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
@@ -2393,6 +2408,7 @@ mod windows_main {
                 || !self.expect_no_switchbar_items.is_empty()
                 || self.expect_switchbar_active.is_some()
                 || self.expect_switchbar_rows.is_some()
+                || self.expect_dpi.is_some()
                 || !self.expect_frame_bars_hidden.is_empty()
                 || !self.expect_switchbar_activity.is_empty()
                 || !self.expect_no_switchbar_activity.is_empty()
@@ -2422,7 +2438,15 @@ mod windows_main {
             })
     }
 
+    /// mirx's treebar width at 96 dpi (`TREE_WIDTH` in mirx-ui's
+    /// `win32.rs`), which `--expect-dpi` checks the layout scaled.
+    const MIRX_TREE_WIDTH: u32 = 240;
+
     pub(crate) fn run() -> Result<(), String> {
+        // The driver has no manifest. Aware like mirx, so whatever it reads
+        // from Win32 itself is in the same physical pixels as mirx's dump.
+        let aware = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE) };
+        assert_ne!(aware, 0, "SetProcessDpiAwarenessContext must succeed");
         let config = parse_args(env::args().skip(1))?;
         let app = MirxApp::find(config.find_timeout)
             .map_err(|error| format!("failed to attach to mirx-ui automation window: {error}"))?;
@@ -2969,6 +2993,27 @@ mod windows_main {
                     ));
                 }
                 println!("PASS switchbar rows {expected_rows}");
+            }
+
+            if let Some(expected_dpi) = config.expect_dpi {
+                if ui_state.dpi != expected_dpi {
+                    return Err(format!(
+                        "dpi assertion failed: the frame is at {} dpi, expected {expected_dpi}",
+                        ui_state.dpi
+                    ));
+                }
+                // The layout scaled too, not only the fonts: the treebar is
+                // mirx's 96-dpi width at the DPI.
+                if let Some(treebar) = ui_state.frame_layout.treebar {
+                    let expected_width = (MIRX_TREE_WIDTH * expected_dpi + 48) / 96;
+                    if u32::try_from(treebar.width) != Ok(expected_width) {
+                        return Err(format!(
+                            "dpi assertion failed: the treebar is {} wide at {expected_dpi} dpi, expected {expected_width}",
+                            treebar.width
+                        ));
+                    }
+                }
+                println!("PASS dpi {expected_dpi}");
             }
 
             for bar in &config.expect_frame_bars_hidden {

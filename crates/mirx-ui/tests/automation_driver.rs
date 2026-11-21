@@ -3086,6 +3086,37 @@ fn automation_driver_rejects_invalid_append_message_sent_update_without_exiting(
 }
 
 #[test]
+fn automation_driver_default_launch_lays_out_at_96_dpi() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let state_path = write_state_file(&base_events())?;
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    // No --frame-size: the default size, at the prefix's 96 dpi.
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.dpi, 96);
+    assert_eq!(
+        ui_state
+            .frame_layout
+            .treebar
+            .expect("the treebar shows")
+            .width,
+        240
+    );
+    let rect = unsafe { window_rect(app.automation_frame_hwnd() as HWND) };
+    assert_eq!(
+        (rect.right - rect.left, rect.bottom - rect.top),
+        (1024, 768)
+    );
+    Ok(())
+}
+
+#[test]
 fn automation_driver_can_attach_and_replace_state_via_testkit()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
@@ -3103,7 +3134,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 67);
+    assert_eq!(version.protocol_version, 68);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
