@@ -333,6 +333,14 @@ configure_case_expectations() {
           ordered_actions=(dialog:reset_e2ee)
           expect_dialog_title='Reset E2EE Identity'
           ;;
+        dialog-sign-out-session)
+          # /devices delete of a password session asks for the password.
+          ordered_actions=(
+            'compose-text:/devices delete PH0NE'
+            dialog:compose_return
+          )
+          expect_dialog_title='Sign Out Session'
+          ;;
         dialog-close-confirm)
           ordered_actions=(dialog:close_active_view)
           expect_dialog_title='mirx'
@@ -2026,6 +2034,48 @@ configure_case_expectations() {
         --expect-switchbar-item 'room:!ops:example::Ops'
       )
       expect_switchbar_active='room:!ops:example'
+      ;;
+    devices-signed-out)
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      # The core's answers to /devices delete and /devices rename, appended:
+      # the snapshot core is not signed in.
+      ordered_actions=(
+        "append:$root_dir/tests/ui-state-updates/devices-signed-out.json"
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::[22:12] * Session 0LDW3B signed out'
+        --expect-room-view '!ops:example::[22:12] * Session PH0NE renamed "Work phone"'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'session renamed'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::@me:example'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+      )
+      expect_switchbar_active='room:!ops:example'
+      ;;
+    devices-sign-out-approval)
+      # An OAuth 2.0 server signs sessions out on its account page; a
+      # replayed load prints it, and opens nothing.
+      expect_active_view='status'
+      select_views=('status')
+      status_view_expect_args=(
+        --expect-status-view '[22:12] * To sign out PH0NE, confirm on the page your browser opened; /devices lists your sessions afterwards'
+        --expect-status-view '[22:12] * If no browser opened, go to https://account.example/account?action=org.matrix.session_end&device_id=PH0NE'
+      )
+      status_view_forbid_args=(
+        --expect-no-status-view 'Unable to open'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'waiting for session sign-out'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::@me:example'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+      )
+      expect_switchbar_active='status'
       ;;
     identity-warning)
       # Bob reset his identity, and so did Carol, whom you had verified;
