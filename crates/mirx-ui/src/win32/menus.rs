@@ -75,6 +75,11 @@ pub(super) const MENU_ID_MEMBER_ACCEPT_IDENTITY: usize = 40055;
 pub(super) const MENU_ID_EXPORT_ROOM_KEYS: usize = 40056;
 /// Import Room Keys..., which runs `/e2ee import`.
 pub(super) const MENU_ID_IMPORT_ROOM_KEYS: usize = 40057;
+/// View > Toolbar.
+pub(super) const MENU_ID_VIEW_TOOLBAR: usize = 40058;
+/// The toolbar's Send File: a command with no menu item, which runs
+/// `/sendfile`.
+pub(super) const TOOLBAR_ID_SEND_FILE: usize = 40059;
 /// The window keys' command ids: accelerators with no menu item, in the
 /// gap below the Commands menu's. Alt+n sends `ACCEL_ID_WINDOW_FIRST + n - 1`.
 pub(super) const ACCEL_ID_WINDOW_FIRST: usize = 40080;
@@ -90,6 +95,8 @@ pub(super) const ACCEL_ID_TREEBAR_FOCUS: usize = 40094;
 pub(super) const MENU_ID_COMMANDS_FIRST: usize = 40100;
 /// List rooms, which Alt+L sends, as mIRC's List Channels.
 pub(super) const MENU_ID_COMMANDS_LIST: usize = MENU_ID_COMMANDS_FIRST + 1;
+/// Join room..., the menu's first item.
+pub(super) const MENU_ID_COMMANDS_JOIN: usize = MENU_ID_COMMANDS_FIRST;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MenuEntry {
@@ -125,12 +132,18 @@ pub(super) const FILE_MENU: &[MenuEntry] = &[
 ];
 
 /// The bars View shows and hides, with their items.
-pub(super) const VIEW_MENU_BARS: [(Bar, usize); 2] = [
+pub(super) const VIEW_MENU_BARS: [(Bar, usize); 3] = [
+    (Bar::Toolbar, MENU_ID_VIEW_TOOLBAR),
     (Bar::Switchbar, MENU_ID_VIEW_SWITCHBAR),
     (Bar::Treebar, MENU_ID_VIEW_TREEBAR),
 ];
 
 pub(super) const VIEW_MENU: &[MenuEntry] = &[
+    // `&T` is the Treebar's.
+    Item {
+        id: MENU_ID_VIEW_TOOLBAR,
+        label: "T&oolbar",
+    },
     Item {
         id: MENU_ID_VIEW_SWITCHBAR,
         label: "&Switchbar",
@@ -142,7 +155,7 @@ pub(super) const VIEW_MENU: &[MenuEntry] = &[
 ];
 
 /// The View items' check marks: each is checked while its bar is shown.
-pub(super) fn view_menu_checks(settings: &Settings) -> [(usize, bool); 2] {
+pub(super) fn view_menu_checks(settings: &Settings) -> [(usize, bool); 3] {
     VIEW_MENU_BARS.map(|(bar, id)| (id, settings.bar_shown(bar)))
 }
 
@@ -803,17 +816,42 @@ mod tests {
         let mut settings = Settings::default();
         assert_eq!(
             view_menu_checks(&settings),
-            [(MENU_ID_VIEW_SWITCHBAR, true), (MENU_ID_VIEW_TREEBAR, true)]
+            [
+                (MENU_ID_VIEW_TOOLBAR, true),
+                (MENU_ID_VIEW_SWITCHBAR, true),
+                (MENU_ID_VIEW_TREEBAR, true)
+            ]
         );
         settings.treebar.show = false;
+        settings.toolbar.show = false;
         assert_eq!(
             view_menu_checks(&settings),
             [
+                (MENU_ID_VIEW_TOOLBAR, false),
                 (MENU_ID_VIEW_SWITCHBAR, true),
                 (MENU_ID_VIEW_TREEBAR, false)
             ]
         );
         assert_eq!(view_menu_bar(MENU_ID_VIEW_TREEBAR), Some(Bar::Treebar));
+        assert_eq!(view_menu_bar(MENU_ID_VIEW_TOOLBAR), Some(Bar::Toolbar));
+        // mIRC's order.
+        assert_eq!(
+            VIEW_MENU,
+            [
+                Item {
+                    id: MENU_ID_VIEW_TOOLBAR,
+                    label: "T&oolbar"
+                },
+                Item {
+                    id: MENU_ID_VIEW_SWITCHBAR,
+                    label: "&Switchbar"
+                },
+                Item {
+                    id: MENU_ID_VIEW_TREEBAR,
+                    label: "&Treebar"
+                },
+            ]
+        );
         assert_eq!(view_menu_bar(MENU_ID_FIND), None);
         for entry in VIEW_MENU {
             let Item { id, .. } = entry else {
@@ -865,6 +903,7 @@ mod tests {
         .chain((0..COMMANDS_MENU.len()).map(|index| MENU_ID_COMMANDS_FIRST + index))
         .chain(ROOM_NOTIFICATIONS_MENU.iter().map(|(_, id, _)| *id))
         .chain(ACCEL_ID_WINDOW_FIRST..=ACCEL_ID_TREEBAR_FOCUS)
+        .chain([TOOLBAR_ID_SEND_FILE])
         .collect::<Vec<_>>();
         let count = ids.len();
         ids.sort_unstable();

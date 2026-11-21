@@ -3100,6 +3100,7 @@ fn automation_driver_default_launch_lays_out_at_96_dpi() -> Result<(), Box<dyn s
 
     let ui_state = app.dump_ui_state()?;
     assert_eq!(ui_state.dpi, 96);
+    assert!(ui_state.frame_layout.toolbar.is_some());
     assert_eq!(
         ui_state
             .frame_layout
@@ -3134,7 +3135,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 69);
+    assert_eq!(version.protocol_version, 70);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -3583,6 +3584,168 @@ fn startup_with_connect_on_startup_off_restores_without_syncing()
     invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
     app.wait_for_connection("syncing", Duration::from_secs(30))?;
 
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The toolbar control, which the frame created with this id.
+const TOOLBAR_ID: i32 = 1006;
+
+/// Clicks a toolbar button as the mouse does, posted to the toolbar at the
+/// button's middle: the toolbar itself sends the frame its command.
+fn click_toolbar_button(app: &MirxApp, label: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let ui_state = app.dump_ui_state()?;
+    let toolbar = ui_state.frame_layout.toolbar.expect("the toolbar is shown");
+    let button = ui_state
+        .toolbar
+        .iter()
+        .find(|button| button.label == label)
+        .unwrap_or_else(|| panic!("the toolbar has {label}"));
+    assert!(!button.hidden && button.enabled, "{label} can be clicked");
+    let point = UiPoint {
+        x: button.rect.x + button.rect.width / 2 - toolbar.x,
+        y: button.rect.y + button.rect.height / 2 - toolbar.y,
+    };
+    let toolbar_hwnd = unsafe { GetDlgItem(app.automation_frame_hwnd() as HWND, TOOLBAR_ID) };
+    assert!(!toolbar_hwnd.is_null(), "the frame has its toolbar");
+    post_left_click(toolbar_hwnd, &point, false);
+    Ok(())
+}
+
+/// Whether each named toolbar button shows.
+fn toolbar_shows(app: &MirxApp) -> Result<Vec<(String, bool)>, Box<dyn std::error::Error>> {
+    Ok(app
+        .dump_ui_state()?
+        .toolbar
+        .into_iter()
+        .filter(|button| ["Connect", "Disconnect"].contains(&button.label.as_str()))
+        .map(|button| (button.label, !button.hidden))
+        .collect())
+}
+
+#[test]
+fn toolbar_connect_button_follows_the_connection_and_clicks_through()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    let app = launch_automation_app(&local_app_data)?;
+    let labels = app
+        .dump_ui_state()?
+        .toolbar
+        .into_iter()
+        .map(|button| button.label)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels,
+        [
+            "Connect",
+            "Disconnect",
+            "Options",
+            "List Rooms",
+            "Join Room",
+            "Colors",
+            "Send File",
+            "Cascade",
+            "Tile Horizontal",
+            "Tile Vertical",
+            "Arrange Icons",
+            "Help",
+        ]
+    );
+    let connect_shown = vec![
+        ("Connect".to_owned(), true),
+        ("Disconnect".to_owned(), false),
+    ];
+    let disconnect_shown = vec![
+        ("Connect".to_owned(), false),
+        ("Disconnect".to_owned(), true),
+    ];
+    // Signed out.
+    assert_eq!(toolbar_shows(&app)?, connect_shown);
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    assert_eq!(app.dump_model()?.connection, "signed_in");
+    assert_eq!(toolbar_shows(&app)?, connect_shown);
+
+    click_toolbar_button(&app, "Connect")?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(toolbar_shows(&app)?, disconnect_shown);
+
+    click_toolbar_button(&app, "Disconnect")?;
+    app.wait_for_connection("signed_in", Duration::from_secs(30))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(status_view_contains(&app, "] * Disconnected")?);
+    assert_eq!(toolbar_shows(&app)?, connect_shown);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn toolbar_options_button_opens_options() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_automation_app(&local_app_data)?;
+    click_toolbar_button(&app, "Options")?;
+    let dialog = wait_for_options_dialog(&app)?;
+    post_options_command(dialog, IDCANCEL)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn toolbar_command_hides_the_toolbar_and_persists() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let launch = || {
+        launch_app_with_options(
+            &exe_path,
+            &[OsString::from("--automation")],
+            launch_options(Some(local_app_data.clone())),
+        )
+    };
+
+    let app = launch()?;
+    let shown = app.dump_ui_state()?.frame_layout;
+    let toolbar = shown.toolbar.expect("the toolbar shows by default");
+    assert_eq!((toolbar.x, toolbar.y), (0, 0));
+    let switchbar = shown.switchbar.expect("the switchbar shows");
+    assert_eq!(switchbar.y, toolbar.bottom());
+    assert_eq!(shown.mdi_client.y, switchbar.bottom());
+    assert!(
+        app.dump_ui_state()?
+            .menu_bar
+            .contains(&view_menu_with_toolbar(true, true, true))
+    );
+
+    type_commands(&app, &["/toolbar off"])?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.frame_layout.toolbar, None);
+    assert_eq!(ui_state.frame_layout.switchbar.map(|bar| bar.y), Some(0));
+    assert_eq!(ui_state.frame_layout.mdi_client.y, switchbar.height);
+    assert_eq!(
+        ui_state.frame_layout.mdi_client.height,
+        shown.mdi_client.height + toolbar.height
+    );
+    assert_eq!(ui_state.status_bar.text, "toolbar: off");
+    assert!(
+        ui_state
+            .menu_bar
+            .contains(&view_menu_with_toolbar(false, true, true))
+    );
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    assert!(ini.contains("[toolbar]\r\nshow=off\r\n"), "{ini}");
+    drop(app);
+
+    let app = launch()?;
+    assert_eq!(app.dump_ui_state()?.frame_layout.toolbar, None);
+    type_commands(&app, &["/toolbar on"])?;
+    assert_eq!(app.dump_ui_state()?.frame_layout, shown);
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
@@ -6972,6 +7135,7 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
         "[fonts]\r\ntext=Fixedsys,9\r\n\
          [timestamp]\r\nshow=on\r\nformat=[HH:nn:ss]\r\n\
          [connect]\r\nstartup=on\r\nreconnect=on\r\nretry=on\r\nretry_times=99\r\nretry_delay=10\r\n\
+         [toolbar]\r\nshow=on\r\n\
          [switchbar]\r\nshow=on\r\nbuttons=120\r\n\
          event=5\r\nmessage=4\r\nhighlight=12\r\n\
          [treebar]\r\nshow=on\r\nwidth=240\r\n\
@@ -15835,16 +15999,24 @@ fn menu(label: &str, items: &[(&str, bool)]) -> UiMenu {
 
 /// View, with each bar's item checked while the bar is shown.
 fn view_menu(switchbar: bool, treebar: bool) -> UiMenu {
+    view_menu_with_toolbar(true, switchbar, treebar)
+}
+
+fn view_menu_with_toolbar(toolbar: bool, switchbar: bool, treebar: bool) -> UiMenu {
     UiMenu {
         label: "&View".to_owned(),
-        items: [("&Switchbar", switchbar), ("&Treebar", treebar)]
-            .into_iter()
-            .map(|(label, checked)| UiMenuItem {
-                label: label.to_owned(),
-                enabled: true,
-                checked,
-            })
-            .collect(),
+        items: [
+            ("T&oolbar", toolbar),
+            ("&Switchbar", switchbar),
+            ("&Treebar", treebar),
+        ]
+        .into_iter()
+        .map(|(label, checked)| UiMenuItem {
+            label: label.to_owned(),
+            enabled: true,
+            checked,
+        })
+        .collect(),
     }
 }
 
@@ -15965,7 +16137,10 @@ fn view_menu_hides_and_shows_the_bars_and_persists_them() -> Result<(), Box<dyn 
     invoke_account_menu_command(&app, MENU_ID_VIEW_SWITCHBAR)?;
     let ui_state = app.dump_ui_state()?;
     assert_eq!(ui_state.frame_layout.switchbar, None);
-    assert_eq!(ui_state.frame_layout.mdi_client.y, 0);
+    assert_eq!(
+        ui_state.frame_layout.mdi_client.y,
+        shown.toolbar.expect("the toolbar shows").bottom()
+    );
     assert_eq!(ui_state.status_bar.text, "switchbar: off");
     assert!(ui_state.menu_bar.contains(&view_menu(false, true)));
     // Its buttons still follow the windows.
@@ -20565,7 +20740,8 @@ fn automation_driver_selected_timeline_context_menu_uses_keyboard_selection()
     Ok(())
 }
 
-/// The replies fixture in a frame low enough that its room scrolls.
+/// The replies fixture in a frame low enough that its room scrolls, with
+/// the fallback reply's quote line still on screen at the end.
 fn launch_replies_app() -> Result<(GuiTestApp, PathBuf), Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
@@ -20576,7 +20752,7 @@ fn launch_replies_app() -> Result<(GuiTestApp, PathBuf), Box<dyn std::error::Err
         LaunchOptions {
             frame_size: Some(FrameSize {
                 width: 800,
-                height: 300,
+                height: 330,
             }),
             ..launch_options(Some(local_app_data.clone()))
         },

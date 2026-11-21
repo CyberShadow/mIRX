@@ -804,7 +804,7 @@ unsafe fn menu_command_result(
         MENU_ID_HELP_ABOUT => ("Help", show_about_dialog(hwnd).map(|()| Some(()))),
         MENU_ID_TOOLS_OPTIONS => ("Options", run_options_dialog(hwnd).map(|()| Some(()))),
         MENU_ID_TOOLS_COLORS => ("Colors", run_colors_dialog(hwnd).map(|()| Some(()))),
-        MENU_ID_VIEW_SWITCHBAR | MENU_ID_VIEW_TREEBAR => {
+        MENU_ID_VIEW_TOOLBAR | MENU_ID_VIEW_SWITCHBAR | MENU_ID_VIEW_TREEBAR => {
             let bar = view_menu_bar(command_id).expect("View items show and hide a bar");
             let command = if state_ref(hwnd).settings.settings().bar_shown(bar) {
                 BarCommand::Off
@@ -862,6 +862,10 @@ unsafe fn menu_command_result(
             submit_menu_verification_action(hwnd, VerificationAction::Reject).map(|_| Some(())),
         ),
         MENU_ID_LOGOUT => ("File", log_out(hwnd).map(|_| Some(()))),
+        TOOLBAR_ID_SEND_FILE => (
+            "Send File",
+            run_local_command(hwnd, SlashCommand::SendFile { path: None }).map(|_| Some(())),
+        ),
         _ => {
             let item = commands_menu_item(command_id)?;
             (
@@ -932,8 +936,7 @@ pub(super) fn dialog_gesture(dialog: AutomationDialog) -> DialogGesture {
         AutomationDialog::Colors => DialogGesture::MenuCommand(MENU_ID_TOOLS_COLORS),
         AutomationDialog::SelectServer => DialogGesture::MenuCommand(MENU_ID_FILE_SELECT_SERVER),
         AutomationDialog::About => DialogGesture::MenuCommand(MENU_ID_HELP_ABOUT),
-        // Commands > Join room... is the menu's first item.
-        AutomationDialog::CommandsJoin => DialogGesture::MenuCommand(MENU_ID_COMMANDS_FIRST),
+        AutomationDialog::CommandsJoin => DialogGesture::MenuCommand(MENU_ID_COMMANDS_JOIN),
         AutomationDialog::RecoverE2ee => DialogGesture::MenuCommand(MENU_ID_RECOVER_E2EE),
         AutomationDialog::SetupE2eeRecovery => {
             DialogGesture::MenuCommand(MENU_ID_SETUP_E2EE_RECOVERY)

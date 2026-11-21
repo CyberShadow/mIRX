@@ -572,6 +572,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         summary: "show, turn on or off, or format line timestamps",
     },
     CommandSpec {
+        name: "toolbar",
+        usage: "[on|off]",
+        summary: "show or hide the toolbar",
+    },
+    CommandSpec {
         name: "topic",
         usage: "[#room] [text]",
         summary: "show or set a room's topic (#alias or !id names the room)",
@@ -848,6 +853,7 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         "log" => parse_log(argument).map(SlashCommand::Log),
         "font" => parse_font(argument).map(SlashCommand::Font),
         "switchbar" => parse_bar(Bar::Switchbar, argument),
+        "toolbar" => parse_bar(Bar::Toolbar, argument),
         "treebar" => parse_bar(Bar::Treebar, argument),
         _ => Err(CommandError::unknown(name)),
     }
@@ -2127,7 +2133,11 @@ mod tests {
 
     #[test]
     fn bars_show_or_toggle() {
-        for (name, bar) in [("switchbar", Bar::Switchbar), ("treebar", Bar::Treebar)] {
+        for (name, bar) in [
+            ("toolbar", Bar::Toolbar),
+            ("switchbar", Bar::Switchbar),
+            ("treebar", Bar::Treebar),
+        ] {
             let command = |command| Ok(SlashCommand::Bar { bar, command });
             assert_eq!(parse(&format!("/{name}")), command(BarCommand::Show));
             assert_eq!(parse(&format!("/{name} on")), command(BarCommand::On));
@@ -2222,6 +2232,7 @@ mod tests {
         ));
         assert!(lines[0].contains(" /help /identity /ignore "));
         assert!(lines[0].contains(" /reply /savebuf /sendfile "));
+        assert!(lines[0].contains(" /timestamp /toolbar /topic /treebar "));
         assert_eq!(lines[1], "* /help <command> for usage");
         assert_eq!(
             help_lines(Some("join")),

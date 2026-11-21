@@ -175,11 +175,12 @@ use crate::{
         SwitchbarState, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind,
         UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiPoint, UiRect,
         UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState, UiTextFont, UiTimelineLine,
-        UiTimelineLineKind, UiTimelineLink, UiTimestamp, VerificationActionArgs, ViewActivityLevel,
-        ViewIdentity, WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
-        dump_room_from_summary, dump_room_message_send_state_from_core,
-        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
-        parse_command_request, success_response,
+        UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiToolbarButton, VerificationActionArgs,
+        ViewActivityLevel, ViewIdentity, WaitIdleResponse, dump_error_from_core,
+        dump_room_activity_from_activity, dump_room_from_summary,
+        dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
+        dump_verification_from_state_event, failure_response, parse_command_request,
+        success_response,
     },
 };
 
@@ -249,6 +250,7 @@ mod timeline_rows;
 mod timeline_text;
 mod timeline_window;
 mod timestamp;
+mod toolbar;
 mod tray;
 mod verification;
 mod views;
@@ -356,8 +358,8 @@ use frame_menus::active_message_action_state;
 use frame_menus::{
     active_message_action_state_for_automation, active_room_action_state, append_menu_text,
     connect, context_menu_command_id, context_menu_screen_point_for_lparam, create_frame_menu,
-    default_context_point_for_window, disconnect, handle_menu_command, handle_switchbar_command,
-    handle_window_key_command, invoke_menu_command_for_automation,
+    default_context_point_for_window, disconnect, frame_menu_item_enabled, handle_menu_command,
+    handle_switchbar_command, handle_window_key_command, invoke_menu_command_for_automation,
     invoke_navigation_context_menu_for_automation, invoke_timeline_context_menu_for_automation,
     log_out, open_dialog_for_automation, refresh_menu_popup, refresh_message_menu_state,
     refresh_room_menu_state, refresh_tools_menu_state, run_room_keys_dialogs,
@@ -384,10 +386,10 @@ use menus::{
     ACCEL_ID_NEXT_CHANNEL, ACCEL_ID_NEXT_QUERY, ACCEL_ID_TOGGLE_MAXIMIZE, ACCEL_ID_TREEBAR_FOCUS,
     ACCEL_ID_WINDOW_FIRST, ACCEL_ID_WINDOW_LAST, ACCEL_ID_WINDOW_NEXT, ACCEL_ID_WINDOW_PREVIOUS,
     BarMenu, COMMANDS_MENU, FILE_MENU, HELP_MENU, MEMBER_CONTROL_MENU, MEMBER_MENU, MENU_BAR,
-    MENU_ID_COMMANDS_FIRST, MENU_ID_COMMANDS_LIST, MENU_ID_EXPORT_ROOM_KEYS, MENU_ID_FILE_CONNECT,
-    MENU_ID_FILE_DISCONNECT, MENU_ID_FILE_EXIT, MENU_ID_FILE_SELECT_SERVER, MENU_ID_FIND,
-    MENU_ID_HELP_ABOUT, MENU_ID_HELP_TOPICS, MENU_ID_IMPORT_ROOM_KEYS, MENU_ID_LOGOUT,
-    MENU_ID_MEMBER_ACCEPT_IDENTITY, MENU_ID_MEMBER_BAN, MENU_ID_MEMBER_DEOP,
+    MENU_ID_COMMANDS_FIRST, MENU_ID_COMMANDS_JOIN, MENU_ID_COMMANDS_LIST, MENU_ID_EXPORT_ROOM_KEYS,
+    MENU_ID_FILE_CONNECT, MENU_ID_FILE_DISCONNECT, MENU_ID_FILE_EXIT, MENU_ID_FILE_SELECT_SERVER,
+    MENU_ID_FIND, MENU_ID_HELP_ABOUT, MENU_ID_HELP_TOPICS, MENU_ID_IMPORT_ROOM_KEYS,
+    MENU_ID_LOGOUT, MENU_ID_MEMBER_ACCEPT_IDENTITY, MENU_ID_MEMBER_BAN, MENU_ID_MEMBER_DEOP,
     MENU_ID_MEMBER_DEVICES, MENU_ID_MEMBER_DEVOICE, MENU_ID_MEMBER_IGNORE, MENU_ID_MEMBER_KICK,
     MENU_ID_MEMBER_MENTION, MENU_ID_MEMBER_OP, MENU_ID_MEMBER_QUERY, MENU_ID_MEMBER_UNIGNORE,
     MENU_ID_MEMBER_VERIFY, MENU_ID_MEMBER_VOICE, MENU_ID_MEMBER_WHOIS, MENU_ID_MESSAGE_EDIT,
@@ -398,13 +400,13 @@ use menus::{
     MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_TOOLS_COLORS,
     MENU_ID_TOOLS_OPTIONS, MENU_ID_TOOLS_SESSIONS, MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL,
     MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS, MENU_ID_VERIFY_THIS_SESSION,
-    MENU_ID_VIEW_SWITCHBAR, MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS,
-    MENU_ID_WINDOW_CASCADE, MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL,
-    MenuEntry, ROOM_NOTIFICATIONS_MENU, TOOLS_MENU, VIEW_MENU, WINDOW_MENU, WindowKey,
-    commands_menu_item, commands_menu_line, commands_menu_title, file_menu_state,
-    member_menu_command, member_menu_item_enabled, member_menu_item_ids, notification_menu_id,
-    notification_menu_mode, notification_mode_label, verification_menu_action_enabled,
-    view_menu_bar, view_menu_checks, window_key,
+    MENU_ID_VIEW_SWITCHBAR, MENU_ID_VIEW_TOOLBAR, MENU_ID_VIEW_TREEBAR,
+    MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE, MENU_ID_WINDOW_TILE_HORIZONTAL,
+    MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry, ROOM_NOTIFICATIONS_MENU, TOOLBAR_ID_SEND_FILE,
+    TOOLS_MENU, VIEW_MENU, WINDOW_MENU, WindowKey, commands_menu_item, commands_menu_line,
+    commands_menu_title, file_menu_state, member_menu_command, member_menu_item_enabled,
+    member_menu_item_ids, notification_menu_id, notification_menu_mode, notification_mode_label,
+    verification_menu_action_enabled, view_menu_bar, view_menu_checks, window_key,
 };
 #[cfg(test)]
 use navigation::navigation_layout;
@@ -562,6 +564,9 @@ const VK_ESCAPE_KEY: WPARAM = 27;
 
 #[derive(Default)]
 struct Controls {
+    /// mIRC's toolbar, its image list (which the toolbar does not own).
+    toolbar: HWND,
+    toolbar_images: windows_sys::Win32::UI::Controls::HIMAGELIST,
     tree: HWND,
     mdi_client: HWND,
     status_bar: HWND,

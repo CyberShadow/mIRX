@@ -88,6 +88,7 @@ pub(super) struct Settings {
     pub(super) text_font: FontSetting,
     pub(super) timestamp: TimestampSetting,
     pub(super) connect: ConnectSetting,
+    pub(super) toolbar: ToolbarSetting,
     pub(super) switchbar: SwitchbarSetting,
     pub(super) treebar: TreebarSetting,
     pub(super) logging: LoggingSetting,
@@ -201,6 +202,7 @@ pub(super) fn parse_retry_delay(text: &str) -> Result<RetryDelay, String> {
 impl Settings {
     pub(super) fn bar_shown(&self, bar: Bar) -> bool {
         match bar {
+            Bar::Toolbar => self.toolbar.show,
             Bar::Switchbar => self.switchbar.show,
             Bar::Treebar => self.treebar.show,
         }
@@ -208,6 +210,7 @@ impl Settings {
 
     pub(super) fn set_bar_shown(&mut self, bar: Bar, show: bool) {
         match bar {
+            Bar::Toolbar => self.toolbar.show = show,
             Bar::Switchbar => self.switchbar.show = show,
             Bar::Treebar => self.treebar.show = show,
         }
@@ -217,6 +220,7 @@ impl Settings {
 /// The frame's bars the View menu shows and hides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Bar {
+    Toolbar,
     Switchbar,
     Treebar,
 }
@@ -225,6 +229,7 @@ impl Bar {
     /// Its command's name, without the `/`.
     pub(super) fn name(self) -> &'static str {
         match self {
+            Self::Toolbar => "toolbar",
             Self::Switchbar => "switchbar",
             Self::Treebar => "treebar",
         }
@@ -232,9 +237,22 @@ impl Bar {
 
     pub(super) fn title(self) -> &'static str {
         match self {
+            Self::Toolbar => "Toolbar",
             Self::Switchbar => "Switchbar",
             Self::Treebar => "Treebar",
         }
+    }
+}
+
+/// The toolbar, mIRC's View > Toolbar and `/toolbar`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ToolbarSetting {
+    pub(super) show: bool,
+}
+
+impl Default for ToolbarSetting {
+    fn default() -> Self {
+        Self { show: true }
     }
 }
 
@@ -486,6 +504,7 @@ enum Section {
     Fonts,
     Timestamp,
     Connect,
+    Toolbar,
     Switchbar,
     Treebar,
     Logging,
@@ -514,6 +533,7 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                 "fonts" => Section::Fonts,
                 "timestamp" => Section::Timestamp,
                 "connect" => Section::Connect,
+                "toolbar" => Section::Toolbar,
                 "switchbar" => Section::Switchbar,
                 "treebar" => Section::Treebar,
                 "logging" => Section::Logging,
@@ -563,6 +583,9 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Connect, "retry_delay") => {
                 settings.connect.retry_delay =
                     parse_retry_delay(value.trim_end()).map_err(error)?;
+            }
+            (Section::Toolbar, "show") => {
+                settings.toolbar.show = parse_on_off(value, "show").map_err(error)?;
             }
             (Section::Switchbar, "show") => {
                 settings.switchbar.show = parse_on_off(value, "show").map_err(error)?;
@@ -683,6 +706,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
          [timestamp]\r\nshow={}\r\nformat={}\r\n\
          [connect]\r\nstartup={}\r\nreconnect={}\r\nretry={}\r\n\
          retry_times={}\r\nretry_delay={}\r\n\
+         [toolbar]\r\nshow={}\r\n\
          [switchbar]\r\nshow={}\r\nbuttons={}\r\n\
          event={}\r\nmessage={}\r\nhighlight={}\r\n\
          [treebar]\r\nshow={}\r\nwidth={}\r\n\
@@ -700,6 +724,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         on_off(connect.retry),
         connect.retry_times,
         connect.retry_delay,
+        on_off(settings.toolbar.show),
         on_off(settings.switchbar.show),
         settings.switchbar.buttons,
         activity.event.get(),
@@ -794,6 +819,7 @@ mod tests {
     const DEFAULT_INI: &str = "[fonts]\r\ntext=Fixedsys,9\r\n\
         [timestamp]\r\nshow=on\r\nformat=[HH:nn]\r\n\
         [connect]\r\nstartup=on\r\nreconnect=on\r\nretry=on\r\nretry_times=99\r\nretry_delay=10\r\n\
+        [toolbar]\r\nshow=on\r\n\
         [switchbar]\r\nshow=on\r\nbuttons=120\r\nevent=5\r\nmessage=4\r\nhighlight=12\r\n\
         [treebar]\r\nshow=on\r\nwidth=240\r\n\
         [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
@@ -836,6 +862,10 @@ mod tests {
         assert!(!settings.treebar.show);
         settings.set_bar_shown(Bar::Switchbar, false);
         assert!(!settings.switchbar.show);
+        assert!(settings.bar_shown(Bar::Toolbar));
+        settings.set_bar_shown(Bar::Toolbar, false);
+        assert!(!settings.toolbar.show);
+        assert!(!settings.bar_shown(Bar::Toolbar));
     }
 
     #[test]
@@ -857,6 +887,7 @@ mod tests {
                     highlight: PaletteIndex::new(0).unwrap(),
                 },
             },
+            toolbar: ToolbarSetting { show: false },
             treebar: TreebarSetting {
                 show: false,
                 width: TreebarWidth::new(300).unwrap(),
@@ -870,6 +901,7 @@ mod tests {
         assert!(text.contains(
             "[switchbar]\r\nshow=off\r\nbuttons=90\r\nevent=7\r\nmessage=9\r\nhighlight=0\r\n"
         ));
+        assert!(text.contains("retry_delay=30\r\n[toolbar]\r\nshow=off\r\n[switchbar]"));
         assert!(text.contains("[treebar]\r\nshow=off\r\nwidth=300\r\n"));
         assert_eq!(parse_ini(&text), Ok(settings));
     }
@@ -1143,6 +1175,8 @@ mod tests {
             ("[colors]\njoin=3\njoin=4", "line 3: duplicate key join"),
             ("[switchbar]\nmessage=99", "line 2: colors must be 0-15"),
             ("[treebar]\nevent=5", "line 2: unknown key event"),
+            ("[toolbar]\nshow=yes", "line 2: show must be on or off"),
+            ("[toolbar]\nwidth=9", "line 2: unknown key width"),
         ] {
             assert_eq!(parse_ini(text), Err(error.to_owned()), "{text:?}");
         }

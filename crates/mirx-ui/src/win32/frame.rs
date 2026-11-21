@@ -2,6 +2,7 @@
 //! loop.
 
 use windows_sys::Win32::Graphics::Gdi::COLOR_BTNFACE;
+use windows_sys::Win32::UI::Controls::TB_AUTOSIZE;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_CAPTURECHANGED, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR,
 };
@@ -271,6 +272,8 @@ unsafe extern "system" fn window_proc(
         WM_NCDESTROY => {
             if let Some(state) = window_data::get::<WindowState>(hwnd) {
                 destroy_automation_state(state);
+                // The toolbar went with the other children.
+                toolbar::destroy_toolbar_images(state.controls.toolbar_images);
             }
             window_data::drop_owned::<WindowState>(hwnd);
             0
@@ -284,6 +287,10 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     let state = state_mut(hwnd);
 
     create_frame_menu(hwnd)?;
+
+    // First, so it is the top child, as mIRC's.
+    (state.controls.toolbar, state.controls.toolbar_images) =
+        toolbar::create_toolbar(hwnd, instance)?;
 
     state.controls.switchbar = CreateWindowExW(
         0,
@@ -456,7 +463,8 @@ pub(super) unsafe fn set_switchbar_button_width(switchbar: HWND, setting: Button
 
 pub(super) unsafe fn layout_controls(hwnd: HWND) {
     let state = state_mut(hwnd);
-    if state.controls.tree.is_null()
+    if state.controls.toolbar.is_null()
+        || state.controls.tree.is_null()
         || state.controls.mdi_client.is_null()
         || state.controls.status_bar.is_null()
         || state.controls.switchbar.is_null()
@@ -472,7 +480,12 @@ pub(super) unsafe fn layout_controls(hwnd: HWND) {
     // The bars are shown as the settings say. A hidden one is laid out
     // with no size, and the MDI client takes its place.
     let settings = state.settings.settings();
-    let (show_switchbar, show_treebar) = (settings.switchbar.show, settings.treebar.show);
+    let (show_toolbar, show_switchbar, show_treebar) = (
+        settings.toolbar.show,
+        settings.switchbar.show,
+        settings.treebar.show,
+    );
+    ShowWindow(state.controls.toolbar, show_or_hide(show_toolbar));
     ShowWindow(state.controls.switchbar, show_or_hide(show_switchbar));
     ShowWindow(state.controls.tree, show_or_hide(show_treebar));
     let dpi = Dpi::of_window(hwnd);
@@ -488,6 +501,16 @@ pub(super) unsafe fn layout_controls(hwnd: HWND) {
     } else {
         (0, 0)
     };
+    // The toolbar places and sizes itself at the frame's top (CCS_TOP);
+    // the bars below go under its real height.
+    let toolbar_height = if show_toolbar {
+        SendMessageW(state.controls.toolbar, TB_AUTOSIZE, 0, 0);
+        let mut toolbar_rect = RECT::default();
+        GetWindowRect(state.controls.toolbar, &mut toolbar_rect);
+        (toolbar_rect.bottom - toolbar_rect.top).min(height)
+    } else {
+        0
+    };
     let switchbar_height = if show_switchbar {
         // The switchbar wraps its buttons on its own WM_SIZE, so it gets
         // the frame's width first and its height from the rows that gives.
@@ -496,7 +519,7 @@ pub(super) unsafe fn layout_controls(hwnd: HWND) {
         MoveWindow(
             state.controls.switchbar,
             0,
-            0,
+            toolbar_height,
             width,
             switchbar_rect.bottom - switchbar_rect.top,
             1,
@@ -505,11 +528,19 @@ pub(super) unsafe fn layout_controls(hwnd: HWND) {
             .expect("a toolbar's row count is positive");
         let button_height =
             (SendMessageW(state.controls.switchbar, TB_GETBUTTONSIZE, 0, 0) as u32 >> 16) as i32;
-        switchbar::switchbar_height(rows, button_height, dpi).min(height)
+        switchbar::switchbar_height(rows, button_height, dpi).min(height - toolbar_height)
     } else {
         0
     };
-    MoveWindow(state.controls.switchbar, 0, 0, width, switchbar_height, 1);
+    MoveWindow(
+        state.controls.switchbar,
+        0,
+        toolbar_height,
+        width,
+        switchbar_height,
+        1,
+    );
+    let bars_height = toolbar_height + switchbar_height;
     // A status bar sizes and places itself at the bottom of its parent, so
     // the controls above it are laid out against its real height. Sizing it
     // to a guessed height instead left it overlapping them by a few pixels,
@@ -518,14 +549,14 @@ pub(super) unsafe fn layout_controls(hwnd: HWND) {
     let mut status_bar_rect = RECT::default();
     GetWindowRect(state.controls.status_bar, &mut status_bar_rect);
     let status_bar_height =
-        (status_bar_rect.bottom - status_bar_rect.top).min((height - switchbar_height).max(0));
+        (status_bar_rect.bottom - status_bar_rect.top).min((height - bars_height).max(0));
     let mdi_width = (width - mdi_x).max(0);
-    let mdi_height = (height - switchbar_height - status_bar_height).max(0);
+    let mdi_height = (height - bars_height - status_bar_height).max(0);
 
     MoveWindow(
         state.controls.tree,
         0,
-        switchbar_height,
+        bars_height,
         tree_width,
         mdi_height,
         1,
@@ -533,7 +564,7 @@ pub(super) unsafe fn layout_controls(hwnd: HWND) {
     MoveWindow(
         state.controls.mdi_client,
         mdi_x,
-        switchbar_height,
+        bars_height,
         mdi_width,
         mdi_height,
         1,
@@ -595,7 +626,11 @@ pub(super) fn frame_status_text(state: &WindowState) -> String {
     text
 }
 
+/// The frame's state chrome follows the model: the status text, and the
+/// toolbar's connect button. Every connection change ends here, as the
+/// status bar shows the connection.
 pub(super) unsafe fn refresh_status_bar(hwnd: HWND) -> Result<(), String> {
+    toolbar::refresh_toolbar(hwnd);
     let status_bar = state_ref(hwnd).controls.status_bar;
     if status_bar.is_null() {
         return Err("status bar control was not created".to_owned());
@@ -961,7 +996,7 @@ mod tests {
                 );
                 assert_eq!(
                     frame_child_layout(hwnd, state_ref(hwnd).controls.mdi_client).y,
-                    bar.height
+                    bar.y + bar.height
                 );
             });
         }
@@ -977,7 +1012,14 @@ mod tests {
         unsafe {
             with_test_frame(800, 600, |hwnd| {
                 let layout = dump_frame_layout(hwnd);
+                // Top to bottom: the toolbar, the switchbar, then the
+                // treebar beside the windows.
+                let toolbar = layout.toolbar.unwrap();
+                assert_eq!((toolbar.x, toolbar.y), (0, 0));
+                let switchbar = layout.switchbar.unwrap();
+                assert_eq!(switchbar.y, toolbar.height);
                 let tree = layout.treebar.unwrap();
+                assert_eq!(tree.y, switchbar.y + switchbar.height);
                 assert_eq!((tree.x, tree.width), (0, 240));
                 assert_eq!(layout.mdi_client.x, 240 + splitter::SPLITTER_WIDTH);
                 assert_eq!(layout.mdi_client.y, tree.y);
@@ -1103,8 +1145,11 @@ mod tests {
                 assert!(!state_ref(hwnd).settings.settings().switchbar.show);
                 let layout = dump_frame_layout(hwnd);
                 assert_eq!(layout.switchbar, None);
-                assert_eq!(layout.mdi_client.y, 0);
-                assert_eq!(layout.treebar.unwrap().y, 0);
+                let toolbar = layout.toolbar.unwrap();
+                assert_eq!(toolbar.y, 0);
+                assert_eq!(toolbar.width, client.right);
+                assert_eq!(layout.mdi_client.y, toolbar.height);
+                assert_eq!(layout.treebar.unwrap().y, toolbar.height);
 
                 // A hidden switchbar still mirrors the views.
                 state_mut(hwnd)
@@ -1128,20 +1173,38 @@ mod tests {
                     layout.mdi_client,
                     UiRect {
                         x: 0,
-                        y: 0,
+                        y: toolbar.height,
                         width: client.right,
                         height: layout.mdi_client.height,
                     }
                 );
                 assert_eq!(IsWindowVisible(tree), 0);
 
+                // The toolbar too: the windows fill the frame under the
+                // menubar.
+                let with_toolbar = layout.mdi_client;
+                assert_eq!(
+                    bar_command(Bar::Toolbar, BarCommand::Off),
+                    Some("toolbar: off".to_owned())
+                );
+                let layout = dump_frame_layout(hwnd);
+                assert_eq!(layout.toolbar, None);
+                assert_eq!(layout.mdi_client.y, 0);
+                assert_eq!(
+                    layout.mdi_client.height,
+                    with_toolbar.height + toolbar.height
+                );
+                bar_command(Bar::Toolbar, BarCommand::On);
+
                 bar_command(Bar::Switchbar, BarCommand::On);
                 bar_command(Bar::Treebar, BarCommand::On);
                 let layout = dump_frame_layout(hwnd);
                 assert_eq!(layout, shown);
+                let switchbar = layout.switchbar.unwrap();
+                assert_eq!(switchbar.y, layout.toolbar.unwrap().height);
                 assert_eq!(
                     frame_child_layout(hwnd, mdi_client).y,
-                    layout.switchbar.unwrap().height
+                    switchbar.y + switchbar.height
                 );
             });
         }

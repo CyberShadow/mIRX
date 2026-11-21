@@ -43,10 +43,10 @@ use mirx_testkit::{
     UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState, UiFrameLayout,
     UiLoggingOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRect, UiRefreshCounters,
     UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState, UiState, UiTextFont,
-    UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiTipsOptions, UiTray,
-    UiTrayMenuItem, UiTrayOptions, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
-    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
-    ViewActivityLevel, ViewIdentity,
+    UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiTipsOptions,
+    UiToolbarButton, UiTray, UiTrayMenuItem, UiTrayOptions, UnsupportedRoomMessageActivity,
+    UserCommandAction, Verification, VerificationActionArgs, VerificationDecimals,
+    VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -884,7 +884,25 @@ fn data_models_round_trip_through_json() {
                 },
             ],
         },
+        toolbar: vec![UiToolbarButton {
+            command_id: 40030,
+            label: "Connect".to_owned(),
+            hidden: false,
+            enabled: true,
+            rect: UiRect {
+                x: 0,
+                y: 2,
+                width: 23,
+                height: 22,
+            },
+        }],
         frame_layout: UiFrameLayout {
+            toolbar: Some(UiRect {
+                x: 0,
+                y: 0,
+                width: 1008,
+                height: 26,
+            }),
             switchbar: Some(UiRect {
                 x: 0,
                 y: 0,
@@ -1310,7 +1328,17 @@ fn data_models_round_trip_through_json() {
                     }
                 ],
             },
+            "toolbar": [
+                {
+                    "command_id": 40030,
+                    "label": "Connect",
+                    "hidden": false,
+                    "enabled": true,
+                    "rect": {"x": 0, "y": 2, "width": 23, "height": 22},
+                }
+            ],
             "frame_layout": {
+                "toolbar": {"x": 0, "y": 0, "width": 1008, "height": 26},
                 "switchbar": {"x": 0, "y": 0, "width": 1008, "height": 28},
                 "treebar": {"x": 0, "y": 28, "width": 240, "height": 600},
                 "mdi_client": {"x": 240, "y": 28, "width": 768, "height": 600},
@@ -6997,7 +7025,25 @@ fn switchbar_helpers_find_items_and_active_item() {
                 },
             ],
         },
+        toolbar: vec![UiToolbarButton {
+            command_id: 40030,
+            label: "Connect".to_owned(),
+            hidden: false,
+            enabled: true,
+            rect: UiRect {
+                x: 0,
+                y: 2,
+                width: 23,
+                height: 22,
+            },
+        }],
         frame_layout: UiFrameLayout {
+            toolbar: Some(UiRect {
+                x: 0,
+                y: 0,
+                width: 1008,
+                height: 26,
+            }),
             switchbar: Some(UiRect {
                 x: 0,
                 y: 0,

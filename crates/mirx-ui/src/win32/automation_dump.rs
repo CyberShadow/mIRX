@@ -292,6 +292,7 @@ pub(super) unsafe fn frame_child_rect(hwnd: HWND, child: HWND) -> Option<UiRect>
 pub(super) unsafe fn dump_frame_layout(hwnd: HWND) -> UiFrameLayout {
     let controls = &state_ref(hwnd).controls;
     UiFrameLayout {
+        toolbar: frame_child_rect(hwnd, controls.toolbar),
         switchbar: frame_child_rect(hwnd, controls.switchbar),
         treebar: frame_child_rect(hwnd, controls.tree),
         mdi_client: frame_child_rect(hwnd, controls.mdi_client)
@@ -554,6 +555,7 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
     let mdi = dump_mdi_state(hwnd)?;
     let status_bar = dump_status_bar_state(hwnd)?;
     let switchbar = dump_switchbar_state(hwnd)?;
+    let toolbar = toolbar::dump_toolbar(hwnd);
     let frame_layout = dump_frame_layout(hwnd);
     let state = state_ref(hwnd);
     let active_view = state
@@ -631,6 +633,7 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         mdi,
         status_bar,
         switchbar,
+        toolbar,
         frame_layout,
         dpi: Dpi::of_window(hwnd).get(),
         active_find: dump_active_find_state(state),

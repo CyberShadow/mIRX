@@ -1344,6 +1344,8 @@ pub struct UiState {
     pub mdi: MdiState,
     pub status_bar: StatusBarState,
     pub switchbar: SwitchbarState,
+    /// The toolbar's buttons, separators omitted; hidden ones too.
+    pub toolbar: Vec<UiToolbarButton>,
     pub frame_layout: UiFrameLayout,
     /// The frame's dots per inch, which its layout is at.
     pub dpi: u32,
@@ -1601,9 +1603,22 @@ impl UiRect {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UiFrameLayout {
+    pub toolbar: Option<UiRect>,
     pub switchbar: Option<UiRect>,
     pub treebar: Option<UiRect>,
     pub mdi_client: UiRect,
+}
+
+/// A toolbar button: the command it sends, its tooltip, and its place in
+/// the frame's client coordinates (empty while hidden).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiToolbarButton {
+    pub command_id: u32,
+    pub label: String,
+    pub hidden: bool,
+    pub enabled: bool,
+    pub rect: UiRect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

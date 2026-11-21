@@ -249,6 +249,7 @@ configure_case_expectations() {
   expect_switchbar_active=
   expect_switchbar_rows=
   frame_bar_hidden_expect_args=()
+  toolbar_button_expect_args=()
   verification_text_expect_args=()
   mdi_placement_expect_args=()
   mdi_title_expect_args=()
@@ -2292,9 +2293,10 @@ configure_case_expectations() {
     view-bars-hidden)
       expect_selected='!ops:example'
       expect_active_view='room:!ops:example'
-      # The multi-room fixture with both bars hidden: the maximized room
-      # fills the frame from the menubar to the status bar.
+      # The multi-room fixture with all three bars hidden: the maximized
+      # room fills the frame from the menubar to the status bar.
       ordered_actions=(
+        'input:/toolbar off'
         'input:/switchbar off'
         'input:/treebar off'
       )
@@ -2312,6 +2314,7 @@ configure_case_expectations() {
         --expect-status-bar 'treebar: off'
       )
       frame_bar_hidden_expect_args=(
+        --expect-frame-bar-hidden toolbar
         --expect-frame-bar-hidden switchbar
         --expect-frame-bar-hidden treebar
       )
@@ -3353,6 +3356,7 @@ run_case() {
     driver_args+=(--expect-dialog-title "$expect_dialog_title")
   fi
   driver_args+=("${frame_bar_hidden_expect_args[@]}")
+  driver_args+=("${toolbar_button_expect_args[@]}")
   driver_args+=("${dpi_expect_args[@]}")
 
   ui_args=(--render-state "$state_path_win" --automation)

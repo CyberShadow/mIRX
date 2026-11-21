@@ -51,6 +51,7 @@ mod cli {
         pub(crate) expect_switchbar_active: Option<ViewIdentity>,
         pub(crate) expect_switchbar_rows: Option<u32>,
         pub(crate) expect_frame_bars_hidden: Vec<FrameBar>,
+        pub(crate) expect_toolbar_buttons: Vec<ToolbarButtonExpectation>,
         pub(crate) expect_dpi: Option<u32>,
         pub(crate) expect_switchbar_activity: Vec<SwitchbarActivityExpectation>,
         pub(crate) expect_no_switchbar_activity: Vec<ViewIdentity>,
@@ -72,6 +73,7 @@ mod cli {
     /// A frame bar that View shows and hides.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum FrameBar {
+        Toolbar,
         Switchbar,
         Treebar,
     }
@@ -79,10 +81,19 @@ mod cli {
     impl FrameBar {
         pub(crate) fn name(self) -> &'static str {
             match self {
+                Self::Toolbar => "toolbar",
                 Self::Switchbar => "switchbar",
                 Self::Treebar => "treebar",
             }
         }
+    }
+
+    /// A toolbar button, by its tooltip: whether it shows and is enabled.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct ToolbarButtonExpectation {
+        pub(crate) label: String,
+        pub(crate) shown: bool,
+        pub(crate) enabled: bool,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -613,15 +624,51 @@ mod cli {
                     let value = args
                         .next()
                         .ok_or_else(|| "missing value for --expect-frame-bar-hidden".to_owned())?;
-                    let bar = [FrameBar::Switchbar, FrameBar::Treebar]
+                    let bar = [FrameBar::Toolbar, FrameBar::Switchbar, FrameBar::Treebar]
                         .into_iter()
                         .find(|bar| bar.name() == value)
                         .ok_or_else(|| {
                             format!(
-                                "invalid --expect-frame-bar-hidden value {value:?}; expected switchbar or treebar"
+                                "invalid --expect-frame-bar-hidden value {value:?}; expected toolbar, switchbar or treebar"
                             )
                         })?;
                     config.expect_frame_bars_hidden.push(bar);
+                }
+                "--expect-toolbar-button" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-toolbar-button".to_owned())?;
+                    let invalid = || {
+                        format!(
+                            "invalid --expect-toolbar-button value {value:?}; expected <label>::<shown|hidden>::<enabled|disabled>"
+                        )
+                    };
+                    let mut parts = value.split("::");
+                    let (Some(label), Some(shown), Some(enabled), None) =
+                        (parts.next(), parts.next(), parts.next(), parts.next())
+                    else {
+                        return Err(invalid());
+                    };
+                    let shown = match shown {
+                        "shown" => true,
+                        "hidden" => false,
+                        _ => return Err(invalid()),
+                    };
+                    let enabled = match enabled {
+                        "enabled" => true,
+                        "disabled" => false,
+                        _ => return Err(invalid()),
+                    };
+                    if label.is_empty() {
+                        return Err(invalid());
+                    }
+                    config
+                        .expect_toolbar_buttons
+                        .push(ToolbarButtonExpectation {
+                            label: label.to_owned(),
+                            shown,
+                            enabled,
+                        });
                 }
                 "--expect-switchbar-activity" => {
                     let value = args.next().ok_or_else(|| {
@@ -805,7 +852,8 @@ mod cli {
             "  --expect-no-switchbar-item <identity>",
             "  --expect-switchbar-active <identity>",
             "  --expect-switchbar-rows <count>",
-            "  --expect-frame-bar-hidden <switchbar|treebar>",
+            "  --expect-frame-bar-hidden <toolbar|switchbar|treebar>",
+            "  --expect-toolbar-button <label>::<shown|hidden>::<enabled|disabled> (repeatable)",
             "  --expect-switchbar-activity <identity>::<event|message|highlight>",
             "  --expect-no-switchbar-activity <identity>",
             "  --expect-navigation-text <substring>",
@@ -1118,8 +1166,9 @@ mod cli {
             Action, FrameBar, MdiPlacementExpectation, MdiTitleExpectation,
             NavigationActivityExpectation, NavigationNodeExpectation, RoomMembershipExpectation,
             RoomReadTargetExpectation, RoomTagExpectation, RoomUnreadExpectation,
-            SwitchbarActivityExpectation, TextPoint, ViewExpectation, format_view_identity,
-            parse_args, parse_view_expectation, parse_view_identity_arg, usage,
+            SwitchbarActivityExpectation, TextPoint, ToolbarButtonExpectation, ViewExpectation,
+            format_view_identity, parse_args, parse_view_expectation, parse_view_identity_arg,
+            usage,
         };
         use mirx_core::RoomMembership;
         use mirx_testkit::{
@@ -1388,12 +1437,63 @@ mod cli {
             }
             assert!(
                 parse_args(
-                    ["--expect-frame-bar-hidden", "toolbar"]
+                    ["--expect-frame-bar-hidden", "menubar"]
                         .into_iter()
                         .map(str::to_owned)
                 )
                 .is_err()
             );
+        }
+
+        #[test]
+        fn parse_args_reads_toolbar_button_expectations() {
+            let config = parse_args(
+                [
+                    "--expect-toolbar-button",
+                    "Connect::shown::enabled",
+                    "--expect-toolbar-button",
+                    "Disconnect::hidden::disabled",
+                    "--expect-frame-bar-hidden",
+                    "toolbar",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap();
+            assert_eq!(
+                config.expect_toolbar_buttons,
+                [
+                    ToolbarButtonExpectation {
+                        label: "Connect".to_owned(),
+                        shown: true,
+                        enabled: true,
+                    },
+                    ToolbarButtonExpectation {
+                        label: "Disconnect".to_owned(),
+                        shown: false,
+                        enabled: false,
+                    },
+                ]
+            );
+            assert_eq!(config.expect_frame_bars_hidden, [FrameBar::Toolbar]);
+            for value in [
+                "Connect",
+                "Connect::shown",
+                "Connect::visible::enabled",
+                "Connect::shown::on",
+                "::shown::enabled",
+                "Connect::shown::enabled::x",
+            ] {
+                assert!(
+                    parse_args(
+                        ["--expect-toolbar-button", value]
+                            .into_iter()
+                            .map(str::to_owned)
+                    )
+                    .is_err(),
+                    "{value:?}"
+                );
+            }
         }
 
         #[test]
@@ -2450,6 +2550,7 @@ mod windows_main {
                 || self.expect_switchbar_rows.is_some()
                 || self.expect_dpi.is_some()
                 || !self.expect_frame_bars_hidden.is_empty()
+                || !self.expect_toolbar_buttons.is_empty()
                 || !self.expect_switchbar_activity.is_empty()
                 || !self.expect_no_switchbar_activity.is_empty()
                 || !self.expect_navigation_texts.is_empty()
@@ -3066,6 +3167,7 @@ mod windows_main {
             for bar in &config.expect_frame_bars_hidden {
                 let layout = &ui_state.frame_layout;
                 let rect = match bar {
+                    FrameBar::Toolbar => layout.toolbar,
                     FrameBar::Switchbar => layout.switchbar,
                     FrameBar::Treebar => layout.treebar,
                 };
@@ -3076,6 +3178,32 @@ mod windows_main {
                     ));
                 }
                 println!("PASS {} hidden", bar.name());
+            }
+
+            for expectation in &config.expect_toolbar_buttons {
+                let button = ui_state
+                    .toolbar
+                    .iter()
+                    .find(|button| button.label == expectation.label)
+                    .ok_or_else(|| {
+                        format!(
+                            "toolbar button assertion failed: no {:?} button",
+                            expectation.label
+                        )
+                    })?;
+                if (!button.hidden, button.enabled) != (expectation.shown, expectation.enabled) {
+                    return Err(format!(
+                        "toolbar button assertion failed: {:?} is {}, {}",
+                        expectation.label,
+                        if button.hidden { "hidden" } else { "shown" },
+                        if button.enabled {
+                            "enabled"
+                        } else {
+                            "disabled"
+                        },
+                    ));
+                }
+                println!("PASS toolbar button {:?}", expectation.label);
             }
 
             if let Some(expected_identity) = config.expect_switchbar_active.as_ref() {

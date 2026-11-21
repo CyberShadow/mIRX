@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 69;
+pub(crate) const PROTOCOL_VERSION: u32 = 70;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1092,6 +1092,9 @@ pub(crate) struct UiState {
     pub(crate) mdi: MdiState,
     pub(crate) status_bar: StatusBarState,
     pub(crate) switchbar: SwitchbarState,
+    /// The toolbar's buttons, read back from the control, separators
+    /// omitted; hidden ones too.
+    pub(crate) toolbar: Vec<UiToolbarButton>,
     pub(crate) frame_layout: UiFrameLayout,
     /// The frame's dots per inch, which its layout is at.
     pub(crate) dpi: u32,
@@ -1339,9 +1342,22 @@ pub(crate) struct UiRect {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UiFrameLayout {
+    pub(crate) toolbar: Option<UiRect>,
     pub(crate) switchbar: Option<UiRect>,
     pub(crate) treebar: Option<UiRect>,
     pub(crate) mdi_client: UiRect,
+}
+
+/// A toolbar button: the command it sends, its tooltip, and its place in
+/// the frame's client coordinates (empty while hidden).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiToolbarButton {
+    pub(crate) command_id: u32,
+    pub(crate) label: String,
+    pub(crate) hidden: bool,
+    pub(crate) enabled: bool,
+    pub(crate) rect: UiRect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3464,9 +3480,9 @@ mod tests {
         SendTextArgs, SendTextResponse, SetComposeTextArgs, SetNavigationExpandedArgs,
         SetViewWindowStateArgs, SetupE2eeRecoveryArgs, StatusBarState, SwitchbarItem,
         SwitchbarState, UiFindHistorySearchState, UiFindState, UiFrameLayout, UiRect,
-        UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, VerificationActionArgs,
-        ViewActivityLevel, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
-        parse_command_request, success_response,
+        UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiToolbarButton,
+        VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
+        failure_response, parse_command_request, success_response,
     };
 
     fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -3823,8 +3839,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_69() {
-        assert_eq!(PROTOCOL_VERSION, 69);
+    fn protocol_version_is_70() {
+        assert_eq!(PROTOCOL_VERSION, 70);
     }
 
     #[test]
@@ -4829,7 +4845,8 @@ mod tests {
             "mdi":{"active":{"kind":"status"},"views":[]},
             "status_bar":{"text":"ready"},
             "switchbar":{"rows":1,"items":[]},
-            "frame_layout":{"switchbar":{"x":0,"y":0,"width":1008,"height":28},"treebar":{"x":0,"y":28,"width":240,"height":600},"mdi_client":{"x":240,"y":28,"width":768,"height":600}},
+            "toolbar":[],
+            "frame_layout":{"toolbar":null,"switchbar":{"x":0,"y":0,"width":1008,"height":28},"treebar":{"x":0,"y":28,"width":240,"height":600},"mdi_client":{"x":240,"y":28,"width":768,"height":600}},
             "dpi":96,
             "active_find":null,
             "rooms":[],
@@ -4851,7 +4868,8 @@ mod tests {
             "mdi":{"active":{"kind":"room","room_id":"!room:example"},"views":[]},
             "status_bar":{"text":"ready"},
             "switchbar":{"rows":1,"items":[]},
-            "frame_layout":{"switchbar":{"x":0,"y":0,"width":1008,"height":28},"treebar":{"x":0,"y":28,"width":240,"height":600},"mdi_client":{"x":240,"y":28,"width":768,"height":600}},
+            "toolbar":[],
+            "frame_layout":{"toolbar":null,"switchbar":{"x":0,"y":0,"width":1008,"height":28},"treebar":{"x":0,"y":28,"width":240,"height":600},"mdi_client":{"x":240,"y":28,"width":768,"height":600}},
             "dpi":96,
             "active_find":{
                 "active":{"kind":"room","room_id":"!room:example"},
@@ -5854,7 +5872,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":69,
+                    "protocol_version":70,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6400,7 +6418,25 @@ mod tests {
                             },
                         ],
                     },
+                    toolbar: vec![UiToolbarButton {
+                        command_id: 40030,
+                        label: "Connect".to_owned(),
+                        hidden: false,
+                        enabled: true,
+                        rect: UiRect {
+                            x: 0,
+                            y: 2,
+                            width: 23,
+                            height: 22,
+                        },
+                    }],
                     frame_layout: UiFrameLayout {
+                        toolbar: Some(UiRect {
+                            x: 0,
+                            y: 0,
+                            width: 1008,
+                            height: 26,
+                        }),
                         switchbar: Some(UiRect {
                             x: 0,
                             y: 0,
@@ -6697,7 +6733,11 @@ mod tests {
                             }
                         ]
                     },
+                    "toolbar":[
+                        {"command_id":40030,"label":"Connect","hidden":false,"enabled":true,"rect":{"x":0,"y":2,"width":23,"height":22}}
+                    ],
                     "frame_layout":{
+                        "toolbar":{"x":0,"y":0,"width":1008,"height":26},
                         "switchbar":{"x":0,"y":0,"width":1008,"height":28},
                         "treebar":null,
                         "mdi_client":{"x":0,"y":28,"width":1008,"height":600}
