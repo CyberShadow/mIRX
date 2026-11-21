@@ -626,7 +626,7 @@ pub(super) fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState
 
     for view_id in &stale_view_ids {
         state.find_states.remove(view_id);
-        cancel_original_jump_for_view(state, view_id);
+        cancel_jump_for_view(state, view_id);
     }
 
     let removed = stale_view_ids
@@ -1031,7 +1031,7 @@ fn unregister_view_by_child(state: &mut WindowState, child: HWND) -> Option<View
         .remove(&view_id)
         .expect("HWND-to-view registry must match tracked views");
     state.find_states.remove(&view_id);
-    cancel_original_jump_for_view(state, &view_id);
+    cancel_jump_for_view(state, &view_id);
     room_window_gone(state, &view_id);
     assert_eq!(
         removed.child, child,

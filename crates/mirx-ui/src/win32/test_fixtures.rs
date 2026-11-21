@@ -875,7 +875,7 @@ pub(super) fn test_state() -> WindowState {
         active_view: ViewId::Status,
         selected_timeline_event: None,
         find_states: BTreeMap::new(),
-        pending_original_jump: None,
+        pending_jump: None,
         switchbar_views: Vec::new(),
         switchbar_labels: Vec::new(),
         applied_navigation: None,

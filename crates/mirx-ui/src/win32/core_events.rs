@@ -896,7 +896,7 @@ pub(super) unsafe fn apply_events_and_refresh(
     }
     // After the anchor, so the jump's scroll wins.
     if backfill_result {
-        continue_original_jump(hwnd, failed_backfill_room_id.as_deref())?;
+        continue_event_jump(hwnd, failed_backfill_room_id.as_deref())?;
     }
     Ok(())
 }

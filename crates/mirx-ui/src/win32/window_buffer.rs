@@ -63,7 +63,7 @@ fn room_buffer_trim(state: &WindowState, room_id: &str, cap: usize) -> Option<Bu
             .iter()
             .any(|view_id| view_id.room_id() == Some(room_id))
         || state
-            .pending_original_jump
+            .pending_jump
             .as_ref()
             .is_some_and(|jump| jump.view_id.room_id() == Some(room_id))
     {

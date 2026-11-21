@@ -879,9 +879,9 @@ unsafe fn scroll_timeline(hwnd: HWND, wparam: WPARAM) -> LRESULT {
 /// `submit_backfill_room_history_for_room` refuses while one is loading or
 /// history is exhausted.
 pub(super) unsafe fn scroll_timeline_by(hwnd: HWND, gesture: ScrollGesture) {
-    // The user scrolling a window drops its pending Go to Original; the
-    // jump's own scroll sets the top line directly.
-    cancel_original_jump_for_timeline(hwnd);
+    // The user scrolling a window drops its pending event jump; the jump's
+    // own scroll sets the top line directly.
+    cancel_jump_for_timeline(hwnd);
     let visible_rows = timeline_visible_rows(hwnd);
     let (current, max_top_line) = {
         let state = timeline_state_ref(hwnd);
@@ -932,9 +932,6 @@ fn normalize_timeline_text(text: &str) -> (String, Vec<String>) {
     (normalized, lines)
 }
 
-/// Status bar text while Go to Original pages older history.
-const FINDING_ORIGINAL_STATUS: &str = "finding the original message...";
-
 /// The message menu's Go to Original Message, and a double-click on a
 /// quote line (which selects its reply): scrolls to the message the
 /// selected reply quotes, loading older history until it is found.
@@ -944,28 +941,36 @@ pub(super) unsafe fn go_to_original_of_selected_message(hwnd: HWND) -> Result<()
         .ok_or_else(|| "the selected message is not a reply".to_owned())?
         .to_owned();
     let view_id = state.active_view.clone();
-    // A new jump replaces a pending one.
-    state_mut(hwnd).pending_original_jump = Some(replies::OriginalJump {
-        view_id,
-        target_event_id,
-    });
-    continue_original_jump(hwnd, None)
+    start_event_jump(
+        hwnd,
+        replies::EventJump {
+            view_id,
+            target_event_id,
+            purpose: replies::JumpPurpose::Original,
+        },
+    )
 }
 
-/// Takes the pending Go to Original's next step, when it starts and after
+/// Starts `jump`, which replaces a pending one.
+pub(super) unsafe fn start_event_jump(hwnd: HWND, jump: replies::EventJump) -> Result<(), String> {
+    state_mut(hwnd).pending_jump = Some(jump);
+    continue_event_jump(hwnd, None)
+}
+
+/// Takes the pending event jump's next step, when it starts and after
 /// every history result. `failed_backfill_room_id`: the room whose request
 /// for older messages just failed.
-pub(super) unsafe fn continue_original_jump(
+pub(super) unsafe fn continue_event_jump(
     hwnd: HWND,
     failed_backfill_room_id: Option<&str>,
 ) -> Result<(), String> {
-    let Some(jump) = state_ref(hwnd).pending_original_jump.clone() else {
+    let Some(jump) = state_ref(hwnd).pending_jump.clone() else {
         return Ok(());
     };
     let room_id = jump
         .view_id
         .room_id()
-        .expect("only room and thread windows quote")
+        .expect("only room and thread windows jump to events")
         .to_owned();
     let step = {
         let state = state_ref(hwnd);
@@ -982,7 +987,7 @@ pub(super) unsafe fn continue_original_jump(
             .model
             .room_views
             .get(&room_id)
-            .expect("a reply's room has its timeline");
+            .expect("a jump's room has its timeline");
         let history = match &room_view.history {
             RoomHistoryBackfillState::Idle { .. } => replies::JumpHistory::Idle,
             RoomHistoryBackfillState::Loading { .. } => replies::JumpHistory::Loading,
@@ -994,7 +999,7 @@ pub(super) unsafe fn continue_original_jump(
         };
         let another_backfill_loading = loading_room_history_room_id(&state.model.room_views)
             .is_some_and(|loading_room_id| loading_room_id != room_id);
-        replies::original_jump_step(
+        replies::event_jump_step(
             &jump.view_id,
             in_view_rows,
             room_view
@@ -1005,72 +1010,78 @@ pub(super) unsafe fn continue_original_jump(
         )
     };
     let status = match step {
-        replies::OriginalJumpStep::Show(view_id) => {
-            state_mut(hwnd).pending_original_jump = None;
-            show_original_message(hwnd, &view_id, &jump.target_event_id)?;
-            "original message found".to_owned()
+        replies::EventJumpStep::Show(view_id) => {
+            state_mut(hwnd).pending_jump = None;
+            show_jump_target(hwnd, &view_id, &jump)?;
+            jump.purpose.found_status().to_owned()
         }
-        replies::OriginalJumpStep::LoadOlder => {
+        replies::EventJumpStep::LoadOlder => {
             let submitted = submit_backfill_room_history_for_room(state_mut(hwnd), &room_id)?;
             assert!(
                 submitted,
                 "a joined room with history left and none loading takes a request"
             );
-            FINDING_ORIGINAL_STATUS.to_owned()
+            jump.purpose.finding_status().to_owned()
         }
-        replies::OriginalJumpStep::Wait => FINDING_ORIGINAL_STATUS.to_owned(),
-        replies::OriginalJumpStep::NotFound => {
-            state_mut(hwnd).pending_original_jump = None;
-            "* the original message is not in this room's history".to_owned()
+        replies::EventJumpStep::Wait => jump.purpose.finding_status().to_owned(),
+        replies::EventJumpStep::NotFound => {
+            state_mut(hwnd).pending_jump = None;
+            jump.purpose.not_found_status().to_owned()
         }
-        replies::OriginalJumpStep::Failed(message) => {
-            state_mut(hwnd).pending_original_jump = None;
+        replies::EventJumpStep::Failed(message) => {
+            state_mut(hwnd).pending_jump = None;
             format!("* could not load older messages: {message}")
         }
     };
     set_local_command_status(hwnd, status)
 }
 
-/// Scrolls `view_id`'s window, activated first, so the message's first line
-/// is at the top (as low as the end allows), and selects it.
-unsafe fn show_original_message(
+/// Scrolls `view_id`'s window, activated first, so the jump's target is at
+/// the top (as low as the end allows). Go to Original scrolls to the
+/// message's first line and selects it.
+unsafe fn show_jump_target(
     hwnd: HWND,
     view_id: &ViewId,
-    event_id: &str,
+    jump: &replies::EventJump,
 ) -> Result<(), String> {
     if state_ref(hwnd).active_view != *view_id {
         activate_view(hwnd, view_id, None)?;
     }
     let timeline = view_timeline(view_id, state_ref(hwnd).views[view_id].content);
+    let event_id = jump.target_event_id.as_str();
     let source_row_index = timeline_source_row_index_of_event(timeline, event_id)
-        .expect("the jump shows a message its window holds");
-    scroll_timeline_to_source_row_index(timeline, source_row_index);
-    state_mut(hwnd).selected_timeline_event = Some(SelectedTimelineEvent {
-        view_id: view_id.clone(),
-        event_id: event_id.to_owned(),
-    });
+        .expect("the jump shows an event its window holds");
+    match jump.purpose {
+        replies::JumpPurpose::Original => {
+            scroll_timeline_to_source_row_index(timeline, source_row_index);
+            state_mut(hwnd).selected_timeline_event = Some(SelectedTimelineEvent {
+                view_id: view_id.clone(),
+                event_id: event_id.to_owned(),
+            });
+        }
+    }
     InvalidateRect(timeline, null(), 1);
     Ok(())
 }
 
-pub(super) fn cancel_original_jump_for_view(state: &mut WindowState, view_id: &ViewId) {
+pub(super) fn cancel_jump_for_view(state: &mut WindowState, view_id: &ViewId) {
     if state
-        .pending_original_jump
+        .pending_jump
         .as_ref()
         .is_some_and(|jump| jump.view_id == *view_id)
     {
-        state.pending_original_jump = None;
+        state.pending_jump = None;
     }
 }
 
-unsafe fn cancel_original_jump_for_timeline(timeline: HWND) {
+unsafe fn cancel_jump_for_timeline(timeline: HWND) {
     let frame = frame_window_for(timeline);
     let state = state_mut(frame);
-    let Some(jump) = &state.pending_original_jump else {
+    let Some(jump) = &state.pending_jump else {
         return;
     };
     if view_timeline(&jump.view_id, state.views[&jump.view_id].content) == timeline {
-        state.pending_original_jump = None;
+        state.pending_jump = None;
     }
 }
 
@@ -1601,7 +1612,7 @@ mod tests {
                 go_to_original_of_selected_message(hwnd).unwrap();
                 assert_eq!(top_line_event_id(timeline).as_deref(), Some("$q"));
                 assert_eq!(selected_timeline_event_id(state_ref(hwnd)), Some("$q"));
-                assert_eq!(state_ref(hwnd).pending_original_jump, None);
+                assert_eq!(state_ref(hwnd).pending_jump, None);
                 assert_eq!(state_ref(hwnd).model.status, "original message found");
                 assert_eq!(backfill_requests(state_ref(hwnd)), 0);
             });
@@ -1614,14 +1625,18 @@ mod tests {
             with_original_jump_frame("$old", |hwnd| {
                 go_to_original_of_selected_message(hwnd).unwrap();
                 assert_eq!(
-                    state_ref(hwnd).pending_original_jump,
-                    Some(replies::OriginalJump {
+                    state_ref(hwnd).pending_jump,
+                    Some(replies::EventJump {
                         view_id: room_view_id("!ops:example"),
                         target_event_id: "$old".to_owned(),
+                        purpose: replies::JumpPurpose::Original,
                     })
                 );
                 assert_eq!(backfill_requests(state_ref(hwnd)), 1);
-                assert_eq!(state_ref(hwnd).model.status, FINDING_ORIGINAL_STATUS);
+                assert_eq!(
+                    state_ref(hwnd).model.status,
+                    "finding the original message..."
+                );
 
                 // A page without it asks for the next.
                 apply_events_and_refresh(
@@ -1629,7 +1644,7 @@ mod tests {
                     vec![room_history_backfill("!ops:example", Some("t1"), vec![])],
                 )
                 .unwrap();
-                assert!(state_ref(hwnd).pending_original_jump.is_some());
+                assert!(state_ref(hwnd).pending_jump.is_some());
                 assert_eq!(backfill_requests(state_ref(hwnd)), 2);
 
                 apply_events_and_refresh(
@@ -1653,7 +1668,7 @@ mod tests {
                 // The jump's scroll wins over the backfill anchor.
                 assert_eq!(top_line_event_id(timeline).as_deref(), Some("$old"));
                 assert_eq!(selected_timeline_event_id(state_ref(hwnd)), Some("$old"));
-                assert_eq!(state_ref(hwnd).pending_original_jump, None);
+                assert_eq!(state_ref(hwnd).pending_jump, None);
                 assert_eq!(state_ref(hwnd).model.status, "original message found");
                 assert_eq!(backfill_requests(state_ref(hwnd)), 2);
             });
@@ -1670,7 +1685,7 @@ mod tests {
                     vec![room_history_backfill("!ops:example", None, vec![])],
                 )
                 .unwrap();
-                assert_eq!(state_ref(hwnd).pending_original_jump, None);
+                assert_eq!(state_ref(hwnd).pending_jump, None);
                 assert_eq!(
                     state_ref(hwnd).model.status,
                     "* the original message is not in this room's history"
@@ -1688,14 +1703,14 @@ mod tests {
                     })],
                 )
                 .unwrap();
-                assert_eq!(state_ref(hwnd).pending_original_jump, None);
+                assert_eq!(state_ref(hwnd).pending_jump, None);
                 assert_eq!(
                     state_ref(hwnd).model.status,
                     "* could not load older messages: offline"
                 );
                 // A failure left from before is retried by the next jump.
                 go_to_original_of_selected_message(hwnd).unwrap();
-                assert!(state_ref(hwnd).pending_original_jump.is_some());
+                assert!(state_ref(hwnd).pending_jump.is_some());
                 assert_eq!(backfill_requests(state_ref(hwnd)), 2);
             });
         }
@@ -1708,7 +1723,7 @@ mod tests {
                 go_to_original_of_selected_message(hwnd).unwrap();
                 let timeline = ops_timeline(hwnd, &room_view_id("!ops:example"));
                 SendMessageW(timeline, WM_VSCROLL, SB_LINEUP as WPARAM, 0);
-                assert_eq!(state_ref(hwnd).pending_original_jump, None);
+                assert_eq!(state_ref(hwnd).pending_jump, None);
                 // The page it asked for arrives and changes nothing.
                 let top_line = timeline_state_ref(timeline).top_line;
                 apply_events_and_refresh(

@@ -474,10 +474,10 @@ use timeline_text::{
 #[cfg(test)]
 use timeline_window::clamped_timeline_top_line;
 use timeline_window::{
-    ScrollGesture, cancel_original_jump_for_view, capture_room_history_backfill_anchor,
-    continue_original_jump, go_to_original_of_selected_message, loading_room_history_room_id,
-    register_timeline_class, relayout_timeline, restore_room_history_backfill_anchor,
-    scroll_timeline_by, select_timeline_event_at_client_y, set_timeline_rows, split_rendered_lines,
+    ScrollGesture, cancel_jump_for_view, capture_room_history_backfill_anchor, continue_event_jump,
+    go_to_original_of_selected_message, loading_room_history_room_id, register_timeline_class,
+    relayout_timeline, restore_room_history_backfill_anchor, scroll_timeline_by,
+    select_timeline_event_at_client_y, set_timeline_rows, split_rendered_lines,
     submit_backfill_room_history_for_room, timeline_max_top_line, timeline_shows_end,
     timeline_source_row_index_for_top_line, timeline_state_mut, timeline_state_ref,
     timeline_top_line_for_source_row_index, timeline_visible_rows, update_timeline_scrollbar,
@@ -751,7 +751,7 @@ struct WindowState {
     selected_timeline_event: Option<SelectedTimelineEvent>,
     find_states: BTreeMap<ViewId, ViewFindState>,
     /// The Go to Original waiting for older history; one at a time.
-    pending_original_jump: Option<replies::OriginalJump>,
+    pending_jump: Option<replies::EventJump>,
     /// The switchbar's buttons' windows, indexed by command id, and their
     /// labels; only `rebuild_switchbar` sets them, both together.
     switchbar_views: Vec<ViewId>,
@@ -1004,7 +1004,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         active_view: ViewId::Status,
         selected_timeline_event: None,
         find_states: BTreeMap::new(),
-        pending_original_jump: None,
+        pending_jump: None,
         switchbar_views: Vec::new(),
         switchbar_labels: Vec::new(),
         applied_navigation: None,
