@@ -19,7 +19,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 use windows_sys::core::{PCWSTR, s, w};
 
-use super::app_icon::APP_ICON_ID;
+use super::app_icon::{APP_ICON_ID, TOOLBAR_ICON_IDS};
 
 /// `build/resources.rs` gives the version block id 1.
 const VERSION_ID: u16 = 1;
@@ -58,21 +58,42 @@ fn u32_at(bytes: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
 }
 
-#[test]
-fn app_icon_group_has_every_size() {
+/// An icon group's (width, bits) per entry; width 0 is 256.
+fn icon_group_entries(id: u16) -> Vec<(u8, u16)> {
     // GRPICONDIR: reserved, type, count, then 14-byte GRPICONDIRENTRYs
     // (width, height, colours, reserved, planes, bit count, size, id).
-    let group = resource_bytes(RT_GROUP_ICON, APP_ICON_ID);
+    let group = resource_bytes(RT_GROUP_ICON, id);
     assert_eq!(u16_at(group, 2), 1, "an icon group");
     let count = u16_at(group, 4) as usize;
-    let entries: Vec<(u8, u16)> = (0..count)
+    (0..count)
         .map(|index| {
             let entry = 6 + 14 * index;
             (group[entry], u16_at(group, entry + 6))
         })
-        .collect();
+        .collect()
+}
+
+#[test]
+fn toolbar_icon_groups_have_the_toolbar_sizes_and_load() {
+    for id in TOOLBAR_ICON_IDS {
+        assert_eq!(
+            icon_group_entries(id),
+            [16, 20, 24, 32].map(|width| (width, 32)).to_vec(),
+            "icon group {id}"
+        );
+        for size in [16, 24] {
+            let icon =
+                unsafe { LoadImageW(this_module(), int_resource(id), IMAGE_ICON, size, size, 0) };
+            assert!(!icon.is_null(), "LoadImageW of icon {id} at {size} px");
+            unsafe { DestroyIcon(icon) };
+        }
+    }
+}
+
+#[test]
+fn app_icon_group_has_every_size() {
     assert_eq!(
-        entries,
+        icon_group_entries(APP_ICON_ID),
         [16, 20, 24, 32, 40, 48, 64, 0]
             .map(|width| (width, 32))
             .to_vec(),

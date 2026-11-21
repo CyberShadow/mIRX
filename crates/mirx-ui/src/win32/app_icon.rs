@@ -11,6 +11,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 /// the `app_resources` tests load this id from the exe.
 pub(super) const APP_ICON_ID: u16 = 1;
 
+/// The toolbar's glyphs' icon groups. `build/toolbar_icons.rs` gives its
+/// glyphs these ids; the `app_resources` tests load each.
+#[cfg(test)]
+pub(super) const TOOLBAR_ICON_IDS: std::ops::RangeInclusive<u16> = 101..=112;
+
 #[derive(Clone, Copy)]
 pub(super) enum IconSize {
     /// Captions, the maximized child's menubar button, the tray.

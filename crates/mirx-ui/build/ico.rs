@@ -1,7 +1,7 @@
 //! The ICO container: 32-bpp BMP entries for the small sizes, a PNG entry for
 //! 256 (Windows Vista and later read PNG entries; a 256 BMP would be 256 KiB).
 
-use crate::icon::Image;
+use crate::raster::Image;
 
 const PNG_SIZE: u32 = 256;
 

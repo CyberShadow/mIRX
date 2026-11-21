@@ -2,7 +2,7 @@
 //! version shown in Explorer is the crate's.
 
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The icon's resource id. `win32/app_icon.rs` has the same constant
 /// (`APP_ICON_ID`); the bin's resource tests load group icon 1 from the exe.
@@ -34,6 +34,8 @@ impl Version {
 
 pub struct RcInputs<'a> {
     pub icon_path: &'a Path,
+    /// The toolbar's icon groups, by resource id.
+    pub toolbar_icons: &'a [(u16, PathBuf)],
     pub manifest_path: &'a Path,
     pub version: Version,
 }
@@ -47,10 +49,15 @@ pub fn rc_source(inputs: &RcInputs) -> String {
     } = &inputs.version;
     let icon = rc_path(inputs.icon_path);
     let manifest = rc_path(inputs.manifest_path);
+    let toolbar_icons = inputs
+        .toolbar_icons
+        .iter()
+        .map(|(id, path)| format!("{id} ICON \"{}\"\n", rc_path(path)))
+        .collect::<String>();
     format!(
         r#"#pragma code_page(65001)
 {APP_ICON_ID} ICON "{icon}"
-1 24 "{manifest}"
+{toolbar_icons}1 24 "{manifest}"
 1 VERSIONINFO
 FILEVERSION     {major},{minor},{patch},0
 PRODUCTVERSION  {major},{minor},{patch},0
