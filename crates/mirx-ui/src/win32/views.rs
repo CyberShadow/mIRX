@@ -2,7 +2,7 @@
 
 use windows_sys::Win32::Graphics::Gdi::{HDC, SetBkColor};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_ERASEBKGND,
+    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_ERASEBKGND, WS_CLIPSIBLINGS,
 };
 
 use super::*;
@@ -512,11 +512,15 @@ unsafe fn room_content_state_ref(hwnd: HWND) -> &'static RoomContentState {
 
 unsafe fn create_room_content_state(hwnd: HWND) -> Result<Box<RoomContentState>, String> {
     let instance = GetModuleHandleW(null());
+    // The two clip each other. When the window widens, the text area grows
+    // over the nick list's old place before the list moves right. Without
+    // clipping, the text area paints there, and the moving list copies
+    // those pixels as its own still-valid bits.
     let timeline = CreateWindowExW(
         WS_EX_CLIENTEDGE,
         wide_null(TIMELINE_CLASS_NAME).as_ptr(),
         wide_null("").as_ptr(),
-        WS_CHILD | WS_VISIBLE | WS_VSCROLL,
+        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPSIBLINGS,
         0,
         0,
         0,
@@ -537,6 +541,7 @@ unsafe fn create_room_content_state(hwnd: HWND) -> Result<Box<RoomContentState>,
         WS_CHILD
             | WS_VISIBLE
             | WS_VSCROLL
+            | WS_CLIPSIBLINGS
             | (LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) as u32,
         0,
         0,
