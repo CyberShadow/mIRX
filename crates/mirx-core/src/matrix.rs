@@ -40,6 +40,7 @@ use matrix_sdk::{
             VerificationRequest as MatrixVerificationRequest, VerificationRequestState,
         },
     },
+    event_handler::RawEvent,
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
     notification_settings::{
         IsEncrypted, IsOneToOne, NotificationSettings,
@@ -81,6 +82,7 @@ use matrix_sdk::{
             relation::{Annotation, Reply, Thread},
             room::{
                 EncryptedFile, ImageInfo, MediaSource,
+                encrypted::{OriginalSyncRoomEncryptedEvent, Relation as EncryptedRelation},
                 encryption::RoomEncryptionEventContent,
                 member::{MembershipChange, MembershipState, OriginalSyncRoomMemberEvent},
                 message::{
@@ -154,6 +156,8 @@ use crate::api::{TextStyleSpan, UserLinkSpan, check_text_styles, validate_highli
 use crate::mentions::body_mentions;
 use crate::rich_text::{StyledText, html_from_styled_text, styled_text_from_html};
 use crate::runtime::{EventSender, InitialSnapshot, RoomSnapshots, emit_event};
+
+mod room_keys;
 
 #[derive(Debug)]
 pub(crate) struct MatrixCoreError {
@@ -2501,6 +2505,18 @@ pub(crate) fn register_event_handlers(
         },
     );
 
+    // The SDK dispatches an event it could not decrypt by its encrypted
+    // type; one it decrypted reaches the handlers of what it decrypted to.
+    let encrypted_events = events.clone();
+    client.add_event_handler(
+        move |_event: OriginalSyncRoomEncryptedEvent, room: Room, raw: RawEvent| {
+            let events = encrypted_events.clone();
+            async move {
+                room_keys::emit_undecrypted_sync_event(&room, Raw::from_json(raw.0), &events).await;
+            }
+        },
+    );
+
     let reaction_index = Arc::new(Mutex::new(ReactionEventIndex::default()));
 
     let redaction_events = events.clone();
@@ -2914,18 +2930,26 @@ fn room_activity_relation_from_message(
     event: &OriginalSyncRoomMessageEvent,
 ) -> Option<RoomActivityRelation> {
     match event.content.relates_to.as_ref()? {
-        MessageRelation::Reply(reply) => Some(RoomActivityRelation::Reply {
-            in_reply_to_event_id: reply.in_reply_to.event_id.to_string(),
-        }),
-        MessageRelation::Thread(thread) => Some(RoomActivityRelation::Thread {
-            thread_root_event_id: thread.event_id.to_string(),
-            in_reply_to_event_id: thread
-                .in_reply_to
-                .as_ref()
-                .map(|in_reply_to| in_reply_to.event_id.to_string()),
-            is_falling_back: thread.is_falling_back,
-        }),
+        MessageRelation::Reply(reply) => Some(room_activity_reply_relation(reply)),
+        MessageRelation::Thread(thread) => Some(room_activity_thread_relation(thread)),
         _ => None,
+    }
+}
+
+fn room_activity_reply_relation(reply: &Reply) -> RoomActivityRelation {
+    RoomActivityRelation::Reply {
+        in_reply_to_event_id: reply.in_reply_to.event_id.to_string(),
+    }
+}
+
+fn room_activity_thread_relation(thread: &Thread) -> RoomActivityRelation {
+    RoomActivityRelation::Thread {
+        thread_root_event_id: thread.event_id.to_string(),
+        in_reply_to_event_id: thread
+            .in_reply_to
+            .as_ref()
+            .map(|in_reply_to| in_reply_to.event_id.to_string()),
+        is_falling_back: thread.is_falling_back,
     }
 }
 
@@ -5143,6 +5167,9 @@ async fn room_history_backfill_events_from_timeline(
     Ok(events)
 }
 
+/// The line of an event that could not be decrypted. Its relation is in
+/// the clear: one in a thread or a reply shows as such, while an edit or a
+/// reaction is no line of its own (it applies once it decrypts).
 fn room_activity_from_unable_to_decrypt_timeline_event(
     room_id: &str,
     event: &TimelineEvent,
@@ -5151,13 +5178,25 @@ fn room_activity_from_unable_to_decrypt_timeline_event(
     highlight: bool,
 ) -> Option<RoomActivity> {
     let event_id = event.event_id()?.to_string();
+    // A malformed event has no relation to read, but it is still a line.
+    let relates_to = event
+        .raw()
+        .deserialize_as_unchecked::<OriginalSyncRoomEncryptedEvent>()
+        .ok()
+        .and_then(|event| event.content.relates_to);
+    let relation = match relates_to {
+        Some(EncryptedRelation::Reply(reply)) => Some(room_activity_reply_relation(&reply)),
+        Some(EncryptedRelation::Thread(thread)) => Some(room_activity_thread_relation(&thread)),
+        Some(EncryptedRelation::Replacement(_) | EncryptedRelation::Annotation(_)) => return None,
+        Some(_) | None => None,
+    };
 
     Some(RoomActivity {
         room_id: room_id.to_owned(),
-        activity_id: event_id.clone(),
+        activity_id: format!("event:{event_id}"),
         timestamp_ms: event.timestamp()?.get().into(),
         highlight,
-        relation: None,
+        relation,
         kind: RoomActivityKind::UnableToDecrypt(RoomUnableToDecryptActivity {
             event_id,
             sender,
@@ -6695,7 +6734,7 @@ mod tests {
             backfill_event(&event, &RedactionRules::V1, &mut BTreeMap::new(),),
             Some(RoomHistoryBackfillEvent::Activity(Box::new(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
-                activity_id: "$encrypted1:example.org".to_owned(),
+                activity_id: "event:$encrypted1:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
                 highlight: false,
                 relation: None,
@@ -6707,6 +6746,101 @@ mod tests {
                 }),
             })))
         );
+    }
+
+    fn megolm_utd_with_relation(relates_to: serde_json::Value) -> TimelineEvent {
+        TimelineEvent::from_utd(
+            Raw::new(&serde_json::json!({
+                "type": "m.room.encrypted",
+                "content": {
+                    "algorithm": "m.megolm.v1.aes-sha2",
+                    "ciphertext": "AwgAEnAC",
+                    "sender_key": "SENDERKEY",
+                    "device_id": "DEVICE",
+                    "session_id": "SESSIONID",
+                    "m.relates_to": relates_to,
+                },
+                "event_id": "$related:example.org",
+                "sender": "@alice:example.org",
+                "origin_server_ts": 1700000000000u64
+            }))
+            .expect("serialize raw encrypted timeline event")
+            .cast_unchecked(),
+            UnableToDecryptInfo {
+                session_id: Some("SESSIONID".to_owned()),
+                reason: UnableToDecryptReason::MissingMegolmSession {
+                    withheld_code: None,
+                },
+            },
+        )
+    }
+
+    #[test]
+    fn room_history_backfill_unable_to_decrypt_keeps_its_clear_relation() {
+        let reply = megolm_utd_with_relation(
+            serde_json::json!({ "m.in_reply_to": { "event_id": "$quoted:example.org" } }),
+        );
+        let Some(RoomHistoryBackfillEvent::Activity(activity)) =
+            backfill_event(&reply, &RedactionRules::V1, &mut BTreeMap::new())
+        else {
+            panic!("a reply that could not be decrypted is a line");
+        };
+        assert_eq!(
+            activity.relation,
+            Some(RoomActivityRelation::Reply {
+                in_reply_to_event_id: "$quoted:example.org".to_owned(),
+            })
+        );
+
+        let thread = megolm_utd_with_relation(serde_json::json!({
+            "rel_type": "m.thread",
+            "event_id": "$root:example.org",
+            "is_falling_back": true,
+            "m.in_reply_to": { "event_id": "$root:example.org" },
+        }));
+        let Some(RoomHistoryBackfillEvent::Activity(activity)) =
+            backfill_event(&thread, &RedactionRules::V1, &mut BTreeMap::new())
+        else {
+            panic!("a thread message that could not be decrypted is a line");
+        };
+        assert_eq!(
+            activity.relation,
+            Some(RoomActivityRelation::Thread {
+                thread_root_event_id: "$root:example.org".to_owned(),
+                in_reply_to_event_id: Some("$root:example.org".to_owned()),
+                is_falling_back: true,
+            })
+        );
+
+        let reference = megolm_utd_with_relation(serde_json::json!({
+            "rel_type": "m.reference",
+            "event_id": "$referenced:example.org",
+        }));
+        let Some(RoomHistoryBackfillEvent::Activity(activity)) =
+            backfill_event(&reference, &RedactionRules::V1, &mut BTreeMap::new())
+        else {
+            panic!("a reference that could not be decrypted is a line");
+        };
+        assert_eq!(activity.relation, None);
+    }
+
+    #[test]
+    fn room_history_backfill_unable_to_decrypt_edit_or_reaction_is_no_line() {
+        for relates_to in [
+            serde_json::json!({ "rel_type": "m.replace", "event_id": "$edited:example.org" }),
+            serde_json::json!({
+                "rel_type": "m.annotation",
+                "event_id": "$reacted:example.org",
+                "key": "+1",
+            }),
+        ] {
+            let event = megolm_utd_with_relation(relates_to.clone());
+            assert_eq!(
+                backfill_event(&event, &RedactionRules::V1, &mut BTreeMap::new()),
+                None,
+                "{relates_to}"
+            );
+        }
     }
 
     #[test]
@@ -6741,7 +6875,7 @@ mod tests {
             backfill_events(vec![event], RedactionRules::V1,),
             vec![RoomHistoryBackfillEvent::Activity(Box::new(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
-                activity_id: "$encrypted-vector:example.org".to_owned(),
+                activity_id: "event:$encrypted-vector:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
                 highlight: false,
                 relation: None,
