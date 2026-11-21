@@ -2,6 +2,7 @@
 
 use std::borrow::Borrow;
 
+use super::line_edits::{EditOrder, HeldEdit, LineEdits};
 use super::*;
 
 /// Where a room window's older history stands.
@@ -40,8 +41,8 @@ pub(super) struct RoomViewModel {
     pub(super) preview_media: BTreeMap<String, RoomPreviewMediaState>,
     /// Messages replies answer that are not among `activities`, by event ID.
     pub(super) reply_targets: BTreeMap<String, ReplyTargetState>,
-    /// The messages among `activities` that were edited, shown `(edited)`.
-    pub(super) edited_event_ids: BTreeSet<String>,
+    /// The latest edit of each of `activities` that was edited.
+    pub(super) line_edits: LineEdits,
     pub(super) typing_user_ids: Vec<String>,
     pub(super) members: Vec<RoomMemberSummary>,
     pub(super) history: RoomHistoryBackfillState,
@@ -298,6 +299,15 @@ pub(super) struct MessageReplacementFields {
     pub(super) user_links: Vec<UserLinkSpan>,
 }
 
+impl MessageReplacementFields {
+    fn apply_to(self, message: &mut RoomMessageActivity) {
+        message.presentation = self.presentation;
+        message.body = self.body;
+        message.styles = self.styles;
+        message.user_links = self.user_links;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RoomReactionEntry {
     reaction_event_id: String,
@@ -412,7 +422,7 @@ impl RoomViewModel {
             self.arrivals.forget(&activity.activity_id);
             if let Some(event_id) = room_activity_event_id(activity) {
                 self.reactions_by_target.remove(event_id);
-                self.edited_event_ids.remove(event_id);
+                self.line_edits.forget(event_id);
             }
         }
         let quoted = self
@@ -776,45 +786,51 @@ impl RoomViewModel {
         self.rebuild_threads();
     }
 
-    pub(super) fn replace_message(
-        &mut self,
-        target_event_id: &str,
-        replacement: MessageReplacementFields,
-    ) -> bool {
-        let Some(activity) = self.activities.iter_mut().find(|activity| {
-            matches!(
-                &activity.kind,
-                RoomActivityKind::Message(RoomMessageActivity {
-                    event_id: Some(event_id),
-                    ..
-                }) if event_id == target_event_id
-            )
-        }) else {
+    /// Applies an edit of a message line, if it is the line's latest and
+    /// from the line's sender: only a message's sender can edit it (the
+    /// spec's validity of replacement events), and anyone else's edit is
+    /// ignored, as Element does. A line that could not be decrypted holds
+    /// the edit until it decrypts. Whether the room changed.
+    fn replace_message(&mut self, target_event_id: &str, edit: HeldEdit) -> bool {
+        let Some(index) = self.find_activity_index_by_event_id(target_event_id) else {
             return false;
         };
-        let RoomActivityKind::Message(message) = &mut activity.kind else {
-            panic!("message replacement requires a message room activity");
+        // The envelope's sender: the server vouches for it, not the
+        // ciphertext, and decryption keeps it.
+        let line_sender = match &self.activities[index].kind {
+            RoomActivityKind::Message(message) => &message.sender.user_id,
+            RoomActivityKind::UnableToDecrypt(utd) => &utd.sender.user_id,
+            _ => return false,
         };
-        message.presentation = replacement.presentation;
-        message.body = replacement.body;
-        message.styles = replacement.styles;
-        message.user_links = replacement.user_links;
-        self.edited_event_ids.insert(target_event_id.to_owned());
-        self.rebuild_threads();
+        if *line_sender != edit.sender || !self.line_edits.is_newer(target_event_id, &edit.order) {
+            return false;
+        }
+        match &mut self.activities[index].kind {
+            RoomActivityKind::Message(message) => {
+                edit.fields.apply_to(message);
+                self.line_edits.applied(target_event_id, edit.order);
+                self.rebuild_threads();
+            }
+            RoomActivityKind::UnableToDecrypt(_) => self.line_edits.hold(target_event_id, edit),
+            _ => unreachable!("the line's sender was read above"),
+        }
         true
     }
 
     /// Redacts the event a redaction names, whatever the room shows it as:
-    /// a line (its reactions go with it) or a reaction. Whether the room
-    /// showed it.
+    /// a line (its reactions and edit go with it), a reaction, or an edit
+    /// held for a line that could not be decrypted. Whether the room
+    /// showed it. An applied edit's redaction changes nothing: the line no
+    /// longer has the text the edit replaced.
     fn redact_activity(&mut self, target_event_id: &str) -> bool {
         let Some(index) = self.find_activity_index_by_event_id(target_event_id) else {
-            return self.remove_reaction(target_event_id);
+            return self.remove_reaction(target_event_id)
+                || self.line_edits.forget_held_by_replacement(target_event_id);
         };
         let activity_id = self.activities[index].activity_id.clone();
         self.remove_reactions_for_target(target_event_id);
         // A redacted line says only that; what it was, edited or not, is gone.
-        self.edited_event_ids.remove(target_event_id);
+        self.line_edits.forget(target_event_id);
         self.activities[index].kind = RoomActivityKind::Redacted(RoomRedactedActivity {
             event_id: target_event_id.to_owned(),
         });
@@ -991,10 +1007,10 @@ impl RoomViewModel {
             self.shows_undecrypted(&event_id),
             "{event_id} is not shown as undecrypted"
         );
-        let shown = match self.find_activity_index_by_event_id(&event_id) {
-            Some(index) => &mut self.activities[index],
+        let (shown, line) = match self.find_activity_index_by_event_id(&event_id) {
+            Some(index) => (&mut self.activities[index], true),
             None => match self.reply_targets.get_mut(&event_id) {
-                Some(ReplyTargetState::Loaded(target)) => &mut **target,
+                Some(ReplyTargetState::Loaded(target)) => (&mut **target, false),
                 _ => unreachable!("shows_undecrypted found it"),
             },
         };
@@ -1004,6 +1020,16 @@ impl RoomViewModel {
             "a decrypted line keeps its activity"
         );
         *shown = activity;
+        // An edit the line held applies to the message of its sender; one
+        // of another kind cannot be edited (a quote holds no edits).
+        if line
+            && let Some(held) = self.line_edits.take_held(&event_id)
+            && let RoomActivityKind::Message(message) = &mut shown.kind
+            && message.sender.user_id == held.sender
+        {
+            held.fields.apply_to(message);
+            self.line_edits.applied(&event_id, held.order);
+        }
         // It may be a thread's message, or a thread's root.
         self.rebuild_threads();
     }
@@ -1115,19 +1141,28 @@ impl RoomViewModel {
             (
                 RoomActivityUpdateTarget::Event { event_id },
                 RoomActivityUpdateKind::MessageReplaced {
+                    replacement_event_id,
+                    sender,
+                    timestamp_ms,
                     presentation,
                     body,
                     styles,
                     user_links,
-                    ..
                 },
             ) => self.replace_message(
                 event_id,
-                MessageReplacementFields {
-                    presentation: *presentation,
-                    body: body.clone(),
-                    styles: styles.clone(),
-                    user_links: user_links.clone(),
+                HeldEdit {
+                    order: EditOrder {
+                        timestamp_ms: *timestamp_ms,
+                        replacement_event_id: replacement_event_id.clone(),
+                    },
+                    sender: sender.clone(),
+                    fields: MessageReplacementFields {
+                        presentation: *presentation,
+                        body: body.clone(),
+                        styles: styles.clone(),
+                        user_links: user_links.clone(),
+                    },
                 },
             ),
             (
@@ -1176,7 +1211,13 @@ impl RoomViewModel {
                 RoomActivityUpdateTarget::Event { event_id },
                 RoomActivityUpdateKind::MessageReplaced { .. },
             ) => self
-                .find_message_activity_index(None, Some(event_id))
+                .find_activity_index_by_event_id(event_id)
+                .filter(|index| {
+                    matches!(
+                        self.activities[*index].kind,
+                        RoomActivityKind::Message(_) | RoomActivityKind::UnableToDecrypt(_)
+                    )
+                })
                 .map(|_| ())
                 .ok_or_else(|| "message edit requires an existing visible target event".to_owned()),
             (
@@ -1977,15 +2018,15 @@ mod tests {
             1_700_000_120_000,
         ));
 
-        assert!(room_view.replace_message(
+        assert!(room_view.apply_update(&edit_by(
+            "!ops:example",
             "$thread-root",
-            MessageReplacementFields {
-                presentation: RoomMessagePresentationKind::Text,
-                body: "edited root".to_owned(),
-                styles: Vec::new(),
-                user_links: Vec::new(),
-            }
-        ));
+            "$root-edit",
+            "@alice:example",
+            1_700_000_180_000,
+            RoomMessagePresentationKind::Text,
+            "edited root",
+        )));
         assert_eq!(
             room_view
                 .threads
@@ -2583,15 +2624,15 @@ mod tests {
         let mut room_view = room_with_lines(3);
         assert!(room_view.add_reaction("$m0", "$r0", "@bob:example", 1, "+1"));
         assert!(room_view.add_reaction("$m2", "$r2", "@bob:example", 1, "+1"));
-        assert!(room_view.replace_message(
+        assert!(room_view.apply_update(&edit_by(
+            "!ops:example",
             "$m0",
-            MessageReplacementFields {
-                presentation: RoomMessagePresentationKind::Text,
-                body: "edited".to_owned(),
-                styles: Vec::new(),
-                user_links: Vec::new(),
-            },
-        ));
+            "$e0",
+            "@alice:example",
+            1,
+            RoomMessagePresentationKind::Text,
+            "edited",
+        )));
         for activity_id in ["event:$m0", "event:$m2"] {
             room_view.insert_preview_media(
                 activity_id.to_owned(),
@@ -2607,7 +2648,7 @@ mod tests {
             room_view.reactions_by_target.keys().collect::<Vec<_>>(),
             ["$m2"]
         );
-        assert!(room_view.edited_event_ids.is_empty());
+        assert!(room_view.line_edits.is_empty());
         assert_eq!(
             room_view.preview_media.keys().collect::<Vec<_>>(),
             ["event:$m2"]

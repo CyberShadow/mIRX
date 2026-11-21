@@ -2911,6 +2911,18 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!encrypted:example.org'
       ;;
+    # Bob's edit of his line came before its key; Alice's forged edit of it
+    # never shows (the Wine test checks it is not there).
+    room-keys-decrypted-edit)
+      expect_selected='!encrypted:example.org'
+      expect_active_view='room:!encrypted:example.org'
+      append_events_path="$root_dir/tests/ui-state-updates/room-keys-decrypted-edit.json"
+      room_view_expect_args=(
+        --expect-room-view '!encrypted:example.org::<Bob> at noon, once the build is green and tagged (edited)'
+        --expect-room-view '!encrypted:example.org::* Bob sent an encrypted message that could not be decrypted'
+      )
+      expect_switchbar_active='room:!encrypted:example.org'
+      ;;
     # Room key file answers, the failure in red.
     room-keys-imported)
       expect_active_view='status'

@@ -547,7 +547,7 @@ fn activity_line_text(
                     if message
                         .event_id
                         .as_ref()
-                        .is_some_and(|event_id| room_view.edited_event_ids.contains(event_id)) =>
+                        .is_some_and(|event_id| room_view.line_edits.shows_edited(event_id)) =>
                 {
                     " (edited)"
                 }
@@ -1191,13 +1191,15 @@ mod tests {
         let mut state = reply_quote_state("$q");
         apply_core_event(
             &mut state,
-            incoming_replaced(
+            Event::RoomActivityUpdate(edit_by(
                 "!ops:example",
                 "$a",
                 "$a-edit",
+                "@bob:example",
+                1_700_000_000_500,
                 RoomMessagePresentationKind::Emote,
                 "says yes",
-            ),
+            )),
         )
         .unwrap();
         assert_eq!(
@@ -1210,11 +1212,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(room_lines(&state)[3], "[22:14] * message redacted");
-        assert!(
-            state.model.room_views["!ops:example"]
-                .edited_event_ids
-                .is_empty()
-        );
+        assert!(state.model.room_views["!ops:example"].line_edits.is_empty());
     }
 
     fn fetch_reply_targets(state: &mut WindowState) {

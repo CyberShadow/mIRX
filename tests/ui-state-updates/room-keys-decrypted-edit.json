@@ -1,0 +1,75 @@
+[
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!encrypted:example.org",
+      "target": {
+        "type": "event",
+        "event_id": "$answer:example.org"
+      },
+      "kind": {
+        "type": "message_replaced",
+        "replacement_event_id": "$answer-edit:example.org",
+        "sender": "@bob:example.org",
+        "timestamp_ms": 1710000180000,
+        "presentation": "text",
+        "body": "at noon, once the build is green and tagged",
+        "styles": [],
+        "user_links": []
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!encrypted:example.org",
+      "target": {
+        "type": "event",
+        "event_id": "$answer:example.org"
+      },
+      "kind": {
+        "type": "message_replaced",
+        "replacement_event_id": "$answer-forged:example.org",
+        "sender": "@alice:example.org",
+        "timestamp_ms": 1710000240000,
+        "presentation": "text",
+        "body": "never, the build is red",
+        "styles": [],
+        "user_links": []
+      }
+    }
+  },
+  {
+    "RoomEventsDecrypted": {
+      "room_id": "!encrypted:example.org",
+      "events": [
+        {
+          "type": "activity",
+          "room_id": "!encrypted:example.org",
+          "activity_id": "event:$answer:example.org",
+          "timestamp_ms": 1710000060000,
+          "highlight": false,
+          "relation": {
+            "type": "reply",
+            "in_reply_to_event_id": "$question:example.org"
+          },
+          "kind": {
+            "type": "message",
+            "event_id": "$answer:example.org",
+            "transaction_id": null,
+            "sender": {
+              "user_id": "@bob:example.org",
+              "display_name": "Bob",
+              "display_name_ambiguous": false
+            },
+            "presentation": "text",
+            "body": "at noon, once the build is green",
+            "styles": [],
+            "user_links": [],
+            "send_state": {
+              "state": "sent"
+            }
+          }
+        }
+      ]
+    }
+  }
+]

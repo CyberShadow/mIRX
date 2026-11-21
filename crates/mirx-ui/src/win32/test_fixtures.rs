@@ -363,6 +363,7 @@ pub(super) fn outgoing_sent(room_id: &str, transaction_id: &str, event_id: &str)
     })
 }
 
+/// Alice's edit of `target_event_id`.
 pub(super) fn incoming_replaced(
     room_id: &str,
     target_event_id: &str,
@@ -370,21 +371,41 @@ pub(super) fn incoming_replaced(
     presentation: RoomMessagePresentationKind,
     body: &str,
 ) -> Event {
-    Event::RoomActivityUpdate(RoomActivityUpdate {
+    Event::RoomActivityUpdate(edit_by(
+        room_id,
+        target_event_id,
+        replacement_event_id,
+        "@alice:example",
+        1_700_000_000_500,
+        presentation,
+        body,
+    ))
+}
+
+pub(super) fn edit_by(
+    room_id: &str,
+    target_event_id: &str,
+    replacement_event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    presentation: RoomMessagePresentationKind,
+    body: &str,
+) -> RoomActivityUpdate {
+    RoomActivityUpdate {
         room_id: room_id.to_owned(),
         target: RoomActivityUpdateTarget::Event {
             event_id: target_event_id.to_owned(),
         },
         kind: RoomActivityUpdateKind::MessageReplaced {
             replacement_event_id: replacement_event_id.to_owned(),
-            sender: "@alice:example".to_owned(),
-            timestamp_ms: 1_700_000_000_500,
+            sender: sender.to_owned(),
+            timestamp_ms,
             presentation,
             body: body.to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
         },
-    })
+    }
 }
 
 pub(super) fn incoming_redacted(

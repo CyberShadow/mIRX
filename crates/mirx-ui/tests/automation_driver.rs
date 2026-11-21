@@ -12324,6 +12324,52 @@ fn automation_driver_decrypts_a_line_that_could_not_be_decrypted_in_place()
     Ok(())
 }
 
+/// Bob's edit of his line that could not be decrypted waits for the line,
+/// and Alice's later edit of it never shows: only a message's sender can
+/// edit it.
+#[test]
+fn automation_driver_edit_waits_for_its_line_to_decrypt() -> Result<(), Box<dyn std::error::Error>>
+{
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(fixture_state_path(
+        "room-keys-decrypted-edit.json",
+    ))?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.append_synthetic_events(&fs::read_to_string(fixture_update_path(
+        "room-keys-decrypted-edit.json",
+    ))?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let state = app.dump_ui_state()?;
+    let view = find_view(&state, &room_identity("!encrypted:example.org"));
+    assert_eq!(
+        view_lines_containing(
+            view,
+            "<Bob> at noon, once the build is green and tagged (edited)"
+        )
+        .len(),
+        1,
+        "{:#?}",
+        view.lines
+    );
+    assert!(
+        !view_contains(view, "the build is red"),
+        "{:#?}",
+        view.lines
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 #[test]
 fn automation_driver_loads_receive_side_reactions() -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =

@@ -217,6 +217,7 @@ mod hotlinks;
 mod identity;
 mod ignore;
 mod images;
+mod line_edits;
 mod logging;
 mod mdi;
 mod menus;

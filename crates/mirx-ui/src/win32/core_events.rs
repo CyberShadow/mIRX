@@ -3131,7 +3131,7 @@ mod tests {
                 threads: BTreeMap::new(),
                 preview_media: BTreeMap::new(),
                 reply_targets: BTreeMap::new(),
-                edited_event_ids: BTreeSet::new(),
+                line_edits: Default::default(),
                 typing_user_ids: vec!["@alice:example.org".to_owned()],
                 members: Vec::new(),
                 history: RoomHistoryBackfillState::default(),
@@ -5854,6 +5854,203 @@ mod tests {
                 .iter()
                 .any(|line| line.ends_with("<@alice:example> plan")),
             "{lines:#?}"
+        );
+    }
+
+    /// `sender`'s edit of `target`, at `at` ms past the test epoch.
+    fn edit(target: &str, replacement: &str, sender: &str, at: u64, body: &str) -> Event {
+        Event::RoomActivityUpdate(edit_by(
+            "!ops:example",
+            target,
+            replacement,
+            sender,
+            1_700_000_200_000 + at,
+            RoomMessagePresentationKind::Text,
+            body,
+        ))
+    }
+
+    fn line_of<'a>(lines: &'a [String], event_line_end: &str) -> &'a str {
+        lines
+            .iter()
+            .find(|line| line.contains(event_line_end))
+            .unwrap_or_else(|| panic!("no line with {event_line_end}: {lines:#?}"))
+    }
+
+    /// Only a message's sender can edit it (the spec's validity of
+    /// replacement events): anyone else's edit is ignored, as Element
+    /// does, also while the line waits for its key.
+    #[test]
+    fn an_edit_by_another_user_is_ignored() {
+        let mut state = undecrypted_state();
+        let before = ops_lines(&state);
+        for event in [
+            edit("$before", "$forged", "@bob:example", 1, "bob was here"),
+            edit("$secret", "$forged-too", "@bob:example", 2, "bob again"),
+        ] {
+            apply_core_event(&mut state, event).unwrap();
+        }
+        assert_eq!(ops_lines(&state), before);
+
+        apply_core_event(
+            &mut state,
+            decrypted("!ops:example", vec![decrypted_line(alices_secret("plan"))]),
+        )
+        .unwrap();
+        let lines = ops_lines(&state);
+        assert!(
+            line_of(&lines, "<@alice:example> plan").ends_with("plan"),
+            "{lines:#?}"
+        );
+        assert!(!lines.iter().any(|line| line.contains("bob")), "{lines:#?}");
+    }
+
+    /// The latest edit shows (by server time, then by event ID), whatever
+    /// order the edits come in; the same edit again changes nothing.
+    #[test]
+    fn an_older_edit_never_overwrites_a_newer_one() {
+        let mut state = undecrypted_state();
+        for event in [
+            edit("$before", "$e2", "@alice:example", 2, "second"),
+            edit("$before", "$e1", "@alice:example", 1, "first"),
+        ] {
+            apply_core_event(&mut state, event).unwrap();
+        }
+        assert_eq!(
+            line_of(&ops_lines(&state), "<@alice:example> "),
+            "[22:13] <@alice:example> second (edited)"
+        );
+
+        // A tie in time goes to the greater event ID.
+        let Event::RoomActivityUpdate(tie) = edit("$before", "$e3", "@alice:example", 2, "third")
+        else {
+            unreachable!()
+        };
+        let Event::RoomActivityUpdate(tie_lost) =
+            edit("$before", "$e0", "@alice:example", 2, "zeroth")
+        else {
+            unreachable!()
+        };
+        let view = state.model.room_views.get_mut("!ops:example").unwrap();
+        assert!(view.apply_update(&tie));
+        assert!(!view.apply_update(&tie_lost));
+        assert!(!view.apply_update(&tie), "the same edit again");
+        assert_eq!(
+            line_of(&ops_lines(&state), "<@alice:example> "),
+            "[22:13] <@alice:example> third (edited)"
+        );
+    }
+
+    /// An edit that came while its line could not be decrypted waits for
+    /// the line; once the line decrypts, it shows edited.
+    #[test]
+    fn an_edit_of_an_undecrypted_line_applies_when_it_decrypts() {
+        let mut state = undecrypted_state();
+        let before = ops_lines(&state);
+        apply_core_event(
+            &mut state,
+            edit("$secret", "$fix", "@alice:example", 1, "the plan, fixed"),
+        )
+        .unwrap();
+        assert_eq!(ops_lines(&state), before, "the line still waits");
+
+        apply_core_event(
+            &mut state,
+            decrypted(
+                "!ops:example",
+                vec![decrypted_line(alices_secret("the plna"))],
+            ),
+        )
+        .unwrap();
+        let lines = ops_lines(&state);
+        assert!(
+            lines.contains(&"[22:14] <@alice:example> the plan, fixed (edited)".to_owned()),
+            "{lines:#?}"
+        );
+    }
+
+    #[test]
+    fn an_edit_held_for_a_line_that_decrypts_to_another_kind_is_dropped() {
+        let mut state = undecrypted_state();
+        apply_core_event(
+            &mut state,
+            edit("$secret", "$fix", "@alice:example", 1, "fixed"),
+        )
+        .unwrap();
+        let image = image_activity(
+            "!ops:example",
+            "$secret",
+            "@alice:example",
+            1_700_000_060_000,
+            "plan.png",
+            None,
+            None,
+        );
+        apply_core_event(
+            &mut state,
+            decrypted("!ops:example", vec![decrypted_line(image)]),
+        )
+        .unwrap();
+
+        let lines = ops_lines(&state);
+        assert!(
+            !lines.iter().any(|line| line.contains("fixed")),
+            "{lines:#?}"
+        );
+        assert!(state.model.room_views["!ops:example"].line_edits.is_empty());
+    }
+
+    #[test]
+    fn a_held_edit_redacted_before_its_line_decrypts_is_dropped() {
+        let mut state = undecrypted_state();
+        apply_core_event(
+            &mut state,
+            edit("$secret", "$fix", "@alice:example", 1, "fixed"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_redacted("!ops:example", "$fix", "$unfix"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            decrypted("!ops:example", vec![decrypted_line(alices_secret("plan"))]),
+        )
+        .unwrap();
+
+        let lines = ops_lines(&state);
+        assert!(
+            lines.contains(&"[22:14] <@alice:example> plan".to_owned()),
+            "{lines:#?}"
+        );
+    }
+
+    /// An edit that decrypts late, older than the edit already shown, does
+    /// not bring back the older text.
+    #[test]
+    fn a_decrypted_older_edit_after_a_live_newer_one_is_ignored() {
+        let mut state = undecrypted_state();
+        apply_core_event(
+            &mut state,
+            edit("$before", "$e2", "@alice:example", 2, "second"),
+        )
+        .unwrap();
+        let Event::RoomActivityUpdate(older) = edit("$before", "$e1", "@alice:example", 1, "first")
+        else {
+            unreachable!()
+        };
+        apply_core_event(
+            &mut state,
+            decrypted(
+                "!ops:example",
+                vec![RoomHistoryBackfillEvent::ActivityUpdate(older)],
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            line_of(&ops_lines(&state), "<@alice:example> "),
+            "[22:13] <@alice:example> second (edited)"
         );
     }
 
