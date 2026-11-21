@@ -410,6 +410,11 @@ struct MockBackfillHomeserver {
     read_markers: Arc<Mutex<Vec<serde_json::Value>>>,
     /// `!beta:example`'s sync timeline, which every `/sync` serves whole.
     timeline: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// What the user's presence went through: the bodies of the presence
+    /// `PUT`s, in arrival order. A `GET` answers the last one's presence.
+    presence_puts: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// Each `/sync`'s `set_presence`, in arrival order.
+    sync_presence: Arc<Mutex<Vec<Option<String>>>>,
 }
 
 /// What the mock homeserver fails, as the network would: a failed request
@@ -445,6 +450,54 @@ impl MockBackfillHomeserver {
             }
             std::thread::sleep(POLL_INTERVAL);
         }
+    }
+
+    /// Waits until the mock got `count` presence `PUT`s; their bodies.
+    fn wait_for_presence_puts(
+        &self,
+        count: usize,
+    ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let bodies = self.presence_puts.lock().expect("the presence").clone();
+            if bodies.len() >= count {
+                return Ok(bodies);
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("the mock got {bodies:?}, not {count} presence PUTs").into());
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
+    }
+
+    /// Waits until a `/sync` after the first `after` says `set_presence`
+    /// as `presence` (`None`: without the parameter).
+    fn wait_for_sync_presence(
+        &self,
+        after: usize,
+        presence: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let syncs = self.sync_presence.lock().expect("the syncs").clone();
+            if syncs[after.min(syncs.len())..]
+                .iter()
+                .any(|said| said.as_deref() == presence)
+            {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "no sync after the first {after} said {presence:?}: {syncs:?}"
+                )
+                .into());
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
+    }
+
+    fn sync_count(&self) -> usize {
+        self.sync_presence.lock().expect("the syncs").len()
     }
 
     /// A new event in Beta's timeline, from the next `/sync` on.
@@ -546,6 +599,10 @@ fn spawn_mock_homeserver_with_auth(
     let mock_read_markers = Arc::clone(&read_markers);
     let timeline = Arc::new(Mutex::new(timeline_events.clone()));
     let mock_timeline = Arc::clone(&timeline);
+    let presence_puts = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+    let mock_presence_puts = Arc::clone(&presence_puts);
+    let sync_presence = Arc::new(Mutex::new(Vec::new()));
+    let mock_sync_presence = Arc::clone(&sync_presence);
     let room_account_data = fully_read
         .into_iter()
         .map(|event_id| {
@@ -711,6 +768,15 @@ fn spawn_mock_homeserver_with_auth(
             }
 
             if path.contains("/sync") {
+                mock_sync_presence.lock().expect("the syncs").push(
+                    path.split_once('?')
+                        .and_then(|(_, query)| {
+                            query
+                                .split('&')
+                                .find_map(|pair| pair.strip_prefix("set_presence="))
+                        })
+                        .map(str::to_owned),
+                );
                 // A continuous sync loop polls with `since`; idle like a
                 // long-poll instead of spinning.
                 if path.contains("since=") {
@@ -797,6 +863,29 @@ fn spawn_mock_homeserver_with_auth(
                         }
                     }),
                 );
+                continue;
+            }
+
+            // The user's presence: as Synapse, a GET reads what the last
+            // PUT set.
+            if path.starts_with("/_matrix/client/v3/presence/") && path.ends_with("/status") {
+                let mut puts = mock_presence_puts.lock().expect("the presence");
+                if request_line.starts_with("PUT ") {
+                    let body = &request[request
+                        .find("\r\n\r\n")
+                        .map_or(request.len(), |end| end + 4)..];
+                    puts.push(serde_json::from_str(body).expect("a presence JSON body"));
+                    respond_json(&mut stream, 200, &serde_json::json!({}));
+                } else {
+                    let presence = puts
+                        .last()
+                        .map_or(serde_json::json!("online"), |put| put["presence"].clone());
+                    respond_json(
+                        &mut stream,
+                        200,
+                        &serde_json::json!({ "presence": presence }),
+                    );
+                }
                 continue;
             }
 
@@ -1027,6 +1116,8 @@ fn spawn_mock_homeserver_with_auth(
         faults,
         read_markers,
         timeline,
+        presence_puts,
+        sync_presence,
     })
 }
 
@@ -4423,6 +4514,61 @@ fn app_with_a_held_history_request()
     app.trigger_active_timeline_history_backfill()?;
     server.wait_for_held(1)?;
     Ok((local_app_data, server, app))
+}
+
+/// `/away` marks the user away on the server and in every later sync,
+/// which Synapse would otherwise take as online again; `/back` undoes both.
+#[test]
+fn away_rides_the_sync_loop() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_homeserver(MockMessages::Hang, vec![])?;
+    let app = launch_automation_app(&local_app_data)?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    server.wait_for_sync_presence(0, None)?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+
+    app.set_compose_text("/away lunch")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(
+        server.wait_for_presence_puts(1)?,
+        [serde_json::json!({ "presence": "unavailable", "status_msg": "lunch" })]
+    );
+    let after_away = server.sync_count();
+    server.wait_for_sync_presence(after_away, Some("unavailable"))?;
+    app.wait_for_ui_state("the away answer", Duration::from_secs(10), |ui_state| {
+        view_contains(
+            find_view(ui_state, &beta),
+            "* You have been marked as being away",
+        )
+    })?;
+
+    app.set_compose_text("/back")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(
+        server.wait_for_presence_puts(2)?[1],
+        serde_json::json!({ "presence": "online" })
+    );
+    let after_back = server.sync_count();
+    server.wait_for_sync_presence(after_back, None)?;
+    app.wait_for_ui_state("the back answer", Duration::from_secs(10), |ui_state| {
+        view_contains(
+            find_view(ui_state, &beta),
+            "* You are no longer marked as being away",
+        )
+    })?;
+    // The server showed the away to others: no warning line.
+    assert!(!view_contains(
+        find_view(&app.dump_ui_state()?, &beta),
+        "Others"
+    ));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
 }
 
 /// A history request the server does not answer holds up no other room:
