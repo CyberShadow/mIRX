@@ -73,6 +73,10 @@ pub(super) struct TimelineBackfillAnchor {
     source_row: TimelineRow,
     source_row_index: usize,
     source_row_count: usize,
+    /// The top line's place among its row's wrapped lines, when the top
+    /// row is the anchor: the page above keeps the very line on top, not
+    /// only its row.
+    line_in_row: usize,
 }
 
 pub(super) fn register_timeline_class(instance: *mut c_void) -> Result<(), String> {
@@ -682,11 +686,18 @@ pub(super) unsafe fn capture_room_history_backfill_anchor(
         &timeline_state.source_rows,
         visible_source_row_index,
     )?;
+    // A later row is anchored at its first line.
+    let line_in_row = if source_row_index == visible_source_row_index {
+        timeline_state.top_line - timeline_top_line_for_source_row_index(timeline, source_row_index)
+    } else {
+        0
+    };
     Some(TimelineBackfillAnchor {
         room_id: room_id.to_owned(),
         source_row: timeline_state.source_rows.get(source_row_index)?.clone(),
         source_row_index,
         source_row_count: timeline_state.source_rows.len(),
+        line_in_row,
     })
 }
 
@@ -743,7 +754,10 @@ pub(super) unsafe fn restore_room_history_backfill_anchor(
                 )
                 .min(timeline_state.source_rows.len().saturating_sub(1))
         });
-    let top_line = timeline_top_line_for_source_row_index(timeline, source_row_index);
+    // The same line of the row, within the lines the row has now.
+    let row_start = timeline_top_line_for_source_row_index(timeline, source_row_index);
+    let row_end = timeline_top_line_for_source_row_index(timeline, source_row_index + 1);
+    let top_line = (row_start + anchor.line_in_row).min(row_end.saturating_sub(1).max(row_start));
     let visible_rows = timeline_visible_rows(timeline);
     let max_top_line = timeline_max_top_line(timeline_state.paint_lines.len(), visible_rows);
     timeline_state_mut(timeline).top_line = top_line.min(max_top_line);
