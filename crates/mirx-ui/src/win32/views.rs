@@ -774,9 +774,14 @@ unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(),
             WS_CHILD | WS_VISIBLE | WS_VSCROLL,
             WS_EX_CLIENTEDGE,
         ),
-        ViewId::Room(_) | ViewId::Thread { .. } => {
-            (ROOM_CONTENT_CLASS_NAME, WS_CHILD | WS_VISIBLE, 0)
-        }
+        // Clipping its children: its background erase must not paint over
+        // the text area's and the nick list's borders, which they draw
+        // when they move, before the erase comes.
+        ViewId::Room(_) | ViewId::Thread { .. } => (
+            ROOM_CONTENT_CLASS_NAME,
+            WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+            0,
+        ),
         // An owner-data list: the rows live in `UiModel.room_list`, and the
         // list asks for each cell's text as it paints.
         ViewId::RoomList => (
