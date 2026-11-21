@@ -139,7 +139,8 @@ host_capture_helper() {
         printf 'host screenshot capture helper terminated while processing request\n'
         printf 'request file: %s\n' "$current_work_file"
         printf 'DISPLAY: %s\n' "${DISPLAY:-unset}"
-      } >"$current_result_file"
+      } >"$current_result_file.partial"
+      mv "$current_result_file.partial" "$current_result_file"
     fi
   }
   trap 'write_interrupted_result; exit 143' TERM INT HUP
@@ -159,7 +160,7 @@ host_capture_helper() {
       capture_path="$request_dir/$capture_name"
 
       if timeout --kill-after=1s 10s import -window root "$capture_path" >"$runner_tmpdir/import.log" 2>&1; then
-        printf 'ok\n' >"$result_file"
+        printf 'ok\n' >"$result_file.partial"
       else
         local import_status=$?
         {
@@ -170,8 +171,10 @@ host_capture_helper() {
           printf 'import exit status: %s\n' "$import_status"
           printf 'import.log:\n'
           cat "$runner_tmpdir/import.log"
-        } >"$result_file"
+        } >"$result_file.partial"
       fi
+      # The test polls for the result file to exist; it must appear whole.
+      mv "$result_file.partial" "$result_file"
       cat "$runner_tmpdir/import.log"
 
       rm -f "$work_file"
