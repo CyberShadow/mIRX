@@ -300,7 +300,8 @@ pub(super) unsafe fn active_member_action_state(hwnd: HWND) -> MemberMenuActionS
                         id,
                         member,
                         model.ignored_users.as_deref(),
-                        model.own_user_id.as_deref(),
+                        model.own_user_id(),
+                        identity::user_identity_warning(model, &member.user_id).is_some(),
                     )
                 });
                 (id, enabled)

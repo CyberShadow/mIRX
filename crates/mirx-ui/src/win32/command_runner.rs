@@ -132,6 +132,16 @@ pub(super) unsafe fn run_slash_command(
             enqueue_command(state, Command::ListUserDevices(user_id.clone()))?;
             Ok(Some(format!("devices requested: {user_id}")))
         }
+        SlashCommand::IdentityAccept { target } => {
+            let state = state_mut(hwnd);
+            let user_id = commands::resolve_user(all_room_members(&state.model), &target)?.user_id;
+            if identity::user_identity_warning(&state.model, &user_id).is_none() {
+                let nick = known_nick(&state.model, &user_id).unwrap_or_else(|| user_id.clone());
+                return Err(format!("{nick}'s identity has not changed"));
+            }
+            enqueue_command(state, Command::AcceptUserIdentity(user_id.clone()))?;
+            Ok(Some(format!("identity accept submitted: {user_id}")))
+        }
         SlashCommand::Ignore { target: None } => {
             let lines = {
                 let model = &state_ref(hwnd).model;
@@ -149,7 +159,7 @@ pub(super) unsafe fn run_slash_command(
             let user_id = ignore_target(&state.model, &target)?;
             ignore::check_ignore(
                 state.model.ignored_users.as_deref(),
-                state.model.own_user_id.as_deref(),
+                state.model.own_user_id(),
                 &user_id,
                 |user_id| known_nick(&state.model, user_id),
             )?;
@@ -350,8 +360,7 @@ pub(super) unsafe fn run_slash_command(
                 let state = state_ref(hwnd);
                 let activity = window_message(&state.model, &state.active_view, &target_event_id)
                     .ok_or_else(|| "no such message in this window".to_owned())?;
-                replies::editable_message(activity, state.model.own_user_id.as_deref())?
-                    .presentation
+                replies::editable_message(activity, state.model.own_user_id())?.presentation
             };
             send_edit(state_mut(hwnd), &target_event_id, presentation, &body)?;
             Ok(Some(format!("Edit queued for {target_event_id}")))
@@ -424,6 +433,15 @@ pub(super) unsafe fn run_slash_command(
             }
             E2eeSlashCommand::RecoverDialog => {
                 show_recover_e2ee_menu_dialog(hwnd)?;
+                Ok(None)
+            }
+            E2eeSlashCommand::ResetDialog => {
+                show_reset_e2ee_menu_dialog(hwnd)?;
+                Ok(None)
+            }
+            E2eeSlashCommand::ResetCancel => {
+                submit_cancel_identity_reset(state_mut(hwnd))?;
+                refresh_status_bar(hwnd)?;
                 Ok(None)
             }
             E2eeSlashCommand::Setup {
@@ -779,8 +797,9 @@ pub(super) fn devices_lines(
     local_time: LocalTimeFn,
 ) -> Vec<String> {
     let nick = known_nick(model, &devices.user_id).unwrap_or_else(|| devices.user_id.clone());
-    let own_user = model.own_user_id.as_deref() == Some(devices.user_id.as_str());
-    commands::devices_lines(devices, &nick, own_user, local_time)
+    let own_user = model.own_user_id() == Some(devices.user_id.as_str());
+    let identity_changed = identity::user_identity_warning(model, &devices.user_id).is_some();
+    commands::devices_lines(devices, &nick, own_user, identity_changed, local_time)
 }
 
 pub(super) fn resolve_joined_room_target(
@@ -856,8 +875,7 @@ pub(super) fn own_user_id(model: &UiModel) -> Result<&str, String> {
         return Err("not connected to server".to_owned());
     }
     Ok(model
-        .own_user_id
-        .as_deref()
+        .own_user_id()
         .expect("a signed-in session knows its user"))
 }
 
@@ -1061,7 +1079,7 @@ pub(super) fn send_edit(
     let message = replies::editable_message(
         window_message(&state.model, &state.active_view, target_event_id)
             .ok_or_else(|| "no such message in this window".to_owned())?,
-        state.model.own_user_id.as_deref(),
+        state.model.own_user_id(),
     )?;
     let (body, styles) = message_text_from_input(input)?;
     if message.presentation == presentation && message.body == body && message.styles == styles {
@@ -1196,7 +1214,10 @@ fn submit_topic_slash_command(
 
 #[cfg(test)]
 mod tests {
-    use mirx_core::{DeviceSummary, RoomMemberRank, UserIdentityState};
+    use mirx_core::{
+        DeviceSummary, IdentityChange, IdentityTrust, RoomIdentityChanges, RoomMemberRank,
+        UserIdentityState,
+    };
 
     use super::super::test_fixtures::*;
     use super::*;
@@ -1382,7 +1403,8 @@ mod tests {
                 // Signed out, there are no own sessions to list.
                 type_compose_line(hwnd, "/devices");
                 state_mut(hwnd).model.connection = ConnectionState::Syncing;
-                state_mut(hwnd).model.own_user_id = Some("@me:example".to_owned());
+                state_mut(hwnd).model.own_account =
+                    Some(OwnAccount::matrix("@me:example".to_owned()));
                 type_compose_line(hwnd, "/devices");
                 type_compose_line(hwnd, "/devices Nobody");
                 type_compose_line(hwnd, "/devices Bob");
@@ -1438,9 +1460,80 @@ mod tests {
     }
 
     #[test]
+    fn identity_accept_submits_only_for_a_changed_identity() {
+        let (state, handle) = irc_command_state();
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                apply_core_event(
+                    state_mut(hwnd),
+                    Event::RoomIdentityChanges(RoomIdentityChanges {
+                        room_id: "!ops:example".to_owned(),
+                        changes: vec![IdentityChange {
+                            user_id: "@bob:example".to_owned(),
+                            trust: IdentityTrust::PinViolation,
+                        }],
+                    }),
+                )
+                .unwrap();
+                for input in [
+                    "/identity",
+                    "/identity accept",
+                    "/identity forget Bob",
+                    "/identity accept Alice",
+                    "/identity accept Nobody",
+                    "/identity accept Bob",
+                    "/devices Bob",
+                ] {
+                    type_compose_line(hwnd, input);
+                }
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![
+                        Command::AcceptUserIdentity("@bob:example".to_owned()),
+                        Command::ListUserDevices("@bob:example".to_owned()),
+                    ]
+                );
+                apply_core_event(
+                    state_mut(hwnd),
+                    Event::UserDevices(UserDevices {
+                        user_id: "@bob:example".to_owned(),
+                        identity: UserIdentityState::Unverified,
+                        devices: Vec::new(),
+                    }),
+                )
+                .unwrap();
+                apply_core_event(
+                    state_mut(hwnd),
+                    Event::UserIdentityAccepted("@bob:example".to_owned()),
+                )
+                .unwrap();
+                let lines = render_room_lines(state_ref(hwnd), "!ops:example");
+                assert_eq!(
+                    &lines[lines.len() - 9..],
+                    [
+                        "[22:12] * Warning: Bob's identity was reset; /identity accept \
+                         @bob:example to accept it, or /verify @bob:example",
+                        "[22:12] * /identity: insufficient parameters",
+                        "[22:12] * /identity: insufficient parameters",
+                        "[22:12] * /identity: invalid parameters",
+                        "[22:12] * /identity: Alice's identity has not changed",
+                        "[22:12] * /identity: no such nick: Nobody",
+                        "[22:12] * Bob changed identity; /identity accept @bob:example, or \
+                         /verify @bob:example",
+                        "[22:12] * Bob End of /DEVICES list",
+                        "[22:12] * Bob's new identity accepted",
+                    ]
+                );
+            });
+        }
+        stop_test_core(handle);
+    }
+
+    #[test]
     fn ignore_and_unignore_check_locally_and_submit_core_commands() {
         let (mut state, handle) = irc_command_state();
-        state.model.own_user_id = Some("@me:example".to_owned());
+        state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
         state.model.ignored_users = Some(vec!["@spam:remote".to_owned()]);
         unsafe {
             with_test_compose_window(state, |hwnd| {
@@ -1952,7 +2045,7 @@ mod tests {
     fn submit_create_room_records_a_private_or_public_room_and_returns_status() {
         let (mut state, handle) = test_state_with_command_sender();
         state.model.connection = ConnectionState::Syncing;
-        state.model.own_user_id = Some("@me:example.org".to_owned());
+        state.model.own_account = Some(OwnAccount::matrix("@me:example.org".to_owned()));
 
         let private = CreateRoomArgs::Private {
             name: "Team room".to_owned(),

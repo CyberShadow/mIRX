@@ -1121,7 +1121,7 @@ pub(super) fn view_rows_key(state: &WindowState, view_id: &ViewId) -> ViewRowsKe
             ViewId::RoomList => unreachable!("the Rooms List has no rows to gate"),
         },
         timestamp: state.settings.settings().timestamp.clone(),
-        own_user_id: state.model.own_user_id.clone(),
+        own_user_id: state.model.own_user_id().map(str::to_owned),
         can_fetch_media: can_fetch_room_media(state),
         can_fetch_events: can_fetch_room_events(state),
         compose_target: state.views[view_id].compose().target.clone(),
@@ -1450,7 +1450,9 @@ mod tests {
             ),
             (
                 "the own user",
-                |state| state.model.own_user_id = Some("@other:example".to_owned()),
+                |state| {
+                    state.model.own_account = Some(OwnAccount::matrix("@other:example".to_owned()))
+                },
                 true,
                 true,
             ),

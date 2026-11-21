@@ -156,10 +156,13 @@ fn error_room_id(command: &Command) -> Option<&str> {
         | Command::UnignoreUser(_)
         | Command::FetchUserProfile(_)
         | Command::ListUserDevices(_)
+        | Command::AcceptUserIdentity(_)
         | Command::ListPublicRooms(_)
         | Command::RefreshE2eeStatus
         | Command::SetupE2eeRecovery(_)
         | Command::RecoverE2ee(_)
+        | Command::ResetE2eeIdentity(_)
+        | Command::CancelE2eeIdentityReset
         | Command::RequestVerification(_)
         | Command::AcceptVerification(_)
         | Command::CancelVerification(_)
@@ -802,6 +805,31 @@ fn list_user_devices_before_login_emits_list_error() {
         Command::ListUserDevices("@alice:example.org".to_owned()),
         Operation::ListUserDevices,
         "listing devices requires an authenticated session",
+    );
+}
+
+#[test]
+fn accept_user_identity_before_login_emits_accept_error() {
+    assert_invalid_authenticated_command(
+        Command::AcceptUserIdentity("@alice:example.org".to_owned()),
+        Operation::AcceptUserIdentity,
+        "accepting an identity requires an authenticated session",
+    );
+}
+
+#[test]
+fn identity_reset_before_login_emits_reset_errors() {
+    assert_invalid_authenticated_command(
+        Command::ResetE2eeIdentity(mirx_core::ResetE2eeIdentityRequest {
+            password: Some("hunter2".to_owned()),
+        }),
+        Operation::ResetE2eeIdentity,
+        "resetting your E2EE identity requires an authenticated session",
+    );
+    assert_invalid_authenticated_command(
+        Command::CancelE2eeIdentityReset,
+        Operation::ResetE2eeIdentity,
+        "no identity reset is under way",
     );
 }
 

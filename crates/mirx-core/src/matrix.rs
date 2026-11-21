@@ -7,7 +7,9 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use futures_util::StreamExt;
+use std::pin::Pin;
+
+use futures_util::{Stream, StreamExt};
 use matrix_sdk::{
     Client, LoopCtrl, Room, RoomMemberships, SessionChange, SessionMeta, SessionTokens,
     attachment::{
@@ -28,10 +30,10 @@ use matrix_sdk::{
         UnableToDecryptReason,
     },
     encryption::{
-        BackupDownloadStrategy, EncryptionSettings,
+        BackupDownloadStrategy, CrossSigningResetAuthType, EncryptionSettings,
         VerificationState as EncryptionVerificationState,
         backups::BackupState,
-        recovery::RecoveryState,
+        recovery::{IdentityResetHandle, RecoveryError, RecoveryState},
         verification::{
             CancelInfo, Emoji as MatrixEmoji, EmojiShortAuthString, SasState,
             SasVerification as MatrixSasVerification,
@@ -52,6 +54,7 @@ use matrix_sdk::{
         api::client::profile::DisplayName as DisplayNameField,
         api::client::push::{delete_pushrule, set_pushrule, set_pushrule_enabled},
         api::client::session::get_login_types::v3::LoginType,
+        api::client::uiaa,
         api::client::{
             directory::get_public_rooms_filtered,
             media::get_content_thumbnail::v3::Method,
@@ -110,31 +113,32 @@ use matrix_sdk_base::{
     RoomInfoNotableUpdate, RoomInfoNotableUpdateReasons, RoomState,
     deserialized_responses::DisplayName, read_receipts::RoomReadReceipts,
 };
-use matrix_sdk_crypto::CrossSigningStatus;
+use matrix_sdk_crypto::{CrossSigningStatus, IdentityState, IdentityStatusChange};
 use mime::Mime;
 use serde::Deserialize;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
+use tokio_stream::StreamMap;
 use url::Url;
 
 use crate::api::{
     BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent,
     CreateRoomRequest, CreateRoomVisibility, DeviceSummary, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeRecoveryState, E2eeSessionState, E2eeStatus, EditMessageRequest,
-    Event, FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, InviteRoomMemberRequest,
-    JoinRoomRequest, KickRoomMemberRequest, ListPublicRoomsRequest, MarkRoomReadRequest,
-    MemberPowerRole, Operation, PublicRoom, PublicRoomsPage, PublicRoomsResult,
-    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
-    RequestVerificationRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
-    RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomEventFetch,
-    RoomEventFetchResult, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
-    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat,
-    RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank, RoomMemberSummary,
-    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomNotificationMode, RoomPowerLevelUserChange,
-    RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
+    Event, FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, IdentityChange,
+    IdentityTrust, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
+    ListPublicRoomsRequest, MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoom,
+    PublicRoomsPage, PublicRoomsResult, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest,
+    RedactEventRequest, RequestVerificationRequest, RoomActivity, RoomActivityKind,
+    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
+    RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
+    RoomEventFetch, RoomEventFetchResult, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
+    RoomHistoryBackfillEvent, RoomIdentityChanges, RoomImageActivity, RoomImageInfo, RoomMedia,
+    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
+    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
+    RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
     RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
     SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
@@ -1221,6 +1225,268 @@ fn user_identity_state(has_verification_violation: bool, is_verified: bool) -> U
     } else {
         UserIdentityState::Unverified
     }
+}
+
+/// Accepts the user's changed identity, as the room identity streams
+/// report it: a verified identity that changed loses the verification
+/// (which pins the new one), any other is pinned as it is now. The streams
+/// then report the user `Pinned`.
+pub(crate) async fn accept_user_identity(
+    client: &Client,
+    user_id: &str,
+) -> Result<(), MatrixCoreError> {
+    let user_id = parse_user_id(user_id)?;
+    let failed = |err: &dyn Display| {
+        MatrixCoreError::new(format!("failed to accept {user_id}'s identity: {err}"))
+    };
+    let identity = client
+        .encryption()
+        .get_user_identity(&user_id)
+        .await
+        .map_err(|err| failed(&err))?
+        .ok_or_else(|| MatrixCoreError::new(format!("no identity is known for {user_id}")))?;
+    if identity.has_verification_violation() {
+        identity.withdraw_verification().await
+    } else {
+        identity.pin().await
+    }
+    .map_err(|err| failed(&err))
+}
+
+fn identity_trust(state: IdentityState) -> IdentityTrust {
+    match state {
+        IdentityState::Verified => IdentityTrust::Verified,
+        IdentityState::Pinned => IdentityTrust::Pinned,
+        IdentityState::PinViolation => IdentityTrust::PinViolation,
+        IdentityState::VerificationViolation => IdentityTrust::VerificationViolation,
+    }
+}
+
+fn room_identity_changes(
+    room_id: &RoomId,
+    changes: Vec<IdentityStatusChange>,
+) -> RoomIdentityChanges {
+    RoomIdentityChanges {
+        room_id: room_id.to_string(),
+        changes: changes
+            .into_iter()
+            .map(|change| IdentityChange {
+                user_id: change.user_id.to_string(),
+                trust: identity_trust(change.changed_to),
+            })
+            .collect(),
+    }
+}
+
+type IdentityStatusStream = Pin<Box<dyn Stream<Item = Vec<IdentityStatusChange>>>>;
+
+/// The rooms whose identity stream to drop, and those to start, to watch
+/// exactly `wanted`.
+fn identity_watch_changes<'a>(
+    watched: impl Iterator<Item = &'a OwnedRoomId>,
+    wanted: &BTreeSet<OwnedRoomId>,
+) -> (Vec<OwnedRoomId>, Vec<OwnedRoomId>) {
+    let watched = watched.cloned().collect::<BTreeSet<_>>();
+    (
+        watched.difference(wanted).cloned().collect(),
+        wanted.difference(&watched).cloned().collect(),
+    )
+}
+
+/// Watches the identities of the members of every joined encrypted room
+/// through the SDK's room identity stream, and emits each batch as
+/// `RoomIdentityChanges`. A stream starts with the room's current
+/// violations, so every session start reports those still unresolved.
+///
+/// The task owns the streams: aborting it drops them, and with them the
+/// event handlers they registered.
+pub(crate) fn start_room_identity_task(client: Client, events: EventSender) -> JoinHandle<()> {
+    let mut updates = client.room_info_notable_update_receiver();
+
+    tokio::task::spawn_local(async move {
+        let mut streams = StreamMap::<OwnedRoomId, IdentityStatusStream>::new();
+        watch_room_identities(&client, &events, &mut streams).await;
+        loop {
+            tokio::select! {
+                update = updates.recv() => match update {
+                    // A join or leave, or new room state such as
+                    // `m.room.encryption`, which the SDK reports as `NONE`.
+                    Ok(update) if !update.reasons.intersects(
+                        RoomInfoNotableUpdateReasons::MEMBERSHIP
+                            | RoomInfoNotableUpdateReasons::NONE,
+                    ) => {}
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                        watch_room_identities(&client, &events, &mut streams).await;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+                // An empty map ends at once, which disables this branch
+                // until the next turn.
+                Some((room_id, changes)) = streams.next() => emit_event(
+                    &events,
+                    Event::RoomIdentityChanges(room_identity_changes(&room_id, changes)),
+                ),
+            }
+        }
+    })
+}
+
+/// Brings `streams` in line with the joined encrypted rooms. New streams
+/// start one at a time: each may fetch the room's members.
+async fn watch_room_identities(
+    client: &Client,
+    events: &EventSender,
+    streams: &mut StreamMap<OwnedRoomId, IdentityStatusStream>,
+) {
+    let wanted = client
+        .joined_rooms()
+        .into_iter()
+        .filter(|room| room.encryption_state().is_encrypted())
+        .map(|room| room.room_id().to_owned())
+        .collect::<BTreeSet<_>>();
+    let (dropped, started) = identity_watch_changes(streams.keys(), &wanted);
+    for room_id in dropped {
+        streams.remove(&room_id);
+    }
+    for room_id in started {
+        let room = client
+            .get_room(&room_id)
+            .expect("the room was just listed as joined");
+        match room.subscribe_to_identity_status_changes().await {
+            Ok(stream) => {
+                streams.insert(room_id, Box::pin(stream));
+            }
+            Err(err) => emit_e2ee_status_error(
+                events,
+                MatrixCoreError::new(format!("failed to watch identities in {room_id}: {err}")),
+            ),
+        }
+    }
+}
+
+/// Starts resetting your E2EE identity (see `Recovery::reset_identity`):
+/// deletes the key backup, turns recovery off and creates a new
+/// cross-signing identity, which it tries to upload. `None` when the
+/// upload needed no authentication: the reset is done.
+pub(crate) async fn start_identity_reset(
+    client: &Client,
+) -> Result<Option<IdentityResetHandle>, MatrixCoreError> {
+    client
+        .encryption()
+        .recovery()
+        .reset_identity()
+        .await
+        .map_err(|err| identity_reset_error(&err))
+}
+
+pub(crate) fn identity_reset_error(err: &dyn Display) -> MatrixCoreError {
+    MatrixCoreError::new(format!("failed to reset your E2EE identity: {err}"))
+}
+
+/// Why the server did not take a reset's new identity: the server's own
+/// word on a refused password, which the SDK's error only calls
+/// "User-Interactive Authentication required".
+pub(crate) fn identity_reset_failure(err: &RecoveryError) -> MatrixCoreError {
+    match err {
+        RecoveryError::Sdk(matrix_sdk::Error::Timeout) => identity_reset_error(
+            &"the server did not accept it within 2 minutes; /e2ee reset to try again",
+        ),
+        RecoveryError::Sdk(sdk_err) => match sdk_err
+            .as_uiaa_response()
+            .and_then(|info| info.auth_error.as_ref())
+        {
+            Some(refusal) => identity_reset_error(&refusal.message),
+            None => identity_reset_error(err),
+        },
+        RecoveryError::BackupExistsOnServer | RecoveryError::SecretStorage(_) => {
+            identity_reset_error(err)
+        }
+    }
+}
+
+/// How the server wants the cross-signing upload of a reset authenticated.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum IdentityResetAuth {
+    /// User-interactive auth with the account password alone.
+    Password { session: Option<String> },
+    /// Approval on the OAuth 2.0 server's page.
+    Browser { url: String },
+}
+
+pub(crate) fn identity_reset_auth(
+    auth_type: &CrossSigningResetAuthType,
+) -> Result<IdentityResetAuth, MatrixCoreError> {
+    match auth_type {
+        CrossSigningResetAuthType::OAuth(info) => Ok(IdentityResetAuth::Browser {
+            url: info.approval_url.to_string(),
+        }),
+        CrossSigningResetAuthType::Uiaa(info) => {
+            // Any other stage would make the SDK ask again and again,
+            // until it gives up after two minutes.
+            if info
+                .flows
+                .iter()
+                .any(|flow| flow.stages == [uiaa::AuthType::Password])
+            {
+                Ok(IdentityResetAuth::Password {
+                    session: info.session.clone(),
+                })
+            } else {
+                let flows = info
+                    .flows
+                    .iter()
+                    .map(|flow| {
+                        flow.stages
+                            .iter()
+                            .map(|stage| stage.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" + ")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", or ");
+                Err(identity_reset_error(&format!(
+                    "your server asks to confirm with {flows}; mirx can confirm with your password only"
+                )))
+            }
+        }
+    }
+}
+
+/// The password answer to the server's user-interactive auth `session`.
+pub(crate) fn identity_reset_password(
+    client: &Client,
+    session: Option<String>,
+    password: String,
+) -> uiaa::AuthData {
+    let user_id = client.user_id().expect("a reset runs signed in");
+    let mut password = uiaa::Password::new(
+        uiaa::UserIdentifier::Matrix(uiaa::MatrixUserIdentifier::new(user_id.to_string())),
+        password,
+    );
+    password.session = session;
+    uiaa::AuthData::Password(password)
+}
+
+/// Reads your identity back from the server after a reset that did not
+/// finish, and returns whether the server holds the new one. A reset
+/// creates its keys before it asks the server: until your own keys are
+/// queried again, the store holds keys the server never got. The query
+/// drops those that differ from the server's.
+pub(crate) async fn settle_identity_reset(client: &Client) -> Result<bool, MatrixCoreError> {
+    let user_id = client.user_id().expect("a reset runs signed in");
+    let encryption = client.encryption();
+    encryption
+        .request_user_identity(user_id)
+        .await
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to read your E2EE identity back from the server: {err}"
+            ))
+        })?;
+    Ok(encryption
+        .cross_signing_status()
+        .await
+        .is_some_and(|status| status.is_complete()))
 }
 
 /// This session first, then the most recently seen (never seen last),
@@ -14782,6 +15048,295 @@ mod tests {
                     .collect::<Vec<_>>(),
                 vec!["ME", "NEW", "OLD", "A", "B"]
             );
+        }
+    }
+
+    mod identity {
+        use matrix_sdk::ruma::owned_user_id;
+        use std::collections::BTreeSet;
+
+        use matrix_sdk_test::LeftRoomBuilder;
+
+        use super::super::{
+            accept_user_identity, identity_watch_changes, start_room_identity_task,
+        };
+        use super::*;
+        use crate::api::{IdentityChange, IdentityTrust, RoomIdentityChanges};
+
+        fn block_on<F: std::future::Future>(future: F) -> F::Output {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio runtime")
+                .block_on(tokio::task::LocalSet::new().run_until(future))
+        }
+
+        fn ops() -> OwnedRoomId {
+            OwnedRoomId::try_from("!ops:example.org").expect("room id")
+        }
+
+        fn member(user_id: &str) -> serde_json::Value {
+            serde_json::json!({
+                "type": "m.room.member",
+                "state_key": user_id,
+                "sender": user_id,
+                "event_id": format!("$join-{}", &user_id[1..4]),
+                "origin_server_ts": 1u64,
+                "content": { "membership": "join" }
+            })
+        }
+
+        fn encryption() -> serde_json::Value {
+            serde_json::json!({
+                "type": "m.room.encryption",
+                "state_key": "",
+                "sender": "@alice:example.org",
+                "event_id": "$encryption:example.org",
+                "origin_server_ts": 1u64,
+                "content": { "algorithm": "m.megolm.v1.aes-sha2" }
+            })
+        }
+
+        /// Alice and Bob, each with a cross-signing identity, and Alice
+        /// knowing (and so pinning) Bob's. The room's members answer
+        /// `/members`, which the identity stream reads.
+        async fn alice_and_bob(server: &MatrixMockServer) -> (Client, Client) {
+            server.mock_crypto_endpoints_preset().await;
+            let (alice, bob) = server.set_up_alice_and_bob_for_encryption().await;
+            for client in [&alice, &bob] {
+                client
+                    .encryption()
+                    .bootstrap_cross_signing(None)
+                    .await
+                    .expect("bootstrap cross-signing");
+            }
+            query_bob(&alice).await;
+            server
+                .mock_get_members()
+                .expect_any_access_token()
+                .ok(raw_room_member_events(&serde_json::json!([
+                    member("@alice:example.org"),
+                    member("@bob:example.org"),
+                ])))
+                .mount()
+                .await;
+            (alice, bob)
+        }
+
+        async fn sync_ops(server: &MatrixMockServer, alice: &Client, encrypted: bool) {
+            let mut state = vec![member("@alice:example.org"), member("@bob:example.org")];
+            if encrypted {
+                state.push(encryption());
+            }
+            server
+                .sync_room(
+                    alice,
+                    JoinedRoomBuilder::new(&ops())
+                        .add_state_bulk(raw_sync_state_events(&serde_json::Value::from(state))),
+                )
+                .await;
+        }
+
+        async fn query_bob(alice: &Client) {
+            alice
+                .encryption()
+                .request_user_identity(&owned_user_id!("@bob:example.org"))
+                .await
+                .expect("query bob's keys");
+        }
+
+        /// Bob replaces his identity, and Alice sees it.
+        async fn bob_resets(alice: &Client, bob: &Client) {
+            assert!(
+                bob.encryption()
+                    .reset_cross_signing()
+                    .await
+                    .expect("reset bob's identity")
+                    .is_none(),
+                "the mock server wants no authentication"
+            );
+            query_bob(alice).await;
+        }
+
+        async fn identity_events(event_rx: &mpsc::Receiver<Event>) -> Vec<RoomIdentityChanges> {
+            // Let the task see the SDK's updates.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            event_rx
+                .try_iter()
+                .map(|event| match event {
+                    Event::RoomIdentityChanges(changes) => changes,
+                    other => panic!("expected identity changes, got {other:?}"),
+                })
+                .collect()
+        }
+
+        fn bob_in_ops(trust: IdentityTrust) -> RoomIdentityChanges {
+            RoomIdentityChanges {
+                room_id: ops().to_string(),
+                changes: vec![IdentityChange {
+                    user_id: "@bob:example.org".to_owned(),
+                    trust,
+                }],
+            }
+        }
+
+        #[test]
+        fn a_changed_identity_is_reported_and_accepting_it_pins_it() {
+            block_on(async {
+                let server = MatrixMockServer::new().await;
+                let (alice, bob) = alice_and_bob(&server).await;
+                sync_ops(&server, &alice, true).await;
+                let (events, event_rx) = mpsc::channel();
+                let task = start_room_identity_task(alice.clone(), events);
+                assert_eq!(identity_events(&event_rx).await, Vec::new());
+
+                bob_resets(&alice, &bob).await;
+                assert_eq!(
+                    identity_events(&event_rx).await,
+                    vec![bob_in_ops(IdentityTrust::PinViolation)]
+                );
+                accept_user_identity(&alice, "@bob:example.org")
+                    .await
+                    .expect("accept bob's new identity");
+                assert_eq!(
+                    identity_events(&event_rx).await,
+                    vec![bob_in_ops(IdentityTrust::Pinned)]
+                );
+
+                // Verified, then changed: accepting withdraws the
+                // verification.
+                alice
+                    .encryption()
+                    .get_user_identity(&owned_user_id!("@bob:example.org"))
+                    .await
+                    .expect("read the store")
+                    .expect("bob has an identity")
+                    .verify()
+                    .await
+                    .expect("verify bob");
+                query_bob(&alice).await;
+                assert_eq!(
+                    identity_events(&event_rx).await,
+                    vec![bob_in_ops(IdentityTrust::Verified)]
+                );
+                bob_resets(&alice, &bob).await;
+                assert_eq!(
+                    identity_events(&event_rx).await,
+                    vec![bob_in_ops(IdentityTrust::VerificationViolation)]
+                );
+                accept_user_identity(&alice, "@bob:example.org")
+                    .await
+                    .expect("accept bob's new identity");
+                assert_eq!(
+                    identity_events(&event_rx).await,
+                    vec![bob_in_ops(IdentityTrust::Pinned)]
+                );
+                let bob_identity = alice
+                    .encryption()
+                    .get_user_identity(&owned_user_id!("@bob:example.org"))
+                    .await
+                    .expect("read the store")
+                    .expect("bob has an identity");
+                assert!(!bob_identity.has_verification_violation());
+                assert!(!bob_identity.is_verified());
+
+                // A new watch (the next start) has nothing to report.
+                task.abort();
+                let (events, event_rx) = mpsc::channel();
+                let task = start_room_identity_task(alice.clone(), events);
+                assert_eq!(identity_events(&event_rx).await, Vec::new());
+                task.abort();
+            });
+        }
+
+        #[test]
+        fn a_watch_starts_with_the_rooms_current_violations() {
+            block_on(async {
+                let server = MatrixMockServer::new().await;
+                let (alice, bob) = alice_and_bob(&server).await;
+                sync_ops(&server, &alice, true).await;
+                bob_resets(&alice, &bob).await;
+
+                let (events, event_rx) = mpsc::channel();
+                let task = start_room_identity_task(alice.clone(), events);
+                assert_eq!(
+                    identity_events(&event_rx).await,
+                    vec![bob_in_ops(IdentityTrust::PinViolation)]
+                );
+                task.abort();
+            });
+        }
+
+        #[test]
+        fn the_watch_follows_rooms_that_become_encrypted_and_drops_left_ones() {
+            block_on(async {
+                let server = MatrixMockServer::new().await;
+                let (alice, bob) = alice_and_bob(&server).await;
+                sync_ops(&server, &alice, false).await;
+                let (events, event_rx) = mpsc::channel();
+                let task = start_room_identity_task(alice.clone(), events);
+
+                // An unencrypted room is not watched.
+                bob_resets(&alice, &bob).await;
+                assert_eq!(identity_events(&event_rx).await, Vec::new());
+
+                // The sync that turns encryption on starts its watch, which
+                // reports Bob's unresolved change.
+                sync_ops(&server, &alice, true).await;
+                assert_eq!(
+                    identity_events(&event_rx).await,
+                    vec![bob_in_ops(IdentityTrust::PinViolation)]
+                );
+
+                // Once Alice left, the room's watch is gone.
+                server.sync_room(&alice, LeftRoomBuilder::new(&ops())).await;
+                accept_user_identity(&alice, "@bob:example.org")
+                    .await
+                    .expect("accept bob's new identity");
+                assert_eq!(identity_events(&event_rx).await, Vec::new());
+                task.abort();
+            });
+        }
+
+        #[test]
+        fn watch_changes_drop_unwanted_and_start_missing_rooms() {
+            let room = |id: &str| OwnedRoomId::try_from(id).expect("room id");
+            let watched = [room("!kept:x"), room("!left:x")];
+            let wanted = BTreeSet::from([room("!kept:x"), room("!new:x")]);
+            assert_eq!(
+                identity_watch_changes(watched.iter(), &wanted),
+                (vec![room("!left:x")], vec![room("!new:x")])
+            );
+            assert_eq!(
+                identity_watch_changes([].iter(), &BTreeSet::new()),
+                (Vec::new(), Vec::new())
+            );
+        }
+
+        #[test]
+        fn accepting_an_unknown_identity_fails() {
+            block_on(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                let (alice, _bob) = server.set_up_alice_and_bob_for_encryption().await;
+                assert_eq!(
+                    accept_user_identity(&alice, "@carol:example.org")
+                        .await
+                        .expect_err("carol has no known identity")
+                        .to_string(),
+                    "no identity is known for @carol:example.org"
+                );
+                assert_eq!(
+                    accept_user_identity(&alice, "not a user")
+                        .await
+                        .expect_err("an invalid user id fails")
+                        .to_string(),
+                    fetch_user_profile(&alice, "not a user")
+                        .await
+                        .expect_err("an invalid user id fails")
+                        .to_string()
+                );
+            });
         }
     }
 }

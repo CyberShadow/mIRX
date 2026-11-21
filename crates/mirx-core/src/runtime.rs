@@ -8,6 +8,8 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 
 use matrix_sdk::Client;
+use matrix_sdk::authentication::AuthApi;
+use matrix_sdk::encryption::recovery::{IdentityResetHandle, RecoveryError};
 use matrix_sdk::encryption::verification::VerificationRequest as MatrixVerificationRequest;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -15,15 +17,15 @@ use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 
 use crate::api::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CoreConfig,
-    CoreErrorEvent, CreateDirectRoomRequest, CreateRoomRequest, E2eeRecoveryOperation,
-    E2eeRecoverySetupSucceeded, E2eeRecoverySucceeded, EditMessageRequest, Event, HighlightWord,
-    InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, LoginMethod,
-    LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
-    RejectRoomInviteRequest, RequestVerificationRequest, RestoreSessionRequest, RoomJoined,
-    RoomMembers, RoomMembership, RoomReadState, RoomSummary, SendReactionRequest,
-    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
-    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SyncStopReason, UnbanRoomMemberRequest,
-    VerificationFlowId,
+    CoreErrorEvent, CreateDirectRoomRequest, CreateRoomRequest, E2eeIdentityResetOutcome,
+    E2eeRecoveryOperation, E2eeRecoverySetupSucceeded, E2eeRecoverySucceeded, EditMessageRequest,
+    Event, HighlightWord, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
+    LeaveRoomRequest, LoginMethod, LoginRequest, MarkRoomReadRequest, Operation,
+    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RequestVerificationRequest,
+    ResetE2eeIdentityRequest, RestoreSessionRequest, RoomJoined, RoomMembers, RoomMembership,
+    RoomReadState, RoomSummary, SendReactionRequest, SetDisplayNameRequest,
+    SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
+    SetupE2eeRecoveryRequest, SyncStopReason, UnbanRoomMemberRequest, VerificationFlowId,
 };
 use crate::loopback::{self, LoopbackListener, LoopbackRedirect};
 use crate::matrix::{
@@ -133,8 +135,25 @@ enum WorkerState {
         e2ee_recovery_state_task: TokioJoinHandle<()>,
         e2ee_backup_state_task: TokioJoinHandle<()>,
         e2ee_session_state_task: TokioJoinHandle<()>,
+        room_identity_task: TokioJoinHandle<()>,
         verification_tasks: HashMap<(String, String), TokioJoinHandle<()>>,
+        /// The one identity reset under way, between the server's request
+        /// for authentication and its end.
+        identity_reset: Option<PendingIdentityReset>,
     },
+}
+
+/// An identity reset waiting for the server to accept its cross-signing
+/// upload: approval in the browser, or the password checked.
+struct PendingIdentityReset {
+    handle: Rc<IdentityResetHandle>,
+    /// `handle.reset(..)`: it asks every half second for up to two
+    /// minutes, so it runs beside the worker loop.
+    task: TokioJoinHandle<Result<(), RecoveryError>>,
+    /// `CancelE2eeIdentityReset` was asked. The SDK then ends the task with
+    /// `Ok` without uploading, unless an upload just got through: only the
+    /// server knows which (see `matrix::settle_identity_reset`).
+    cancel_requested: bool,
 }
 
 struct PendingBrowserLogin {
@@ -154,6 +173,7 @@ struct PendingBrowserLogin {
 enum Next {
     Command(Option<Command>),
     Redirect(io::Result<LoopbackRedirect>),
+    IdentityReset(Result<(), RecoveryError>),
 }
 
 pub fn start(config: CoreConfig) -> Result<CoreHandle, StartError> {
@@ -218,9 +238,21 @@ async fn run_worker(
                     redirect.unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic())),
                 ),
             },
-            WorkerState::NoClient | WorkerState::Ready { .. } => {
-                Next::Command(command_rx.recv().await)
-            }
+            // So does an identity reset, for the server's approval.
+            WorkerState::Ready {
+                identity_reset: Some(pending),
+                ..
+            } => tokio::select! {
+                command = command_rx.recv() => Next::Command(command),
+                result = &mut pending.task => Next::IdentityReset(
+                    result.unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic())),
+                ),
+            },
+            WorkerState::NoClient
+            | WorkerState::Ready {
+                identity_reset: None,
+                ..
+            } => Next::Command(command_rx.recv().await),
         };
         match next {
             Next::Command(None) => break,
@@ -230,6 +262,9 @@ async fn run_worker(
                 }
             }
             Next::Redirect(redirect) => finish_browser_login(&event_tx, &mut state, redirect).await,
+            Next::IdentityReset(result) => {
+                finish_pending_identity_reset(&event_tx, &mut state, result).await
+            }
         }
     }
 
@@ -291,6 +326,9 @@ async fn handle_command(
         Command::ListUserDevices(user_id) => {
             handle_list_user_devices(event_tx, state, user_id).await
         }
+        Command::AcceptUserIdentity(user_id) => {
+            handle_accept_user_identity(event_tx, state, user_id).await
+        }
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
         Command::SendFile(request) => handle_send_file(event_tx, state, request).await,
         Command::EditMessage(request) => handle_edit_message(event_tx, state, request).await,
@@ -310,6 +348,12 @@ async fn handle_command(
             handle_setup_e2ee_recovery(event_tx, state, &request).await
         }
         Command::RecoverE2ee(request) => handle_recover_e2ee(event_tx, state, &request).await,
+        Command::ResetE2eeIdentity(request) => {
+            handle_reset_e2ee_identity(event_tx, state, request).await
+        }
+        Command::CancelE2eeIdentityReset => {
+            handle_cancel_e2ee_identity_reset(event_tx, state).await
+        }
         Command::RequestVerification(request) => {
             handle_request_verification(event_tx, state, request).await
         }
@@ -628,6 +672,7 @@ async fn enter_session(
         matrix::start_e2ee_recovery_state_task(client.clone(), event_tx.clone());
     let e2ee_backup_state_task =
         matrix::start_e2ee_backup_state_task(client.clone(), event_tx.clone());
+    let room_identity_task = matrix::start_room_identity_task(client.clone(), event_tx.clone());
 
     *state = WorkerState::Ready {
         client,
@@ -641,7 +686,9 @@ async fn enter_session(
         e2ee_recovery_state_task,
         e2ee_backup_state_task,
         e2ee_session_state_task,
+        room_identity_task,
         verification_tasks: HashMap::new(),
+        identity_reset: None,
     };
 
     if start_sync {
@@ -1542,6 +1589,225 @@ async fn handle_list_user_devices(
     false
 }
 
+async fn handle_accept_user_identity(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    user_id: String,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::AcceptUserIdentity,
+            "accepting an identity requires an authenticated session",
+        );
+        return false;
+    };
+
+    match matrix::accept_user_identity(client, &user_id).await {
+        Ok(()) => emit_event(event_tx, Event::UserIdentityAccepted(user_id)),
+        Err(err) => emit_matrix_error(event_tx, Operation::AcceptUserIdentity, err),
+    }
+
+    false
+}
+
+async fn handle_reset_e2ee_identity(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: ResetE2eeIdentityRequest,
+) -> bool {
+    let WorkerState::Ready {
+        client,
+        identity_reset,
+        ..
+    } = state
+    else {
+        emit_invalid_state(
+            event_tx,
+            Operation::ResetE2eeIdentity,
+            "resetting your E2EE identity requires an authenticated session",
+        );
+        return false;
+    };
+    if identity_reset.is_some() {
+        emit_invalid_state(
+            event_tx,
+            Operation::ResetE2eeIdentity,
+            "an identity reset is already under way; /e2ee reset cancel stops it",
+        );
+        return false;
+    }
+
+    // The reset deletes the backup before the server says how to confirm
+    // it: refuse what cannot work while nothing is lost.
+    let refusal = match (
+        client.auth_api().expect("a ready session is signed in"),
+        &request.password,
+    ) {
+        (AuthApi::Matrix(_), None) => {
+            Some("resetting your E2EE identity needs your account password")
+        }
+        (AuthApi::OAuth(_), Some(_)) => {
+            Some("your server confirms an identity reset in the browser, not with a password")
+        }
+        (AuthApi::Matrix(_), Some(_)) | (AuthApi::OAuth(_), None) => None,
+        // `AuthApi` is non-exhaustive; mirx signs in with these two only.
+        (api, _) => panic!("a session signed in with {api:?}"),
+    };
+    if let Some(refusal) = refusal {
+        emit_invalid_state(event_tx, Operation::ResetE2eeIdentity, refusal);
+        return false;
+    }
+
+    let handle = match matrix::start_identity_reset(client).await {
+        Ok(None) => return end_identity_reset(event_tx, client, IdentityResetEnd::Uploaded).await,
+        Ok(Some(handle)) => handle,
+        Err(err) => {
+            return end_identity_reset(event_tx, client, IdentityResetEnd::Failed(err)).await;
+        }
+    };
+    let auth = match (
+        matrix::identity_reset_auth(handle.auth_type()),
+        request.password,
+    ) {
+        (Ok(matrix::IdentityResetAuth::Browser { url }), _) => {
+            emit_event(event_tx, Event::E2eeIdentityResetApproval { url });
+            None
+        }
+        (Ok(matrix::IdentityResetAuth::Password { session }), Some(password)) => {
+            Some(matrix::identity_reset_password(client, session, password))
+        }
+        (Ok(matrix::IdentityResetAuth::Password { .. }), None) => {
+            let err = matrix::identity_reset_error(&"your server asks for your account password");
+            return end_identity_reset(event_tx, client, IdentityResetEnd::Refused(err)).await;
+        }
+        (Err(err), _) => {
+            return end_identity_reset(event_tx, client, IdentityResetEnd::Refused(err)).await;
+        }
+    };
+    let handle = Rc::new(handle);
+    let task = tokio::task::spawn_local({
+        let handle = handle.clone();
+        async move { handle.reset(auth).await }
+    });
+    *identity_reset = Some(PendingIdentityReset {
+        handle,
+        task,
+        cancel_requested: false,
+    });
+
+    false
+}
+
+async fn handle_cancel_e2ee_identity_reset(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+) -> bool {
+    let WorkerState::Ready {
+        identity_reset: Some(pending),
+        ..
+    } = state
+    else {
+        emit_invalid_state(
+            event_tx,
+            Operation::ResetE2eeIdentity,
+            "no identity reset is under way",
+        );
+        return false;
+    };
+
+    // The SDK sees it after its next refused attempt, within half a
+    // second; the task's end answers.
+    pending.handle.cancel().await;
+    pending.cancel_requested = true;
+
+    false
+}
+
+async fn finish_pending_identity_reset(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    result: Result<(), RecoveryError>,
+) {
+    let WorkerState::Ready {
+        client,
+        identity_reset,
+        ..
+    } = state
+    else {
+        unreachable!("only a ready session waits for an identity reset");
+    };
+    let pending = identity_reset
+        .take()
+        .expect("the worker waited for this reset");
+    let end = match result {
+        Ok(()) if pending.cancel_requested => IdentityResetEnd::Cancelled,
+        Ok(()) => IdentityResetEnd::Uploaded,
+        Err(err) => IdentityResetEnd::Refused(matrix::identity_reset_failure(&err)),
+    };
+    end_identity_reset(event_tx, client, end).await;
+}
+
+/// How the attempt to upload a reset's new identity ended.
+enum IdentityResetEnd {
+    /// The server took the new identity.
+    Uploaded,
+    /// Stopped by `CancelE2eeIdentityReset`: no upload, unless the last
+    /// one got through.
+    Cancelled,
+    /// Before the SDK asked the server for the upload.
+    Failed(MatrixCoreError),
+    /// The server's authentication was not passed: the reset had already
+    /// turned the key backup and recovery off.
+    Refused(MatrixCoreError),
+}
+
+/// Answers a reset, then reports the E2EE status, which is the truth
+/// about this session: the backup and recovery are off even when the
+/// identity did not change.
+async fn end_identity_reset(
+    event_tx: &EventSender,
+    client: &Client,
+    end: IdentityResetEnd,
+) -> bool {
+    match end {
+        IdentityResetEnd::Uploaded => emit_identity_reset(event_tx, E2eeIdentityResetOutcome::Done),
+        IdentityResetEnd::Cancelled => match matrix::settle_identity_reset(client).await {
+            Ok(true) => emit_identity_reset(event_tx, E2eeIdentityResetOutcome::Done),
+            Ok(false) => emit_identity_reset(event_tx, E2eeIdentityResetOutcome::Cancelled),
+            Err(err) => emit_matrix_error(event_tx, Operation::ResetE2eeIdentity, err),
+        },
+        IdentityResetEnd::Failed(err) => {
+            emit_matrix_error(event_tx, Operation::ResetE2eeIdentity, err);
+            if let Err(err) = matrix::settle_identity_reset(client).await {
+                emit_matrix_error(event_tx, Operation::ResetE2eeIdentity, err);
+            }
+        }
+        IdentityResetEnd::Refused(err) => {
+            emit_error(
+                event_tx,
+                Operation::ResetE2eeIdentity,
+                None,
+                format!(
+                    "{err}; your key backup and recovery were turned off before the server was asked"
+                ),
+            );
+            if let Err(err) = matrix::settle_identity_reset(client).await {
+                emit_matrix_error(event_tx, Operation::ResetE2eeIdentity, err);
+            }
+        }
+    }
+    match matrix::summarize_e2ee_status(client, BackupServerStatusMode::Fetch).await {
+        Ok(status) => emit_event(event_tx, Event::E2eeStatus(status)),
+        Err(err) => emit_matrix_error(event_tx, Operation::E2eeStatus, err),
+    }
+    false
+}
+
+fn emit_identity_reset(event_tx: &EventSender, outcome: E2eeIdentityResetOutcome) {
+    emit_event(event_tx, Event::E2eeIdentityReset(outcome));
+}
+
 async fn handle_request_verification(
     event_tx: &EventSender,
     state: &mut WorkerState,
@@ -1685,7 +1951,9 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
         e2ee_recovery_state_task,
         e2ee_backup_state_task,
         e2ee_session_state_task,
+        room_identity_task,
         verification_tasks,
+        identity_reset,
     } = state
     else {
         emit_invalid_state(
@@ -1704,7 +1972,11 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
     e2ee_recovery_state_task.abort();
     e2ee_backup_state_task.abort();
     e2ee_session_state_task.abort();
+    room_identity_task.abort();
     abort_verification_tasks(verification_tasks);
+    if let Some(pending) = identity_reset.take() {
+        pending.task.abort();
+    }
 
     if let Err(err) = matrix::logout(client.clone()).await {
         emit_matrix_error(event_tx, Operation::Logout, err);
@@ -1748,20 +2020,33 @@ async fn shutdown_state(state: &mut WorkerState) {
             e2ee_recovery_state_task,
             e2ee_backup_state_task,
             e2ee_session_state_task,
+            room_identity_task,
             verification_tasks,
-        } => sync_task
-            .into_iter()
-            .chain([
-                session_update_task,
-                send_queue_update_task,
-                room_list_update_task,
-                room_read_state_update_task,
-                e2ee_recovery_state_task,
-                e2ee_backup_state_task,
-                e2ee_session_state_task,
-            ])
-            .chain(verification_tasks.into_values())
-            .collect::<Vec<_>>(),
+            identity_reset,
+        } => {
+            if let Some(pending) = identity_reset {
+                pending.task.abort();
+                if let Err(err) = pending.task.await
+                    && err.is_panic()
+                {
+                    std::panic::resume_unwind(err.into_panic());
+                }
+            }
+            sync_task
+                .into_iter()
+                .chain([
+                    session_update_task,
+                    send_queue_update_task,
+                    room_list_update_task,
+                    room_read_state_update_task,
+                    e2ee_recovery_state_task,
+                    e2ee_backup_state_task,
+                    e2ee_session_state_task,
+                    room_identity_task,
+                ])
+                .chain(verification_tasks.into_values())
+                .collect::<Vec<_>>()
+        }
     };
     for task in &tasks {
         task.abort();
@@ -2101,9 +2386,11 @@ mod tests {
             e2ee_recovery_state_task: tokio::task::spawn_local(async {}),
             e2ee_backup_state_task: tokio::task::spawn_local(async {}),
             e2ee_session_state_task: tokio::task::spawn_local(async {}),
+            room_identity_task: tokio::task::spawn_local(async {}),
             session_update_task: tokio::task::spawn_local(async {}),
             send_queue_update_task: tokio::task::spawn_local(async {}),
             verification_tasks: HashMap::new(),
+            identity_reset: None,
         }
     }
 
@@ -2665,9 +2952,11 @@ mod tests {
                 e2ee_recovery_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 e2ee_backup_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 e2ee_session_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
+                room_identity_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 session_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 send_queue_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 verification_tasks: HashMap::new(),
+                identity_reset: None,
             };
 
             assert!(!handle_start_sync(&event_tx as &EventSender, &mut state));
@@ -2690,6 +2979,7 @@ mod tests {
                 e2ee_recovery_state_task,
                 e2ee_backup_state_task,
                 e2ee_session_state_task,
+                room_identity_task,
                 session_update_task,
                 send_queue_update_task,
                 ..
@@ -2703,6 +2993,7 @@ mod tests {
                 e2ee_recovery_state_task.abort();
                 e2ee_backup_state_task.abort();
                 e2ee_session_state_task.abort();
+                room_identity_task.abort();
                 session_update_task.abort();
                 send_queue_update_task.abort();
             }
@@ -2847,12 +3138,14 @@ mod tests {
                 e2ee_recovery_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 e2ee_backup_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 e2ee_session_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
+                room_identity_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 session_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 send_queue_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 verification_tasks: HashMap::from([(
                     ("@alice:example.org".to_owned(), "txn-123".to_owned()),
                     verification_task,
                 )]),
+                identity_reset: None,
             };
 
             shutdown_state(&mut state).await;

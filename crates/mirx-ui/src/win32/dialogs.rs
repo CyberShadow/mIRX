@@ -20,6 +20,7 @@ use windows_sys::core::BOOL;
 const LOGIN_DIALOG_CLASS_NAME: &str = "mirxWin32LoginDialog";
 const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32RecoverE2eeDialog";
 const SETUP_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32SetupE2eeDialog";
+const RESET_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32ResetE2eeDialog";
 const RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME: &str = "mirxWin32RecoveryKeyHandoffDialog";
 pub(super) const SINGLE_FIELD_DIALOG_CLASS_NAME: &str = "mirxWin32SingleFieldDialog";
 pub(super) const ABOUT_DIALOG_CLASS_NAME: &str = "mirxWin32AboutDialog";
@@ -39,6 +40,9 @@ const SETUP_E2EE_DIALOG_OK_ID: usize = 5015;
 const SETUP_E2EE_DIALOG_CANCEL_ID: usize = 5016;
 const RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID: u16 = 5017;
 const RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID: usize = 5018;
+const RESET_E2EE_DIALOG_PASSWORD_ID: u16 = 5019;
+const RESET_E2EE_DIALOG_RESET_ID: usize = 5020;
+const RESET_E2EE_DIALOG_CANCEL_ID: usize = 5021;
 const SINGLE_FIELD_DIALOG_EDIT_ID: u16 = 5010;
 const SINGLE_FIELD_DIALOG_OK_ID: usize = 5011;
 const SINGLE_FIELD_DIALOG_CANCEL_ID: usize = 5012;
@@ -65,6 +69,8 @@ const fn default_button(id: usize) -> LRESULT {
 const LOGIN_DIALOG_WIDTH: i32 = 280;
 const SINGLE_FIELD_DIALOG_WIDTH: i32 = 260;
 const RECOVERY_KEY_HANDOFF_DIALOG_WIDTH: i32 = 320;
+/// Wide enough for the warning to wrap to a few lines.
+const RESET_E2EE_DIALOG_WIDTH: i32 = 320;
 
 // Windows' dialog metrics at 96 dpi, in pixels: what the dialog units of
 // mIRC's MS Shell Dlg 8 resource dialogs come to.
@@ -119,6 +125,27 @@ struct SetupE2eeRecoveryDialogState {
     result: Arc<Mutex<Option<SetupE2eeRecoveryForm>>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ResetE2eeForm {
+    /// The account password; `None` from a session the browser confirms
+    /// for, or an empty field, which the core refuses before it changes
+    /// anything.
+    pub(super) password: Option<String>,
+}
+
+struct ResetE2eeDialogState {
+    /// Whether the dialog has the password field: a session that signed in
+    /// with the Matrix login API confirms a reset with its password.
+    asks_password: bool,
+    result: Arc<Mutex<Option<ResetE2eeForm>>>,
+}
+
+/// What a reset destroys, which the dialog says before anything else.
+const RESET_E2EE_WARNING: &str = "Reset only if you have lost all your other sessions and your \
+     recovery key. Resetting deletes your key backup and turns recovery off; messages you \
+     cannot read now stay unreadable; people who verified you will see your identity change \
+     and must verify you again.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SubmittedSetupE2eeRecovery {
     pub(super) passphrase_redacted: bool,
@@ -130,7 +157,7 @@ pub(super) struct SingleFieldDialogState {
 }
 
 /// Every mirx dialog's class and window procedure.
-const DIALOG_CLASSES: [(&str, WNDPROC); 8] = [
+const DIALOG_CLASSES: [(&str, WNDPROC); 9] = [
     (LOGIN_DIALOG_CLASS_NAME, Some(login_dialog_window_proc)),
     (
         RECOVER_E2EE_DIALOG_CLASS_NAME,
@@ -139,6 +166,10 @@ const DIALOG_CLASSES: [(&str, WNDPROC); 8] = [
     (
         SETUP_E2EE_DIALOG_CLASS_NAME,
         Some(setup_e2ee_dialog_window_proc),
+    ),
+    (
+        RESET_E2EE_DIALOG_CLASS_NAME,
+        Some(reset_e2ee_dialog_window_proc),
     ),
     (
         RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME,
@@ -398,23 +429,40 @@ impl DialogColumn {
     /// The buttons, right-aligned in a row a margin under the fields; the
     /// first is the default.
     unsafe fn buttons(self, buttons: &[(usize, &str)]) -> Result<(), String> {
+        let default = buttons[0].0;
+        self.buttons_with_default(buttons, default)
+    }
+
+    /// The buttons, right-aligned in a row a margin under the fields, with
+    /// `default` the default: Cancel, before an action that destroys data.
+    unsafe fn buttons_with_default(
+        self,
+        buttons: &[(usize, &str)],
+        default: usize,
+    ) -> Result<(), String> {
         let row_width = buttons.len() as i32 * (DIALOG_BUTTON_WIDTH + DIALOG_GAP) - DIALOG_GAP;
         let x = DIALOG_MARGIN + self.width - row_width;
-        self.button_row(x, buttons)
+        self.button_row(x, buttons, default)
     }
 
     /// One default button, centred a margin under the fields.
     unsafe fn centred_button(self, id: usize, text: &str) -> Result<(), String> {
         let x = DIALOG_MARGIN + (self.width - DIALOG_BUTTON_WIDTH) / 2;
-        self.button_row(x, &[(id, text)])
+        self.button_row(x, &[(id, text)], id)
     }
 
-    unsafe fn button_row(mut self, mut x: i32, buttons: &[(usize, &str)]) -> Result<(), String> {
+    unsafe fn button_row(
+        mut self,
+        mut x: i32,
+        buttons: &[(usize, &str)],
+        default: usize,
+    ) -> Result<(), String> {
         self.y += DIALOG_MARGIN - DIALOG_GAP;
-        for (index, (id, text)) in buttons.iter().enumerate() {
-            let style = match index {
-                0 => BS_DEFPUSHBUTTON,
-                _ => BS_PUSHBUTTON,
+        for (id, text) in buttons {
+            let style = if *id == default {
+                BS_DEFPUSHBUTTON
+            } else {
+                BS_PUSHBUTTON
             };
             let button = create_child_window(
                 self.dialog,
@@ -607,6 +655,60 @@ unsafe extern "system" fn setup_e2ee_dialog_window_proc(
         }
         WM_NCDESTROY => {
             window_data::drop_owned::<SetupE2eeRecoveryDialogState>(hwnd);
+            0
+        }
+        _ => DefWindowProcW(hwnd, message, wparam, lparam),
+    }
+}
+
+/// Reset is not the default button: Enter, typed after the password as in
+/// any other dialog, must not destroy the backup. Only a click on Reset (or
+/// its access key) does.
+unsafe extern "system" fn reset_e2ee_dialog_window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        WM_NCCREATE => {
+            window_data::adopt_create_param::<ResetE2eeDialogState>(hwnd, lparam);
+            // Sets the window text from the CreateWindowExW title.
+            DefWindowProcW(hwnd, message, wparam, lparam)
+        }
+        WM_COMMAND => match wparam & 0xffff {
+            RESET_E2EE_DIALOG_RESET_ID => {
+                let state = reset_e2ee_dialog_state(hwnd);
+                let password = state
+                    .asks_password
+                    .then(|| {
+                        read_window_text(GetDlgItem(hwnd, RESET_E2EE_DIALOG_PASSWORD_ID.into()))
+                    })
+                    .filter(|password| !password.is_empty());
+                clear_reset_e2ee_dialog_password(hwnd);
+                *state
+                    .result
+                    .lock()
+                    .expect("reset e2ee dialog result mutex poisoned") =
+                    Some(ResetE2eeForm { password });
+                end_modal_dialog(hwnd);
+                0
+            }
+            RESET_E2EE_DIALOG_CANCEL_ID | ESC_CANCEL_ID => {
+                clear_reset_e2ee_dialog_password(hwnd);
+                end_modal_dialog(hwnd);
+                0
+            }
+            _ => DefWindowProcW(hwnd, message, wparam, lparam),
+        },
+        DM_GETDEFID => default_button(RESET_E2EE_DIALOG_CANCEL_ID),
+        WM_CLOSE => {
+            clear_reset_e2ee_dialog_password(hwnd);
+            end_modal_dialog(hwnd);
+            0
+        }
+        WM_NCDESTROY => {
+            window_data::drop_owned::<ResetE2eeDialogState>(hwnd);
             0
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -873,6 +975,69 @@ pub(super) unsafe fn show_setup_e2ee_dialog(
     Ok(result
         .lock()
         .expect("setup e2ee dialog result mutex poisoned")
+        .clone())
+}
+
+unsafe fn create_reset_e2ee_dialog(
+    owner: HWND,
+    auth: &SessionAuth,
+    result: Arc<Mutex<Option<ResetE2eeForm>>>,
+) -> Result<HWND, String> {
+    let asks_password = match auth {
+        SessionAuth::Matrix => true,
+        SessionAuth::OAuth { .. } => false,
+    };
+    let mut state = window_data::CreateParam::new(ResetE2eeDialogState {
+        asks_password,
+        result,
+    });
+    create_modal_dialog(
+        owner,
+        RESET_E2EE_DIALOG_CLASS_NAME,
+        "Reset E2EE Identity",
+        state.as_param(),
+        |dialog| {
+            let mut column = DialogColumn::new(dialog, RESET_E2EE_DIALOG_WIDTH);
+            column.label(RESET_E2EE_WARNING, 0, 0)?;
+            column.y += DIALOG_GAP;
+            if asks_password {
+                column.label("Account password", 0, 0)?;
+                column.edit(RESET_E2EE_DIALOG_PASSWORD_ID, "", ES_PASSWORD as u32)?;
+            } else {
+                column.label(
+                    "Your server will ask you to approve the reset in your browser.",
+                    0,
+                    0,
+                )?;
+            }
+            column.buttons_with_default(
+                &[
+                    (RESET_E2EE_DIALOG_RESET_ID, "&Reset"),
+                    (RESET_E2EE_DIALOG_CANCEL_ID, "Cancel"),
+                ],
+                RESET_E2EE_DIALOG_CANCEL_ID,
+            )
+        },
+    )
+}
+
+/// The Reset E2EE Identity dialog, its focus on the password if it asks for
+/// one, else on Cancel.
+pub(super) unsafe fn show_reset_e2ee_dialog(
+    owner: HWND,
+    auth: &SessionAuth,
+) -> Result<Option<ResetE2eeForm>, String> {
+    let result = Arc::new(Mutex::new(None));
+    let dialog = create_reset_e2ee_dialog(owner, auth, Arc::clone(&result))?;
+    let focus = match auth {
+        SessionAuth::Matrix => RESET_E2EE_DIALOG_PASSWORD_ID,
+        SessionAuth::OAuth { .. } => RESET_E2EE_DIALOG_CANCEL_ID as u16,
+    };
+    SetFocus(GetDlgItem(dialog, focus.into()));
+    run_modal_dialog(owner, dialog);
+    Ok(result
+        .lock()
+        .expect("reset e2ee dialog result mutex poisoned")
         .clone())
 }
 
@@ -1152,6 +1317,17 @@ unsafe fn clear_recover_e2ee_dialog_secret(hwnd: HWND) {
     set_window_text(GetDlgItem(hwnd, RECOVER_E2EE_DIALOG_SECRET_ID.into()), "");
 }
 
+unsafe fn reset_e2ee_dialog_state(hwnd: HWND) -> &'static ResetE2eeDialogState {
+    window_data::get(hwnd).expect("the reset e2ee dialog has its state")
+}
+
+/// Clears the password, if the dialog asked for one.
+unsafe fn clear_reset_e2ee_dialog_password(hwnd: HWND) {
+    if reset_e2ee_dialog_state(hwnd).asks_password {
+        set_window_text(GetDlgItem(hwnd, RESET_E2EE_DIALOG_PASSWORD_ID.into()), "");
+    }
+}
+
 unsafe fn clear_setup_e2ee_dialog_passphrase(hwnd: HWND) {
     set_window_text(GetDlgItem(hwnd, SETUP_E2EE_DIALOG_PASSPHRASE_ID.into()), "");
 }
@@ -1247,6 +1423,75 @@ mod tests {
         }
     }
 
+    /// Types `p` into the reset dialog's password, then presses Enter in it.
+    unsafe extern "system" fn press_enter_in_reset_password(
+        frame: HWND,
+        _message: u32,
+        timer: usize,
+        _time: u32,
+    ) {
+        KillTimer(frame, timer);
+        let dialog = owned_dialog(frame, RESET_E2EE_DIALOG_CLASS_NAME);
+        let edit = GetDlgItem(dialog, RESET_E2EE_DIALOG_PASSWORD_ID.into());
+        PostMessageW(edit, WM_CHAR, 'p' as WPARAM, 0);
+        PostMessageW(edit, WM_KEYDOWN, VK_RETURN_KEY, 0);
+    }
+
+    /// Types `p` into the reset dialog's password, then clicks Reset.
+    unsafe extern "system" fn click_reset_after_a_password(
+        frame: HWND,
+        _message: u32,
+        timer: usize,
+        _time: u32,
+    ) {
+        KillTimer(frame, timer);
+        let dialog = owned_dialog(frame, RESET_E2EE_DIALOG_CLASS_NAME);
+        set_window_text(
+            GetDlgItem(dialog, RESET_E2EE_DIALOG_PASSWORD_ID.into()),
+            "p",
+        );
+        PostMessageW(dialog, WM_COMMAND, RESET_E2EE_DIALOG_RESET_ID, 0);
+    }
+
+    /// Clicks Reset in a reset dialog with no password field.
+    unsafe extern "system" fn click_reset(frame: HWND, _message: u32, timer: usize, _time: u32) {
+        KillTimer(frame, timer);
+        let dialog = owned_dialog(frame, RESET_E2EE_DIALOG_CLASS_NAME);
+        assert!(GetDlgItem(dialog, RESET_E2EE_DIALOG_PASSWORD_ID.into()).is_null());
+        PostMessageW(dialog, WM_COMMAND, RESET_E2EE_DIALOG_RESET_ID, 0);
+    }
+
+    /// Enter presses Cancel, the default: only a click on Reset resets.
+    #[test]
+    fn the_reset_dialog_resets_only_from_its_reset_button() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                register_dialog_classes(GetModuleHandleW(null())).unwrap();
+                SetTimer(hwnd, 1, 0, Some(press_enter_in_reset_password));
+                assert_eq!(
+                    show_reset_e2ee_dialog(hwnd, &SessionAuth::Matrix).unwrap(),
+                    None
+                );
+                SetTimer(hwnd, 1, 0, Some(click_reset_after_a_password));
+                assert_eq!(
+                    show_reset_e2ee_dialog(hwnd, &SessionAuth::Matrix).unwrap(),
+                    Some(ResetE2eeForm {
+                        password: Some("p".to_owned())
+                    })
+                );
+                SetTimer(hwnd, 1, 0, Some(click_reset));
+                let oauth = SessionAuth::OAuth {
+                    client_id: "client".to_owned(),
+                };
+                assert_eq!(
+                    show_reset_e2ee_dialog(hwnd, &oauth).unwrap(),
+                    Some(ResetE2eeForm { password: None })
+                );
+                assert_ne!(IsWindowEnabled(hwnd), 0, "closing it enables the frame");
+            });
+        }
+    }
+
     #[test]
     fn a_dialog_centres_on_its_owner() {
         let owner = RECT {
@@ -1330,6 +1575,15 @@ mod tests {
                     create_login_dialog(frame, "matrix.org", Arc::default()).unwrap(),
                     create_recover_e2ee_dialog(frame, Arc::default()).unwrap(),
                     create_setup_e2ee_dialog(frame, Arc::default()).unwrap(),
+                    create_reset_e2ee_dialog(frame, &SessionAuth::Matrix, Arc::default()).unwrap(),
+                    create_reset_e2ee_dialog(
+                        frame,
+                        &SessionAuth::OAuth {
+                            client_id: "client".to_owned(),
+                        },
+                        Arc::default(),
+                    )
+                    .unwrap(),
                     create_single_field_dialog(frame, "Find", "Find", "", Arc::default()).unwrap(),
                     create_recovery_key_handoff_dialog(frame, "EsTc abcd efgh").unwrap(),
                     create_about_dialog(frame).unwrap(),

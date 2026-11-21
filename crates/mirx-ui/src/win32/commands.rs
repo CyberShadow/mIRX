@@ -67,6 +67,10 @@ pub(super) enum SlashCommand {
     Devices {
         target: Option<String>,
     },
+    /// `/identity accept <nick>`: accept a user's changed identity.
+    IdentityAccept {
+        target: String,
+    },
     /// `/ignore [nick]`: without a nick, lists the ignore list.
     Ignore {
         target: Option<String>,
@@ -211,6 +215,10 @@ pub(super) enum E2eeSlashCommand {
     ShowStatus,
     Refresh,
     RecoverDialog,
+    /// `/e2ee reset`: the Reset E2EE Identity dialog.
+    ResetDialog,
+    /// `/e2ee reset cancel`: stop a reset that waits for approval.
+    ResetCancel,
     Setup {
         passphrase: Option<String>,
         wait_for_backups_to_upload: bool,
@@ -252,6 +260,7 @@ impl SlashCommand {
             Self::Names { .. } => "names",
             Self::Whois { .. } => "whois",
             Self::Devices { .. } => "devices",
+            Self::IdentityAccept { .. } => "identity",
             Self::Ignore { .. } => "ignore",
             Self::Unignore { .. } => "unignore",
             Self::Close => "close",
@@ -373,7 +382,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "e2ee",
-        usage: "[status|refresh|recover|setup [wait] [passphrase <passphrase>]]",
+        usage: "[status|refresh|recover|reset [cancel]|setup [wait] [passphrase <passphrase>]]",
         summary: "show or manage end-to-end encryption",
     },
     CommandSpec {
@@ -400,6 +409,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "help",
         usage: "[command]",
         summary: "list the commands, or show one's usage",
+    },
+    CommandSpec {
+        name: "identity",
+        usage: "accept <nick>",
+        summary: "accept a user's changed identity",
     },
     CommandSpec {
         name: "ignore",
@@ -690,6 +704,7 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         "devices" => Ok(SlashCommand::Devices {
             target: Some(single_word(&name, argument)?),
         }),
+        "identity" => parse_identity(argument),
         "ignore" if argument.is_empty() => Ok(SlashCommand::Ignore { target: None }),
         "ignore" => Ok(SlashCommand::Ignore {
             target: Some(single_word(&name, argument)?),
@@ -915,6 +930,18 @@ fn single_word(name: &str, argument: &str) -> Result<String, CommandError> {
     Ok(word.to_owned())
 }
 
+/// `accept <nick>`, the one action yet.
+fn parse_identity(argument: &str) -> Result<SlashCommand, CommandError> {
+    let (action, rest) = split_word(argument);
+    match action.to_ascii_lowercase().as_str() {
+        "" => Err(CommandError::insufficient_parameters("identity")),
+        "accept" => Ok(SlashCommand::IdentityAccept {
+            target: single_word("identity", rest)?,
+        }),
+        _ => Err(CommandError::new("identity", "invalid parameters")),
+    }
+}
+
 /// The reasons never repeat the argument: it may hold a passphrase.
 fn parse_e2ee(argument: &str) -> Result<E2eeSlashCommand, CommandError> {
     let invalid = || CommandError::new("e2ee", "invalid parameters");
@@ -923,6 +950,8 @@ fn parse_e2ee(argument: &str) -> Result<E2eeSlashCommand, CommandError> {
         "" | "status" if rest.is_empty() => Ok(E2eeSlashCommand::ShowStatus),
         "refresh" if rest.is_empty() => Ok(E2eeSlashCommand::Refresh),
         "recover" if rest.is_empty() => Ok(E2eeSlashCommand::RecoverDialog),
+        "reset" if rest.is_empty() => Ok(E2eeSlashCommand::ResetDialog),
+        "reset" if rest.eq_ignore_ascii_case("cancel") => Ok(E2eeSlashCommand::ResetCancel),
         "setup" => parse_e2ee_setup(rest).ok_or_else(invalid),
         _ => Err(invalid()),
     }
@@ -1219,10 +1248,13 @@ pub(super) fn whois_lines(
 /// your own list leaves that to the Status window's E2EE lines, which
 /// say whether this session is verified. Each session line gives its ID,
 /// name, trust and, for yours, when the server last saw it.
+/// `identity_changed`: a room's identity stream reports the user's
+/// identity changed since it was pinned, which only the stream knows.
 pub(super) fn devices_lines(
     devices: &UserDevices,
     nick: &str,
     own_user: bool,
+    identity_changed: bool,
     local_time: LocalTimeFn,
 ) -> Vec<String> {
     let user_id = &devices.user_id;
@@ -1231,15 +1263,19 @@ pub(super) fn devices_lines(
     } else {
         match devices.identity {
             UserIdentityState::Verified => format!("* {nick} is verified"),
+            UserIdentityState::Unverified if identity_changed => format!(
+                "* {nick} changed identity; /identity accept {user_id}, or /verify {user_id}"
+            ),
             UserIdentityState::Unverified => {
                 format!("* {nick} is not verified; /verify {user_id}")
             }
             UserIdentityState::NoCrossSigning => format!(
                 "* {nick} has no cross-signing; verify a device: /verify {user_id} <device>"
             ),
-            UserIdentityState::VerificationViolation => {
-                format!("* {nick} changed identity since you verified them; /verify {user_id}")
-            }
+            UserIdentityState::VerificationViolation => format!(
+                "* {nick} changed identity since you verified them; /verify {user_id}, or \
+                 /identity accept {user_id}"
+            ),
         }
     }];
     lines.extend(devices.devices.iter().map(|device| {
@@ -1463,6 +1499,14 @@ mod tests {
             parse("/e2ee recover"),
             Ok(SlashCommand::E2ee(E2eeSlashCommand::RecoverDialog))
         );
+        assert_eq!(
+            parse("/e2ee reset"),
+            Ok(SlashCommand::E2ee(E2eeSlashCommand::ResetDialog))
+        );
+        assert_eq!(
+            parse("/E2EE RESET Cancel"),
+            Ok(SlashCommand::E2ee(E2eeSlashCommand::ResetCancel))
+        );
         for (input, passphrase, wait) in [
             ("/e2ee setup", None, false),
             ("/e2ee setup wait", None, true),
@@ -1531,6 +1575,8 @@ mod tests {
         );
         for input in [
             "/e2ee recover secret",
+            "/e2ee reset secret",
+            "/e2ee reset cancel secret",
             "/e2ee bogus",
             "/e2ee setup passphrase",
             "/e2ee setup wait passphrases secret phrase",
@@ -2024,7 +2070,7 @@ mod tests {
         assert!(lines[0].starts_with(
             "* Commands: /accept /ban /clear /close /create /deop /devices /devoice /e2ee"
         ));
-        assert!(lines[0].contains(" /help "));
+        assert!(lines[0].contains(" /help /identity /ignore "));
         assert_eq!(lines[1], "* /help <command> for usage");
         assert_eq!(
             help_lines(Some("join")),
@@ -2136,6 +2182,22 @@ mod tests {
         assert_eq!(
             parse("/devices Bob DEV1"),
             error("devices", "too many parameters")
+        );
+        assert_eq!(
+            parse("/IDENTITY Accept  Bob "),
+            Ok(SlashCommand::IdentityAccept {
+                target: "Bob".to_owned(),
+            })
+        );
+        assert_eq!(parse("/identity"), insufficient("identity"));
+        assert_eq!(parse("/identity accept"), insufficient("identity"));
+        assert_eq!(
+            parse("/identity accept Bob Carol"),
+            error("identity", "too many parameters")
+        );
+        assert_eq!(
+            parse("/identity reject Bob"),
+            error("identity", "invalid parameters")
         );
         assert_eq!(parse("/ignore"), Ok(SlashCommand::Ignore { target: None }));
         assert_eq!(
@@ -2273,7 +2335,13 @@ mod tests {
             ],
         };
         assert_eq!(
-            devices_lines(&own, "me", true, super::super::timestamp::utc_local_time),
+            devices_lines(
+                &own,
+                "me",
+                true,
+                false,
+                super::super::timestamp::utc_local_time
+            ),
             vec![
                 "* me sessions:",
                 "* me L4PT0P \"Element Desktop\" verified, last seen Fri Nov 20 14:02:11 2026 (this session)",
@@ -2300,13 +2368,15 @@ mod tests {
             ),
             (
                 UserIdentityState::VerificationViolation,
-                "* Bob changed identity since you verified them; /verify @bob:example",
+                "* Bob changed identity since you verified them; /verify @bob:example, or \
+                 /identity accept @bob:example",
             ),
         ] {
             assert_eq!(
                 devices_lines(
                     &other(identity),
                     "Bob",
+                    false,
                     false,
                     super::super::timestamp::utc_local_time
                 ),
@@ -2319,9 +2389,29 @@ mod tests {
             ..other(UserIdentityState::Unverified)
         };
         assert_eq!(
-            devices_lines(&none, "Bob", false, super::super::timestamp::utc_local_time),
+            devices_lines(
+                &none,
+                "Bob",
+                false,
+                false,
+                super::super::timestamp::utc_local_time
+            ),
             vec![
                 "* Bob is not verified; /verify @bob:example",
+                "* Bob End of /DEVICES list"
+            ]
+        );
+        // Only a room's identity stream knows a pinned identity changed.
+        assert_eq!(
+            devices_lines(
+                &none,
+                "Bob",
+                false,
+                true,
+                super::super::timestamp::utc_local_time
+            ),
+            vec![
+                "* Bob changed identity; /identity accept @bob:example, or /verify @bob:example",
                 "* Bob End of /DEVICES list"
             ]
         );

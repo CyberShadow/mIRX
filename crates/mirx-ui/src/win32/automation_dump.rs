@@ -22,6 +22,7 @@ pub(super) unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenu
         whois_enabled: state.enabled(MENU_ID_MEMBER_WHOIS),
         devices_enabled: state.enabled(MENU_ID_MEMBER_DEVICES),
         verify_enabled: state.enabled(MENU_ID_MEMBER_VERIFY),
+        accept_identity_enabled: state.enabled(MENU_ID_MEMBER_ACCEPT_IDENTITY),
         query_enabled: state.enabled(MENU_ID_MEMBER_QUERY),
         mention_enabled: state.enabled(MENU_ID_MEMBER_MENTION),
         ignore_enabled: state.enabled(MENU_ID_MEMBER_IGNORE),
@@ -782,6 +783,9 @@ fn submitted_user_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedU
                     (DumpUserCommandAction::FetchProfile, user_id)
                 }
                 Command::ListUserDevices(user_id) => (DumpUserCommandAction::ListDevices, user_id),
+                Command::AcceptUserIdentity(user_id) => {
+                    (DumpUserCommandAction::AcceptIdentity, user_id)
+                }
                 _ => return None,
             };
             Some(DumpSubmittedUserCommand {
@@ -1135,6 +1139,43 @@ fn submitted_setup_recovery_commands_from_state(
         .collect()
 }
 
+fn submitted_identity_reset_commands_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedIdentityReset> {
+    state
+        .submitted_identity_resets
+        .iter()
+        .map(|command| match *command {
+            SubmittedIdentityReset::Reset { password_redacted } => {
+                DumpSubmittedIdentityReset::Reset { password_redacted }
+            }
+            SubmittedIdentityReset::Cancel => DumpSubmittedIdentityReset::Cancel,
+        })
+        .collect()
+}
+
+/// By room, then user: both maps are ordered.
+fn dump_identity_warnings(model: &UiModel) -> Vec<DumpIdentityWarning> {
+    model
+        .room_views
+        .iter()
+        .flat_map(|(room_id, view)| {
+            view.identity_warnings
+                .iter()
+                .map(|(user_id, warning)| DumpIdentityWarning {
+                    room_id: room_id.clone(),
+                    user_id: user_id.clone(),
+                    warning: match warning {
+                        IdentityWarning::Changed => DumpIdentityWarningKind::Changed,
+                        IdentityWarning::VerifiedChanged => {
+                            DumpIdentityWarningKind::VerifiedChanged
+                        }
+                    },
+                })
+        })
+        .collect()
+}
+
 pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
     let model = &state.model;
     DumpModel {
@@ -1157,6 +1198,7 @@ pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
             .last_verification
             .as_ref()
             .map(dump_verification_from_state_event),
+        identity_warnings: dump_identity_warnings(model),
         submitted_membership_commands: submitted_membership_commands_from_state(state),
         submitted_member_moderation_commands: submitted_member_moderation_commands_from_state(
             state,
@@ -1178,6 +1220,7 @@ pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_verification_requests: submitted_verification_requests_from_state(state),
         submitted_recovery_commands: submitted_recovery_commands_from_state(state),
         submitted_setup_recovery_commands: submitted_setup_recovery_commands_from_state(state),
+        submitted_identity_reset_commands: submitted_identity_reset_commands_from_state(state),
         submitted_room_list_requests: submitted_room_list_requests_from_state(state),
         opened_links: state.opened_links.clone(),
         shown_tips: dump_shown_tips(state),

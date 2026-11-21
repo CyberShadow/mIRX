@@ -19,19 +19,20 @@ use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command,
     CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
     CreateRoomRequest, CreateRoomVisibility, E2eeBackupState, E2eeBackupStatus,
-    E2eeCrossSigningStatus, E2eeRecoveryState, E2eeSessionState, E2eeStatus, EditMessageRequest,
-    Event, FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, InviteRoomMemberRequest,
-    JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, LoginMethod, LoginRequest,
-    MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoomsPage,
-    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
-    RejectRoomInviteRequest, RequestVerificationRequest, RestoreSessionRequest, RoomActivity,
-    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomAudioInfo, RoomEventFetch, RoomEventFetchResult, RoomFileInfo,
-    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageInfo, RoomMedia, RoomMediaFormat,
-    RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
-    RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    RoomUserProfile, RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
+    E2eeCrossSigningStatus, E2eeIdentityResetOutcome, E2eeRecoveryState, E2eeSessionState,
+    E2eeStatus, EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
+    HighlightWord, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
+    LeaveRoomRequest, LoginMethod, LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation,
+    PublicRoomsPage, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
+    RejectRoomInviteRequest, RequestVerificationRequest, ResetE2eeIdentityRequest,
+    RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioInfo,
+    RoomEventFetch, RoomEventFetchResult, RoomFileInfo, RoomHistoryBackfill,
+    RoomHistoryBackfillEvent, RoomImageInfo, RoomMedia, RoomMediaFormat, RoomMediaKind,
+    RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomReadState,
+    RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, RoomUserProfile,
+    RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
     SendMessageThreadTarget, SendReactionRequest, SessionAuth, SetDisplayNameRequest,
     SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
     SetupE2eeRecoveryRequest, StoredSession, TextStyleSpan, UnbanRoomMemberRequest, UserDevices,
@@ -147,18 +148,19 @@ use crate::{
         AcceptedResponse, AutomationDialog, COMMAND_ID_DUMP_COMPOSE_TEXT,
         COMMAND_ID_DUMP_ROOM_ACTIVITY, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING,
         COMMAND_ID_WAIT_IDLE, ComposeKey, ComposeTextResponse, ConnectionState, ContextMenuCommand,
-        DumpE2eeRecoverySetupResult, DumpMemberMenuState, DumpMemberModerationAction,
-        DumpMemberPowerRole, DumpMembershipCommandAction, DumpMessageMenuState, DumpModel,
-        DumpRoomActivity, DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMenuState,
+        DumpE2eeRecoverySetupResult, DumpIdentityWarning, DumpIdentityWarningKind,
+        DumpMemberMenuState, DumpMemberModerationAction, DumpMemberPowerRole,
+        DumpMembershipCommandAction, DumpMessageMenuState, DumpModel, DumpRoomActivity,
+        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMenuState,
         DumpRoomMessageActivityLine, DumpRoomPreviewMediaState, DumpRoomReactionSummary,
         DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand, DumpSubmittedFileCommand,
-        DumpSubmittedHistoryCommand, DumpSubmittedMemberModerationCommand,
-        DumpSubmittedMembershipCommand, DumpSubmittedMessageCommand,
-        DumpSubmittedNotificationCommand, DumpSubmittedPowerLevelCommand,
-        DumpSubmittedProfileCommand, DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand,
-        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
-        DumpSubmittedRoomListRequest, DumpSubmittedRoomTopicCommand,
-        DumpSubmittedSetupRecoveryCommand, DumpSubmittedUserCommand,
+        DumpSubmittedHistoryCommand, DumpSubmittedIdentityReset,
+        DumpSubmittedMemberModerationCommand, DumpSubmittedMembershipCommand,
+        DumpSubmittedMessageCommand, DumpSubmittedNotificationCommand,
+        DumpSubmittedPowerLevelCommand, DumpSubmittedProfileCommand, DumpSubmittedReactionCommand,
+        DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
+        DumpSubmittedReplyThreadTarget, DumpSubmittedRoomListRequest,
+        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand, DumpSubmittedUserCommand,
         DumpSubmittedVerificationAction, DumpSubmittedVerificationRequest, DumpUserCommandAction,
         DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
         FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
@@ -205,6 +207,7 @@ mod frame_menus;
 mod glyph_fonts;
 mod glyph_runs;
 mod hotlinks;
+mod identity;
 mod ignore;
 mod images;
 mod logging;
@@ -244,10 +247,11 @@ mod views;
 mod window_data;
 
 use account::{
-    CRASH_LOG_FILE_NAME, PROFILE_SUBDIR, delete_saved_session, load_or_create_store_passphrase,
-    profile_dir, save_session, session_path, submit_login, submit_logout, submit_recover_e2ee,
-    submit_restore_saved_session, submit_restore_session, submit_setup_e2ee_recovery,
-    submit_start_sync,
+    CRASH_LOG_FILE_NAME, PROFILE_SUBDIR, SubmittedIdentityReset, delete_saved_session,
+    load_or_create_store_passphrase, profile_dir, save_session, session_path,
+    submit_cancel_identity_reset, submit_identity_reset, submit_login, submit_logout,
+    submit_recover_e2ee, submit_restore_saved_session, submit_restore_session,
+    submit_setup_e2ee_recovery, submit_start_sync,
 };
 #[cfg(test)]
 use account::{SAVED_SESSION_VERSION, SESSION_FILE_NAME, SavedSession, load_saved_session};
@@ -310,8 +314,8 @@ use dialogs::{
 use dialogs::{
     SubmittedSetupE2eeRecovery, create_child_window, pack_size_lparam, register_dialog_classes,
     run_colors_dialog, run_modal_dialog, run_options_dialog, show_about_dialog,
-    show_e2ee_recovery_key, show_login_dialog, show_recover_e2ee_dialog, show_setup_e2ee_dialog,
-    show_single_field_dialog,
+    show_e2ee_recovery_key, show_login_dialog, show_recover_e2ee_dialog, show_reset_e2ee_dialog,
+    show_setup_e2ee_dialog, show_single_field_dialog,
 };
 use echo::{EchoLine, EchoLog};
 use errors::{ErrorDestination, error_destination};
@@ -346,9 +350,10 @@ use frame_menus::{
     refresh_room_menu_state, refresh_tools_menu_state, select_timeline_event_for_automation,
     selected_message_quote_target, selected_timeline_event_id,
     selected_timeline_event_id_for_automation, selected_timeline_media_attachment,
-    show_context_menu, show_recover_e2ee_menu_dialog, show_timeline_message_context_menu,
-    timeline_row_is_selected, window_menu_command_id,
+    show_context_menu, show_recover_e2ee_menu_dialog, show_reset_e2ee_menu_dialog,
+    show_timeline_message_context_menu, timeline_row_is_selected, window_menu_command_id,
 };
+use identity::IdentityWarning;
 #[cfg(test)]
 use images::room_preview_media_storage_key;
 use images::{
@@ -367,16 +372,16 @@ use menus::{
     BarMenu, COMMANDS_MENU, FILE_MENU, HELP_MENU, MEMBER_CONTROL_MENU, MEMBER_MENU, MENU_BAR,
     MENU_ID_COMMANDS_FIRST, MENU_ID_COMMANDS_LIST, MENU_ID_FILE_CONNECT, MENU_ID_FILE_DISCONNECT,
     MENU_ID_FILE_EXIT, MENU_ID_FILE_SELECT_SERVER, MENU_ID_FIND, MENU_ID_HELP_ABOUT,
-    MENU_ID_HELP_TOPICS, MENU_ID_LOGOUT, MENU_ID_MEMBER_BAN, MENU_ID_MEMBER_DEOP,
-    MENU_ID_MEMBER_DEVICES, MENU_ID_MEMBER_DEVOICE, MENU_ID_MEMBER_IGNORE, MENU_ID_MEMBER_KICK,
-    MENU_ID_MEMBER_MENTION, MENU_ID_MEMBER_OP, MENU_ID_MEMBER_QUERY, MENU_ID_MEMBER_UNIGNORE,
-    MENU_ID_MEMBER_VERIFY, MENU_ID_MEMBER_VOICE, MENU_ID_MEMBER_WHOIS, MENU_ID_MESSAGE_EDIT,
-    MENU_ID_MESSAGE_GO_TO_ORIGINAL, MENU_ID_MESSAGE_REACT, MENU_ID_MESSAGE_REDACT,
-    MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_SAVE_ATTACHMENT, MENU_ID_RECOVER_E2EE,
-    MENU_ID_ROOM_ACCEPT_INVITE, MENU_ID_ROOM_NOTIFY_ALL, MENU_ID_ROOM_NOTIFY_MENTIONS,
-    MENU_ID_ROOM_NOTIFY_MUTE, MENU_ID_ROOM_PART, MENU_ID_ROOM_REJECT_INVITE,
-    MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_TOOLS_COLORS, MENU_ID_TOOLS_OPTIONS,
-    MENU_ID_TOOLS_SESSIONS, MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL,
+    MENU_ID_HELP_TOPICS, MENU_ID_LOGOUT, MENU_ID_MEMBER_ACCEPT_IDENTITY, MENU_ID_MEMBER_BAN,
+    MENU_ID_MEMBER_DEOP, MENU_ID_MEMBER_DEVICES, MENU_ID_MEMBER_DEVOICE, MENU_ID_MEMBER_IGNORE,
+    MENU_ID_MEMBER_KICK, MENU_ID_MEMBER_MENTION, MENU_ID_MEMBER_OP, MENU_ID_MEMBER_QUERY,
+    MENU_ID_MEMBER_UNIGNORE, MENU_ID_MEMBER_VERIFY, MENU_ID_MEMBER_VOICE, MENU_ID_MEMBER_WHOIS,
+    MENU_ID_MESSAGE_EDIT, MENU_ID_MESSAGE_GO_TO_ORIGINAL, MENU_ID_MESSAGE_REACT,
+    MENU_ID_MESSAGE_REDACT, MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_SAVE_ATTACHMENT,
+    MENU_ID_RECOVER_E2EE, MENU_ID_RESET_E2EE, MENU_ID_ROOM_ACCEPT_INVITE, MENU_ID_ROOM_NOTIFY_ALL,
+    MENU_ID_ROOM_NOTIFY_MENTIONS, MENU_ID_ROOM_NOTIFY_MUTE, MENU_ID_ROOM_PART,
+    MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_TOOLS_COLORS,
+    MENU_ID_TOOLS_OPTIONS, MENU_ID_TOOLS_SESSIONS, MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL,
     MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS, MENU_ID_VERIFY_THIS_SESSION,
     MENU_ID_VIEW_SWITCHBAR, MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS,
     MENU_ID_WINDOW_CASCADE, MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL,
@@ -630,7 +635,7 @@ struct UiModel {
     status: String,
     /// The signed-in account, known from the login result or the session
     /// being restored.
-    own_user_id: Option<String>,
+    own_account: Option<OwnAccount>,
     /// Kept across logouts, as mIRC keeps Status text across disconnects.
     status_log: StatusLog,
     lifecycle_state: LifecycleState,
@@ -653,6 +658,32 @@ struct UiModel {
     /// The account's ignore list as the server last listed it, sorted;
     /// `None` until the first list after signing in, and after logout.
     ignored_users: Option<Vec<String>>,
+}
+
+/// Who is signed in, and how the session authenticates: a reset of the
+/// E2EE identity confirms with the account password, or in the browser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OwnAccount {
+    user_id: String,
+    auth: SessionAuth,
+}
+
+#[cfg(test)]
+impl OwnAccount {
+    fn matrix(user_id: String) -> Self {
+        Self {
+            user_id,
+            auth: SessionAuth::Matrix,
+        }
+    }
+}
+
+impl UiModel {
+    fn own_user_id(&self) -> Option<&str> {
+        self.own_account
+            .as_ref()
+            .map(|account| account.user_id.as_str())
+    }
 }
 
 struct WindowState {
@@ -707,6 +738,7 @@ struct WindowState {
     /// The web links handed to the shell, in order.
     opened_links: Vec<String>,
     submitted_setup_e2ee_recovery: Vec<SubmittedSetupE2eeRecovery>,
+    submitted_identity_resets: Vec<SubmittedIdentityReset>,
     pending_attachment_saves: BTreeMap<String, PendingAttachmentSave>,
     last_attachment_save: Option<AttachmentSaveResult>,
     /// The Options dialog while it is open, for the automation dump.
@@ -945,6 +977,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         recorded_commands: Vec::new(),
         opened_links: Vec::new(),
         submitted_setup_e2ee_recovery: Vec::new(),
+        submitted_identity_resets: Vec::new(),
         pending_attachment_saves: BTreeMap::new(),
         last_attachment_save: None,
         options_dialog: None,

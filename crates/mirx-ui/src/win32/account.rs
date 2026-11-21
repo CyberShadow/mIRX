@@ -350,6 +350,10 @@ pub(super) fn submit_restore_session(
         .command_sender
         .as_ref()
         .ok_or_else(|| "core command sender is not available".to_owned())?;
+    let account = OwnAccount {
+        user_id: session.user_id.clone(),
+        auth: session.auth.clone(),
+    };
     let user_id = session.user_id.clone();
     sender
         .send(Command::RestoreSession(RestoreSessionRequest {
@@ -364,7 +368,7 @@ pub(super) fn submit_restore_session(
         StatusLineKind::Info,
         status_log::restoring(&homeserver_url, &user_id),
     );
-    state.model.own_user_id = Some(user_id);
+    state.model.own_account = Some(account);
     state.current_session_homeserver_url = Some(homeserver_url);
     state.model.connection = ConnectionState::SigningIn;
     state.model.status = "restoring saved session".to_owned();
@@ -445,6 +449,55 @@ pub(super) fn submit_setup_e2ee_recovery(
             wait_for_backups_to_upload,
         });
     state.model.status = "e2ee recovery setup submitted".to_owned();
+    Ok(())
+}
+
+/// An identity reset the UI handed the core, for the automation dump. It
+/// keeps whether a password went with it, never the password.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SubmittedIdentityReset {
+    Reset { password_redacted: bool },
+    Cancel,
+}
+
+pub(super) fn submit_identity_reset(
+    state: &mut WindowState,
+    password: Option<String>,
+) -> Result<(), String> {
+    let password_redacted = password.is_some();
+    send_identity_reset_command(
+        state,
+        Command::ResetE2eeIdentity(ResetE2eeIdentityRequest { password }),
+        SubmittedIdentityReset::Reset { password_redacted },
+    )?;
+    state.model.status = "e2ee identity reset submitted".to_owned();
+    Ok(())
+}
+
+pub(super) fn submit_cancel_identity_reset(state: &mut WindowState) -> Result<(), String> {
+    send_identity_reset_command(
+        state,
+        Command::CancelE2eeIdentityReset,
+        SubmittedIdentityReset::Cancel,
+    )?;
+    state.model.status = "e2ee identity reset cancel submitted".to_owned();
+    Ok(())
+}
+
+/// Sends a reset command past `recorded_commands`, which would keep the
+/// password.
+fn send_identity_reset_command(
+    state: &mut WindowState,
+    command: Command,
+    submitted: SubmittedIdentityReset,
+) -> Result<(), String> {
+    state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?
+        .send(command)
+        .map_err(|err| format!("failed to enqueue e2ee identity reset command: {err}"))?;
+    state.submitted_identity_resets.push(submitted);
     Ok(())
 }
 
@@ -531,6 +584,39 @@ mod tests {
             }]
         );
         assert!(!format!("{:?}", state.submitted_setup_e2ee_recovery).contains("secret phrase"));
+        assert!(state.recorded_commands.is_empty());
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn identity_resets_enqueue_and_record_only_whether_a_password_went() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+
+        submit_identity_reset(&mut state, Some("hunter2".to_owned())).unwrap();
+        assert_eq!(state.model.status, "e2ee identity reset submitted");
+        submit_identity_reset(&mut state, None).unwrap();
+        submit_cancel_identity_reset(&mut state).unwrap();
+        assert_eq!(state.model.status, "e2ee identity reset cancel submitted");
+
+        assert_eq!(
+            state.submitted_identity_resets,
+            vec![
+                SubmittedIdentityReset::Reset {
+                    password_redacted: true
+                },
+                SubmittedIdentityReset::Reset {
+                    password_redacted: false
+                },
+                SubmittedIdentityReset::Cancel,
+            ]
+        );
         assert!(state.recorded_commands.is_empty());
 
         handle
@@ -789,7 +875,7 @@ mod tests {
         );
         assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
         assert_eq!(state.model.connection, ConnectionState::SigningIn);
-        assert_eq!(state.model.own_user_id.as_deref(), Some("@alice:example"));
+        assert_eq!(state.model.own_user_id(), Some("@alice:example"));
         assert_eq!(
             commands.try_recv(),
             Ok(Command::RestoreSession(RestoreSessionRequest {

@@ -24,7 +24,7 @@ fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) ->
     let clears_last_activity = matches!(activity.kind, RoomActivityKind::Redacted(_));
     let target_view_id = room_activity_target_view_id(&activity);
     let mut attention = ActivityAttention::default();
-    if let Some(level) = activity_level_for(&activity, state.model.own_user_id.as_deref())
+    if let Some(level) = activity_level_for(&activity, state.model.own_user_id())
         && let Some((room_is_direct, mode)) =
             sendable_room_by_id(&state.model.rooms, &activity.room_id)
                 .map(|room| (room.is_direct, joined_room_notification_mode(room)))
@@ -407,8 +407,8 @@ pub(super) fn apply_core_event(
             session,
             homeserver_url,
         } => {
-            if let Some(own_user_id) = &state.model.own_user_id
-                && *own_user_id != session.user_id
+            if let Some(own_user_id) = state.model.own_user_id()
+                && own_user_id != session.user_id
             {
                 return Err(format!(
                     "received LoggedIn for {} while signed in as {own_user_id}",
@@ -425,7 +425,10 @@ pub(super) fn apply_core_event(
                 StatusLineKind::Info,
                 status_log::logged_in(&session.user_id, &session.device_id),
             );
-            state.model.own_user_id = Some(session.user_id);
+            state.model.own_account = Some(OwnAccount {
+                user_id: session.user_id,
+                auth: session.auth,
+            });
             state.model.status = "authenticated".to_owned();
             state.model.lifecycle_state = LifecycleState::Authenticated;
         }
@@ -573,6 +576,13 @@ pub(super) fn apply_core_event(
             let lines = devices_lines(&state.model, &devices, state.local_time);
             echo_lines_in_active_view(state, lines);
         }
+        Event::RoomIdentityChanges(changes) => {
+            identity::apply_room_identity_changes(state, changes);
+        }
+        Event::UserIdentityAccepted(user_id) => {
+            let nick = known_nick(&state.model, &user_id).unwrap_or(user_id);
+            echo_lines_in_active_view(state, [identity::accepted_line(&nick)]);
+        }
         Event::E2eeStatus(status) => {
             for (kind, line) in status_log::e2ee_status(&status) {
                 log_status(state, kind, line);
@@ -597,13 +607,36 @@ pub(super) fn apply_core_event(
             state.model.last_e2ee_recovery_setup_result = true;
             state.model.status = "e2ee recovery setup complete".to_owned();
         }
+        Event::E2eeIdentityResetApproval { url } => {
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::E2EE_RESET_APPROVAL.to_owned(),
+            );
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::sign_in_address(&url),
+            );
+            state.model.status = "waiting for identity reset approval".to_owned();
+        }
+        Event::E2eeIdentityReset(outcome) => {
+            for (kind, line) in status_log::e2ee_identity_reset(outcome) {
+                log_status(state, kind, line);
+            }
+            state.model.status = match outcome {
+                E2eeIdentityResetOutcome::Done => "e2ee identity reset",
+                E2eeIdentityResetOutcome::Cancelled => "e2ee identity reset cancelled",
+            }
+            .to_owned();
+        }
         Event::VerificationRequest(request) => apply_verification_request(state, request),
         Event::VerificationState(event) => apply_verification_event(state, event),
         Event::LoggedOut => {
             state.reconnect.reset();
             delete_saved_session()?;
             state.current_session_homeserver_url = None;
-            state.model.own_user_id = None;
+            state.model.own_account = None;
             state.model.status = "logged out".to_owned();
             state.model.lifecycle_state = LifecycleState::LoggedOut;
             state.model.rooms.clear();
@@ -803,15 +836,19 @@ pub(super) unsafe fn apply_events_and_refresh(
         }
         backfill_result |= backfilled_room_id.is_some();
         // A replayed event load opens nothing, and reconnects nowhere.
-        let sign_in_url = match &event {
-            Event::SignInUrl { url } if !state.synthetic_load_in_progress => Some(url.clone()),
+        let browser_url = match &event {
+            Event::SignInUrl { url } | Event::E2eeIdentityResetApproval { url }
+                if !state.synthetic_load_in_progress =>
+            {
+                Some(url.clone())
+            }
             _ => None,
         };
         let connection_lost = !state.synthetic_load_in_progress
             && matches!(event, Event::SyncStopped(SyncStopReason::Lost(_)));
         attention = attention.then(apply_core_event(state, event)?);
         state.event_generation += 1;
-        if let Some(url) = sign_in_url {
+        if let Some(url) = browser_url {
             open_web_link(hwnd, url)?;
         }
         if connection_lost {
@@ -1024,6 +1061,7 @@ pub(super) fn operation_name(operation: Operation) -> &'static str {
         Operation::UnignoreUser => "unignore user",
         Operation::FetchUserProfile => "fetch user profile",
         Operation::ListUserDevices => "list devices",
+        Operation::AcceptUserIdentity => "accept identity",
         Operation::SendMessage => "send text",
         Operation::SendFile => "send file",
         Operation::EditMessage => "edit message",
@@ -1040,6 +1078,7 @@ pub(super) fn operation_name(operation: Operation) -> &'static str {
         Operation::E2eeStatus => "e2ee status",
         Operation::RecoverE2ee => "e2ee recovery",
         Operation::SetupE2eeRecovery => "e2ee recovery setup",
+        Operation::ResetE2eeIdentity => "e2ee identity reset",
         Operation::Verification => "verification",
         Operation::RequestVerification => "verification request",
         Operation::Logout => "logout",
@@ -1153,6 +1192,112 @@ mod tests {
                 assert_eq!(state.opened_links, Vec::<String>::new());
             });
         }
+    }
+
+    const RESET_APPROVAL_URL: &str =
+        "https://account.example/account?action=org.matrix.cross_signing_reset";
+
+    fn status_lines_with_kinds(state: &WindowState) -> Vec<(StatusLineKind, String)> {
+        state
+            .model
+            .status_log
+            .lines()
+            .iter()
+            .map(|line| (line.kind, line.text.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn an_identity_reset_approval_opens_its_page_and_says_how_to_cancel() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![Event::E2eeIdentityResetApproval {
+                        url: RESET_APPROVAL_URL.to_owned(),
+                    }],
+                )
+                .unwrap();
+                let state = state_ref(hwnd);
+                assert_eq!(state.opened_links, vec![RESET_APPROVAL_URL.to_owned()]);
+                let lines = status_lines_with_kinds(state);
+                assert_eq!(
+                    lines[..2],
+                    [
+                        (
+                            StatusLineKind::Info,
+                            "* To reset your E2EE identity, approve it on the page your browser \
+                             opened; mirx waits 2 minutes, /e2ee reset cancel stops it"
+                                .to_owned()
+                        ),
+                        (
+                            StatusLineKind::Info,
+                            format!("* If no browser opened, go to {RESET_APPROVAL_URL}")
+                        ),
+                    ]
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn a_replayed_identity_reset_approval_is_not_opened() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                apply_event_load(
+                    hwnd,
+                    vec![
+                        Event::Started,
+                        Event::E2eeIdentityResetApproval {
+                            url: RESET_APPROVAL_URL.to_owned(),
+                        },
+                    ],
+                )
+                .unwrap();
+                let state = state_ref(hwnd);
+                assert_eq!(state.opened_links, Vec::<String>::new());
+                assert_eq!(state.model.status, "waiting for identity reset approval");
+            });
+        }
+    }
+
+    #[test]
+    fn an_identity_reset_ends_done_or_cancelled_with_recovery_off_in_red() {
+        let mut state = test_state();
+        apply_core_event(
+            &mut state,
+            Event::E2eeIdentityReset(E2eeIdentityResetOutcome::Done),
+        )
+        .unwrap();
+        assert_eq!(state.model.status, "e2ee identity reset");
+        apply_core_event(
+            &mut state,
+            Event::E2eeIdentityReset(E2eeIdentityResetOutcome::Cancelled),
+        )
+        .unwrap();
+        assert_eq!(state.model.status, "e2ee identity reset cancelled");
+        let recovery_off = (
+            StatusLineKind::Error,
+            "* Recovery is off: /e2ee setup to set it up again".to_owned(),
+        );
+        assert_eq!(
+            status_lines_with_kinds(&state),
+            [
+                (
+                    StatusLineKind::Info,
+                    "* Your E2EE identity was reset; this session is verified with the new one"
+                        .to_owned()
+                ),
+                recovery_off.clone(),
+                (
+                    StatusLineKind::Info,
+                    "* E2EE identity reset cancelled: your identity is unchanged, but your key \
+                     backup was deleted"
+                        .to_owned()
+                ),
+                recovery_off,
+            ]
+        );
     }
 
     #[test]
@@ -2417,7 +2562,7 @@ mod tests {
     #[test]
     fn outgoing_verification_request_is_sent_with_only_cancel() {
         let mut state = test_state();
-        state.model.own_user_id = Some("@me:example".to_owned());
+        state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
 
         apply_core_event(
             &mut state,
@@ -2891,6 +3036,7 @@ mod tests {
                 history: RoomHistoryBackfillState::default(),
                 echo: EchoLog::default(),
                 arrivals: RoomArrivals::default(),
+                identity_warnings: BTreeMap::new(),
             },
         );
         state.model.last_activity = Some(LastMessageActivity {
@@ -2988,7 +3134,7 @@ mod tests {
     fn closed_query_reopens_on_message_activity_from_others() {
         let mut state = test_state();
         state.model.rooms = vec![query("!dm:example", "Alice", "@alice:example")];
-        state.model.own_user_id = Some("@me:example".to_owned());
+        state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
         state.closed_queries.insert("!dm:example".to_owned());
         let message_from = |event_id: &str, user_id: &str| {
             let mut activity = sent_message_activity("!dm:example", event_id, None, "hi", 1);
@@ -3116,7 +3262,7 @@ mod tests {
         direct_room.is_direct = true;
         direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
         state.model.rooms = vec![direct_room];
-        state.model.own_user_id = Some("@me:example".to_owned());
+        state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
         let message_from = |event_id: &str, user_id: &str| {
             let mut activity = sent_message_activity("!dm:example", event_id, None, "hi", 1);
             let RoomActivityKind::Message(message) = &mut activity.kind else {
@@ -4896,7 +5042,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(state.model.lifecycle_state, LifecycleState::Authenticated);
-            assert_eq!(state.model.own_user_id.as_deref(), Some("@alice:example"));
+            assert_eq!(state.model.own_user_id(), Some("@alice:example"));
             assert_eq!(
                 state.current_session_homeserver_url,
                 Some("https://matrix.example".to_owned())
@@ -4945,7 +5091,7 @@ mod tests {
 
             apply_core_event(&mut state, Event::LoggedOut).unwrap();
             assert_eq!(state.model.lifecycle_state, LifecycleState::LoggedOut);
-            assert_eq!(state.model.own_user_id, None);
+            assert_eq!(state.model.own_account, None);
             assert_eq!(state.current_session_homeserver_url, None);
             assert!(!session_path.exists());
 
@@ -4995,7 +5141,7 @@ mod tests {
             apply_core_event(&mut state, Event::LoggedOut).unwrap();
             apply_core_event(&mut state, Event::Stopped).unwrap();
 
-            assert_eq!(state.model.own_user_id, None);
+            assert_eq!(state.model.own_account, None);
             assert_eq!(
                 status_log_lines(&state),
                 vec![
@@ -5148,7 +5294,7 @@ mod tests {
     fn logged_in_event_for_another_account_is_rejected() {
         let mut state = test_state();
         state.synthetic_load_in_progress = true;
-        state.model.own_user_id = Some("@me:example".to_owned());
+        state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
 
         assert_eq!(
             apply_core_event(
@@ -5160,7 +5306,7 @@ mod tests {
             ),
             Err("received LoggedIn for @alice:example while signed in as @me:example".to_owned())
         );
-        assert_eq!(state.model.own_user_id.as_deref(), Some("@me:example"));
+        assert_eq!(state.model.own_user_id(), Some("@me:example"));
     }
 
     #[test]

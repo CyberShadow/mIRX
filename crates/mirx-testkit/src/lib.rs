@@ -177,6 +177,7 @@ pub enum ContextMenuCommand {
     WhoisMember,
     DevicesMember,
     VerifyMember,
+    AcceptIdentityMember,
     QueryMember,
     MentionMember,
     IgnoreMember,
@@ -195,6 +196,7 @@ pub struct MemberMenuState {
     pub whois_enabled: bool,
     pub devices_enabled: bool,
     pub verify_enabled: bool,
+    pub accept_identity_enabled: bool,
     pub query_enabled: bool,
     pub mention_enabled: bool,
     pub ignore_enabled: bool,
@@ -397,6 +399,9 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_e2ee_recovery_setup_result: Option<E2eeRecoverySetupResult>,
     pub last_verification: Option<Verification>,
+    /// Every room's identity-change warnings, by room and then user.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub identity_warnings: Vec<IdentityWarning>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_membership_commands: Vec<SubmittedMembershipCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -435,6 +440,8 @@ pub struct Model {
     pub submitted_recovery_commands: Vec<SubmittedRecoveryCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_setup_recovery_commands: Vec<SubmittedSetupRecoveryCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_identity_reset_commands: Vec<SubmittedIdentityReset>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_room_list_requests: Vec<SubmittedRoomListRequest>,
     /// The web links handed to the shell, in order.
@@ -520,6 +527,7 @@ pub enum UserCommandAction {
     Unignore,
     FetchProfile,
     ListDevices,
+    AcceptIdentity,
 }
 
 /// A room directory page asked for (`/list`).
@@ -667,6 +675,31 @@ pub struct SubmittedRecoveryCommand {
 pub struct SubmittedSetupRecoveryCommand {
     pub passphrase_redacted: bool,
     pub wait_for_backups_to_upload: bool,
+}
+
+/// An identity reset (`/e2ee reset`) or its cancel; never the password.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SubmittedIdentityReset {
+    Reset { password_redacted: bool },
+    Cancel,
+}
+
+/// A room member whose identity changed since this session accepted or
+/// verified it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityWarning {
+    pub room_id: String,
+    pub user_id: String,
+    pub warning: IdentityWarningKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IdentityWarningKind {
+    Changed,
+    VerifiedChanged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2105,6 +2138,8 @@ pub enum AutomationDialog {
     RecoverE2ee,
     /// Tools > Set Up E2EE Recovery...
     SetupE2eeRecovery,
+    /// Tools > Reset E2EE Identity...
+    ResetE2ee,
     /// The active window's close box, which asks before leaving a room.
     CloseActiveView,
 }

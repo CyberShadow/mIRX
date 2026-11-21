@@ -54,6 +54,11 @@ pub enum Command {
     /// their server (`/keys/query`; for the own user also `/devices`);
     /// answered by `UserDevices`.
     ListUserDevices(String),
+    /// Accepts a user's changed identity: withdraws the verification of a
+    /// verified identity that changed (which also pins the new one), else
+    /// pins the current one. Answered by `UserIdentityAccepted`; the room
+    /// identity streams then report the user `Pinned`.
+    AcceptUserIdentity(String),
     SendMessage(SendMessageRequest),
     SendFile(SendFileRequest),
     EditMessage(EditMessageRequest),
@@ -67,6 +72,12 @@ pub enum Command {
     RefreshE2eeStatus,
     SetupE2eeRecovery(SetupE2eeRecoveryRequest),
     RecoverE2ee(RecoverE2eeRequest),
+    /// Resets your cross-signing identity, and with it key backup and
+    /// recovery. See `ResetE2eeIdentityRequest`.
+    ResetE2eeIdentity(ResetE2eeIdentityRequest),
+    /// Stops a reset that waits for approval in the browser; answered by
+    /// `E2eeIdentityReset(Cancelled)`, or `Done` if the approval won.
+    CancelE2eeIdentityReset,
     /// Starts a verification, answered by `Event::VerificationRequest` with
     /// `VerificationDirection::Outgoing`, then `VerificationState` events.
     /// See `RequestVerificationRequest`.
@@ -482,6 +493,27 @@ impl fmt::Debug for RecoverE2eeRequest {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("RecoverE2eeRequest")
             .field("recovery_secret", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Answered by `E2eeIdentityReset(Done)` and an `E2eeStatus`, or first by
+/// `E2eeIdentityResetApproval` when the server wants the reset approved in
+/// a browser. The reset deletes the key backup and turns recovery off
+/// before it asks the server, so a refused or cancelled reset leaves them
+/// off; an `E2eeStatus` follows either way.
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResetE2eeIdentityRequest {
+    /// The account password, for a server that confirms the reset with it
+    /// (user-interactive auth). `None` for an OAuth 2.0 session.
+    pub password: Option<String>,
+}
+
+impl fmt::Debug for ResetE2eeIdentityRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResetE2eeIdentityRequest")
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .finish()
     }
 }
@@ -1574,6 +1606,50 @@ pub struct DeviceSummary {
     pub last_seen_ms: Option<u64>,
 }
 
+/// Members of a joined encrypted room whose identity trust changed, from
+/// the SDK's room identity stream. The first for a room lists its members
+/// whose identity is not pinned or verified now (you excluded; omitted
+/// when there are none); later ones are transitions.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomIdentityChanges {
+    pub room_id: String,
+    pub changes: Vec<IdentityChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityChange {
+    pub user_id: String,
+    pub trust: IdentityTrust,
+}
+
+/// How far this session trusts a user's identity, as the SDK's room
+/// identity stream reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IdentityTrust {
+    Verified,
+    /// The first identity seen for the user, or one the user accepted.
+    /// Also reported when a user with a changed identity leaves the room.
+    Pinned,
+    /// The identity changed since it was pinned.
+    PinViolation,
+    /// The identity changed since you verified it.
+    VerificationViolation,
+}
+
+/// How an identity reset that waited for browser approval ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum E2eeIdentityResetOutcome {
+    /// Your new identity is on the server, and signs this session.
+    Done,
+    /// `CancelE2eeIdentityReset` stopped it; the server keeps your old
+    /// identity.
+    Cancelled,
+}
+
 /// Whom a verification asks. A device: that device, to-device. No device
 /// and the own user: your other cross-signed sessions, to-device. No device
 /// and another user: their cross-signing identity, in your DM with them,
@@ -1795,6 +1871,7 @@ pub enum Operation {
     UnignoreUser,
     FetchUserProfile,
     ListUserDevices,
+    AcceptUserIdentity,
     SendMessage,
     SendFile,
     EditMessage,
@@ -1813,6 +1890,7 @@ pub enum Operation {
     E2eeStatus,
     SetupE2eeRecovery,
     RecoverE2ee,
+    ResetE2eeIdentity,
     /// Answering a verification: accept, cancel, confirm or reject.
     Verification,
     RequestVerification,
@@ -1885,9 +1963,20 @@ pub enum Event {
     UserProfile(UserProfile),
     /// The answer to `ListUserDevices`.
     UserDevices(UserDevices),
+    RoomIdentityChanges(RoomIdentityChanges),
+    /// The answer to `AcceptUserIdentity`.
+    UserIdentityAccepted(String),
     E2eeStatus(E2eeStatus),
     E2eeRecoverySetupSucceeded(E2eeRecoverySetupSucceeded),
     E2eeRecoverySucceeded(E2eeRecoverySucceeded),
+    /// The server wants the identity reset approved on this page; the core
+    /// asks again every half second for up to two minutes, and answers
+    /// with `E2eeIdentityReset` or a `ResetE2eeIdentity` error.
+    E2eeIdentityResetApproval {
+        url: String,
+    },
+    /// The answer to `ResetE2eeIdentity`; an `E2eeStatus` follows.
+    E2eeIdentityReset(E2eeIdentityResetOutcome),
     VerificationRequest(VerificationRequest),
     VerificationState(VerificationStateEvent),
     LoggedOut,
@@ -1914,6 +2003,60 @@ mod tests {
 
     fn span(start: usize, end: usize, style: TextStyle) -> TextStyleSpan {
         TextStyleSpan { start, end, style }
+    }
+
+    #[test]
+    fn identity_reset_requests_redact_the_password() {
+        let request = ResetE2eeIdentityRequest {
+            password: Some("hunter2".to_owned()),
+        };
+        let debug = format!("{:?}", Command::ResetE2eeIdentity(request.clone()));
+        assert!(!debug.contains("hunter2"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        assert_eq!(
+            format!("{:?}", ResetE2eeIdentityRequest { password: None }),
+            "ResetE2eeIdentityRequest { password: None }"
+        );
+        assert_eq!(
+            serde_json::from_value::<ResetE2eeIdentityRequest>(
+                serde_json::to_value(&request).unwrap()
+            )
+            .unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn identity_dtos_round_trip_and_reject_unknown_fields() {
+        let changes = RoomIdentityChanges {
+            room_id: "!ops:example.org".to_owned(),
+            changes: vec![IdentityChange {
+                user_id: "@bob:example.org".to_owned(),
+                trust: IdentityTrust::VerificationViolation,
+            }],
+        };
+        let json = serde_json::json!({
+            "room_id": "!ops:example.org",
+            "changes": [{ "user_id": "@bob:example.org", "trust": "verification_violation" }],
+        });
+        assert_eq!(serde_json::to_value(&changes).unwrap(), json);
+        assert_eq!(
+            serde_json::from_value::<RoomIdentityChanges>(json).unwrap(),
+            changes
+        );
+        assert!(
+            serde_json::from_value::<IdentityChange>(serde_json::json!({
+                "user_id": "@bob:example.org", "trust": "pinned", "extra": true,
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            serde_json::to_value(Event::E2eeIdentityReset(
+                E2eeIdentityResetOutcome::Cancelled
+            ))
+            .unwrap(),
+            serde_json::json!({ "E2eeIdentityReset": "cancelled" })
+        );
     }
 
     #[test]

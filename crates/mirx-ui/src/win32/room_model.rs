@@ -48,6 +48,9 @@ pub(super) struct RoomViewModel {
     pub(super) history: RoomHistoryBackfillState,
     pub(super) echo: EchoLog,
     pub(super) arrivals: RoomArrivals,
+    /// Members whose identity changed, by user ID, as the room's identity
+    /// stream last reported them (`identity.rs`).
+    pub(super) identity_warnings: BTreeMap<String, IdentityWarning>,
 }
 
 /// Every room's view model, by room ID, each with a revision: the gate

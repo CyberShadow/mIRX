@@ -873,6 +873,7 @@ pub(super) fn test_state() -> WindowState {
         opened_links: Vec::new(),
         #[cfg(test)]
         submitted_setup_e2ee_recovery: Vec::new(),
+        submitted_identity_resets: Vec::new(),
         pending_attachment_saves: BTreeMap::new(),
         last_attachment_save: None,
         options_dialog: None,
@@ -1173,7 +1174,7 @@ pub(super) fn compose_target_state() -> WindowState {
     // Kept open for the state's lifetime: sends must not fail.
     std::mem::forget(commands);
     state.command_sender = Some(sender);
-    state.model.own_user_id = Some("@me:example".to_owned());
+    state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
     state.model.rooms = vec![room("!ops:example", "Ops", false)];
     let mine = |event_id: &str, presentation, body: &str, timestamp_ms| {
         let mut activity = sent_message_activity_with_presentation(

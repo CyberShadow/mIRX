@@ -477,11 +477,7 @@ pub(super) fn compose_target_row(
         TimelineSyntheticRowLabel::ComposeTarget,
         &replies::compose_target_indicator(
             target,
-            &quoted_line(
-                &model.room_views[room_id],
-                activity,
-                model.own_user_id.as_deref(),
-            ),
+            &quoted_line(&model.room_views[room_id], activity, model.own_user_id()),
         ),
     )
 }
@@ -773,7 +769,7 @@ pub(super) fn build_room_timeline_rows(
             room_view.activities.iter(),
             None,
             timestamps,
-            model.own_user_id.as_deref(),
+            model.own_user_id(),
         );
         push_room_typing_row(&mut rows, room_view);
     }
@@ -833,7 +829,7 @@ pub(super) fn build_thread_timeline_rows(
             .filter(|activity| room_activity_belongs_to_thread(activity, thread_root_event_id)),
         Some(thread_root_event_id),
         timestamps,
-        model.own_user_id.as_deref(),
+        model.own_user_id(),
     );
     push_room_typing_row(&mut rows, room_view);
     rows

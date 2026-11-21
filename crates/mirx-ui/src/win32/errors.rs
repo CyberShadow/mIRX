@@ -48,6 +48,9 @@ pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> 
         },
         Operation::FetchUserProfile => ErrorDestination::ActiveWindow { command: "whois" },
         Operation::ListUserDevices => ErrorDestination::ActiveWindow { command: "devices" },
+        Operation::AcceptUserIdentity => ErrorDestination::ActiveWindow {
+            command: "identity",
+        },
         Operation::RequestVerification => ErrorDestination::ActiveWindow { command: "verify" },
         Operation::Login
         | Operation::RestoreSession
@@ -73,6 +76,7 @@ pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> 
         | Operation::E2eeStatus
         | Operation::SetupE2eeRecovery
         | Operation::RecoverE2ee
+        | Operation::ResetE2eeIdentity
         | Operation::Verification
         | Operation::Logout
         | Operation::Shutdown => ErrorDestination::Status,
@@ -146,6 +150,7 @@ mod tests {
             Operation::E2eeStatus,
             Operation::SetupE2eeRecovery,
             Operation::RecoverE2ee,
+            Operation::ResetE2eeIdentity,
             Operation::Verification,
             Operation::Logout,
             Operation::Shutdown,
@@ -178,6 +183,7 @@ mod tests {
             (Operation::UnignoreUser, "unignore"),
             (Operation::FetchUserProfile, "whois"),
             (Operation::ListUserDevices, "devices"),
+            (Operation::AcceptUserIdentity, "identity"),
             (Operation::RequestVerification, "verify"),
         ] {
             assert_eq!(

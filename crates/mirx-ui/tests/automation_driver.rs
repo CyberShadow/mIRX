@@ -13,13 +13,14 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mirx_core::{
-    DeviceSummary, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState,
-    E2eeSessionState, E2eeStatus, Event, HighlightWord, RoomActivity as CoreRoomActivity,
+    DeviceSummary, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
+    E2eeIdentityResetOutcome, E2eeRecoveryState, E2eeSessionState, E2eeStatus, Event,
+    HighlightWord, IdentityChange, IdentityTrust, RoomActivity as CoreRoomActivity,
     RoomActivityKind as CoreRoomActivityKind, RoomActivityRelation as CoreRoomActivityRelation,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomHistoryBackfill,
-    RoomHistoryBackfillEvent, RoomMedia as CoreRoomMedia, RoomMediaFormat as CoreRoomMediaFormat,
-    RoomMediaKind as CoreRoomMediaKind, RoomMemberRank, RoomMemberSummary, RoomMembers,
-    RoomMembership, RoomMessageActivity as CoreRoomMessageActivity,
+    RoomHistoryBackfillEvent, RoomIdentityChanges, RoomMedia as CoreRoomMedia,
+    RoomMediaFormat as CoreRoomMediaFormat, RoomMediaKind as CoreRoomMediaKind, RoomMemberRank,
+    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomNotificationMode, RoomSummary,
     RoomTyping, SessionAuth as CoreSessionAuth, SpaceChildSummary,
@@ -30,23 +31,24 @@ use mirx_core::{
 };
 use mirx_testkit::{
     AutomationDialog, ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult,
-    FindActiveViewResult, FrameSize, LaunchOptions, MdiArrangement, MdiView, MdiWindowPlacement,
-    MdiWindowState, MemberModerationAction, MemberPowerRole, MembershipCommandAction,
-    MircFormatKey, MirxApp, Model, NavigationNode, NavigationNodeKey, NavigationPathSegment, Room,
-    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
-    RoomImageActivity, RoomImageInfo, RoomImageMediaState, RoomMediaSource, RoomMemberChange,
-    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomTag, SessionAuth, ShownTip, SpaceChild, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedFileCommand,
-    SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
-    SubmittedMessageCommand, SubmittedNotificationCommand, SubmittedPowerLevelCommand,
-    SubmittedProfileCommand, SubmittedReactionCommand, SubmittedRecoveryCommand,
-    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
-    SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
-    SubmittedUserCommand, SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem,
-    TestkitError, UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
+    FindActiveViewResult, FrameSize, IdentityWarning, IdentityWarningKind, LaunchOptions,
+    MdiArrangement, MdiView, MdiWindowPlacement, MdiWindowState, MemberModerationAction,
+    MemberPowerRole, MembershipCommandAction, MircFormatKey, MirxApp, Model, NavigationNode,
+    NavigationNodeKey, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
+    RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
+    RoomImageMediaState, RoomMediaSource, RoomMemberChange, RoomMessageActivity,
+    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomTag, SessionAuth, ShownTip, SpaceChild, StoredSession, SubmittedDirectRoomCommand,
+    SubmittedEditCommand, SubmittedFileCommand, SubmittedHistoryCommand, SubmittedIdentityReset,
+    SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedMessageCommand,
+    SubmittedNotificationCommand, SubmittedPowerLevelCommand, SubmittedProfileCommand,
+    SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
+    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomListRequest,
+    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SubmittedUserCommand,
+    SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem, TestkitError,
+    UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
     UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
     UiFindState, UiLoggingOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
     UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
@@ -115,6 +117,8 @@ const MENU_ID_SETUP_E2EE_RECOVERY: usize = 40017;
 const MENU_ID_VERIFY_THIS_SESSION: usize = 40050;
 const MENU_ID_TOOLS_SESSIONS: usize = 40051;
 const RECOVER_E2EE_DIALOG_SECRET_ID: i32 = 5007;
+const RESET_E2EE_DIALOG_PASSWORD_ID: i32 = 5019;
+const RESET_E2EE_DIALOG_RESET_ID: usize = 5020;
 const RECOVER_E2EE_DIALOG_OK_ID: usize = 5008;
 const SETUP_E2EE_DIALOG_PASSPHRASE_ID: i32 = 5013;
 const SETUP_E2EE_DIALOG_OK_ID: usize = 5015;
@@ -3040,7 +3044,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 61);
+    assert_eq!(version.protocol_version, 62);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -4734,6 +4738,269 @@ fn automation_driver_member_menu_verify_requests_the_member()
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+fn identity_changes(room_id: &str, user_id: &str, trust: IdentityTrust) -> Event {
+    Event::RoomIdentityChanges(RoomIdentityChanges {
+        room_id: room_id.to_owned(),
+        changes: vec![IdentityChange {
+            user_id: user_id.to_owned(),
+            trust,
+        }],
+    })
+}
+
+const BOB_CHANGED_WARNING: &str = "* Warning: Bob's identity was reset; /identity accept \
+     @bob:example to accept it, or /verify @bob:example";
+
+/// Bob's identity changed, as both rooms' streams report.
+fn warn_about_bob(app: &MirxApp) -> Result<(), Box<dyn std::error::Error>> {
+    let events = ["!beta:example", "!alpha:example"]
+        .map(|room_id| identity_changes(room_id, "@bob:example", IdentityTrust::PinViolation));
+    app.append_synthetic_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+#[test]
+fn automation_driver_identity_warnings_print_in_shared_rooms_and_clear()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_signed_in_member_app(&local_app_data)?;
+
+    warn_about_bob(&app)?;
+    let warning = |room_id: &str| IdentityWarning {
+        room_id: room_id.to_owned(),
+        user_id: "@bob:example".to_owned(),
+        warning: IdentityWarningKind::Changed,
+    };
+    assert_eq!(
+        app.dump_model()?.identity_warnings,
+        vec![warning("!alpha:example"), warning("!beta:example")]
+    );
+    // Alpha has no member list: the warning names Bob by ID there.
+    let ui_state = app.dump_ui_state()?;
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
+    only_view_line_containing(beta, BOB_CHANGED_WARNING);
+    let alpha = find_view(&ui_state, &room_identity("!alpha:example"));
+    only_view_line_containing(alpha, "* Warning: @bob:example's identity was reset");
+    // In red, on the active window's screen.
+    let timeline = active_timeline(&app)?;
+    let line = timeline
+        .visible_lines
+        .iter()
+        .find(|line| line.text.contains("* Warning: Bob's identity was reset"))
+        .unwrap_or_else(|| panic!("the warning is on screen: {timeline:?}"));
+    assert_eq!(line.kind, UiTimelineLineKind::Error);
+    // The background window's button shows the warning.
+    let alpha_button = app
+        .dump_ui_state()?
+        .switchbar
+        .items
+        .into_iter()
+        .find(|item| item.identity == room_identity("!alpha:example"))
+        .expect("Alpha has a button");
+    assert_eq!(alpha_button.activity, Some(ViewActivityLevel::Event));
+
+    // Accepted elsewhere: the warnings go, and nothing more prints.
+    let events = ["!beta:example", "!alpha:example"]
+        .map(|room_id| identity_changes(room_id, "@bob:example", IdentityTrust::Pinned));
+    app.append_synthetic_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(app.dump_model()?.identity_warnings.is_empty());
+    let ui_state = app.dump_ui_state()?;
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
+    assert_eq!(view_lines_containing(beta, "identity").len(), 1);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_identity_accept_submits_and_refuses_unchanged()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_signed_in_member_app(&local_app_data)?;
+    warn_about_bob(&app)?;
+
+    app.select_member("@alice:example")?;
+    assert!(!app.dump_member_menu_state()?.accept_identity_enabled);
+    app.select_member("@bob:example")?;
+    assert!(app.dump_member_menu_state()?.accept_identity_enabled);
+    app.open_member_context_menu("@bob:example", ContextMenuCommand::AcceptIdentityMember)?;
+    type_commands(&app, &["/identity accept Bob", "/identity accept Alice"])?;
+
+    let accept = SubmittedUserCommand {
+        action: UserCommandAction::AcceptIdentity,
+        user_id: "@bob:example".to_owned(),
+    };
+    assert_eq!(
+        app.dump_model()?.submitted_user_commands,
+        vec![accept.clone(), accept]
+    );
+    let events = [Event::UserIdentityAccepted("@bob:example".to_owned())];
+    app.append_synthetic_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
+    for line in [
+        "* /identity: Alice's identity has not changed",
+        // The automation core is not signed in.
+        "* /identity: accepting an identity requires an authenticated session",
+        "* Bob's new identity accepted",
+    ] {
+        assert!(view_contains(beta, line), "{line}: {:?}", beta.lines);
+    }
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Opens Tools > Reset E2EE Identity... and returns the dialog.
+fn open_reset_e2ee_dialog(app: &MirxApp) -> Result<HWND, Box<dyn std::error::Error>> {
+    app.open_dialog(AutomationDialog::ResetE2ee)?;
+    let dialog = app.wait_for_modal_dialog(Duration::from_secs(5))?;
+    assert_eq!(
+        (dialog.class.as_str(), dialog.title.as_str()),
+        ("mirxWin32ResetE2eeDialog", "Reset E2EE Identity")
+    );
+    Ok(dialog.hwnd as HWND)
+}
+
+fn click_reset(app: &MirxApp, dialog: HWND) -> Result<(), Box<dyn std::error::Error>> {
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, RESET_E2EE_DIALOG_RESET_ID as WPARAM, 0) },
+        0
+    );
+    wait_for_window_gone(dialog, "Reset E2EE Identity dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+#[test]
+fn automation_driver_reset_e2ee_dialog_submits_the_password_redacted()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_signed_in_member_app(&local_app_data)?;
+
+    // Cancel, and Esc, submit nothing.
+    let dialog = open_reset_e2ee_dialog(&app)?;
+    close_dialog(&app, dialog)?;
+    assert!(
+        app.dump_model()?
+            .submitted_identity_reset_commands
+            .is_empty()
+    );
+
+    let password = "sample account password";
+    let dialog = open_reset_e2ee_dialog(&app)?;
+    let edit = unsafe { GetDlgItem(dialog, RESET_E2EE_DIALOG_PASSWORD_ID) };
+    assert!(!edit.is_null(), "a password session is asked its password");
+    let wide = wide_null(password);
+    assert_ne!(unsafe { SetWindowTextW(edit, wide.as_ptr()) }, 0);
+    click_reset(&app, dialog)?;
+    type_commands(&app, &["/e2ee reset cancel"])?;
+
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_identity_reset_commands,
+        vec![
+            SubmittedIdentityReset::Reset {
+                password_redacted: true
+            },
+            SubmittedIdentityReset::Cancel,
+        ]
+    );
+    assert!(!serde_json::to_string(&model)?.contains(password));
+    let ui_state = app.dump_ui_state()?;
+    assert!(!serde_json::to_string(&ui_state)?.contains(password));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_reset_e2ee_dialog_of_a_browser_session_asks_no_password()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let app = launch_app(&exe_path, &[OsString::from("--automation")])?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let approval_url = "https://account.example/account?action=org.matrix.cross_signing_reset";
+    let mut session = core_stored_session();
+    session.auth = CoreSessionAuth::OAuth {
+        client_id: "client".to_owned(),
+    };
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::LoggedIn {
+            session,
+            homeserver_url: "https://matrix.example/".to_owned(),
+        },
+        Event::E2eeIdentityResetApproval {
+            url: approval_url.to_owned(),
+        },
+        Event::E2eeIdentityReset(E2eeIdentityResetOutcome::Done),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let dialog = open_reset_e2ee_dialog(&app)?;
+    assert!(unsafe { GetDlgItem(dialog, RESET_E2EE_DIALOG_PASSWORD_ID) }.is_null());
+    click_reset(&app, dialog)?;
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_identity_reset_commands,
+        vec![SubmittedIdentityReset::Reset {
+            password_redacted: false
+        }]
+    );
+    // A replayed approval opens no page.
+    assert!(model.opened_links.is_empty());
+    let ui_state = app.dump_ui_state()?;
+    let status = find_view(&ui_state, &ViewIdentity::Status);
+    for line in [
+        "* To reset your E2EE identity, approve it on the page your browser opened; mirx \
+         waits 2 minutes, /e2ee reset cancel stops it",
+        &format!("* If no browser opened, go to {approval_url}"),
+        "* Your E2EE identity was reset; this session is verified with the new one",
+        "* Recovery is off: /e2ee setup to set it up again",
+    ] {
+        assert!(view_contains(status, line), "{line}: {:?}", status.lines);
+    }
+    Ok(())
+}
+
+#[test]
+fn automation_driver_reset_e2ee_needs_a_session() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let app = launch_app(&exe_path, &[OsString::from("--automation")])?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_view(room_identity("!beta:example"))?;
+    type_commands(&app, &["/e2ee reset", "/e2ee reset now"])?;
+    assert!(
+        app.wait_for_modal_dialog(Duration::from_millis(500))
+            .is_err()
+    );
+    assert!(
+        app.dump_model()?
+            .submitted_identity_reset_commands
+            .is_empty()
+    );
+    let ui_state = app.dump_ui_state()?;
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
+    for line in [
+        "* /e2ee: not connected to server",
+        "* /e2ee: invalid parameters",
+    ] {
+        assert!(view_contains(beta, line), "{line}: {:?}", beta.lines);
+    }
     Ok(())
 }
 

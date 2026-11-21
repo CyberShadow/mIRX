@@ -41,7 +41,7 @@ pub(super) fn view_caption(model: &UiModel, view_id: &ViewId) -> String {
                 ),
             }
         }
-        ViewId::Status => mdi::status_caption(model.own_user_id.as_deref()),
+        ViewId::Status => mdi::status_caption(model.own_user_id()),
         ViewId::Thread { .. } => title,
         ViewId::RoomList => model
             .room_list
@@ -66,10 +66,7 @@ pub(super) fn view_short_title(model: &UiModel, view_id: &ViewId) -> String {
     match view_id {
         // mIRC labels a connection's Status window with its network; a
         // Matrix user ID names both the account and its server.
-        ViewId::Status => model
-            .own_user_id
-            .clone()
-            .unwrap_or_else(|| "Status".to_owned()),
+        ViewId::Status => model.own_user_id().unwrap_or("Status").to_owned(),
         ViewId::Room(room_id) => {
             let room = room_by_id(&model.rooms, room_id)
                 .expect("room view activation must target an existing room");
@@ -1560,7 +1557,7 @@ mod tests {
             nav_view("Status", ViewId::Status, Vec::new())
         );
 
-        state.model.own_user_id = Some("@me:example".to_owned());
+        state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         assert_eq!(
             navigation_layout(&state.model),
@@ -1970,7 +1967,7 @@ mod tests {
     fn view_short_title_names_status_by_the_user_id() {
         let mut state = test_state();
         assert_eq!(view_short_title(&state.model, &ViewId::Status), "Status");
-        state.model.own_user_id = Some("@me:example".to_owned());
+        state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
         assert_eq!(
             view_short_title(&state.model, &ViewId::Status),
             "@me:example"
@@ -2022,7 +2019,7 @@ mod tests {
             "Plain"
         );
         assert_eq!(view_caption(&state.model, &ViewId::Status), "Status");
-        state.model.own_user_id = Some("@me:example".to_owned());
+        state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
         assert_eq!(
             view_caption(&state.model, &ViewId::Status),
             "Status: @me:example"

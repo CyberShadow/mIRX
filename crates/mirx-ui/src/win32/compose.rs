@@ -208,7 +208,7 @@ pub(super) unsafe fn arm_compose_target(hwnd: HWND, target: ComposeTarget) -> Re
         match &target {
             ComposeTarget::Reply { .. } => None,
             ComposeTarget::Edit { .. } => Some(replies::compose_text_for_edit(
-                replies::editable_message(activity, state.model.own_user_id.as_deref())?,
+                replies::editable_message(activity, state.model.own_user_id())?,
             )),
         }
     };

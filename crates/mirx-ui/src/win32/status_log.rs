@@ -7,8 +7,8 @@
 //! may print other lines too, such as `-> *Alice* hi`.
 
 use mirx_core::{
-    E2eeSessionState, E2eeStatus, VerificationDirection, VerificationRequest, VerificationState,
-    VerificationStateEvent,
+    E2eeIdentityResetOutcome, E2eeSessionState, E2eeStatus, VerificationDirection,
+    VerificationRequest, VerificationState, VerificationStateEvent,
 };
 
 use super::menus::verification_actions_text;
@@ -95,7 +95,8 @@ pub(super) fn restoring(homeserver_url: &str, user_id: &str) -> String {
 pub(super) const SIGN_IN_WITH_BROWSER: &str =
     "Sign in on the page your browser opened; File > Disconnect cancels";
 
-/// The sign-in page as a hotlink, for when the shell opened no browser.
+/// The page the browser was asked to open (a sign-in, an identity reset's
+/// approval) as a hotlink, for when the shell opened no browser.
 pub(super) fn sign_in_address(url: &str) -> String {
     format!("If no browser opened, go to {url}")
 }
@@ -119,6 +120,32 @@ pub(super) const E2EE_RECOVERY_SET_UP: &str =
     "E2EE recovery set up; the recovery key was shown in a dialog";
 pub(super) const E2EE_RECOVERY_COMPLETE: &str = "E2EE recovery complete";
 pub(super) const E2EE_STATUS_UNKNOWN: &str = "E2EE status not yet known";
+pub(super) const E2EE_RESET_APPROVAL: &str = "To reset your E2EE identity, approve it on the page your browser opened; mirx waits 2 minutes, /e2ee reset cancel stops it";
+/// After a reset, or a cancelled one: the reset turned recovery off first.
+pub(super) const E2EE_RECOVERY_OFF_AFTER_RESET: &str =
+    "Recovery is off: /e2ee setup to set it up again";
+
+/// The answer to `/e2ee reset`. The E2EE status follows, with the state of
+/// the key backup.
+pub(super) fn e2ee_identity_reset(
+    outcome: E2eeIdentityResetOutcome,
+) -> [(StatusLineKind, String); 2] {
+    let line = match outcome {
+        E2eeIdentityResetOutcome::Done => {
+            "Your E2EE identity was reset; this session is verified with the new one"
+        }
+        E2eeIdentityResetOutcome::Cancelled => {
+            "E2EE identity reset cancelled: your identity is unchanged, but your key backup was deleted"
+        }
+    };
+    [
+        (StatusLineKind::Info, line.to_owned()),
+        (
+            StatusLineKind::Error,
+            E2EE_RECOVERY_OFF_AFTER_RESET.to_owned(),
+        ),
+    ]
+}
 
 /// mIRC's `* Disconnected` when the connection ended by itself; the user's
 /// own Disconnect logs `STOPPED`.
@@ -194,7 +221,7 @@ pub(super) fn e2ee_status(status: &E2eeStatus) -> Vec<(StatusLineKind, String)> 
     lines
 }
 
-pub(super) const SESSION_UNVERIFIED_WARNING: &str = "This session is not verified: /verify to verify it from another of your sessions, or /e2ee recover with your recovery key";
+pub(super) const SESSION_UNVERIFIED_WARNING: &str = "This session is not verified: /verify to verify it from another of your sessions, /e2ee recover with your recovery key, or /e2ee reset if you have neither";
 
 /// Whether to warn that this session is not verified: your identity does
 /// not sign it, and this session lacks the self-signing key to sign
@@ -465,7 +492,7 @@ mod tests {
         }
         assert_eq!(
             SESSION_UNVERIFIED_WARNING,
-            "This session is not verified: /verify to verify it from another of your sessions, or /e2ee recover with your recovery key"
+            "This session is not verified: /verify to verify it from another of your sessions, /e2ee recover with your recovery key, or /e2ee reset if you have neither"
         );
     }
 

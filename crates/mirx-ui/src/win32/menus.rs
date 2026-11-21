@@ -69,6 +69,8 @@ pub(super) const MENU_ID_VERIFY_THIS_SESSION: usize = 40050;
 pub(super) const MENU_ID_TOOLS_SESSIONS: usize = 40051;
 pub(super) const MENU_ID_MEMBER_DEVICES: usize = 40052;
 pub(super) const MENU_ID_MEMBER_VERIFY: usize = 40053;
+pub(super) const MENU_ID_RESET_E2EE: usize = 40054;
+pub(super) const MENU_ID_MEMBER_ACCEPT_IDENTITY: usize = 40055;
 /// The window keys' command ids: accelerators with no menu item, in the
 /// gap below the Commands menu's. Alt+n sends `ACCEL_ID_WINDOW_FIRST + n - 1`.
 pub(super) const ACCEL_ID_WINDOW_FIRST: usize = 40080;
@@ -202,6 +204,10 @@ pub(super) const TOOLS_MENU: &[MenuEntry] = &[
     Item {
         id: MENU_ID_RECOVER_E2EE,
         label: "Recover &E2EE...",
+    },
+    Item {
+        id: MENU_ID_RESET_E2EE,
+        label: "Rese&t E2EE Identity...",
     },
     Item {
         id: MENU_ID_VERIFY_THIS_SESSION,
@@ -419,6 +425,10 @@ pub(super) const MEMBER_MENU: &[MenuEntry] = &[
         label: "Verify",
     },
     Item {
+        id: MENU_ID_MEMBER_ACCEPT_IDENTITY,
+        label: "Accept Identity",
+    },
+    Item {
         id: MENU_ID_MEMBER_QUERY,
         label: "Query User",
     },
@@ -487,6 +497,9 @@ pub(super) fn member_menu_command(id: usize, user_id: &str) -> Option<SlashComma
             target: Some(nick.clone()),
             device_id: None,
         }),
+        MENU_ID_MEMBER_ACCEPT_IDENTITY => Some(SlashCommand::IdentityAccept {
+            target: nick.clone(),
+        }),
         MENU_ID_MEMBER_IGNORE => Some(SlashCommand::Ignore {
             target: Some(nick.clone()),
         }),
@@ -511,12 +524,14 @@ pub(super) fn member_menu_command(id: usize, user_id: &str) -> Option<SlashComma
 
 /// Whether a member menu item applies to the selected member: the checks
 /// its command makes before asking the server. The server decides the
-/// rest; a refused op prints in the room window.
+/// rest; a refused op prints in the room window. `identity_warning` is
+/// whether any room warns that the member's identity changed.
 pub(super) fn member_menu_item_enabled(
     id: usize,
     member: &RoomMemberSummary,
     ignored_users: Option<&[String]>,
     own_user_id: Option<&str>,
+    identity_warning: bool,
 ) -> bool {
     let no_nick = |_: &str| None;
     match id {
@@ -525,6 +540,7 @@ pub(super) fn member_menu_item_enabled(
         | MENU_ID_MEMBER_VERIFY
         | MENU_ID_MEMBER_QUERY
         | MENU_ID_MEMBER_MENTION => true,
+        MENU_ID_MEMBER_ACCEPT_IDENTITY => identity_warning,
         MENU_ID_MEMBER_IGNORE => {
             check_ignore(ignored_users, own_user_id, &member.user_id, no_nick).is_ok()
         }
@@ -905,6 +921,10 @@ mod tests {
                 }),
             ),
             (
+                MENU_ID_MEMBER_ACCEPT_IDENTITY,
+                Some(SlashCommand::IdentityAccept { target: nick() }),
+            ),
+            (
                 MENU_ID_MEMBER_IGNORE,
                 Some(SlashCommand::Ignore {
                     target: Some(nick()),
@@ -959,7 +979,7 @@ mod tests {
         ] {
             assert_eq!(member_menu_command(id, user_id), command, "{id}");
         }
-        assert_eq!(member_menu_item_ids().count(), 13);
+        assert_eq!(member_menu_item_ids().count(), 14);
     }
 
     #[test]
@@ -971,7 +991,13 @@ mod tests {
                 .collect::<Vec<_>>();
             member_menu_item_ids()
                 .filter(|id| {
-                    member_menu_item_enabled(*id, member, Some(&ignored), Some("@me:example"))
+                    member_menu_item_enabled(
+                        *id,
+                        member,
+                        Some(&ignored),
+                        Some("@me:example"),
+                        false,
+                    )
                 })
                 .collect::<Vec<_>>()
         };
@@ -1031,13 +1057,29 @@ mod tests {
             MENU_ID_MEMBER_IGNORE,
             &plain,
             None,
-            Some("@me:example")
+            Some("@me:example"),
+            false
         ));
         assert!(!member_menu_item_enabled(
             MENU_ID_MEMBER_UNIGNORE,
             &plain,
             None,
-            Some("@me:example")
+            Some("@me:example"),
+            false
         ));
+
+        // Accept Identity applies exactly while a warning stands.
+        for warning in [false, true] {
+            assert_eq!(
+                member_menu_item_enabled(
+                    MENU_ID_MEMBER_ACCEPT_IDENTITY,
+                    &plain,
+                    Some(&[]),
+                    Some("@me:example"),
+                    warning
+                ),
+                warning
+            );
+        }
     }
 }

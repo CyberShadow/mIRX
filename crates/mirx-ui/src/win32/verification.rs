@@ -13,7 +13,7 @@ pub(super) fn apply_verification_event(state: &mut WindowState, event: Verificat
 /// A new flow, in or out, replaces the current one: the UI follows one
 /// verification at a time.
 pub(super) fn apply_verification_request(state: &mut WindowState, request: VerificationRequest) {
-    let lines = status_log::verification_request(&request, state.model.own_user_id.as_deref());
+    let lines = status_log::verification_request(&request, state.model.own_user_id());
     for line in lines {
         log_status(state, StatusLineKind::Info, line);
     }

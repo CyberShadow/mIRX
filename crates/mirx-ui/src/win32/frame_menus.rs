@@ -378,7 +378,7 @@ fn selected_message_editable(state: &WindowState, selected_event_id: Option<&str
     selected_event_id
         .and_then(|event_id| window_message(&state.model, &state.active_view, event_id))
         .is_some_and(|activity| {
-            replies::editable_message(activity, state.model.own_user_id.as_deref()).is_ok()
+            replies::editable_message(activity, state.model.own_user_id()).is_ok()
         })
 }
 
@@ -760,6 +760,7 @@ unsafe fn menu_command_result(
         MENU_ID_MEMBER_WHOIS
         | MENU_ID_MEMBER_DEVICES
         | MENU_ID_MEMBER_VERIFY
+        | MENU_ID_MEMBER_ACCEPT_IDENTITY
         | MENU_ID_MEMBER_IGNORE
         | MENU_ID_MEMBER_UNIGNORE
         | MENU_ID_MEMBER_OP
@@ -810,6 +811,10 @@ unsafe fn menu_command_result(
         MENU_ID_SETUP_E2EE_RECOVERY => (
             "Tools",
             show_setup_e2ee_menu_dialog(hwnd).map(|handled| handled.then_some(())),
+        ),
+        MENU_ID_RESET_E2EE => (
+            "Tools",
+            show_reset_e2ee_menu_dialog(hwnd).map(|handled| handled.then_some(())),
         ),
         MENU_ID_VERIFY_THIS_SESSION => (
             "Tools",
@@ -917,6 +922,7 @@ pub(super) fn dialog_gesture(dialog: AutomationDialog) -> DialogGesture {
         AutomationDialog::SetupE2eeRecovery => {
             DialogGesture::MenuCommand(MENU_ID_SETUP_E2EE_RECOVERY)
         }
+        AutomationDialog::ResetE2ee => DialogGesture::MenuCommand(MENU_ID_RESET_E2EE),
         AutomationDialog::CloseActiveView => DialogGesture::CloseActiveView,
     }
 }
@@ -979,6 +985,7 @@ pub(super) fn context_menu_command_id(command: &ContextMenuCommand) -> Option<us
         ContextMenuCommand::WhoisMember => MENU_ID_MEMBER_WHOIS,
         ContextMenuCommand::DevicesMember => MENU_ID_MEMBER_DEVICES,
         ContextMenuCommand::VerifyMember => MENU_ID_MEMBER_VERIFY,
+        ContextMenuCommand::AcceptIdentityMember => MENU_ID_MEMBER_ACCEPT_IDENTITY,
         ContextMenuCommand::QueryMember => MENU_ID_MEMBER_QUERY,
         ContextMenuCommand::MentionMember => MENU_ID_MEMBER_MENTION,
         ContextMenuCommand::IgnoreMember => MENU_ID_MEMBER_IGNORE,
@@ -1280,6 +1287,21 @@ pub(super) unsafe fn show_recover_e2ee_menu_dialog(hwnd: HWND) -> Result<bool, S
     Ok(true)
 }
 
+/// The dialog asks for what the session's sign-in confirms a reset with:
+/// the account password, or nothing for a browser approval.
+pub(super) unsafe fn show_reset_e2ee_menu_dialog(hwnd: HWND) -> Result<bool, String> {
+    let auth = match &state_ref(hwnd).model.own_account {
+        Some(account) => account.auth.clone(),
+        None => return Err("not connected to server".to_owned()),
+    };
+    let Some(form) = show_reset_e2ee_dialog(hwnd, &auth)? else {
+        return Ok(false);
+    };
+    submit_identity_reset(state_mut(hwnd), form.password)?;
+    refresh_status_bar(hwnd)?;
+    Ok(true)
+}
+
 unsafe fn show_setup_e2ee_menu_dialog(hwnd: HWND) -> Result<bool, String> {
     let Some(form) = show_setup_e2ee_dialog(hwnd)? else {
         return Ok(false);
@@ -1320,6 +1342,10 @@ mod tests {
             (
                 AutomationDialog::SetupE2eeRecovery,
                 DialogGesture::MenuCommand(MENU_ID_SETUP_E2EE_RECOVERY),
+            ),
+            (
+                AutomationDialog::ResetE2ee,
+                DialogGesture::MenuCommand(MENU_ID_RESET_E2EE),
             ),
             (
                 AutomationDialog::CloseActiveView,

@@ -758,7 +758,7 @@ mod cli {
             "  <node> is a treebar item: space:<room_id> for a space folder, or a view identity",
             "  <arrangement> is cascade, tile_horizontal, tile_vertical, or arrange_icons",
             "  <state> is maximized, normal, or minimized",
-            "  <dialog> is options, colors, select_server, about, commands_join, recover_e2ee, setup_e2ee_recovery, or close_active_view; it must be the last action",
+            "  <dialog> is options, colors, select_server, about, commands_join, recover_e2ee, setup_e2ee_recovery, reset_e2ee, or close_active_view; it must be the last action",
             "  <options page> is an Options tree path such as IRC/Messages",
             "  <point> is <line>,<offset>: a byte offset into the text of a visible line of the active timeline, from 0; the drag is not released, and it must be the last action",
             "  --expect-active-find-history <local_only|loading|exhausted|failed>",
