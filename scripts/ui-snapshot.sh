@@ -25,7 +25,7 @@ dpi144_prefix=
 # --expect-dpi 144.
 dpi144_cases=(multi-room image-message-loaded room-list-listing compose-color-index
   dialog-options-display dialog-colors dialog-sign-out-session dialog-export-room-keys
-  toolbar-connected)
+  toolbar-connected line-marker)
 
 die() {
   echo "ui-snapshot: $*" >&2
@@ -1254,6 +1254,24 @@ configure_case_expectations() {
         --expect-no-switchbar-activity 'status'
       )
       expect_switchbar_active='room:!replies:example'
+      ;;
+    line-marker)
+      # The read marker names Carol's reacted line: the rule sits below its
+      # reactions, above Dave's line; the echo line goes last.
+      expect_selected='!marker:example'
+      expect_active_view='room:!marker:example'
+      ordered_actions=('input:/reply $marker-question')
+      room_expect_args=(
+        --expect-room '!marker:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!marker:example::    > <Alice> are we deploying today?'
+        --expect-room-view '!marker:example::<Carol> the build is green on every platform'
+        --expect-room-view '!marker:example::reactions: +1 Alice, Dave'
+        --expect-room-view '!marker:example::<Dave> I will tag the release'
+        --expect-room-view '!marker:example::* Replying to <Alice> are we deploying today? (Esc cancels)'
+      )
+      expect_switchbar_active='room:!marker:example'
       ;;
     redactions)
       expect_selected='!redactions:example'

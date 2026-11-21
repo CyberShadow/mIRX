@@ -1,0 +1,267 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!marker:example",
+        "display_name": "Line Marker",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!marker:example",
+      "members": [
+        {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@dave:example",
+          "display_name": "Dave",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        }
+      ]
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!marker:example",
+      "activity_id": "event:$marker-question",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$marker-question",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "are we deploying today?",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!marker:example",
+      "activity_id": "event:$marker-answer",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "relation": {
+        "type": "reply",
+        "in_reply_to_event_id": "$marker-question"
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$marker-answer",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "yes, after lunch",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!marker:example",
+      "activity_id": "event:$marker-green",
+      "timestamp_ms": 1700000120000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$marker-green",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "the build is green on every platform",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!marker:example",
+      "target": {
+        "type": "event",
+        "event_id": "$marker-green"
+      },
+      "kind": {
+        "type": "reaction_added",
+        "reaction_event_id": "$marker-plus-one-a",
+        "sender": "@alice:example",
+        "timestamp_ms": 1700000150000,
+        "key": "+1"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!marker:example",
+      "target": {
+        "type": "event",
+        "event_id": "$marker-green"
+      },
+      "kind": {
+        "type": "reaction_added",
+        "reaction_event_id": "$marker-plus-one-b",
+        "sender": "@dave:example",
+        "timestamp_ms": 1700000210000,
+        "key": "+1"
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!marker:example",
+      "activity_id": "event:$marker-tag",
+      "timestamp_ms": 1700000240000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$marker-tag",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@dave:example",
+          "display_name": "Dave",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "I will tag the release",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!marker:example",
+      "activity_id": "event:$marker-notes",
+      "timestamp_ms": 1700000300000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$marker-notes",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "release notes are in the wiki",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!marker:example",
+      "activity_id": "event:$marker-thanks",
+      "timestamp_ms": 1700000360000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$marker-thanks",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "thanks, reading them now",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomReadState": {
+      "room_id": "!marker:example",
+      "latest_active_event_id": "$marker-thanks",
+      "fully_read_event_id": "$marker-green",
+      "marked_unread": false,
+      "num_unread": 3,
+      "num_notifications": 3,
+      "num_mentions": 0
+    }
+  }
+]
