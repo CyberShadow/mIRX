@@ -361,11 +361,18 @@ unsafe fn gdi_covered_chars(hdc: HDC, metrics: &TEXTMETRICW) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::super::TextFont;
+    use super::super::dpi::Dpi;
     use super::super::settings::FontSetting;
     use super::*;
 
     fn text_font(face: &str, points: u8) -> TextFont {
-        unsafe { TextFont::create(&FontSetting::new(face, points, false).unwrap()).unwrap() }
+        unsafe {
+            TextFont::create(
+                &FontSetting::new(face, points, false).unwrap(),
+                Dpi::STANDARD,
+            )
+            .unwrap()
+        }
     }
 
     fn faces(glyphs: &GlyphFonts) -> Vec<&str> {

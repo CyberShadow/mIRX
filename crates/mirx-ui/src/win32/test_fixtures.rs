@@ -839,7 +839,7 @@ pub(super) fn test_state() -> WindowState {
         clock: UiClock::Fixed(RENDER_STATE_CLOCK_MS),
         settings: SettingsStore::in_memory(),
         local_time: timestamp::utc_local_time,
-        text_font: unsafe { TextFont::create(&FontSetting::default()).unwrap() },
+        text_font: unsafe { TextFont::create(&FontSetting::default(), Dpi::STANDARD).unwrap() },
         scheme_brushes: unsafe { SchemeBrushes::create(&Default::default()) },
         exit_code: Arc::new(AtomicI32::new(0)),
         event_generation: 0,

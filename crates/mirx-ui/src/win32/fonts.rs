@@ -23,23 +23,15 @@ pub(super) struct TextFont {
     pub(super) edit_height: i32,
 }
 
-/// Text height plus room around it inside an editbox's client area.
+/// Text height plus room around it inside an editbox's client area, at 96
+/// dpi.
 const EDIT_TEXT_MARGIN: i32 = 4;
 
-/// The screen's vertical dots per inch, which points convert with.
-unsafe fn screen_dpi() -> i32 {
-    let screen = GetDC(null_mut());
-    assert!(!screen.is_null(), "GetDC must succeed for the screen");
-    let dpi = GetDeviceCaps(screen, LOGPIXELSY as i32);
-    ReleaseDC(null_mut(), screen);
-    dpi
-}
-
-unsafe fn font_setting_logfont(setting: &FontSetting) -> LOGFONTW {
+fn font_setting_logfont(setting: &FontSetting, dpi: Dpi) -> LOGFONTW {
     let face = setting.face().encode_utf16().collect::<Vec<_>>();
     let mut logfont = LOGFONTW {
         // Negative: the character height, as points are measured.
-        lfHeight: -((i32::from(setting.points()) * screen_dpi() + 36) / 72),
+        lfHeight: -dpi.points_to_px(i32::from(setting.points())),
         lfWeight: if setting.bold() { FW_BOLD } else { FW_NORMAL } as i32,
         lfCharSet: DEFAULT_CHARSET,
         ..LOGFONTW::default()
@@ -53,8 +45,9 @@ unsafe fn font_setting_logfont(setting: &FontSetting) -> LOGFONTW {
 }
 
 impl TextFont {
-    pub(super) unsafe fn create(setting: &FontSetting) -> Result<Self, String> {
-        let font = CreateFontIndirectW(&font_setting_logfont(setting));
+    /// The font of `setting` for windows laid out at `dpi`.
+    pub(super) unsafe fn create(setting: &FontSetting, dpi: Dpi) -> Result<Self, String> {
+        let font = CreateFontIndirectW(&font_setting_logfont(setting, dpi));
         if font.is_null() {
             return Err(last_os_error("CreateFontIndirectW"));
         }
@@ -64,7 +57,7 @@ impl TextFont {
             left: 0,
             top: 0,
             right: 0,
-            bottom: glyphs.metrics().tmHeight + EDIT_TEXT_MARGIN,
+            bottom: glyphs.metrics().tmHeight + dpi.px(EDIT_TEXT_MARGIN),
         };
         if AdjustWindowRectEx(&mut edit_rect, COMPOSE_EDIT_STYLE, 0, COMPOSE_EDIT_EX_STYLE) == 0 {
             return Err(last_os_error("AdjustWindowRectEx editbox"));
@@ -152,7 +145,7 @@ pub(super) unsafe fn apply_font_setting(
     hwnd: HWND,
     setting: FontSetting,
 ) -> Result<String, String> {
-    let text_font = TextFont::create(&setting)?;
+    let text_font = TextFont::create(&setting, Dpi::of_window(hwnd))?;
     let status = format!("font: {}", setting.label());
     state_mut(hwnd)
         .settings
@@ -175,7 +168,10 @@ pub(super) unsafe fn apply_font_setting(
 /// The standard font dialog, starting at the current font; `None` when
 /// cancelled.
 unsafe fn choose_text_font(hwnd: HWND) -> Result<Option<FontSetting>, String> {
-    let mut logfont = font_setting_logfont(&state_ref(hwnd).settings.settings().text_font);
+    let mut logfont = font_setting_logfont(
+        &state_ref(hwnd).settings.settings().text_font,
+        Dpi::of_window(hwnd),
+    );
     let mut choose = CHOOSEFONTW {
         lStructSize: size_of::<CHOOSEFONTW>() as u32,
         hwndOwner: hwnd,

@@ -52,9 +52,9 @@ use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, ClientToScreen,
     CreateFontIndirectW, CreateSolidBrush, DEFAULT_CHARSET, DT_CENTER, DT_END_ELLIPSIS,
     DT_SINGLELINE, DeleteObject, DrawFocusRect, EndPaint, FW_BOLD, FW_NORMAL, FillRect, FrameRect,
-    GetDC, GetDeviceCaps, GetSysColor, GetSysColorBrush, GetTextFaceW, GetTextMetricsW, HBRUSH,
-    HFONT, InvalidateRect, LOGFONTW, LOGPIXELSY, MapWindowPoints, PAINTSTRUCT, ReleaseDC,
-    ScreenToClient, SelectObject, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
+    GetDC, GetSysColor, GetSysColorBrush, GetTextFaceW, GetTextMetricsW, HBRUSH, HFONT,
+    InvalidateRect, LOGFONTW, MapWindowPoints, PAINTSTRUCT, ReleaseDC, ScreenToClient,
+    SelectObject, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
     GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectI,
@@ -141,6 +141,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use self::app_icon::{IconSize, app_icon};
+use self::dpi::Dpi;
 use self::glyph_fonts::GlyphFonts;
 use crate::{
     AppCommand, FrameSize, HELP, RunOptions,
@@ -199,6 +200,7 @@ mod connection;
 mod core_events;
 mod crash;
 mod dialogs;
+mod dpi;
 mod echo;
 mod errors;
 mod find;
@@ -949,7 +951,8 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     let event_queue = Arc::new(Mutex::new(VecDeque::new()));
     let (gdiplus_session, gdiplus_startup_error) = initialize_gdiplus_state();
     let settings = load_settings(render_state_mode)?;
-    let text_font = unsafe { TextFont::create(&settings.settings().text_font)? };
+    // The frame does not exist yet; it will be laid out at the system DPI.
+    let text_font = unsafe { TextFont::create(&settings.settings().text_font, Dpi::system())? };
     let scheme_brushes = unsafe { SchemeBrushes::create(&settings.settings().colors) };
 
     let state = Box::new(WindowState {
