@@ -758,6 +758,7 @@ unsafe fn menu_command_result(
         MENU_ID_MEMBER_QUERY => ("Member", query_selected_member(hwnd).map(|_| Some(()))),
         MENU_ID_MEMBER_MENTION => ("Member", mention_selected_member(hwnd).map(|_| Some(()))),
         MENU_ID_MEMBER_WHOIS
+        | MENU_ID_MEMBER_VERIFY
         | MENU_ID_MEMBER_IGNORE
         | MENU_ID_MEMBER_UNIGNORE
         | MENU_ID_MEMBER_OP
@@ -808,6 +809,17 @@ unsafe fn menu_command_result(
         MENU_ID_SETUP_E2EE_RECOVERY => (
             "Tools",
             show_setup_e2ee_menu_dialog(hwnd).map(|handled| handled.then_some(())),
+        ),
+        MENU_ID_VERIFY_THIS_SESSION => (
+            "Tools",
+            run_local_command(
+                hwnd,
+                SlashCommand::VerifyStart {
+                    target: None,
+                    device_id: None,
+                },
+            )
+            .map(|_| Some(())),
         ),
         MENU_ID_VERIFY_ACCEPT => (
             "Tools",
@@ -960,6 +972,7 @@ pub(super) fn context_menu_command_id(command: &ContextMenuCommand) -> Option<us
         ContextMenuCommand::RedactMessage => MENU_ID_MESSAGE_REDACT,
         ContextMenuCommand::SaveAttachment => MENU_ID_MESSAGE_SAVE_ATTACHMENT,
         ContextMenuCommand::WhoisMember => MENU_ID_MEMBER_WHOIS,
+        ContextMenuCommand::VerifyMember => MENU_ID_MEMBER_VERIFY,
         ContextMenuCommand::QueryMember => MENU_ID_MEMBER_QUERY,
         ContextMenuCommand::MentionMember => MENU_ID_MEMBER_MENTION,
         ContextMenuCommand::IgnoreMember => MENU_ID_MEMBER_IGNORE,

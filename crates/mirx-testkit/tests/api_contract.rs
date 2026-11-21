@@ -76,6 +76,7 @@ fn context_menu_command_serializes_to_strict_shape() {
     );
     for (command, wire) in [
         (ContextMenuCommand::WhoisMember, "\"whois_member\""),
+        (ContextMenuCommand::VerifyMember, "\"verify_member\""),
         (ContextMenuCommand::IgnoreMember, "\"ignore_member\""),
         (ContextMenuCommand::UnignoreMember, "\"unignore_member\""),
         (ContextMenuCommand::OpMember, "\"op_member\""),
@@ -535,6 +536,7 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
     );
     let member = MemberMenuState {
         whois_enabled: true,
+        verify_enabled: true,
         query_enabled: true,
         mention_enabled: true,
         ignore_enabled: true,
@@ -573,8 +575,8 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
         }))
         .is_err()
     );
-    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"whois_enabled": true, "query_enabled": true, "mention_enabled": true, "ignore_enabled": true, "unignore_enabled": false, "op_enabled": true, "deop_enabled": false, "voice_enabled": true, "devoice_enabled": false, "kick_enabled": true, "ban_enabled": false, "selected_user_id": null, "selected_label": null, "unexpected": true})).is_err());
-    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"whois_enabled": true, "query_enabled": true, "mention_enabled": true, "ignore_enabled": true, "unignore_enabled": false, "op_enabled": true, "deop_enabled": false, "voice_enabled": true, "devoice_enabled": false, "ban_enabled": false, "selected_user_id": null, "selected_label": null})).is_err());
+    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"whois_enabled": true, "verify_enabled": true, "query_enabled": true, "mention_enabled": true, "ignore_enabled": true, "unignore_enabled": false, "op_enabled": true, "deop_enabled": false, "voice_enabled": true, "devoice_enabled": false, "kick_enabled": true, "ban_enabled": false, "selected_user_id": null, "selected_label": null, "unexpected": true})).is_err());
+    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"whois_enabled": true, "verify_enabled": true, "query_enabled": true, "mention_enabled": true, "ignore_enabled": true, "unignore_enabled": false, "op_enabled": true, "deop_enabled": false, "voice_enabled": true, "devoice_enabled": false, "ban_enabled": false, "selected_user_id": null, "selected_label": null})).is_err());
 }
 
 #[test]
@@ -704,6 +706,7 @@ fn data_models_round_trip_through_json() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_verification_requests: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
         submitted_room_list_requests: Vec::new(),
@@ -4428,6 +4431,7 @@ fn model_last_activity_round_trips_through_json() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_verification_requests: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
         submitted_room_list_requests: Vec::new(),
@@ -4508,6 +4512,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_verification_requests: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
         submitted_room_list_requests: Vec::new(),
@@ -4740,6 +4745,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_verification_requests: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
         submitted_room_list_requests: Vec::new(),
@@ -4840,6 +4846,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_verification_requests: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
         submitted_room_list_requests: Vec::new(),
@@ -4948,6 +4955,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_verification_requests: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
         submitted_room_list_requests: Vec::new(),
@@ -5045,6 +5053,7 @@ fn model_submitted_message_commands_round_trip_with_their_styles() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_verification_requests: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
         submitted_room_list_requests: Vec::new(),
@@ -5129,6 +5138,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_verification_requests: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
         submitted_room_list_requests: Vec::new(),
@@ -5227,6 +5237,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_verification_requests: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
         submitted_room_list_requests: Vec::new(),
@@ -5326,6 +5337,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
         }],
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_verification_requests: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
         submitted_room_list_requests: Vec::new(),
@@ -5473,6 +5485,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
             }],
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_verification_requests: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -5564,6 +5577,7 @@ fn model_submitted_history_commands_round_trip_through_json() {
             },
         ],
         submitted_verification_actions: Vec::new(),
+        submitted_verification_requests: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
         submitted_room_list_requests: Vec::new(),
@@ -5674,6 +5688,7 @@ fn model_submitted_history_commands_default_to_empty_when_omitted() {
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_verification_requests: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),

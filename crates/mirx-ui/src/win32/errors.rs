@@ -47,6 +47,7 @@ pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> 
             command: "unignore",
         },
         Operation::FetchUserProfile => ErrorDestination::ActiveWindow { command: "whois" },
+        Operation::RequestVerification => ErrorDestination::ActiveWindow { command: "verify" },
         Operation::Login
         | Operation::RestoreSession
         | Operation::SessionUpdate
@@ -175,6 +176,7 @@ mod tests {
             (Operation::IgnoreUser, "ignore"),
             (Operation::UnignoreUser, "unignore"),
             (Operation::FetchUserProfile, "whois"),
+            (Operation::RequestVerification, "verify"),
         ] {
             assert_eq!(
                 error_destination(&error(operation, None)),

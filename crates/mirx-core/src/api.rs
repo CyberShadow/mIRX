@@ -63,6 +63,10 @@ pub enum Command {
     RefreshE2eeStatus,
     SetupE2eeRecovery(SetupE2eeRecoveryRequest),
     RecoverE2ee(RecoverE2eeRequest),
+    /// Starts a verification, answered by `Event::VerificationRequest` with
+    /// `VerificationDirection::Outgoing`, then `VerificationState` events.
+    /// See `RequestVerificationRequest`.
+    RequestVerification(RequestVerificationRequest),
     AcceptVerification(VerificationFlowId),
     CancelVerification(VerificationFlowId),
     ConfirmVerificationSas(VerificationFlowId),
@@ -1513,6 +1517,17 @@ pub enum VerificationDirection {
     Outgoing { to_device: Option<String> },
 }
 
+/// Whom a verification asks. A device: that device, to-device. No device
+/// and the own user: your other cross-signed sessions, to-device. No device
+/// and another user: their cross-signing identity, in your DM with them,
+/// which the SDK creates if there is none.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestVerificationRequest {
+    pub user_id: String,
+    pub device_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VerificationFlowId {
@@ -1740,7 +1755,9 @@ pub enum Operation {
     E2eeStatus,
     SetupE2eeRecovery,
     RecoverE2ee,
+    /// Answering a verification: accept, cancel, confirm or reject.
     Verification,
+    RequestVerification,
     Logout,
     Shutdown,
 }

@@ -63,6 +63,9 @@ pub(super) const MENU_ID_MEMBER_VOICE: usize = 40047;
 pub(super) const MENU_ID_MEMBER_DEVOICE: usize = 40048;
 /// Colors..., which Alt+K sends, as in mIRC.
 pub(super) const MENU_ID_TOOLS_COLORS: usize = 40049;
+/// Verify This Session, which runs `/verify`.
+pub(super) const MENU_ID_VERIFY_THIS_SESSION: usize = 40050;
+pub(super) const MENU_ID_MEMBER_VERIFY: usize = 40053;
 /// The window keys' command ids: accelerators with no menu item, in the
 /// gap below the Commands menu's. Alt+n sends `ACCEL_ID_WINDOW_FIRST + n - 1`.
 pub(super) const ACCEL_ID_WINDOW_FIRST: usize = 40080;
@@ -196,6 +199,10 @@ pub(super) const TOOLS_MENU: &[MenuEntry] = &[
     Item {
         id: MENU_ID_RECOVER_E2EE,
         label: "Recover &E2EE...",
+    },
+    Item {
+        id: MENU_ID_VERIFY_THIS_SESSION,
+        label: "&Verify This Session",
     },
     Separator,
     Item {
@@ -397,6 +404,10 @@ pub(super) const MEMBER_MENU: &[MenuEntry] = &[
         label: "Whois",
     },
     Item {
+        id: MENU_ID_MEMBER_VERIFY,
+        label: "Verify",
+    },
+    Item {
         id: MENU_ID_MEMBER_QUERY,
         label: "Query User",
     },
@@ -458,6 +469,10 @@ pub(super) fn member_menu_command(id: usize, user_id: &str) -> Option<SlashComma
     match id {
         MENU_ID_MEMBER_QUERY | MENU_ID_MEMBER_MENTION => None,
         MENU_ID_MEMBER_WHOIS => Some(SlashCommand::Whois { nick: nick.clone() }),
+        MENU_ID_MEMBER_VERIFY => Some(SlashCommand::VerifyStart {
+            target: Some(nick.clone()),
+            device_id: None,
+        }),
         MENU_ID_MEMBER_IGNORE => Some(SlashCommand::Ignore {
             target: Some(nick.clone()),
         }),
@@ -491,7 +506,10 @@ pub(super) fn member_menu_item_enabled(
 ) -> bool {
     let no_nick = |_: &str| None;
     match id {
-        MENU_ID_MEMBER_WHOIS | MENU_ID_MEMBER_QUERY | MENU_ID_MEMBER_MENTION => true,
+        MENU_ID_MEMBER_WHOIS
+        | MENU_ID_MEMBER_VERIFY
+        | MENU_ID_MEMBER_QUERY
+        | MENU_ID_MEMBER_MENTION => true,
         MENU_ID_MEMBER_IGNORE => {
             check_ignore(ignored_users, own_user_id, &member.user_id, no_nick).is_ok()
         }
@@ -859,6 +877,13 @@ mod tests {
                 Some(SlashCommand::Whois { nick: nick() }),
             ),
             (
+                MENU_ID_MEMBER_VERIFY,
+                Some(SlashCommand::VerifyStart {
+                    target: Some(nick()),
+                    device_id: None,
+                }),
+            ),
+            (
                 MENU_ID_MEMBER_IGNORE,
                 Some(SlashCommand::Ignore {
                     target: Some(nick()),
@@ -913,7 +938,7 @@ mod tests {
         ] {
             assert_eq!(member_menu_command(id, user_id), command, "{id}");
         }
-        assert_eq!(member_menu_item_ids().count(), 11);
+        assert_eq!(member_menu_item_ids().count(), 12);
     }
 
     #[test]
@@ -931,6 +956,7 @@ mod tests {
         };
         let always = [
             MENU_ID_MEMBER_WHOIS,
+            MENU_ID_MEMBER_VERIFY,
             MENU_ID_MEMBER_QUERY,
             MENU_ID_MEMBER_MENTION,
         ];

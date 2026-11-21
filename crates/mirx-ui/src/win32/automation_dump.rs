@@ -20,6 +20,7 @@ pub(super) unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenu
     let state = active_member_action_state(hwnd);
     Ok(DumpMemberMenuState {
         whois_enabled: state.enabled(MENU_ID_MEMBER_WHOIS),
+        verify_enabled: state.enabled(MENU_ID_MEMBER_VERIFY),
         query_enabled: state.enabled(MENU_ID_MEMBER_QUERY),
         mention_enabled: state.enabled(MENU_ID_MEMBER_MENTION),
         ignore_enabled: state.enabled(MENU_ID_MEMBER_IGNORE),
@@ -1084,6 +1085,22 @@ fn submitted_verification_actions_from_state(
         .collect()
 }
 
+fn submitted_verification_requests_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedVerificationRequest> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(|command| match command {
+            Command::RequestVerification(request) => Some(DumpSubmittedVerificationRequest {
+                user_id: request.user_id.clone(),
+                device_id: request.device_id.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 fn dump_submitted_recovery_command(command: &Command) -> Option<DumpSubmittedRecoveryCommand> {
     match command {
         Command::RecoverE2ee(_) => Some(DumpSubmittedRecoveryCommand {
@@ -1156,6 +1173,7 @@ pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_redaction_commands: submitted_redaction_commands_from_state(state),
         submitted_history_commands: submitted_history_commands_from_state(state),
         submitted_verification_actions: submitted_verification_actions_from_state(state),
+        submitted_verification_requests: submitted_verification_requests_from_state(state),
         submitted_recovery_commands: submitted_recovery_commands_from_state(state),
         submitted_setup_recovery_commands: submitted_setup_recovery_commands_from_state(state),
         submitted_room_list_requests: submitted_room_list_requests_from_state(state),

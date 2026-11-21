@@ -123,16 +123,17 @@ use crate::api::{
     FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, InviteRoomMemberRequest,
     JoinRoomRequest, KickRoomMemberRequest, ListPublicRoomsRequest, MarkRoomReadRequest,
     MemberPowerRole, Operation, PublicRoom, PublicRoomsPage, PublicRoomsResult,
-    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest, RoomActivity,
-    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
-    RoomEncryptedFileKey, RoomEventFetch, RoomEventFetchResult, RoomFileActivity, RoomFileInfo,
-    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
-    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
-    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
-    RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
+    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
+    RequestVerificationRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
+    RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomEventFetch,
+    RoomEventFetchResult, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
+    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat,
+    RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank, RoomMemberSummary,
+    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomNotificationMode, RoomPowerLevelUserChange,
+    RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
     RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
     SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
@@ -2905,6 +2906,100 @@ pub(crate) async fn lookup_sas_verification(
         })
 }
 
+/// Starts the verification `request` names (see
+/// `RequestVerificationRequest`), offering SAS only: mirx cannot show a QR
+/// code. Returns the announcement and the SDK's flow, which the caller
+/// watches for the other side's answer.
+pub(crate) async fn request_verification(
+    client: &Client,
+    request: &RequestVerificationRequest,
+) -> Result<(VerificationRequest, MatrixVerificationRequest), MatrixCoreError> {
+    let user_id = parse_verification_user_id(&request.user_id)?;
+    let own_user_id = client.user_id().expect("verification runs signed in");
+    let encryption = client.encryption();
+    let methods = vec![VerificationMethod::SasV1];
+    let failed =
+        |err: &dyn Display| MatrixCoreError::new(format!("failed to request verification: {err}"));
+
+    let flow = match request.device_id.as_deref() {
+        Some(device_id) => {
+            let device_id = <&DeviceId>::from(device_id);
+            if user_id == own_user_id && Some(device_id) == client.device_id() {
+                return Err(MatrixCoreError::new(format!("{device_id} is this session")));
+            }
+            // `/keys/query` first: the store may not know the user's
+            // devices, or know them as they were.
+            encryption
+                .request_user_identity(&user_id)
+                .await
+                .map_err(|err| failed(&err))?;
+            let device = encryption
+                .get_device(&user_id, device_id)
+                .await
+                .map_err(|err| failed(&err))?
+                .ok_or_else(|| {
+                    MatrixCoreError::new(format!("{user_id} has no device {device_id}"))
+                })?;
+            device
+                .request_verification_with_methods(methods)
+                .await
+                .map_err(|err| failed(&err))?
+        }
+        None if user_id == own_user_id => {
+            let identity = encryption
+                .get_user_identity(&user_id)
+                .await
+                .map_err(|err| failed(&err))?
+                .ok_or_else(|| {
+                    MatrixCoreError::new(
+                        "cross-signing is not set up for your account; use /e2ee setup",
+                    )
+                })?;
+            // The SDK asks only the sessions your identity signed.
+            let this_device = client.device_id().expect("verification runs signed in");
+            let devices = encryption
+                .get_user_devices(&user_id)
+                .await
+                .map_err(|err| failed(&err))?;
+            if !devices.devices().any(|device| {
+                device.device_id() != this_device && device.is_cross_signed_by_owner()
+            }) {
+                return Err(MatrixCoreError::new(
+                    "none of your other sessions is verified; use /e2ee recover with your recovery key",
+                ));
+            }
+            identity
+                .request_verification_with_methods(methods)
+                .await
+                .map_err(|err| failed(&err))?
+        }
+        None => {
+            let identity = encryption
+                .request_user_identity(&user_id)
+                .await
+                .map_err(|err| failed(&err))?
+                .ok_or_else(|| {
+                    MatrixCoreError::new(format!(
+                        "{user_id} has not set up cross-signing; verify one of their devices: /verify {user_id} <device>"
+                    ))
+                })?;
+            identity
+                .request_verification_with_methods(methods)
+                .await
+                .map_err(|err| failed(&err))?
+        }
+    };
+
+    let announcement = VerificationRequest {
+        flow_id: flow.flow_id().to_owned(),
+        user_id: flow.other_user_id().to_string(),
+        direction: VerificationDirection::Outgoing {
+            to_device: request.device_id.clone(),
+        },
+    };
+    Ok((announcement, flow))
+}
+
 pub(crate) async fn accept_verification(
     client: &Client,
     flow: &VerificationFlowId,
@@ -2983,13 +3078,19 @@ pub(crate) async fn reject_verification_sas(
     cancelled_sas_state_event(flow, &sas)
 }
 
+/// Follows a request's flow until it ends. Either side may start SAS once
+/// both are ready: this session starts it on Ready, and accepts one the
+/// other side started; the SDK settles a start race, replacing one SAS by
+/// the other.
 pub(crate) async fn watch_verification_request(
     request: MatrixVerificationRequest,
     flow: VerificationFlowId,
     events: EventSender,
 ) {
+    let mut state = request.state();
+    let mut changes = request.changes();
     // `Event::VerificationRequest` announced the flow, as requested or sent.
-    if let Some(event) = map_request_state(&flow, request.state())
+    if let Some(event) = map_request_state(&flow, state.clone())
         && !matches!(
             event.state,
             VerificationState::Requested | VerificationState::Sent
@@ -2998,18 +3099,89 @@ pub(crate) async fn watch_verification_request(
         emit_event(&events, Event::VerificationState(event));
     }
 
-    if hand_off_request_state(&request, &flow, &events, request.state()).await {
-        return;
-    }
-
-    let mut changes = request.changes();
-    while let Some(state) = changes.next().await {
-        if let Some(event) = map_request_state(&flow, state.clone()) {
-            emit_event(&events, Event::VerificationState(event));
+    loop {
+        match state {
+            VerificationRequestState::Created { .. }
+            | VerificationRequestState::Requested { .. } => {}
+            // The request moves on to Transitioned, which follows.
+            VerificationRequestState::Ready { .. } => {
+                if let Err(err) = request.start_sas().await {
+                    emit_verification_error(
+                        &events,
+                        format!("failed to start SAS verification: {err}"),
+                    );
+                    return;
+                }
+            }
+            VerificationRequestState::Transitioned { verification } => {
+                // Only SAS is offered, so the other side cannot start another
+                // method.
+                let Some(sas) = verification.sas() else {
+                    emit_verification_error(
+                        &events,
+                        "the other side started a verification method other than SAS".to_owned(),
+                    );
+                    return;
+                };
+                let Some(replaced) = follow_sas(&sas, &flow, &events, &mut changes).await else {
+                    return;
+                };
+                state = replaced;
+                continue;
+            }
+            VerificationRequestState::Done | VerificationRequestState::Cancelled(_) => return,
         }
 
-        if hand_off_request_state(&request, &flow, &events, state).await {
+        let Some(next) = changes.next().await else {
             return;
+        };
+        if let Some(event) = map_request_state(&flow, next.clone()) {
+            emit_event(&events, Event::VerificationState(event));
+        }
+        state = next;
+    }
+}
+
+/// Follows a SAS until it ends (`None`), or until the request transitions
+/// to another one: the other side's, which won a start race.
+async fn follow_sas(
+    sas: &MatrixSasVerification,
+    flow: &VerificationFlowId,
+    events: &EventSender,
+    request_changes: &mut (impl futures_util::Stream<Item = VerificationRequestState> + Unpin),
+) -> Option<VerificationRequestState> {
+    // The other side started it. Accepting goes on to the key exchange; the
+    // user still compares the emoji before anything is verified.
+    if matches!(sas.state(), SasState::Started { .. })
+        && let Err(err) = sas.accept().await
+    {
+        emit_verification_error(events, format!("failed to accept SAS verification: {err}"));
+        return None;
+    }
+    if let Some(event) = map_sas_verification(flow, sas)
+        && emit_verification_state(events, event)
+    {
+        return None;
+    }
+
+    let mut sas_changes = sas.changes();
+    loop {
+        tokio::select! {
+            state = sas_changes.next() => {
+                let state = state?;
+                if let Some(event) = map_sas_state(flow, state)
+                    && emit_verification_state(events, event)
+                {
+                    return None;
+                }
+            }
+            // The SAS reports how the flow ends; a new one replaces it.
+            state = request_changes.next() => {
+                let state = state?;
+                if matches!(state, VerificationRequestState::Transitioned { .. }) {
+                    return Some(state);
+                }
+            }
         }
     }
 }
@@ -3019,87 +3191,41 @@ pub(crate) async fn watch_sas_verification(
     flow: VerificationFlowId,
     events: EventSender,
 ) {
-    if let Some(event) = map_sas_verification(&flow, &sas) {
-        emit_event(&events, Event::VerificationState(event.clone()));
-        if matches!(
-            event.state,
-            VerificationState::Done | VerificationState::Cancelled { .. }
-        ) {
-            return;
-        }
+    if let Some(event) = map_sas_verification(&flow, &sas)
+        && emit_verification_state(&events, event)
+    {
+        return;
     }
 
     let mut changes = sas.changes();
     while let Some(state) = changes.next().await {
-        if let Some(event) = map_sas_state(&flow, state) {
-            let terminal = matches!(
-                event.state,
-                VerificationState::Done | VerificationState::Cancelled { .. }
-            );
-            emit_event(&events, Event::VerificationState(event));
-            if terminal {
-                return;
-            }
+        if let Some(event) = map_sas_state(&flow, state)
+            && emit_verification_state(&events, event)
+        {
+            return;
         }
     }
 }
 
-async fn hand_off_request_state(
-    request: &MatrixVerificationRequest,
-    flow: &VerificationFlowId,
-    events: &EventSender,
-    state: VerificationRequestState,
-) -> bool {
-    match state {
-        VerificationRequestState::Ready { .. } => {
-            match request.start_sas().await {
-                Ok(Some(sas)) => {
-                    if let Some(event) = map_sas_verification(flow, &sas) {
-                        emit_event(events, Event::VerificationState(event.clone()));
-                        if matches!(
-                            event.state,
-                            VerificationState::Done | VerificationState::Cancelled { .. }
-                        ) {
-                            return true;
-                        }
-                    }
-                    watch_sas_verification(sas, flow.clone(), events.clone()).await;
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    emit_event(
-                        events,
-                        Event::Error(CoreErrorEvent {
-                            operation: Operation::Verification,
-                            room_id: None,
-                            message: format!("failed to start SAS verification: {err}"),
-                        }),
-                    );
-                }
-            }
-            true
-        }
-        VerificationRequestState::Transitioned { verification } => {
-            if let Some(sas) = verification.sas() {
-                if let Some(event) = map_sas_verification(flow, &sas) {
-                    emit_event(events, Event::VerificationState(event.clone()));
-                    if matches!(
-                        event.state,
-                        VerificationState::Done | VerificationState::Cancelled { .. }
-                    ) {
-                        return true;
-                    }
-                }
-                watch_sas_verification(sas, flow.clone(), events.clone()).await;
-                return true;
-            }
-            false
-        }
-        VerificationRequestState::Done | VerificationRequestState::Cancelled(_) => true,
-        VerificationRequestState::Created { .. } | VerificationRequestState::Requested { .. } => {
-            false
-        }
-    }
+/// Emits the state; whether it ends the flow.
+fn emit_verification_state(events: &EventSender, event: VerificationStateEvent) -> bool {
+    let terminal = matches!(
+        event.state,
+        VerificationState::Done | VerificationState::Cancelled { .. }
+    );
+    emit_event(events, Event::VerificationState(event));
+    terminal
+}
+
+fn emit_verification_error(events: &EventSender, message: String) {
+    emit_event(
+        events,
+        Event::Error(CoreErrorEvent {
+            operation: Operation::Verification,
+            room_id: None,
+            message,
+        }),
+    );
 }
 
 fn cancelled_request_state_event(
@@ -13518,8 +13644,14 @@ mod tests {
     /// Verification against the SDK's mock crypto server: real
     /// `OlmMachine`s that know each other's keys, offline.
     mod verification {
-        use super::super::lookup_verification_request;
+        use matrix_sdk::ruma::{DeviceId, owned_device_id, owned_user_id};
+
+        use super::super::{
+            accept_verification, confirm_verification_sas, lookup_verification_request,
+            request_verification, watch_verification_request,
+        };
         use super::*;
+        use crate::api::{RequestVerificationRequest, VerificationStateEvent};
 
         fn block_on<F: std::future::Future>(future: F) -> F::Output {
             tokio::runtime::Builder::new_current_thread()
@@ -13696,6 +13828,494 @@ mod tests {
                     "{got:?}"
                 );
             });
+        }
+
+        fn verify(user_id: &str, device_id: Option<&str>) -> RequestVerificationRequest {
+            RequestVerificationRequest {
+                user_id: user_id.to_owned(),
+                device_id: device_id.map(str::to_owned),
+            }
+        }
+
+        /// The bodies of the `m.key.verification.request` to-device
+        /// messages the server received.
+        async fn sent_to_device_requests(server: &MatrixMockServer) -> Vec<serde_json::Value> {
+            server
+                .server()
+                .received_requests()
+                .await
+                .expect("the mock server records requests")
+                .into_iter()
+                .filter(|request| {
+                    request
+                        .url
+                        .path()
+                        .contains("/sendToDevice/m.key.verification.request/")
+                })
+                .map(|request| request.body_json().expect("to-device body"))
+                .collect()
+        }
+
+        async fn bootstrap_cross_signing(client: &Client) {
+            client
+                .encryption()
+                .bootstrap_cross_signing(None)
+                .await
+                .expect("bootstrap cross-signing");
+        }
+
+        #[test]
+        fn request_verification_own_identity_sends_to_device_request() {
+            block_on(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                server
+                    .mock_send_to_device()
+                    .expect_any_access_token()
+                    .ok()
+                    .mount()
+                    .await;
+                let alice_id = owned_user_id!("@alice:example.org");
+                let laptop = server
+                    .client_builder_for_crypto_end_to_end(&alice_id, &owned_device_id!("L4PT0P"))
+                    .build()
+                    .await;
+                bootstrap_cross_signing(&laptop).await;
+                // A new session, which the laptop's identity has not signed,
+                // asks the laptop.
+                let phone = server
+                    .set_up_new_device_for_encryption(
+                        &laptop,
+                        &owned_device_id!("PH0NE"),
+                        Vec::new(),
+                    )
+                    .await;
+
+                let (announcement, flow) =
+                    request_verification(&phone, &verify("@alice:example.org", None))
+                        .await
+                        .expect("request own verification");
+
+                assert_eq!(announcement.user_id, "@alice:example.org");
+                assert_eq!(
+                    announcement.direction,
+                    VerificationDirection::Outgoing { to_device: None }
+                );
+                assert_eq!(announcement.flow_id, flow.flow_id());
+                let sent = sent_to_device_requests(&server).await;
+                assert_eq!(sent.len(), 1, "{sent:?}");
+                let to_alice = sent[0]["messages"]["@alice:example.org"]
+                    .as_object()
+                    .expect("messages to alice");
+                assert_eq!(to_alice.keys().collect::<Vec<_>>(), vec!["L4PT0P"]);
+                let content = &to_alice["L4PT0P"];
+                assert_eq!(content["from_device"], "PH0NE");
+                assert_eq!(content["methods"], serde_json::json!(["m.sas.v1"]));
+                assert_eq!(content["transaction_id"], announcement.flow_id);
+            });
+        }
+
+        #[test]
+        fn request_verification_device_targets_that_device() {
+            block_on(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                server
+                    .mock_send_to_device()
+                    .expect_any_access_token()
+                    .ok()
+                    .mount()
+                    .await;
+                let (alice, _bob) = server.set_up_alice_and_bob_for_encryption().await;
+
+                let (announcement, _flow) =
+                    request_verification(&alice, &verify("@bob:example.org", Some("B0B0B0B0B")))
+                        .await
+                        .expect("request device verification");
+
+                assert_eq!(announcement.user_id, "@bob:example.org");
+                assert_eq!(
+                    announcement.direction,
+                    VerificationDirection::Outgoing {
+                        to_device: Some("B0B0B0B0B".to_owned())
+                    }
+                );
+                let sent = sent_to_device_requests(&server).await;
+                assert_eq!(sent.len(), 1, "{sent:?}");
+                let messages = sent[0]["messages"].as_object().expect("messages");
+                assert_eq!(
+                    messages.keys().collect::<Vec<_>>(),
+                    vec!["@bob:example.org"]
+                );
+                let to_bob = messages["@bob:example.org"].as_object().expect("to bob");
+                assert_eq!(to_bob.keys().collect::<Vec<_>>(), vec!["B0B0B0B0B"]);
+                assert_eq!(
+                    to_bob["B0B0B0B0B"]["methods"],
+                    serde_json::json!(["m.sas.v1"])
+                );
+            });
+        }
+
+        #[test]
+        fn request_verification_unknown_device_and_no_identity_errors() {
+            block_on(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                let (alice, _bob) = server.set_up_alice_and_bob_for_encryption().await;
+                let error = |request| {
+                    let alice = alice.clone();
+                    async move {
+                        request_verification(&alice, &request)
+                            .await
+                            .expect_err("the request must fail")
+                            .to_string()
+                    }
+                };
+
+                assert_eq!(
+                    error(verify("@bob:example.org", Some("NOPE"))).await,
+                    "@bob:example.org has no device NOPE"
+                );
+                assert_eq!(
+                    error(verify("@bob:example.org", None)).await,
+                    "@bob:example.org has not set up cross-signing; verify one of their devices: /verify @bob:example.org <device>"
+                );
+                assert_eq!(
+                    error(verify("@alice:example.org", None)).await,
+                    "cross-signing is not set up for your account; use /e2ee setup"
+                );
+                assert_eq!(
+                    error(verify("@alice:example.org", Some("4L1C3"))).await,
+                    "4L1C3 is this session"
+                );
+                assert_eq!(
+                    error(verify("not a user", None)).await,
+                    error(verify("not a user", Some("DEVICE"))).await,
+                );
+
+                // Your identity signed only this session: nobody to ask.
+                bootstrap_cross_signing(&alice).await;
+                assert_eq!(
+                    error(verify("@alice:example.org", None)).await,
+                    "none of your other sessions is verified; use /e2ee recover with your recovery key"
+                );
+                assert!(sent_to_device_requests(&server).await.is_empty());
+            });
+        }
+
+        #[test]
+        fn request_verification_other_user_identity_goes_in_room() {
+            block_on(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                let (alice, bob) = server.set_up_alice_and_bob_for_encryption().await;
+                bootstrap_cross_signing(&bob).await;
+
+                let dm = OwnedRoomId::try_from("!dm:example.org").expect("room id");
+                let bob_member = serde_json::json!({
+                    "type": "m.room.member",
+                    "state_key": "@bob:example.org",
+                    "sender": "@bob:example.org",
+                    "event_id": "$bob-join:example.org",
+                    "origin_server_ts": 1u64,
+                    "content": { "membership": "join" }
+                });
+                server
+                    .mock_get_members()
+                    .expect_any_access_token()
+                    .ok(raw_room_member_events(&serde_json::json!([bob_member])))
+                    .mount()
+                    .await;
+                server
+                    .mock_room_state_encryption()
+                    .expect_any_access_token()
+                    .plain()
+                    .mount()
+                    .await;
+                server
+                    .mock_room_send()
+                    .expect_any_access_token()
+                    .ok(OwnedEventId::try_from("$request:example.org").expect("event id"))
+                    .mock_once()
+                    .mount()
+                    .await;
+                server
+                    .mock_sync()
+                    .ok_and_run(&alice, |builder| {
+                        builder
+                            .add_joined_room(JoinedRoomBuilder::new(&dm).add_state_bulk(
+                                raw_sync_state_events(&serde_json::json!([bob_member])),
+                            ))
+                            .add_custom_global_account_data(serde_json::json!({
+                                "type": "m.direct",
+                                "content": { "@bob:example.org": ["!dm:example.org"] }
+                            }));
+                    })
+                    .await;
+
+                let (announcement, _flow) =
+                    request_verification(&alice, &verify("@bob:example.org", None))
+                        .await
+                        .expect("request user verification");
+
+                // In-room, the flow ID is the request's event ID.
+                assert_eq!(
+                    announcement,
+                    VerificationRequest {
+                        flow_id: "$request:example.org".to_owned(),
+                        user_id: "@bob:example.org".to_owned(),
+                        direction: VerificationDirection::Outgoing { to_device: None },
+                    }
+                );
+                let sends = server
+                    .server()
+                    .received_requests()
+                    .await
+                    .expect("recorded requests")
+                    .into_iter()
+                    .filter(|request| {
+                        request
+                            .url
+                            .path()
+                            .contains("/rooms/!dm:example.org/send/m.room.message/")
+                    })
+                    .map(|request| request.body_json::<serde_json::Value>().expect("body"))
+                    .collect::<Vec<_>>();
+                assert_eq!(sends.len(), 1, "{sends:?}");
+                assert_eq!(sends[0]["msgtype"], "m.key.verification.request");
+                assert_eq!(sends[0]["to"], "@bob:example.org");
+                assert_eq!(sends[0]["from_device"], "4L1C3");
+                assert_eq!(sends[0]["methods"], serde_json::json!(["m.sas.v1"]));
+            });
+        }
+
+        /// The to-device messages each `(user, device)` has waiting, as a
+        /// homeserver queues them for the recipient's next sync.
+        type ToDeviceInbox = Arc<Mutex<BTreeMap<(String, String), Vec<serde_json::Value>>>>;
+
+        /// Queues every to-device message `sender` sends.
+        async fn relay_to_device_from(
+            server: &MatrixMockServer,
+            sender: &Client,
+            inbox: ToDeviceInbox,
+        ) {
+            let sender_id = sender.user_id().expect("signed in").to_string();
+            let token = sender.access_token().expect("an access token");
+            wiremock::Mock::given(wiremock::matchers::method("PUT"))
+                .and(wiremock::matchers::path_regex(
+                    r"^/_matrix/client/v3/sendToDevice/[^/]+/[^/]+$",
+                ))
+                .and(wiremock::matchers::header(
+                    "authorization",
+                    format!("Bearer {token}").as_str(),
+                ))
+                .respond_with(move |request: &wiremock::Request| {
+                    let event_type = request
+                        .url
+                        .path_segments()
+                        .and_then(|mut segments| segments.nth_back(1))
+                        .expect("the event type in the path")
+                        .to_owned();
+                    let body: serde_json::Value = request.body_json().expect("to-device body");
+                    let mut inbox = inbox.lock().expect("inbox lock");
+                    for (user_id, devices) in body["messages"].as_object().expect("messages") {
+                        for (device_id, content) in devices.as_object().expect("devices") {
+                            inbox
+                                .entry((user_id.clone(), device_id.clone()))
+                                .or_default()
+                                .push(serde_json::json!({
+                                    "type": event_type,
+                                    "sender": sender_id,
+                                    "content": content,
+                                }));
+                        }
+                    }
+                    wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({}))
+                })
+                .mount(server.server())
+                .await;
+        }
+
+        /// Syncs the recipient its waiting messages; whether there were any.
+        async fn deliver_to_device(
+            server: &MatrixMockServer,
+            recipient: &Client,
+            inbox: &ToDeviceInbox,
+        ) -> bool {
+            let key = (
+                recipient.user_id().expect("signed in").to_string(),
+                recipient.device_id().expect("a device").to_string(),
+            );
+            let messages = inbox.lock().expect("inbox lock").remove(&key);
+            let Some(messages) = messages else {
+                return false;
+            };
+            server
+                .mock_sync()
+                .ok_and_run(recipient, |builder| {
+                    for message in messages {
+                        builder.add_to_device_event(message);
+                    }
+                })
+                .await;
+            true
+        }
+
+        fn sas_ready_decimals(events: &[Event]) -> Option<VerificationDecimals> {
+            events.iter().find_map(|event| match event {
+                Event::VerificationState(VerificationStateEvent {
+                    state: VerificationState::SasReady { decimals, .. },
+                    ..
+                }) => Some(decimals.clone()),
+                _ => None,
+            })
+        }
+
+        /// Alice asks Bob's device; Bob accepts as mirx does; the watcher
+        /// Alice's request starts sees Bob's ready, starts SAS, and both
+        /// sides reach the same short authentication string.
+        #[test]
+        fn outgoing_request_round_trip_verifies_the_device() {
+            block_on(tokio::task::LocalSet::new().run_until(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                let (alice, bob) = server.set_up_alice_and_bob_for_encryption().await;
+                // Bob knows Alice's device, as a sync would tell him.
+                bob.encryption()
+                    .request_user_identity(alice.user_id().expect("alice"))
+                    .await
+                    .expect("query alice's keys");
+                let inbox = ToDeviceInbox::default();
+                relay_to_device_from(&server, &alice, inbox.clone()).await;
+                relay_to_device_from(&server, &bob, inbox.clone()).await;
+                let (alice_events, alice_rx) = mpsc::channel();
+                let (bob_events, bob_rx) = mpsc::channel();
+                register_event_handlers(&bob, bob_events.clone());
+
+                let (announcement, request) =
+                    request_verification(&alice, &verify("@bob:example.org", Some("B0B0B0B0B")))
+                        .await
+                        .expect("request bob's device");
+                let alice_flow = VerificationFlowId {
+                    flow_id: announcement.flow_id.clone(),
+                    user_id: announcement.user_id.clone(),
+                };
+                tokio::task::spawn_local(watch_verification_request(
+                    request,
+                    alice_flow,
+                    alice_events,
+                ));
+
+                assert!(deliver_to_device(&server, &bob, &inbox).await);
+                let bob_flow = VerificationFlowId {
+                    flow_id: announcement.flow_id.clone(),
+                    user_id: "@alice:example.org".to_owned(),
+                };
+                assert_eq!(
+                    verification_requests(&drain_events(&bob_rx)),
+                    vec![&VerificationRequest {
+                        flow_id: announcement.flow_id.clone(),
+                        user_id: "@alice:example.org".to_owned(),
+                        direction: VerificationDirection::Incoming {
+                            from_device: "4L1C3".to_owned(),
+                        },
+                    }]
+                );
+                accept_verification(&bob, &bob_flow)
+                    .await
+                    .expect("bob accepts");
+                let bob_request = lookup_verification_request(&bob, &bob_flow)
+                    .await
+                    .expect("bob's flow");
+                tokio::task::spawn_local(watch_verification_request(
+                    bob_request,
+                    bob_flow,
+                    bob_events,
+                ));
+
+                let (mut alice_got, mut bob_got) = (Vec::new(), Vec::new());
+                relay_until_quiet(&server, [&alice, &bob], &inbox).await;
+                alice_got.extend(alice_rx.try_iter());
+                bob_got.extend(bob_rx.try_iter());
+
+                let alice_decimals = sas_ready_decimals(&alice_got)
+                    .unwrap_or_else(|| panic!("alice reaches SAS: {alice_got:?}"));
+                let bob_decimals = sas_ready_decimals(&bob_got)
+                    .unwrap_or_else(|| panic!("bob reaches SAS: {bob_got:?}"));
+                assert_eq!(alice_decimals, bob_decimals);
+                // Alice's watcher reported Bob's ready before SAS, and never
+                // re-announced the sent request.
+                assert!(
+                    !alice_got.iter().any(|event| matches!(
+                        event,
+                        Event::VerificationState(VerificationStateEvent {
+                            state: VerificationState::Sent | VerificationState::Requested,
+                            ..
+                        })
+                    )),
+                    "{alice_got:?}"
+                );
+
+                // Both compare and confirm: each side now trusts the other's
+                // device, as the SDK says.
+                let alice_flow = VerificationFlowId {
+                    flow_id: announcement.flow_id.clone(),
+                    user_id: "@bob:example.org".to_owned(),
+                };
+                let bob_flow = VerificationFlowId {
+                    flow_id: announcement.flow_id.clone(),
+                    user_id: "@alice:example.org".to_owned(),
+                };
+                confirm_verification_sas(&alice, &alice_flow)
+                    .await
+                    .expect("alice confirms");
+                confirm_verification_sas(&bob, &bob_flow)
+                    .await
+                    .expect("bob confirms");
+                relay_until_quiet(&server, [&alice, &bob], &inbox).await;
+                let done = |events: &[Event]| {
+                    events.iter().any(|event| {
+                        matches!(
+                            event,
+                            Event::VerificationState(VerificationStateEvent {
+                                state: VerificationState::Done,
+                                ..
+                            })
+                        )
+                    })
+                };
+                let alice_got = alice_rx.try_iter().collect::<Vec<_>>();
+                let bob_got = bob_rx.try_iter().collect::<Vec<_>>();
+                assert!(done(&alice_got), "{alice_got:?}");
+                assert!(done(&bob_got), "{bob_got:?}");
+                let bobs_device = alice
+                    .encryption()
+                    .get_device(bob.user_id().expect("bob"), <&DeviceId>::from("B0B0B0B0B"))
+                    .await
+                    .expect("store")
+                    .expect("bob's device");
+                assert!(bobs_device.is_verified());
+            }));
+        }
+
+        /// Delivers waiting to-device messages, and lets the watchers
+        /// answer, until no client has any.
+        async fn relay_until_quiet<const N: usize>(
+            server: &MatrixMockServer,
+            clients: [&Client; N],
+            inbox: &ToDeviceInbox,
+        ) {
+            for _ in 0..10 {
+                let mut delivered = false;
+                for client in clients {
+                    delivered |= deliver_to_device(server, client, inbox).await;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                if !delivered && inbox.lock().expect("inbox lock").is_empty() {
+                    return;
+                }
+            }
+            panic!("the clients never stopped talking");
         }
     }
 }

@@ -8,6 +8,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 
 use matrix_sdk::Client;
+use matrix_sdk::encryption::verification::VerificationRequest as MatrixVerificationRequest;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
@@ -18,10 +19,11 @@ use crate::api::{
     E2eeRecoverySetupSucceeded, E2eeRecoverySucceeded, EditMessageRequest, Event, HighlightWord,
     InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, LoginMethod,
     LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
-    RejectRoomInviteRequest, RestoreSessionRequest, RoomJoined, RoomMembers, RoomMembership,
-    RoomReadState, RoomSummary, SendReactionRequest, SetDisplayNameRequest,
-    SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
-    SetupE2eeRecoveryRequest, SyncStopReason, UnbanRoomMemberRequest, VerificationFlowId,
+    RejectRoomInviteRequest, RequestVerificationRequest, RestoreSessionRequest, RoomJoined,
+    RoomMembers, RoomMembership, RoomReadState, RoomSummary, SendReactionRequest,
+    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
+    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SyncStopReason, UnbanRoomMemberRequest,
+    VerificationFlowId,
 };
 use crate::loopback::{self, LoopbackListener, LoopbackRedirect};
 use crate::matrix::{
@@ -304,6 +306,9 @@ async fn handle_command(
             handle_setup_e2ee_recovery(event_tx, state, &request).await
         }
         Command::RecoverE2ee(request) => handle_recover_e2ee(event_tx, state, &request).await,
+        Command::RequestVerification(request) => {
+            handle_request_verification(event_tx, state, request).await
+        }
         Command::AcceptVerification(flow) => {
             handle_accept_verification(event_tx, state, flow).await
         }
@@ -1507,6 +1512,42 @@ async fn handle_setup_e2ee_recovery(
     false
 }
 
+async fn handle_request_verification(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: RequestVerificationRequest,
+) -> bool {
+    let WorkerState::Ready {
+        client,
+        verification_tasks,
+        ..
+    } = state
+    else {
+        emit_invalid_state(
+            event_tx,
+            Operation::RequestVerification,
+            "verification requires an authenticated session",
+        );
+        return false;
+    };
+
+    match matrix::request_verification(client, &request).await {
+        Ok((announcement, flow_request)) => {
+            let flow = VerificationFlowId {
+                flow_id: announcement.flow_id.clone(),
+                user_id: announcement.user_id.clone(),
+            };
+            emit_event(event_tx, Event::VerificationRequest(announcement));
+            // An outgoing flow has no Accept to start the watcher, which
+            // sees the other side's ready and starts SAS.
+            watch_verification_request(event_tx, verification_tasks, flow, flow_request);
+        }
+        Err(err) => emit_matrix_error(event_tx, Operation::RequestVerification, err),
+    }
+
+    false
+}
+
 async fn handle_accept_verification(
     event_tx: &EventSender,
     state: &mut WorkerState,
@@ -1733,23 +1774,34 @@ async fn ensure_verification_watcher(
         return;
     }
 
-    let task = if let Ok(request) = matrix::lookup_verification_request(client, flow).await {
-        tokio::task::spawn_local(matrix::watch_verification_request(
-            request,
-            flow.clone(),
-            event_tx.clone(),
-        ))
-    } else {
-        let Ok(sas) = matrix::lookup_sas_verification(client, flow).await else {
-            return;
-        };
-        tokio::task::spawn_local(matrix::watch_sas_verification(
-            sas,
-            flow.clone(),
-            event_tx.clone(),
-        ))
+    if let Ok(request) = matrix::lookup_verification_request(client, flow).await {
+        watch_verification_request(event_tx, verification_tasks, flow.clone(), request);
+        return;
+    }
+    let Ok(sas) = matrix::lookup_sas_verification(client, flow).await else {
+        return;
     };
+    let task = tokio::task::spawn_local(matrix::watch_sas_verification(
+        sas,
+        flow.clone(),
+        event_tx.clone(),
+    ));
+    verification_tasks.insert(key, task);
+}
 
+/// Follows a request's flow until it ends: the watcher of its flow.
+fn watch_verification_request(
+    event_tx: &EventSender,
+    verification_tasks: &mut HashMap<(String, String), TokioJoinHandle<()>>,
+    flow: VerificationFlowId,
+    request: MatrixVerificationRequest,
+) {
+    let key = verification_task_key(&flow);
+    let task = tokio::task::spawn_local(matrix::watch_verification_request(
+        request,
+        flow,
+        event_tx.clone(),
+    ));
     verification_tasks.insert(key, task);
 }
 

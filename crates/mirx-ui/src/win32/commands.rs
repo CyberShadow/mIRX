@@ -143,8 +143,15 @@ pub(super) enum SlashCommand {
     },
     Clear,
     E2ee(E2eeSlashCommand),
+    /// `/verify accept|cancel|confirm|reject`: answers the current flow.
     Verify {
         action: VerificationAction,
+    },
+    /// `/verify [nick [device]]`: starts a verification. No nick verifies
+    /// this session with your other sessions; a nick alone, that user.
+    VerifyStart {
+        target: Option<String>,
+        device_id: Option<String>,
     },
     Help {
         topic: Option<String>,
@@ -268,7 +275,7 @@ impl SlashCommand {
             Self::Topic { .. } => "topic",
             Self::Clear => "clear",
             Self::E2ee(_) => "e2ee",
-            Self::Verify { .. } => "verify",
+            Self::Verify { .. } | Self::VerifyStart { .. } => "verify",
             Self::Help { .. } => "help",
             Self::Timestamp(_) => "timestamp",
             Self::Log(_) => "log",
@@ -530,8 +537,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "verify",
-        usage: "<accept|cancel|confirm|reject>",
-        summary: "answer a device verification",
+        usage: "[nick [device]] | accept|cancel|confirm|reject",
+        summary: "verify a session or user, or answer a verification",
     },
     CommandSpec {
         name: "voice",
@@ -995,21 +1002,32 @@ fn parse_bar(bar: Bar, argument: &str) -> Result<SlashCommand, CommandError> {
     Ok(SlashCommand::Bar { bar, command })
 }
 
+/// `[nick [device]]`, or one of the actions alone. A user named like an
+/// action is named by user ID.
 fn parse_verify(argument: &str) -> Result<SlashCommand, CommandError> {
-    let action = match argument.to_ascii_lowercase().as_str() {
-        "" => return Err(CommandError::insufficient_parameters("verify")),
-        "accept" => VerificationAction::Accept,
-        "cancel" => VerificationAction::Cancel,
-        "confirm" => VerificationAction::Confirm,
-        "reject" => VerificationAction::Reject,
-        _ => {
-            return Err(CommandError::new(
-                "verify",
-                format!("unknown action: {argument} (accept, cancel, confirm, reject)"),
-            ));
-        }
+    let (first, rest) = split_word(argument);
+    let action = match first.to_ascii_lowercase().as_str() {
+        "accept" => Some(VerificationAction::Accept),
+        "cancel" => Some(VerificationAction::Cancel),
+        "confirm" => Some(VerificationAction::Confirm),
+        "reject" => Some(VerificationAction::Reject),
+        _ => None,
     };
-    Ok(SlashCommand::Verify { action })
+    if let Some(action) = action {
+        if !rest.is_empty() {
+            return Err(CommandError::new("verify", "invalid parameters"));
+        }
+        return Ok(SlashCommand::Verify { action });
+    }
+    let (device, extra) = split_word(rest);
+    if !extra.is_empty() {
+        return Err(CommandError::new("verify", "too many parameters"));
+    }
+    let word = |word: &str| (!word.is_empty()).then(|| word.to_owned());
+    Ok(SlashCommand::VerifyStart {
+        target: word(first),
+        device_id: word(device),
+    })
 }
 
 /// `/help`: every command, or one command's usage.
@@ -1408,6 +1426,23 @@ mod tests {
         ] {
             assert_eq!(parse(input), Ok(SlashCommand::Verify { action }));
         }
+        let start = |target: Option<&str>, device_id: Option<&str>| {
+            Ok(SlashCommand::VerifyStart {
+                target: target.map(str::to_owned),
+                device_id: device_id.map(str::to_owned),
+            })
+        };
+        assert_eq!(parse("/verify"), start(None, None));
+        assert_eq!(parse("/verify  Bob "), start(Some("Bob"), None));
+        assert_eq!(parse("/verify maybe"), start(Some("maybe"), None));
+        assert_eq!(
+            parse("/verify @bob:example DEV1"),
+            start(Some("@bob:example"), Some("DEV1"))
+        );
+        assert_eq!(
+            parse("/verify @accept:example"),
+            start(Some("@accept:example"), None)
+        );
     }
 
     #[test]
@@ -1418,13 +1453,13 @@ mod tests {
         assert_eq!(parse("/clear now"), error("clear", "takes no parameters"));
         assert_eq!(parse("/find"), insufficient("find"));
         assert_eq!(parse("/window"), insufficient("window"));
-        assert_eq!(parse("/verify"), insufficient("verify"));
         assert_eq!(
-            parse("/verify maybe"),
-            error(
-                "verify",
-                "unknown action: maybe (accept, cancel, confirm, reject)"
-            )
+            parse("/verify accept extra"),
+            error("verify", "invalid parameters")
+        );
+        assert_eq!(
+            parse("/verify bob DEV1 more"),
+            error("verify", "too many parameters")
         );
         for input in [
             "/e2ee recover secret",

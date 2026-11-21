@@ -10,21 +10,21 @@ use mirx_core::{
     JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, ListPublicRoomsRequest, LoginMethod,
     LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoom, PublicRoomsPage,
     PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX,
-    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RoomActivity,
-    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-    RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
-    RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
-    RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
-    RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
-    RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomSummary, RoomTagSummary, RoomTyping, RoomUserProfile, SendFileRequest, SendMessageRequest,
-    SendReactionRequest, SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
-    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
-    UnsupportedRoomMessageActivity, UserProfile, VerificationDecimals, VerificationDirection,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start, validate_highlight_word,
+    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RequestVerificationRequest,
+    RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
+    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat,
+    RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank, RoomMemberSummary,
+    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomNotificationMode, RoomReadState, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
+    RoomUserProfile, SendFileRequest, SendMessageRequest, SendReactionRequest, SessionAuth,
+    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
+    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession,
+    SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserProfile,
+    VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start, validate_highlight_word,
 };
 use tempfile::TempDir;
 
@@ -158,6 +158,7 @@ fn error_room_id(command: &Command) -> Option<&str> {
         | Command::RefreshE2eeStatus
         | Command::SetupE2eeRecovery(_)
         | Command::RecoverE2ee(_)
+        | Command::RequestVerification(_)
         | Command::AcceptVerification(_)
         | Command::CancelVerification(_)
         | Command::ConfirmVerificationSas(_)
@@ -778,6 +779,18 @@ fn backfill_room_history_before_login_emits_backfill_room_history_error() {
         }),
         Operation::BackfillRoomHistory,
         "backfill room history requires an authenticated session",
+    );
+}
+
+#[test]
+fn request_verification_before_login_emits_request_error() {
+    assert_invalid_authenticated_command(
+        Command::RequestVerification(RequestVerificationRequest {
+            user_id: "@alice:example.org".to_owned(),
+            device_id: None,
+        }),
+        Operation::RequestVerification,
+        "verification requires an authenticated session",
     );
 }
 
@@ -3153,6 +3166,34 @@ fn verification_dtos_reject_unknown_fields() {
         .is_err(),
         "verification decimals must reject unknown fields"
     );
+}
+
+#[test]
+fn request_verification_request_round_trips_and_rejects_unknown_fields() {
+    let request = RequestVerificationRequest {
+        user_id: "@alice:example.org".to_owned(),
+        device_id: Some("PHONE".to_owned()),
+    };
+    let json = serde_json::to_string(&request).expect("serialize");
+    assert_eq!(
+        json,
+        r#"{"user_id":"@alice:example.org","device_id":"PHONE"}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<RequestVerificationRequest>(&json).expect("deserialize"),
+        request
+    );
+    assert!(
+        serde_json::from_str::<RequestVerificationRequest>(
+            r#"{"user_id":"@alice:example.org","device_id":null,"unexpected":true}"#
+        )
+        .is_err()
+    );
+    assert_eq!(
+        serde_json::from_str::<VerificationState>(r#"{"state":"sent"}"#).expect("sent"),
+        VerificationState::Sent
+    );
+    assert!(serde_json::from_str::<VerificationState>(r#"{"state":"sent","x":1}"#).is_err());
 }
 
 #[test]

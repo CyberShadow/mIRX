@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 60;
+pub(crate) const PROTOCOL_VERSION: u32 = 61;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -620,6 +620,7 @@ pub(crate) enum ContextMenuCommand {
     RedactMessage,
     SaveAttachment,
     WhoisMember,
+    VerifyMember,
     QueryMember,
     MentionMember,
     IgnoreMember,
@@ -998,6 +999,7 @@ pub(crate) struct DumpMessageMenuState {
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpMemberMenuState {
     pub(crate) whois_enabled: bool,
+    pub(crate) verify_enabled: bool,
     pub(crate) query_enabled: bool,
     pub(crate) mention_enabled: bool,
     pub(crate) ignore_enabled: bool,
@@ -1836,6 +1838,8 @@ pub(crate) struct DumpModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_verification_actions: Vec<DumpSubmittedVerificationAction>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_verification_requests: Vec<DumpSubmittedVerificationRequest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_recovery_commands: Vec<DumpSubmittedRecoveryCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_setup_recovery_commands: Vec<DumpSubmittedSetupRecoveryCommand>,
@@ -2050,6 +2054,14 @@ pub(crate) struct DumpSubmittedVerificationAction {
     pub(crate) action: DumpVerificationActionKind,
     pub(crate) flow_id: String,
     pub(crate) user_id: String,
+}
+
+/// A verification started (`/verify [nick [device]]`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedVerificationRequest {
+    pub(crate) user_id: String,
+    pub(crate) device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2432,6 +2444,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::RecoverE2ee => "recover_e2ee",
         Operation::SetupE2eeRecovery => "setup_e2ee_recovery",
         Operation::Verification => "verification",
+        Operation::RequestVerification => "request_verification",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",
     }
@@ -3312,21 +3325,22 @@ mod tests {
         DumpSubmittedProfileCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
         DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
         DumpSubmittedSetupRecoveryCommand, DumpSubmittedUserCommand,
-        DumpUnsupportedRoomMessageActivity, DumpUserCommandAction, FindActiveViewArgs,
-        FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
-        LoadEventsArgs, LoginArgs, MdiArrangement, MdiState, MdiView, MdiWindowPlacement,
-        MdiWindowState, MircFormatKey, NavigationNode, NavigationNodeKey, NavigationPathSegment,
-        NoArgs, OpenDialogArgs, OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs,
-        PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
-        RestoreSessionArgs, RoomMemberView, SelectMemberArgs, SelectNavigationPathArgs,
-        SelectOptionsPageArgs, SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs,
-        SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
-        SendFileArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs,
-        SetNavigationExpandedArgs, SetViewWindowStateArgs, SetupE2eeRecoveryArgs, StatusBarState,
-        SwitchbarItem, SwitchbarState, UiFindHistorySearchState, UiFindState, UiFrameLayout,
-        UiRect, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
-        VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
-        failure_response, parse_command_request, success_response,
+        DumpSubmittedVerificationRequest, DumpUnsupportedRoomMessageActivity,
+        DumpUserCommandAction, FindActiveViewArgs, FindActiveViewResponse, GetVersionResponse,
+        LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiArrangement, MdiState,
+        MdiView, MdiWindowPlacement, MdiWindowState, MircFormatKey, NavigationNode,
+        NavigationNodeKey, NavigationPathSegment, NoArgs, OpenDialogArgs,
+        OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs, PROTOCOL_VERSION,
+        ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
+        RoomMemberView, SelectMemberArgs, SelectNavigationPathArgs, SelectOptionsPageArgs,
+        SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs, SelectViewArgs,
+        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendFileArgs,
+        SendTextArgs, SendTextResponse, SetComposeTextArgs, SetNavigationExpandedArgs,
+        SetViewWindowStateArgs, SetupE2eeRecoveryArgs, StatusBarState, SwitchbarItem,
+        SwitchbarState, UiFindHistorySearchState, UiFindState, UiFrameLayout, UiRect,
+        UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, VerificationActionArgs,
+        ViewActivityLevel, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
+        parse_command_request, success_response,
     };
 
     fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -3447,6 +3461,16 @@ mod tests {
             action: DumpUserCommandAction::FetchProfile,
             user_id: "@bob:example".to_owned(),
         }];
+        model.submitted_verification_requests = vec![
+            DumpSubmittedVerificationRequest {
+                user_id: "@me:example".to_owned(),
+                device_id: None,
+            },
+            DumpSubmittedVerificationRequest {
+                user_id: "@bob:example".to_owned(),
+                device_id: Some("DEV1".to_owned()),
+            },
+        ];
 
         let testkit_model =
             serde_json::from_value::<mirx_testkit::Model>(serde_json::to_value(&model).unwrap())
@@ -3489,11 +3513,24 @@ mod tests {
                 user_id: "@bob:example".to_owned(),
             }]
         );
+        assert_eq!(
+            testkit_model.submitted_verification_requests,
+            vec![
+                mirx_testkit::SubmittedVerificationRequest {
+                    user_id: "@me:example".to_owned(),
+                    device_id: None,
+                },
+                mirx_testkit::SubmittedVerificationRequest {
+                    user_id: "@bob:example".to_owned(),
+                    device_id: Some("DEV1".to_owned()),
+                },
+            ]
+        );
     }
 
     #[test]
-    fn protocol_version_is_60() {
-        assert_eq!(PROTOCOL_VERSION, 60);
+    fn protocol_version_is_61() {
+        assert_eq!(PROTOCOL_VERSION, 61);
     }
 
     #[test]
@@ -5517,7 +5554,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":60,
+                    "protocol_version":61,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5587,6 +5624,7 @@ mod tests {
                     submitted_redaction_commands: Vec::new(),
                     submitted_history_commands: Vec::new(),
                     submitted_verification_actions: Vec::new(),
+                    submitted_verification_requests: Vec::new(),
                     submitted_recovery_commands: Vec::new(),
                     submitted_setup_recovery_commands: Vec::new(),
                     submitted_room_list_requests: Vec::new(),
@@ -6517,6 +6555,7 @@ mod tests {
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_verification_requests: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -6610,6 +6649,7 @@ mod tests {
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_verification_requests: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: vec![DumpSubmittedSetupRecoveryCommand {
                 passphrase_redacted: true,
@@ -6673,6 +6713,7 @@ mod tests {
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_verification_requests: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -6744,6 +6785,7 @@ mod tests {
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_verification_requests: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -6842,6 +6884,7 @@ mod tests {
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_verification_requests: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -6947,6 +6990,7 @@ mod tests {
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_verification_requests: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -7056,6 +7100,7 @@ mod tests {
             }],
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_verification_requests: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -7193,6 +7238,7 @@ mod tests {
                 },
             ],
             submitted_verification_actions: Vec::new(),
+            submitted_verification_requests: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -7274,6 +7320,7 @@ mod tests {
                 submitted_redaction_commands: Vec::new(),
                 submitted_history_commands: Vec::new(),
                 submitted_verification_actions: Vec::new(),
+                submitted_verification_requests: Vec::new(),
                 submitted_recovery_commands: Vec::new(),
                 submitted_setup_recovery_commands: Vec::new(),
                 submitted_room_list_requests: Vec::new(),

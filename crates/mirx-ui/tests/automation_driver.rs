@@ -24,8 +24,8 @@ use mirx_core::{
     RoomMessageSendState as CoreRoomMessageSendState, RoomNotificationMode, RoomSummary,
     RoomTyping, SessionAuth as CoreSessionAuth, SpaceChildSummary,
     StoredSession as CoreStoredSession, UserProfile,
-    VerificationDecimals as CoreVerificationDecimals, VerificationEmoji as CoreVerificationEmoji,
-    VerificationState as CoreVerificationState,
+    VerificationDecimals as CoreVerificationDecimals, VerificationDirection,
+    VerificationEmoji as CoreVerificationEmoji, VerificationState as CoreVerificationState,
     VerificationStateEvent as CoreVerificationStateEvent,
 };
 use mirx_testkit::{
@@ -45,8 +45,8 @@ use mirx_testkit::{
     SubmittedProfileCommand, SubmittedReactionCommand, SubmittedRecoveryCommand,
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
     SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
-    SubmittedUserCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
-    UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
+    SubmittedUserCommand, SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem,
+    TestkitError, UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
     UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
     UiFindState, UiLoggingOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
     UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
@@ -112,6 +112,7 @@ const MENU_ID_VERIFY_CONFIRM_SAS: usize = 40009;
 const MENU_ID_VERIFY_REJECT_SAS: usize = 40010;
 const MENU_ID_RECOVER_E2EE: usize = 40005;
 const MENU_ID_SETUP_E2EE_RECOVERY: usize = 40017;
+const MENU_ID_VERIFY_THIS_SESSION: usize = 40050;
 const RECOVER_E2EE_DIALOG_SECRET_ID: i32 = 5007;
 const RECOVER_E2EE_DIALOG_OK_ID: usize = 5008;
 const SETUP_E2EE_DIALOG_PASSPHRASE_ID: i32 = 5013;
@@ -3037,7 +3038,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 60);
+    assert_eq!(version.protocol_version, 61);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -4625,6 +4626,173 @@ fn automation_driver_verification_error_keeps_requested_menu_actions_enabled()
     app.wait_idle(Duration::from_secs(5))?;
 
     assert_account_verification_menu_state(&app, true, true, false, false);
+
+    Ok(())
+}
+
+/// Signed in as @alice:example, with Bob and Alice in Beta's nick list.
+fn launch_signed_in_member_app(
+    local_app_data: &Path,
+) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let options = launch_options(Some(local_app_data.to_path_buf()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let member = |user_id: &str, display_name: &str, is_own_user| RoomMemberSummary {
+        user_id: user_id.to_owned(),
+        display_name: Some(display_name.to_owned()),
+        display_name_ambiguous: false,
+        is_own_user,
+        rank: RoomMemberRank::Member,
+        can_kick: false,
+        can_ban: false,
+    };
+    let mut events = base_events();
+    events.insert(
+        1,
+        Event::LoggedIn {
+            session: core_stored_session(),
+            homeserver_url: "https://matrix.example/".to_owned(),
+        },
+    );
+    events.push(Event::RoomMembers(RoomMembers {
+        room_id: "!beta:example".to_owned(),
+        members: vec![
+            member("@alice:example", "Alice", true),
+            member("@bob:example", "Bob", false),
+        ],
+    }));
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_view(room_identity("!beta:example"))?;
+    Ok(app)
+}
+
+#[test]
+fn automation_driver_slash_verify_starts_verifications() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_signed_in_member_app(&local_app_data)?;
+
+    type_commands(
+        &app,
+        &[
+            "/verify",
+            "/verify Bob",
+            "/verify @bob:example DEV1",
+            "/verify Nobody",
+        ],
+    )?;
+    invoke_account_menu_command(&app, MENU_ID_VERIFY_THIS_SESSION)?;
+
+    // The automation core is not signed in and refuses each request; what
+    // the UI asked for is the point.
+    let request = |user_id: &str, device_id: Option<&str>| SubmittedVerificationRequest {
+        user_id: user_id.to_owned(),
+        device_id: device_id.map(str::to_owned),
+    };
+    assert_eq!(
+        app.dump_model()?.submitted_verification_requests,
+        vec![
+            request("@alice:example", None),
+            request("@bob:example", None),
+            request("@bob:example", Some("DEV1")),
+            request("@alice:example", None),
+        ]
+    );
+    let ui_state = app.dump_ui_state()?;
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
+    assert!(view_contains(beta, "* /verify: no such nick: Nobody"));
+    assert!(view_contains(
+        beta,
+        "* /verify: verification requires an authenticated session"
+    ));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_member_menu_verify_requests_the_member()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_signed_in_member_app(&local_app_data)?;
+
+    app.select_member("@bob:example")?;
+    assert!(app.dump_member_menu_state()?.verify_enabled);
+    app.open_member_context_menu("@bob:example", ContextMenuCommand::VerifyMember)?;
+    assert_eq!(
+        app.dump_model()?.submitted_verification_requests,
+        vec![SubmittedVerificationRequest {
+            user_id: "@bob:example".to_owned(),
+            device_id: None,
+        }]
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_outgoing_verification_menu_state() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let app = launch_app(&exe_path, &[OsString::from("--automation")])?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::VerificationRequest(mirx_core::VerificationRequest {
+            flow_id: "flow-out".to_owned(),
+            user_id: "@bob:example".to_owned(),
+            direction: VerificationDirection::Outgoing { to_device: None },
+        }),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.dump_model()?.last_verification,
+        Some(Verification {
+            flow_id: "flow-out".to_owned(),
+            user_id: "@bob:example".to_owned(),
+            state: VerificationState::Sent,
+        })
+    );
+    assert_account_verification_menu_state(&app, false, true, false, false);
+    assert!(view_contains(
+        find_view(&app.dump_ui_state()?, &ViewIdentity::Status),
+        "* Verification request sent to @bob:example; waiting for them to accept"
+    ));
+    invoke_account_menu_command(&app, MENU_ID_VERIFY_CANCEL)?;
+    assert_eq!(
+        app.dump_model()?.submitted_verification_actions,
+        vec![SubmittedVerificationAction {
+            action: VerificationActionKind::Cancel,
+            flow_id: "flow-out".to_owned(),
+            user_id: "@bob:example".to_owned(),
+        }]
+    );
+
+    // The other side accepted and the keys are exchanged.
+    app.append_synthetic_events(&serde_json::to_string(&vec![verification_state_event(
+        "flow-out",
+        "@bob:example",
+        CoreVerificationState::SasReady {
+            emojis: vec![CoreVerificationEmoji {
+                symbol: "🐶".to_owned(),
+                description: "Dog".to_owned(),
+            }],
+            decimals: CoreVerificationDecimals {
+                first: 1234,
+                second: 5678,
+                third: 9012,
+            },
+        },
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_account_verification_menu_state(&app, false, true, true, true);
 
     Ok(())
 }

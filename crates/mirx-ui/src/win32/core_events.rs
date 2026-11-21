@@ -1034,6 +1034,7 @@ pub(super) fn operation_name(operation: Operation) -> &'static str {
         Operation::RecoverE2ee => "e2ee recovery",
         Operation::SetupE2eeRecovery => "e2ee recovery setup",
         Operation::Verification => "verification",
+        Operation::RequestVerification => "verification request",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",
     }
@@ -2406,6 +2407,43 @@ mod tests {
             ]
         );
     }
+    #[test]
+    fn outgoing_verification_request_is_sent_with_only_cancel() {
+        let mut state = test_state();
+        state.model.own_user_id = Some("@me:example".to_owned());
+
+        apply_core_event(
+            &mut state,
+            Event::VerificationRequest(VerificationRequest {
+                flow_id: "flow-out".to_owned(),
+                user_id: "@me:example".to_owned(),
+                direction: VerificationDirection::Outgoing { to_device: None },
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state.model.last_verification,
+            Some(VerificationStateEvent {
+                flow_id: "flow-out".to_owned(),
+                user_id: "@me:example".to_owned(),
+                state: VerificationState::Sent,
+            })
+        );
+        assert_eq!(
+            state.model.status,
+            "verification request sent to @me:example"
+        );
+        assert_eq!(
+            status_log_lines(&state),
+            vec![
+                "[22:12] * Verification request sent to your other sessions; accept it on one of them"
+                    .to_owned(),
+                "[22:12] * Actions: Tools > Cancel Verification, /verify cancel".to_owned(),
+            ]
+        );
+    }
+
     #[test]
     fn verification_sas_ready_and_errors_are_logged_to_status() {
         let mut state = test_state();

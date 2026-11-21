@@ -175,6 +175,7 @@ pub enum ContextMenuCommand {
     RedactMessage,
     SaveAttachment,
     WhoisMember,
+    VerifyMember,
     QueryMember,
     MentionMember,
     IgnoreMember,
@@ -191,6 +192,7 @@ pub enum ContextMenuCommand {
 #[serde(deny_unknown_fields)]
 pub struct MemberMenuState {
     pub whois_enabled: bool,
+    pub verify_enabled: bool,
     pub query_enabled: bool,
     pub mention_enabled: bool,
     pub ignore_enabled: bool,
@@ -426,6 +428,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_verification_actions: Vec<SubmittedVerificationAction>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_verification_requests: Vec<SubmittedVerificationRequest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_recovery_commands: Vec<SubmittedRecoveryCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_setup_recovery_commands: Vec<SubmittedSetupRecoveryCommand>,
@@ -638,6 +642,14 @@ pub struct SubmittedVerificationAction {
     pub action: VerificationActionKind,
     pub flow_id: String,
     pub user_id: String,
+}
+
+/// A verification started (`/verify [nick [device]]`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedVerificationRequest {
+    pub user_id: String,
+    pub device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -485,6 +485,24 @@ pub(super) unsafe fn run_slash_command(
             layout_controls(hwnd);
             Ok(Some(format!("{}: {}", bar.name(), on_off(show))))
         }
+        SlashCommand::VerifyStart { target, device_id } => {
+            let state = state_mut(hwnd);
+            let user_id = match target {
+                Some(target) => {
+                    commands::resolve_user(all_room_members(&state.model), &target)?.user_id
+                }
+                None => own_user_id(&state.model)?.to_owned(),
+            };
+            let status = match &device_id {
+                Some(device_id) => format!("verification requested: {user_id} {device_id}"),
+                None => format!("verification requested: {user_id}"),
+            };
+            enqueue_command(
+                state,
+                Command::RequestVerification(RequestVerificationRequest { user_id, device_id }),
+            )?;
+            Ok(Some(status))
+        }
         SlashCommand::Verify { action } => {
             let state = state_mut(hwnd);
             match action {
@@ -797,8 +815,8 @@ pub(super) fn resolve_invite_command_room_id(
     }
 }
 
-/// The user's homeserver name, for commands that need a session.
-pub(super) fn own_server(model: &UiModel) -> Result<&str, String> {
+/// The user's own ID, for commands that need a session.
+pub(super) fn own_user_id(model: &UiModel) -> Result<&str, String> {
     if matches!(
         model.connection,
         ConnectionState::SignedOut
@@ -807,11 +825,15 @@ pub(super) fn own_server(model: &UiModel) -> Result<&str, String> {
     ) {
         return Err("not connected to server".to_owned());
     }
-    let own_user_id = model
+    Ok(model
         .own_user_id
         .as_deref()
-        .expect("a signed-in session knows its user");
-    let (_, server) = own_user_id
+        .expect("a signed-in session knows its user"))
+}
+
+/// The user's homeserver name, for commands that need a session.
+pub(super) fn own_server(model: &UiModel) -> Result<&str, String> {
+    let (_, server) = own_user_id(model)?
         .split_once(':')
         .expect("a Matrix user ID names its server");
     Ok(server)
