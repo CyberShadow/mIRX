@@ -154,6 +154,7 @@ fn error_room_id(command: &Command) -> Option<&str> {
         | Command::CreateDirectRoom(_)
         | Command::CreateRoom(_)
         | Command::SetDisplayName(_)
+        | Command::SetAway(_)
         | Command::AddHighlightWord(_)
         | Command::RemoveHighlightWord(_)
         | Command::IgnoreUser(_)
@@ -558,6 +559,15 @@ fn set_display_name_before_login_emits_set_display_name_error() {
         }),
         Operation::SetDisplayName,
         "set display name requires an authenticated session",
+    );
+}
+
+#[test]
+fn set_away_before_login_emits_set_presence_error() {
+    assert_invalid_authenticated_command(
+        Command::SetAway(Some("lunch".to_owned())),
+        Operation::SetPresence,
+        "set presence requires an authenticated session",
     );
 }
 

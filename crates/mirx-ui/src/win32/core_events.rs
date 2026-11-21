@@ -525,6 +525,10 @@ pub(super) fn apply_core_event(
             let lines = whois_lines(&state.model, &profile);
             echo_lines_in_active_view(state, lines);
         }
+        Event::AwayChanged(changed) => {
+            echo_lines_in_active_view(state, commands::away_lines(&changed));
+            state.model.status = commands::away_status(&changed);
+        }
         Event::UserDevices(devices) => {
             let lines = devices_lines(&state.model, &devices, state.local_time);
             echo_lines_in_active_view(state, lines);
@@ -1056,6 +1060,7 @@ pub(super) fn operation_name(operation: Operation) -> &'static str {
         Operation::InviteRoomMember => "invite room member",
         Operation::SetRoomMemberPowerLevel => "set room member power level",
         Operation::SetDisplayName => "set display name",
+        Operation::SetPresence => "set presence",
         Operation::SetRoomTopic => "set room topic",
         Operation::SetRoomNotificationMode => "set room notifications",
         Operation::HighlightWords => "highlight words",

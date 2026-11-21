@@ -7,11 +7,11 @@ use super::core::Core;
 use super::{AccountLists, EventSender, RoomSnapshot, RoomSnapshots};
 use crate::api::CoreConfig;
 use crate::api::{
-    AcceptRoomInviteRequest, BanRoomMemberRequest, Command, CreateDirectRoomRequest,
+    AcceptRoomInviteRequest, AwayChanged, BanRoomMemberRequest, Command, CreateDirectRoomRequest,
     CreateRoomRequest, CreateRoomVisibility, Event, HighlightWord, JoinRoomRequest,
-    KickRoomMemberRequest, LoginMethod, LoginRequest, Operation, RestoreSessionRequest, RoomJoined,
-    RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership, RoomNotificationMode,
-    RoomReadState, RoomSummary, SyncStopReason,
+    KickRoomMemberRequest, LoginMethod, LoginRequest, Operation, PresenceKind,
+    RestoreSessionRequest, RoomJoined, RoomMemberRank, RoomMemberSummary, RoomMembers,
+    RoomMembership, RoomNotificationMode, RoomReadState, RoomSummary, SyncStopReason,
 };
 use crate::api::{
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
@@ -1079,6 +1079,205 @@ fn sync_requests_reuse_the_token_and_say_no_presence() {
         // Online is the default, which goes without the parameter.
         for query in &queries {
             assert_eq!(query_value(query, "set_presence"), None, "{query:?}");
+        }
+        core.stop().await;
+    });
+}
+
+const OWN_PRESENCE_PATH: &str = "/_matrix/client/v3/presence/@example:localhost/status";
+
+/// Answers `PUT` of the own presence with `put_status`, and `GET` with
+/// `{"presence": seen_as}`.
+async fn mock_own_presence(mock_server: &MatrixMockServer, put_status: u16, seen_as: &str) {
+    let put = wiremock::ResponseTemplate::new(put_status);
+    let put = if put_status == 200 {
+        put.set_body_json(serde_json::json!({}))
+    } else {
+        put.set_body_json(serde_json::json!({
+            "errcode": "M_BAD_JSON",
+            "error": "no presence for you",
+        }))
+    };
+    wiremock::Mock::given(wiremock::matchers::method("PUT"))
+        .and(wiremock::matchers::path(OWN_PRESENCE_PATH))
+        .respond_with(put)
+        .mount(mock_server.server())
+        .await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(OWN_PRESENCE_PATH))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "presence": seen_as })),
+        )
+        .mount(mock_server.server())
+        .await;
+}
+
+/// The bodies of every own presence `PUT` so far, in order.
+async fn presence_puts(mock_server: &MatrixMockServer) -> Vec<serde_json::Value> {
+    mock_server
+        .server()
+        .received_requests()
+        .await
+        .expect("the mock server records requests")
+        .into_iter()
+        .filter(|request| {
+            request.method == wiremock::http::Method::PUT && request.url.path() == OWN_PRESENCE_PATH
+        })
+        .map(|request| serde_json::from_slice(&request.body).expect("a JSON presence body"))
+        .collect()
+}
+
+#[test]
+fn set_away_puts_presence_and_reports_what_the_server_sees() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        let client = mock_server.client_builder().build().await;
+        mock_own_presence(&mock_server, 200, "unavailable").await;
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut core = Core::for_client(client, event_tx.clone());
+
+        run(&mut core, Command::SetAway(Some("lunch".to_owned()))).await;
+        assert_eq!(
+            drain_events(&event_rx),
+            vec![Event::AwayChanged(AwayChanged {
+                message: Some("lunch".to_owned()),
+                seen_as: PresenceKind::Unavailable,
+            })]
+        );
+
+        run(&mut core, Command::SetAway(None)).await;
+        assert_eq!(
+            drain_events(&event_rx),
+            vec![Event::AwayChanged(AwayChanged {
+                message: None,
+                seen_as: PresenceKind::Unavailable,
+            })]
+        );
+        assert_eq!(
+            presence_puts(&mock_server).await,
+            vec![
+                serde_json::json!({ "presence": "unavailable", "status_msg": "lunch" }),
+                serde_json::json!({ "presence": "online" }),
+            ]
+        );
+        core.stop().await;
+    });
+}
+
+#[test]
+fn a_server_without_presence_reports_you_offline() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        let client = mock_server.client_builder().build().await;
+        // Synapse without presence: a silent 200, then offline for all.
+        mock_own_presence(&mock_server, 200, "offline").await;
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut core = Core::for_client(client, event_tx.clone());
+
+        run(&mut core, Command::SetAway(Some("lunch".to_owned()))).await;
+
+        assert_eq!(
+            drain_events(&event_rx),
+            vec![Event::AwayChanged(AwayChanged {
+                message: Some("lunch".to_owned()),
+                seen_as: PresenceKind::Offline,
+            })]
+        );
+        core.stop().await;
+    });
+}
+
+#[test]
+fn away_makes_the_sync_loop_say_unavailable() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        let client = mock_server.client_builder().build().await;
+        mock_server.mock_sync().ok(|_| {}).mount().await;
+        mock_own_presence(&mock_server, 200, "unavailable").await;
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut core = Core::for_client(client, event_tx.clone());
+        let presence_of = |queries: &[Vec<(String, String)>]| -> Vec<Option<String>> {
+            queries
+                .iter()
+                .map(|query| query_value(query, "set_presence").map(str::to_owned))
+                .collect()
+        };
+
+        run(&mut core, Command::StartSync).await;
+        wait_for_sync_requests(&mock_server, 2).await;
+        let before_away = sync_queries(&mock_server).await.len();
+        run(&mut core, Command::SetAway(Some("lunch".to_owned()))).await;
+        let after_away = sync_queries(&mock_server).await.len();
+        wait_for_sync_requests(&mock_server, after_away + 2).await;
+        let queries = sync_queries(&mock_server).await;
+        assert!(
+            presence_of(&queries[..before_away])
+                .iter()
+                .all(Option::is_none),
+            "{queries:?}"
+        );
+        // The sync under way while the server heard of it may say either.
+        assert!(
+            presence_of(&queries[after_away..])
+                .iter()
+                .all(|presence| presence.as_deref() == Some("unavailable")),
+            "{queries:?}"
+        );
+
+        // Away outlasts the sync task: the session keeps it.
+        run(&mut core, Command::StopSync).await;
+        let before_restart = sync_queries(&mock_server).await.len();
+        run(&mut core, Command::StartSync).await;
+        wait_for_sync_requests(&mock_server, before_restart + 2).await;
+        let queries = sync_queries(&mock_server).await;
+        assert!(
+            presence_of(&queries[before_restart..])
+                .iter()
+                .all(|presence| presence.as_deref() == Some("unavailable")),
+            "{queries:?}"
+        );
+
+        run(&mut core, Command::SetAway(None)).await;
+        let after_back = sync_queries(&mock_server).await.len();
+        wait_for_sync_requests(&mock_server, after_back + 2).await;
+        let queries = sync_queries(&mock_server).await;
+        assert!(
+            presence_of(&queries[after_back..])
+                .iter()
+                .all(Option::is_none),
+            "{queries:?}"
+        );
+        drain_events(&event_rx);
+        core.stop().await;
+    });
+}
+
+#[test]
+fn a_failed_away_leaves_the_syncs_present() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        let client = mock_server.client_builder().build().await;
+        mock_server.mock_sync().ok(|_| {}).mount().await;
+        // A 4xx: the SDK retries a 5xx for minutes.
+        mock_own_presence(&mock_server, 400, "online").await;
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut core = Core::for_client(client, event_tx.clone());
+
+        run(&mut core, Command::SetAway(Some("lunch".to_owned()))).await;
+        match drain_events(&event_rx).as_slice() {
+            [Event::Error(err)] => {
+                assert_eq!(err.operation, Operation::SetPresence);
+                assert!(err.message.contains("no presence for you"), "{err:?}");
+            }
+            other => panic!("expected a set presence error, got {other:?}"),
+        }
+
+        // Started after the failure: an away left in place would show.
+        run(&mut core, Command::StartSync).await;
+        wait_for_sync_requests(&mock_server, 2).await;
+        for query in sync_queries(&mock_server).await {
+            assert_eq!(query_value(&query, "set_presence"), None, "{query:?}");
         }
         core.stop().await;
     });

@@ -15,7 +15,7 @@ use super::{
     EventSender, InitialSnapshot, RoomSnapshot, RoomSnapshots, emit_event, emit_matrix_error,
 };
 use crate::api::{E2eeStatus, Event, Operation, VerificationFlowId};
-use crate::matrix::{self, MatrixCoreError, PausedSendRooms};
+use crate::matrix::{self, AwayFlag, MatrixCoreError, PausedSendRooms};
 
 /// What a job takes from the session: it owns clones, never the session.
 #[derive(Clone)]
@@ -95,6 +95,8 @@ pub(super) struct Session {
     initial_snapshot: InitialSnapshot,
     /// Shared by the send queue's update task and every sync task.
     paused_sends: PausedSendRooms,
+    /// For the session's life: it outlasts its sync tasks.
+    away: AwayFlag,
     sync: Option<JoinHandle<()>>,
     background: JoinSet<()>,
     verification: HashMap<(String, String), JoinHandle<()>>,
@@ -146,6 +148,7 @@ impl Session {
             },
             initial_snapshot,
             paused_sends,
+            away: AwayFlag::default(),
             sync: None,
             background,
             verification: HashMap::new(),
@@ -171,6 +174,7 @@ impl Session {
             },
             initial_snapshot: InitialSnapshot::pending(false),
             paused_sends: PausedSendRooms::default(),
+            away: AwayFlag::default(),
             sync: None,
             background: JoinSet::new(),
             verification: HashMap::new(),
@@ -180,6 +184,12 @@ impl Session {
 
     pub(super) fn ctx(&self) -> JobCtx {
         self.ctx.clone()
+    }
+
+    /// Whether the user is away, which `SetAway` changes and every sync
+    /// request says.
+    pub(super) fn away(&self) -> AwayFlag {
+        self.away.clone()
     }
 
     pub(super) fn client(&self) -> &Client {
@@ -201,6 +211,7 @@ impl Session {
             self.ctx.snapshots.clone(),
             self.initial_snapshot.clone(),
             self.paused_sends.clone(),
+            self.away.clone(),
         )));
         emit_event(&self.ctx.events, Event::SyncStarted);
         Ok(())

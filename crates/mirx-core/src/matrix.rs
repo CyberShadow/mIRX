@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -56,6 +56,7 @@ use matrix_sdk::{
         api::client::discovery::get_authorization_server_metadata::v1::{
             AccountManagementActionData, DeviceDeleteData,
         },
+        api::client::presence::{get_presence, set_presence},
         api::client::profile::DisplayName as DisplayNameField,
         api::client::push::{delete_pushrule, set_pushrule, set_pushrule_enabled},
         api::client::session::get_login_types::v3::LoginType,
@@ -107,6 +108,7 @@ use matrix_sdk::{
             tag::{TagEvent, TagEventContent, Tags},
             typing::SyncTypingEvent,
         },
+        presence::PresenceState,
         push::{
             Action, HighlightTweakValue, NewPatternedPushRule, NewPushRule, RuleKind, Ruleset,
             SoundTweakValue, Tweak,
@@ -157,7 +159,9 @@ use crate::api::{
     VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
     VerificationRequest, VerificationState, VerificationStateEvent,
 };
-use crate::api::{TextStyleSpan, UserLinkSpan, check_text_styles, validate_highlight_word};
+use crate::api::{
+    PresenceKind, TextStyleSpan, UserLinkSpan, check_text_styles, validate_highlight_word,
+};
 use crate::mentions::body_mentions;
 use crate::rich_text::{StyledText, html_from_styled_text, styled_text_from_html};
 use crate::runtime::{EventSender, InitialSnapshot, RoomSnapshots, emit_event};
@@ -4122,12 +4126,15 @@ pub(crate) async fn sync_task(
     snapshots: RoomSnapshots,
     initial_snapshot: InitialSnapshot,
     paused_sends: PausedSendRooms,
+    away: AwayFlag,
 ) {
     let mut connected = false;
     let mut token = SyncToken::ReusePrevious;
     let mut last_sync: Option<tokio::time::Instant> = None;
     let err = loop {
-        let settings = SyncSettings::default().token(token);
+        let settings = SyncSettings::default()
+            .token(token)
+            .set_presence(away.sync_presence());
         let response = match client.sync_once(settings).await {
             Ok(response) => response,
             Err(err) => break err,
@@ -4177,6 +4184,75 @@ impl PausedSendRooms {
                 room.send_queue().set_enabled(true);
             }
         }
+    }
+}
+
+/// Whether the user is away (`/away`): the session's sync tasks read it
+/// for every request, since Synapse sets the device's presence to what each
+/// sync says, so a sync saying `online` would undo the away.
+#[derive(Clone, Default)]
+pub(crate) struct AwayFlag(Rc<Cell<bool>>);
+
+impl AwayFlag {
+    /// Sets whether the user is away; whether they were.
+    pub(crate) fn replace(&self, away: bool) -> bool {
+        self.0.replace(away)
+    }
+
+    fn sync_presence(&self) -> PresenceState {
+        if self.0.get() {
+            PresenceState::Unavailable
+        } else {
+            PresenceState::Online
+        }
+    }
+}
+
+/// Sets the user's presence: away (`unavailable`) with `away_message` as
+/// the status, or `online` without one, which clears the status.
+pub(crate) async fn set_own_presence(
+    client: &Client,
+    away_message: Option<&str>,
+) -> Result<(), MatrixCoreError> {
+    let user_id = client
+        .user_id()
+        .expect("setting presence runs signed in")
+        .to_owned();
+    let presence = match away_message {
+        Some(_) => PresenceState::Unavailable,
+        None => PresenceState::Online,
+    };
+    let mut request = set_presence::v3::Request::new(user_id, presence);
+    request.status_msg = away_message.map(str::to_owned);
+    client
+        .send(request)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to set your presence: {err}")))?;
+    Ok(())
+}
+
+/// The user's own presence as their server reports it.
+pub(crate) async fn fetch_own_presence(client: &Client) -> Result<PresenceKind, MatrixCoreError> {
+    let user_id = client
+        .user_id()
+        .expect("fetching presence runs signed in")
+        .to_owned();
+    let response = client
+        .send(get_presence::v3::Request::new(user_id))
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to read back your presence: {err}")))?;
+    presence_kind(&response.presence)
+}
+
+fn presence_kind(presence: &PresenceState) -> Result<PresenceKind, MatrixCoreError> {
+    match presence {
+        PresenceState::Online => Ok(PresenceKind::Online),
+        PresenceState::Unavailable => Ok(PresenceKind::Unavailable),
+        PresenceState::Offline => Ok(PresenceKind::Offline),
+        other => Err(MatrixCoreError::new(format!(
+            "unknown presence \"{}\"",
+            other.as_str()
+        ))),
     }
 }
 

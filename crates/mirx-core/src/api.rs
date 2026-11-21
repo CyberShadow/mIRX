@@ -51,6 +51,13 @@ pub enum Command {
     /// Asks the user's homeserver for their global profile; answered by
     /// `UserProfile`.
     FetchUserProfile(String),
+    /// `Some(message)` marks you away (`unavailable`, with the message as
+    /// your status), `None` present again (`online`, no status). Answered
+    /// by `AwayChanged`, or a `SetPresence` error. While you are away
+    /// every sync request of the session says `unavailable`, since a sync
+    /// that says `online` would make you present again; a new session
+    /// starts present.
+    SetAway(Option<String>),
     /// Fetches the user's cross-signing identity and devices fresh from
     /// their server (`/keys/query`; for the own user also `/devices`);
     /// answered by `UserDevices`.
@@ -1945,6 +1952,28 @@ pub struct VerificationDecimals {
     pub third: u16,
 }
 
+/// A presence state, as the server reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PresenceKind {
+    Online,
+    Unavailable,
+    /// Also what a server without presence reports for everyone.
+    Offline,
+}
+
+/// The answer to `SetAway`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AwayChanged {
+    /// The away message, `None` when you are back.
+    pub message: Option<String>,
+    /// Your presence as the server reports it after the change: not
+    /// `Unavailable` after an away when the server keeps no presence, or
+    /// another of your sessions keeps you online.
+    pub seen_as: PresenceKind,
+}
+
 /// A user's global profile, as their homeserver gives it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct UserProfile {
@@ -2042,6 +2071,7 @@ pub enum Operation {
     InviteRoomMember,
     SetRoomMemberPowerLevel,
     SetDisplayName,
+    SetPresence,
     RejectRoomInvite,
     SetRoomTopic,
     SetRoomNotificationMode,
@@ -2164,6 +2194,7 @@ pub enum Event {
     IgnoredUsers(Vec<String>),
     /// The answer to `FetchUserProfile`.
     UserProfile(UserProfile),
+    AwayChanged(AwayChanged),
     /// The answer to `ListUserDevices`.
     UserDevices(UserDevices),
     RoomIdentityChanges(RoomIdentityChanges),

@@ -9,8 +9,8 @@ use std::borrow::Cow;
 use std::fmt;
 
 use mirx_core::{
-    MemberPowerRole, RoomMemberRank, RoomMemberSummary, RoomMessagePresentationKind, UserDevices,
-    UserIdentityState, UserProfile,
+    AwayChanged, MemberPowerRole, PresenceKind, RoomMemberRank, RoomMemberSummary,
+    RoomMessagePresentationKind, UserDevices, UserIdentityState, UserProfile,
 };
 
 use super::nick_completion::member_mention_text;
@@ -1334,6 +1334,36 @@ pub(super) fn whois_lines(
     lines.push(format!("* {nick} using {server}"));
     lines.push(format!("* {nick} End of /WHOIS list"));
     lines
+}
+
+/// The answer to `/away` and `/back`, as IRC's 306 and 305. An away the
+/// server does not show others says why.
+pub(super) fn away_lines(changed: &AwayChanged) -> Vec<String> {
+    match (&changed.message, changed.seen_as) {
+        (None, _) => vec!["* You are no longer marked as being away".to_owned()],
+        (Some(_), seen_as) => {
+            let mut lines = vec!["* You have been marked as being away".to_owned()];
+            match seen_as {
+                PresenceKind::Unavailable => {}
+                PresenceKind::Online => lines.push(
+                    "* Others still see you as online: another of your sessions is active"
+                        .to_owned(),
+                ),
+                PresenceKind::Offline => lines.push(
+                    "* Others see you as offline: your server does not share presence".to_owned(),
+                ),
+            }
+            lines
+        }
+    }
+}
+
+/// The status bar after `/away` or `/back`.
+pub(super) fn away_status(changed: &AwayChanged) -> String {
+    match &changed.message {
+        Some(message) => format!("away: {message}"),
+        None => "back".to_owned(),
+    }
 }
 
 /// The answers to `/devices delete` and `/devices rename`.
@@ -2749,6 +2779,49 @@ mod tests {
             assert_eq!(parse(&format!("/{name}")), insufficient(name), "{name}");
         }
         assert_eq!(parse("/op Bob Carol"), error("op", "too many parameters"));
+    }
+
+    #[test]
+    fn away_answers_like_irc_and_says_when_others_do_not_see_it() {
+        let changed = |message: Option<&str>, seen_as| AwayChanged {
+            message: message.map(str::to_owned),
+            seen_as,
+        };
+        let away = "* You have been marked as being away";
+        assert_eq!(
+            away_lines(&changed(Some("lunch"), PresenceKind::Unavailable)),
+            [away]
+        );
+        assert_eq!(
+            away_lines(&changed(Some("lunch"), PresenceKind::Online)),
+            [
+                away,
+                "* Others still see you as online: another of your sessions is active"
+            ]
+        );
+        assert_eq!(
+            away_lines(&changed(Some("lunch"), PresenceKind::Offline)),
+            [
+                away,
+                "* Others see you as offline: your server does not share presence"
+            ]
+        );
+        // Being present needs no warning, whatever the server says.
+        for seen_as in [
+            PresenceKind::Online,
+            PresenceKind::Unavailable,
+            PresenceKind::Offline,
+        ] {
+            assert_eq!(
+                away_lines(&changed(None, seen_as)),
+                ["* You are no longer marked as being away"]
+            );
+        }
+        assert_eq!(
+            away_status(&changed(Some("gone fishing"), PresenceKind::Unavailable)),
+            "away: gone fishing"
+        );
+        assert_eq!(away_status(&changed(None, PresenceKind::Online)), "back");
     }
 
     #[test]

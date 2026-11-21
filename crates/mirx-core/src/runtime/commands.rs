@@ -15,20 +15,20 @@ use super::{
     emit_room_matrix_error,
 };
 use crate::api::{
-    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command,
-    CreateDirectRoomRequest, CreateRoomRequest, E2eeIdentityResetOutcome, E2eeRecoveryOperation,
-    E2eeRecoverySetupSucceeded, E2eeRecoverySucceeded, EditMessageRequest, Event,
-    ExportRoomKeysRequest, FetchRoomEventRequest, FetchRoomMediaRequest, ImportRoomKeysRequest,
-    InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
-    ListPublicRoomsRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
-    RedactEventRequest, RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
-    ResetE2eeIdentityRequest, RestoreSessionRequest, RetryDecryptionRequest, RoomJoined,
-    SendFileRequest, SendMessageRequest, SendReactionRequest, SetDisplayNameRequest,
-    SetReadMarkerRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
-    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SignOutDeviceRequest, UnbanRoomMemberRequest,
-    VerificationFlowId,
+    AcceptRoomInviteRequest, AwayChanged, BackfillRoomHistoryRequest, BanRoomMemberRequest,
+    Command, CreateDirectRoomRequest, CreateRoomRequest, E2eeIdentityResetOutcome,
+    E2eeRecoveryOperation, E2eeRecoverySetupSucceeded, E2eeRecoverySucceeded, EditMessageRequest,
+    Event, ExportRoomKeysRequest, FetchRoomEventRequest, FetchRoomMediaRequest,
+    ImportRoomKeysRequest, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
+    LeaveRoomRequest, ListPublicRoomsRequest, LoginRequest, MarkRoomReadRequest, Operation,
+    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RenameDeviceRequest,
+    RequestVerificationRequest, ResetE2eeIdentityRequest, RestoreSessionRequest,
+    RetryDecryptionRequest, RoomJoined, SendFileRequest, SendMessageRequest, SendReactionRequest,
+    SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,
+    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
+    SignOutDeviceRequest, UnbanRoomMemberRequest, VerificationFlowId,
 };
-use crate::matrix::{self, BackupServerStatusMode};
+use crate::matrix::{self, AwayFlag, BackupServerStatusMode};
 
 /// A command, with every in-session command made its lane job.
 pub(super) enum Route {
@@ -261,6 +261,17 @@ pub(super) fn route(command: Command) -> Route {
             ),
             |ctx| remove_highlight_word(ctx, word),
         ),
+        // Not through `lane`: the job takes the session's away flag too.
+        Command::SetAway(message) => Route::Lane(LaneCommand {
+            lane: Lane::Account,
+            refusal: Refusal::account(
+                Op::SetPresence,
+                "set presence requires an authenticated session",
+            ),
+            start: Box::new(move |session: &mut Session| {
+                Box::pin(set_away(session.ctx(), session.away(), message))
+            }),
+        }),
         Command::IgnoreUser(user_id) => lane(
             Lane::Account,
             Refusal::account(
@@ -674,6 +685,26 @@ async fn set_display_name(ctx: JobCtx, request: SetDisplayNameRequest) -> Follow
     let JobCtx { client, events, .. } = &ctx;
     if let Err(err) = matrix::set_display_name(client, &request).await {
         emit_matrix_error(events, Operation::SetDisplayName, err);
+    }
+
+    Followup::Done
+}
+
+/// Says away in the session's syncs before the server hears it: a sync
+/// under way that still said `online` would undo the away on Synapse. A
+/// failure says what the syncs said before. The read-back after it only
+/// informs: its failure leaves the change in place.
+async fn set_away(ctx: JobCtx, away: AwayFlag, message: Option<String>) -> Followup {
+    let JobCtx { client, events, .. } = &ctx;
+    let was_away = away.replace(message.is_some());
+    if let Err(err) = matrix::set_own_presence(client, message.as_deref()).await {
+        away.replace(was_away);
+        emit_matrix_error(events, Operation::SetPresence, err);
+        return Followup::Done;
+    }
+    match matrix::fetch_own_presence(client).await {
+        Ok(seen_as) => emit_event(events, Event::AwayChanged(AwayChanged { message, seen_as })),
+        Err(err) => emit_matrix_error(events, Operation::SetPresence, err),
     }
 
     Followup::Done
