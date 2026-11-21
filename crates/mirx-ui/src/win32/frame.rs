@@ -124,11 +124,8 @@ unsafe extern "system" fn window_proc(
         },
         WM_SIZE => {
             layout_controls(hwnd);
-            // Restored: the active window's lines are on screen again.
-            if wparam != SIZE_MINIMIZED as WPARAM
-                && let Err(message) = read_receipts::read_active_window(hwnd)
-            {
-                show_error_message(hwnd, "Read receipt", &message);
+            if let Err(message) = frame_resized(hwnd, wparam) {
+                show_error_message(hwnd, "Read marker", &message);
             }
             0
         }
@@ -296,6 +293,19 @@ unsafe extern "system" fn window_proc(
         }
         _ => default_window_proc(hwnd, message, wparam, lparam),
     }
+}
+
+/// Minimizing mirx, to the taskbar or the tray, leaves the active window,
+/// as mIRC's "When you minimize a channel or query window, or make it
+/// inactive". Restoring it enters the window again, and reads what arrived
+/// there meanwhile.
+unsafe fn frame_resized(hwnd: HWND, wparam: WPARAM) -> Result<(), String> {
+    let active_view = state_ref(hwnd).active_view.clone();
+    if wparam == SIZE_MINIMIZED as WPARAM {
+        return line_marker::leave_window(hwnd, &active_view);
+    }
+    line_marker::return_to_window(hwnd, &active_view);
+    read_receipts::read_active_window(hwnd)
 }
 
 unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {

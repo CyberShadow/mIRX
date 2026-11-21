@@ -80,11 +80,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES, IsIconic, IsWindow, IsWindowVisible,
     LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN, LBS_OWNERDRAWFIXED, PostMessageW,
     RegisterWindowMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE,
-    SCROLLINFO, SIF_ALL, SMTO_NORMAL, SPI_GETWHEELSCROLLLINES, SWP_NOMOVE, SWP_NOZORDER,
-    SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW,
-    SystemParametersInfoW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NULL, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
+    SC_RESTORE, SCROLLINFO, SIF_ALL, SMTO_NORMAL, SPI_GETWHEELSCROLLLINES, SWP_NOMOVE,
+    SWP_NOZORDER, SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowPos,
+    SetWindowTextW, SystemParametersInfoW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH,
+    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL,
+    WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -3784,6 +3785,117 @@ fn automation_driver_active_window_reads_new_lines() -> Result<(), Box<dyn std::
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(server.read_markers.lock().unwrap().len(), 2);
     assert_eq!(app.dump_model()?.last_error, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Sends `window` `WM_SYSCOMMAND command`, as its caption buttons do. Sent,
+/// so it has run on return.
+fn send_syscommand(window: HWND, command: u32) {
+    let mut result = 0;
+    assert_ne!(
+        unsafe {
+            SendMessageTimeoutW(
+                window,
+                WM_SYSCOMMAND,
+                command as WPARAM,
+                0,
+                SMTO_NORMAL,
+                5_000,
+                &mut result,
+            )
+        },
+        0
+    );
+}
+
+/// Minimizing mirx leaves the active window: its read marker moves, the
+/// rule having been on screen. Restoring it enters the window again.
+#[test]
+fn automation_driver_minimizing_mirx_moves_the_read_marker()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let server = spawn_mock_homeserver_with_read_marker(bob_lines(4), "$bob-2")?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    wait_for_line_marker(&app)?;
+    let beta = room_identity("!beta:example");
+    app.select_navigation_view(&beta)?;
+    assert_eq!(
+        server.wait_for_read_markers(1)?,
+        [serde_json::json!({ "m.read": "$bob-4" })]
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let frame = app.automation_frame_hwnd() as HWND;
+    send_syscommand(frame, SC_MINIMIZE);
+    assert_eq!(
+        server.wait_for_read_markers(2)?[1..],
+        [serde_json::json!({ "m.fully_read": "$bob-4" })]
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.dump_ui_state()?.mdi.active, beta);
+    // Minimized, it is left already.
+    send_syscommand(frame, SC_MINIMIZE);
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(server.read_markers.lock().unwrap().len(), 2);
+
+    // Back, the rule (the marker never echoed) is on screen again, and
+    // leaving moves the marker again.
+    send_syscommand(frame, SC_RESTORE);
+    app.wait_idle(Duration::from_secs(5))?;
+    std::thread::sleep(Duration::from_millis(500));
+    send_syscommand(frame, SC_MINIMIZE);
+    assert_eq!(
+        server.wait_for_read_markers(3)?[2..],
+        [serde_json::json!({ "m.fully_read": "$bob-4" })]
+    );
+    assert_eq!(app.dump_model()?.last_error, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Minimizing the active room window itself, inside mirx, leaves it: MDI
+/// activates another window.
+#[test]
+fn automation_driver_minimizing_the_active_window_leaves_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let server = spawn_mock_homeserver_with_read_marker(bob_lines(4), "$bob-2")?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    wait_for_line_marker(&app)?;
+    let beta = room_identity("!beta:example");
+    app.select_navigation_view(&beta)?;
+    server.wait_for_read_markers(1)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    send_syscommand(view_child_hwnd(&app, &beta)?, SC_MINIMIZE);
+    app.wait_idle(Duration::from_secs(5))?;
+    // Wine's MDI activates the next window, which leaves this one.
+    assert_ne!(app.dump_ui_state()?.mdi.active, beta);
+    assert_eq!(
+        server.wait_for_read_markers(2)?[1..],
+        [serde_json::json!({ "m.fully_read": "$bob-4" })]
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

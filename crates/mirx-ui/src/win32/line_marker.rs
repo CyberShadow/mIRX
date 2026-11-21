@@ -103,6 +103,19 @@ pub(super) unsafe fn enter_window(hwnd: HWND, view_id: &ViewId) {
     }
 }
 
+/// The user comes back to the active window `view_id` after mirx was
+/// minimized: a room window that was left then is entered again. Any other
+/// resize changes nothing.
+pub(super) unsafe fn return_to_window(hwnd: HWND, view_id: &ViewId) {
+    if let ViewId::Room(_) = view_id {
+        let state = state_ref(hwnd);
+        let timeline = timeline_state_mut(view_timeline(view_id, state.views[view_id].content));
+        if timeline.line_marker_sight == MarkerSight::Away {
+            timeline.line_marker_sight = MarkerSight::Unseen;
+        }
+    }
+}
+
 /// What Ctrl+L says in a window without a line marker.
 const NO_LINE_MARKER_STATUS: &str = "* this window has no line marker";
 
@@ -137,6 +150,8 @@ pub(super) unsafe fn go_to_line_marker(hwnd: HWND) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use windows_sys::Win32::UI::WindowsAndMessaging::SIZE_RESTORED;
+
     use super::super::test_fixtures::*;
     use super::*;
 
@@ -414,6 +429,35 @@ mod tests {
                     .filter(|(room_id, _)| room_id == "!bob:example")
                     .collect::<Vec<_>>();
                 assert_eq!(moves, vec![("!bob:example".to_owned(), "$q0".to_owned())]);
+            });
+        }
+    }
+
+    #[test]
+    fn minimizing_mirx_leaves_the_active_window_and_restoring_enters_it() {
+        unsafe {
+            with_marker_frame(Some("$m1"), |hwnd| {
+                let timeline = ops_timeline(hwnd);
+                let sight = || timeline_state_ref(timeline).line_marker_sight;
+                // At the end, the marker far above was never on screen.
+                SendMessageW(hwnd, WM_SIZE, SIZE_MINIMIZED as WPARAM, 0);
+                assert_eq!(read_marker_moves(state_ref(hwnd)), Vec::new());
+                assert_eq!(sight(), MarkerSight::Away);
+                SendMessageW(hwnd, WM_SIZE, SIZE_RESTORED as WPARAM, 0);
+                assert_eq!(sight(), MarkerSight::Unseen);
+                // Seen, then minimized: it moves, once.
+                SendMessageW(timeline, WM_VSCROLL, SB_TOP as WPARAM, 0);
+                SendMessageW(timeline, WM_PAINT, 0, 0);
+                assert_eq!(sight(), MarkerSight::Seen);
+                SendMessageW(hwnd, WM_SIZE, SIZE_MINIMIZED as WPARAM, 0);
+                SendMessageW(hwnd, WM_SIZE, SIZE_MINIMIZED as WPARAM, 0);
+                assert_eq!(read_marker_moves(state_ref(hwnd)), moved_to("$m39"));
+                // A resize of a window the user is in changes nothing.
+                SendMessageW(hwnd, WM_SIZE, SIZE_RESTORED as WPARAM, 0);
+                SendMessageW(timeline, WM_PAINT, 0, 0);
+                assert_eq!(sight(), MarkerSight::Seen);
+                SendMessageW(hwnd, WM_SIZE, SIZE_RESTORED as WPARAM, 0);
+                assert_eq!(sight(), MarkerSight::Seen);
             });
         }
     }
