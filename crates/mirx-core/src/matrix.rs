@@ -1,17 +1,18 @@
 use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use std::pin::Pin;
 
 use futures_util::{Stream, StreamExt};
 use matrix_sdk::{
-    Client, LoopCtrl, Room, RoomMemberships, SessionChange, SessionMeta, SessionTokens,
+    Client, Room, RoomMemberships, SessionChange, SessionMeta, SessionTokens,
     attachment::{
         AttachmentConfig, AttachmentInfo, BaseAudioInfo, BaseFileInfo, BaseImageInfo, BaseVideoInfo,
     },
@@ -24,7 +25,7 @@ use matrix_sdk::{
             registration::{ApplicationType, ClientMetadata, Localized, OAuthGrantType},
         },
     },
-    config::SyncSettings,
+    config::{SyncSettings, SyncToken},
     deserialized_responses::{
         SyncOrStrippedState, TimelineEvent, TimelineEventKind, UnableToDecryptInfo,
         UnableToDecryptReason,
@@ -4110,6 +4111,11 @@ fn map_decimals((first, second, third): (u16, u16, u16)) -> VerificationDecimals
 /// Runs continuous sync until it fails: the initial snapshot if it is still
 /// to come and `SyncConnected` at the first response, then `SyncStopped`
 /// with why it ended.
+///
+/// The loop is the SDK's `sync_stream` (one `sync_once` after another, the
+/// first reusing the stored token, then `next_batch`, at most one a second
+/// when the server answers at once), run by mirx because each request says
+/// the presence it sets, and that changes while the loop runs.
 pub(crate) async fn sync_task(
     client: Client,
     events: EventSender,
@@ -4117,33 +4123,36 @@ pub(crate) async fn sync_task(
     initial_snapshot: InitialSnapshot,
     paused_sends: PausedSendRooms,
 ) {
-    let connected = Cell::new(false);
-    let result = client
-        .sync_with_result_callback(SyncSettings::default(), |result| {
-            let client = client.clone();
-            let events = events.clone();
-            let connected = &connected;
-            let snapshots = &snapshots;
-            let initial_snapshot = &initial_snapshot;
-            let paused_sends = &paused_sends;
-            async move {
-                let response = result?;
-                if !connected.replace(true) {
-                    // Before SyncConnected: the UI's connected session
-                    // has its rooms.
-                    initial_snapshot
-                        .emit_if_pending(&client, snapshots, &events)
-                        .await;
-                    emit_event(&events, Event::SyncConnected);
-                }
-                // The server answers again.
-                paused_sends.resume(&client);
-                emit_member_snapshots_after_sync(&client, &response, &events).await;
-                Ok(LoopCtrl::Continue)
-            }
-        })
-        .await;
-    let err = result.expect_err("the sync callback never breaks the loop");
+    let mut connected = false;
+    let mut token = SyncToken::ReusePrevious;
+    let mut last_sync: Option<tokio::time::Instant> = None;
+    let err = loop {
+        let settings = SyncSettings::default().token(token);
+        let response = match client.sync_once(settings).await {
+            Ok(response) => response,
+            Err(err) => break err,
+        };
+        token = SyncToken::Specific(response.next_batch.clone());
+        if !connected {
+            connected = true;
+            // Before SyncConnected: the UI's connected session has its
+            // rooms.
+            initial_snapshot
+                .emit_if_pending(&client, &snapshots, &events)
+                .await;
+            emit_event(&events, Event::SyncConnected);
+        }
+        // The server answers again.
+        paused_sends.resume(&client);
+        emit_member_snapshots_after_sync(&client, &response, &events).await;
+        // As the SDK's loop: not more than a request a second when the
+        // server does not wait for news.
+        let now = tokio::time::Instant::now();
+        if last_sync.is_some_and(|last| now - last <= Duration::from_secs(1)) {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        last_sync = Some(now);
+    };
     emit_event(&events, Event::SyncStopped(sync_stop_reason(&err)));
 }
 

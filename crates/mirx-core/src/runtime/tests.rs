@@ -1056,6 +1056,54 @@ fn sync_announces_the_first_response_once() {
     });
 }
 
+#[test]
+fn sync_requests_reuse_the_token_and_say_no_presence() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        let client = mock_server.client_builder().build().await;
+        mock_server.mock_sync().ok(|_| {}).mount().await;
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut core = Core::for_client(client, event_tx.clone());
+
+        run(&mut core, Command::StartSync).await;
+        assert_eq!(next_event(&event_rx).await, Event::SyncStarted);
+        wait_for_sync_requests(&mock_server, 3).await;
+
+        let queries = sync_queries(&mock_server).await;
+        // The first reuses no token (none is stored), every later one the
+        // previous response's `next_batch`.
+        assert_eq!(query_value(&queries[0], "since"), None);
+        for query in &queries[1..] {
+            assert!(query_value(query, "since").is_some(), "{query:?}");
+        }
+        // Online is the default, which goes without the parameter.
+        for query in &queries {
+            assert_eq!(query_value(query, "set_presence"), None, "{query:?}");
+        }
+        core.stop().await;
+    });
+}
+
+/// The query of every `/sync` request so far, in order.
+async fn sync_queries(mock_server: &MatrixMockServer) -> Vec<Vec<(String, String)>> {
+    mock_server
+        .server()
+        .received_requests()
+        .await
+        .expect("the mock server records requests")
+        .into_iter()
+        .filter(|request| request.url.path().ends_with("/sync"))
+        .map(|request| request.url.query_pairs().into_owned().collect())
+        .collect()
+}
+
+fn query_value<'a>(query: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    query
+        .iter()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.as_str())
+}
+
 /// A URL whose port refuses connections: the network is down.
 fn closed_port_url() -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a local port");
