@@ -829,6 +829,10 @@ pub enum RoomActivityKind {
     Sticker(Box<RoomImageActivity>),
     /// A poll started or ended (`m.poll.*` and MSC3381's unstable types).
     Poll(Box<RoomPollActivity>),
+    /// An in-room verification request (`m.key.verification.request`).
+    VerificationRequest(RoomVerificationRequestActivity),
+    /// A message of a type without a line of its own: its body, named by
+    /// its msgtype.
     UnsupportedMessage(UnsupportedRoomMessageActivity),
     UnableToDecrypt(RoomUnableToDecryptActivity),
     StateNotice(RoomStateNoticeActivity),
@@ -1259,6 +1263,15 @@ pub enum RoomPollContent {
         poll_start_event_id: String,
         text: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomVerificationRequestActivity {
+    pub event_id: String,
+    pub sender: RoomUserProfile,
+    /// The user ID asked to verify.
+    pub to: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

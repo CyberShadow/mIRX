@@ -683,6 +683,27 @@ pub(super) fn poll_end(poll_start_event_id: &str, text: &str) -> RoomPollContent
     }
 }
 
+/// Bob's request that `to` verify, in the room.
+pub(super) fn verification_request_activity(
+    room_id: &str,
+    event_id: &str,
+    timestamp_ms: u64,
+    to: &str,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("event:{event_id}"),
+        timestamp_ms,
+        highlight: false,
+        relation: None,
+        kind: RoomActivityKind::VerificationRequest(mirx_core::RoomVerificationRequestActivity {
+            event_id: event_id.to_owned(),
+            sender: user_profile("@bob:example"),
+            to: to.to_owned(),
+        }),
+    }
+}
+
 /// A sticker with a plain source and no thumbnail.
 pub(super) fn sticker_activity(
     room_id: &str,

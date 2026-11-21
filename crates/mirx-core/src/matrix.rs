@@ -146,14 +146,15 @@ use crate::api::{
     RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomPollActivity,
     RoomPollContent, RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity,
-    RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
-    SendMessageThreadTarget, SendReactionRequest, SessionAuth, SetDisplayNameRequest,
-    SetReadMarkerRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
-    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession,
-    SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserDevices,
-    UserIdentityState, UserProfile, VerificationDecimals, VerificationDirection, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
+    RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomUserProfile,
+    RoomVerificationRequestActivity, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
+    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
+    SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,
+    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
+    SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
+    UnsupportedRoomMessageActivity, UserDevices, UserIdentityState, UserProfile,
+    VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::api::{TextStyleSpan, UserLinkSpan, check_text_styles, validate_highlight_word};
 use crate::mentions::body_mentions;
@@ -2509,13 +2510,12 @@ pub(crate) fn register_event_handlers(
                 }
                 let highlight = activity_highlight(room.own_user_id(), &event.sender, &actions);
                 match room_user_profile(&room, &event.sender).await {
-                    Ok(sender) => {
-                        if let Some(activity) =
-                            room_activity_from_sync_message(room_id, &event, sender, highlight)
-                        {
-                            emit_event(&events, Event::RoomActivity(Box::new(activity)));
-                        }
-                    }
+                    Ok(sender) => emit_event(
+                        &events,
+                        Event::RoomActivity(Box::new(room_activity_from_sync_message(
+                            room_id, &event, sender, highlight,
+                        ))),
+                    ),
                     Err(err) => emit_sync_error(&events, err),
                 }
             }
@@ -2721,128 +2721,116 @@ fn sync_message_replacement(event: &OriginalSyncRoomMessageEvent) -> Option<&Mes
     }
 }
 
+/// A message's line: every msgtype has one, so the line the server counts
+/// unread is one the user can read. Its edit (`m.replace`) is no line, so
+/// callers handle that first.
 fn room_activity_from_sync_message(
     room_id: &str,
     event: &OriginalSyncRoomMessageEvent,
     sender: RoomUserProfile,
     highlight: bool,
-) -> Option<RoomActivity> {
+) -> RoomActivity {
     let relation = room_activity_relation_from_content(event.content.relates_to.as_ref());
-
-    if let Some((presentation, text)) = room_message_presentation_and_text_from_message_type(
-        &event.content.msgtype,
-        relation.as_ref(),
-    ) {
-        return Some(RoomActivity {
-            room_id: room_id.to_owned(),
-            activity_id: format!("event:{}", event.event_id),
-            timestamp_ms: event.origin_server_ts.get().into(),
-            highlight,
-            relation,
-            kind: RoomActivityKind::Message(RoomMessageActivity {
-                event_id: Some(event.event_id.to_string()),
-                transaction_id: event
-                    .unsigned
-                    .transaction_id
-                    .as_ref()
-                    .map(ToString::to_string),
-                sender,
-                presentation,
-                body: text.body,
-                styles: text.styles,
-                user_links: text.user_links,
-                send_state: RoomMessageSendState::Sent,
-            }),
-        });
-    }
-
-    if let MessageType::Image(image) = &event.content.msgtype {
-        return Some(RoomActivity {
-            room_id: room_id.to_owned(),
-            activity_id: format!("event:{}", event.event_id),
-            timestamp_ms: event.origin_server_ts.get().into(),
-            highlight,
-            relation: relation.clone(),
-            kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
-                event_id: event.event_id.to_string(),
-                sender,
-                body: image.body.clone(),
-                filename: image.filename.clone(),
-                source: room_media_source_from_matrix(&image.source),
-                info: image.info.as_deref().map(room_image_info_from_matrix),
-            })),
-        });
-    }
-
-    if let MessageType::File(file) = &event.content.msgtype {
-        return Some(RoomActivity {
-            room_id: room_id.to_owned(),
-            activity_id: format!("event:{}", event.event_id),
-            timestamp_ms: event.origin_server_ts.get().into(),
-            highlight,
-            relation: relation.clone(),
-            kind: RoomActivityKind::File(Box::new(RoomFileActivity {
-                event_id: event.event_id.to_string(),
-                sender,
-                body: file.body.clone(),
-                filename: file.filename.clone(),
-                source: room_media_source_from_matrix(&file.source),
-                info: file.info.as_deref().map(room_file_info_from_matrix),
-            })),
-        });
-    }
-
-    if let MessageType::Audio(audio) = &event.content.msgtype {
-        return Some(RoomActivity {
-            room_id: room_id.to_owned(),
-            activity_id: format!("event:{}", event.event_id),
-            timestamp_ms: event.origin_server_ts.get().into(),
-            highlight,
-            relation: relation.clone(),
-            kind: RoomActivityKind::Audio(Box::new(RoomAudioActivity {
-                event_id: event.event_id.to_string(),
-                sender,
-                body: audio.body.clone(),
-                filename: audio.filename.clone(),
-                source: room_media_source_from_matrix(&audio.source),
-                info: audio.info.as_deref().map(room_audio_info_from_matrix),
-            })),
-        });
-    }
-
-    if let MessageType::Video(video) = &event.content.msgtype {
-        return Some(RoomActivity {
-            room_id: room_id.to_owned(),
-            activity_id: format!("event:{}", event.event_id),
-            timestamp_ms: event.origin_server_ts.get().into(),
-            highlight,
-            relation: relation.clone(),
-            kind: RoomActivityKind::Video(Box::new(RoomVideoActivity {
-                event_id: event.event_id.to_string(),
-                sender,
-                body: video.body.clone(),
-                filename: video.filename.clone(),
-                source: room_media_source_from_matrix(&video.source),
-                info: video.info.as_deref().map(room_video_info_from_matrix),
-            })),
-        });
-    }
-
-    let (msgtype, body) = unsupported_room_message_body(&event.content.msgtype)?;
-
-    Some(RoomActivity {
+    let event_id = event.event_id.to_string();
+    let message = |presentation, body: &String, formatted: Option<&FormattedBody>| {
+        let text = styled_message_text(body, formatted, relation.as_ref());
+        RoomActivityKind::Message(RoomMessageActivity {
+            event_id: Some(event_id.clone()),
+            transaction_id: event
+                .unsigned
+                .transaction_id
+                .as_ref()
+                .map(ToString::to_string),
+            sender: sender.clone(),
+            presentation,
+            body: text.body,
+            styles: text.styles,
+            user_links: text.user_links,
+            send_state: RoomMessageSendState::Sent,
+        })
+    };
+    let unsupported = || {
+        RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+            event_id: event_id.clone(),
+            sender: sender.clone(),
+            msgtype: event.content.msgtype.msgtype().to_owned(),
+            body: event.content.msgtype.body().to_owned(),
+        })
+    };
+    let kind = match &event.content.msgtype {
+        MessageType::Text(text) => message(
+            RoomMessagePresentationKind::Text,
+            &text.body,
+            text.formatted.as_ref(),
+        ),
+        MessageType::Notice(notice) => message(
+            RoomMessagePresentationKind::Notice,
+            &notice.body,
+            notice.formatted.as_ref(),
+        ),
+        MessageType::Emote(emote) => message(
+            RoomMessagePresentationKind::Emote,
+            &emote.body,
+            emote.formatted.as_ref(),
+        ),
+        MessageType::Image(image) => RoomActivityKind::Image(Box::new(RoomImageActivity {
+            event_id: event_id.clone(),
+            sender: sender.clone(),
+            body: image.body.clone(),
+            filename: image.filename.clone(),
+            source: room_media_source_from_matrix(&image.source),
+            info: image.info.as_deref().map(room_image_info_from_matrix),
+        })),
+        MessageType::File(file) => RoomActivityKind::File(Box::new(RoomFileActivity {
+            event_id: event_id.clone(),
+            sender: sender.clone(),
+            body: file.body.clone(),
+            filename: file.filename.clone(),
+            source: room_media_source_from_matrix(&file.source),
+            info: file.info.as_deref().map(room_file_info_from_matrix),
+        })),
+        MessageType::Audio(audio) => RoomActivityKind::Audio(Box::new(RoomAudioActivity {
+            event_id: event_id.clone(),
+            sender: sender.clone(),
+            body: audio.body.clone(),
+            filename: audio.filename.clone(),
+            source: room_media_source_from_matrix(&audio.source),
+            info: audio.info.as_deref().map(room_audio_info_from_matrix),
+        })),
+        MessageType::Video(video) => RoomActivityKind::Video(Box::new(RoomVideoActivity {
+            event_id: event_id.clone(),
+            sender: sender.clone(),
+            body: video.body.clone(),
+            filename: video.filename.clone(),
+            source: room_media_source_from_matrix(&video.source),
+            info: video.info.as_deref().map(room_video_info_from_matrix),
+        })),
+        // The line only: the in-room verification handler answers a
+        // request to the signed-in user.
+        MessageType::VerificationRequest(request) => {
+            RoomActivityKind::VerificationRequest(RoomVerificationRequestActivity {
+                event_id: event_id.clone(),
+                sender: sender.clone(),
+                to: request.to.to_string(),
+            })
+        }
+        // What mirx has no line of its own for shows its body, named by
+        // its msgtype.
+        MessageType::Location(_)
+        | MessageType::ServerNotice(_)
+        | MessageType::Gallery(_)
+        | MessageType::_Custom(_) => unsupported(),
+        // ruma marks MessageType as non_exhaustive.
+        _ => unsupported(),
+    };
+    RoomActivity {
         room_id: room_id.to_owned(),
         activity_id: format!("event:{}", event.event_id),
         timestamp_ms: event.origin_server_ts.get().into(),
         highlight,
         relation,
-        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
-            event_id: event.event_id.to_string(),
-            sender,
-            msgtype,
-            body,
-        }),
-    })
+        kind,
+    }
 }
 
 /// The types of message-like events other than `m.room.message` that are
@@ -3224,15 +3212,27 @@ fn room_message_presentation_and_text_from_message_type(
         | MessageType::File(_)
         | MessageType::Video(_)
         | MessageType::Location(_)
+        | MessageType::ServerNotice(_)
+        | MessageType::Gallery(_)
         | MessageType::VerificationRequest(_)
         | MessageType::_Custom(_) => return None,
         // ruma marks MessageType as non_exhaustive, so a final fallback is required.
         _ => return None,
     };
-    let text = formatted
+    Some((presentation, styled_message_text(body, formatted, relation)))
+}
+
+/// A text, notice or emote's text: its HTML `formatted_body` when it has
+/// one with text, else its plain body without a reply fallback for
+/// `relation`.
+fn styled_message_text(
+    body: &str,
+    formatted: Option<&FormattedBody>,
+    relation: Option<&RoomActivityRelation>,
+) -> StyledText {
+    formatted
         .and_then(styled_text_from_formatted_body)
-        .unwrap_or_else(|| StyledText::plain(strip_reply_fallback(relation, body.clone())));
-    Some((presentation, text))
+        .unwrap_or_else(|| StyledText::plain(strip_reply_fallback(relation, body.to_owned())))
 }
 
 /// An HTML formatted body's text, or `None` for another format or HTML
@@ -3244,26 +3244,6 @@ fn styled_text_from_formatted_body(formatted: &FormattedBody) -> Option<StyledTe
     }
     let text = styled_text_from_html(&formatted.body);
     (!text.body.is_empty()).then_some(text)
-}
-
-fn unsupported_room_message_body(message_type: &MessageType) -> Option<(String, String)> {
-    match message_type {
-        MessageType::_Custom(_) => Some((
-            message_type.msgtype().to_owned(),
-            message_type.body().to_owned(),
-        )),
-        MessageType::Text(_)
-        | MessageType::Notice(_)
-        | MessageType::Emote(_)
-        | MessageType::Image(_)
-        | MessageType::Audio(_)
-        | MessageType::File(_)
-        | MessageType::Video(_)
-        | MessageType::Location(_)
-        | MessageType::VerificationRequest(_) => None,
-        // ruma marks MessageType as non_exhaustive, so a final fallback is required.
-        _ => None,
-    }
 }
 
 /// The timeline line for a state event in a sync timeline: a topic, member
@@ -5454,11 +5434,8 @@ async fn room_history_backfill_event_from_timeline_event(
             .collect());
         }
         let sender = senders.get(&event.sender).await?;
-        let Some(activity) =
-            room_activity_from_sync_message(room_id, &event, sender, highlight(&event.sender))
-        else {
-            return Ok(Vec::new());
-        };
+        let activity =
+            room_activity_from_sync_message(room_id, &event, sender, highlight(&event.sender));
         // An edit that did not decrypt, or is no message edit, is no
         // bundled `replace` (ruma drops one that does not deserialize).
         let bundled_edit = event
@@ -7208,8 +7185,8 @@ mod tests {
         RoomMessageSendState, RoomPollActivity, RoomPollContent, RoomPowerLevelUserChange,
         RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
         RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity, RoomUnableToDecryptReason,
-        RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendMessageReplyTarget,
-        SendMessageRequest, SendMessageThreadTarget, SetDisplayNameRequest,
+        RoomUserProfile, RoomVerificationRequestActivity, RoomVideoActivity, RoomVideoInfo,
+        SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SetDisplayNameRequest,
         SetRoomMemberPowerLevelRequest, StoredSession, UnbanRoomMemberRequest,
         UnsupportedRoomMessageActivity, VerificationDecimals, VerificationDirection,
         VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
@@ -8037,7 +8014,7 @@ mod tests {
                 profile("@alice:example.org"),
                 false,
             ),
-            Some(RoomActivity {
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
@@ -8053,7 +8030,7 @@ mod tests {
                     user_links: Vec::new(),
                     send_state: RoomMessageSendState::Sent,
                 }),
-            })
+            }
         );
     }
 
@@ -8335,8 +8312,7 @@ mod tests {
             &event,
             profile("@bob:example.org"),
             false,
-        )
-        .expect("a message activity");
+        );
         let RoomActivityKind::Message(message) = activity.kind else {
             panic!("expected a message activity");
         };
@@ -8406,7 +8382,7 @@ mod tests {
                 profile("@alice:example.org"),
                 false,
             ),
-            Some(RoomActivity {
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
@@ -8422,7 +8398,7 @@ mod tests {
                     user_links: Vec::new(),
                     send_state: RoomMessageSendState::Sent,
                 }),
-            })
+            }
         );
     }
 
@@ -8447,7 +8423,7 @@ mod tests {
                 profile("@alice:example.org"),
                 false,
             ),
-            Some(RoomActivity {
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
@@ -8463,7 +8439,7 @@ mod tests {
                     user_links: Vec::new(),
                     send_state: RoomMessageSendState::Sent,
                 }),
-            })
+            }
         );
     }
 
@@ -9290,7 +9266,7 @@ mod tests {
                 profile("@alice:example.org"),
                 false,
             ),
-            Some(RoomActivity {
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$threaded:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_005,
@@ -9310,7 +9286,7 @@ mod tests {
                     user_links: Vec::new(),
                     send_state: RoomMessageSendState::Sent,
                 }),
-            })
+            }
         );
     }
 
@@ -9340,7 +9316,7 @@ mod tests {
                 profile("@alice:example.org"),
                 false,
             ),
-            Some(RoomActivity {
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$reply:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_010,
@@ -9358,7 +9334,7 @@ mod tests {
                     user_links: Vec::new(),
                     send_state: RoomMessageSendState::Sent,
                 }),
-            })
+            }
         );
     }
 
@@ -9389,7 +9365,7 @@ mod tests {
                 profile("@alice:example.org"),
                 false,
             ),
-            Some(RoomActivity {
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$image-thread:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_015,
@@ -9409,7 +9385,7 @@ mod tests {
                     },
                     info: None,
                 })),
-            })
+            }
         );
     }
 
@@ -9442,7 +9418,7 @@ mod tests {
                 profile("@alice:example.org"),
                 false,
             ),
-            Some(RoomActivity {
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
@@ -9465,7 +9441,7 @@ mod tests {
                         thumbnail_source: None,
                     }),
                 })),
-            })
+            }
         );
     }
 
@@ -9492,7 +9468,7 @@ mod tests {
                 profile("@alice:example.org"),
                 false,
             ),
-            Some(RoomActivity {
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$image:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_050,
@@ -9508,7 +9484,7 @@ mod tests {
                     },
                     info: None,
                 })),
-            })
+            }
         );
     }
 
@@ -9565,7 +9541,7 @@ mod tests {
                 profile("@alice:example.org"),
                 false,
             ),
-            Some(RoomActivity {
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$encrypted:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_060,
@@ -9614,7 +9590,7 @@ mod tests {
                         }),
                     }),
                 })),
-            })
+            }
         );
     }
 
@@ -9643,7 +9619,7 @@ mod tests {
                 profile("@alice:example.org"),
                 false,
             ),
-            Some(RoomActivity {
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$image-thumb:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_070,
@@ -9668,7 +9644,7 @@ mod tests {
                         }),
                     }),
                 })),
-            })
+            }
         );
     }
 
@@ -9700,7 +9676,7 @@ mod tests {
                 profile("@alice:example.org"),
                 false,
             ),
-            Some(RoomActivity {
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$audio:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_100,
@@ -9720,7 +9696,7 @@ mod tests {
                         duration_ms: Some(12_000),
                     }),
                 })),
-            })
+            }
         );
     }
 
@@ -9751,7 +9727,7 @@ mod tests {
                 profile("@alice:example.org"),
                 false,
             ),
-            Some(RoomActivity {
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$file:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_200,
@@ -9770,7 +9746,7 @@ mod tests {
                         size: Some(65_536),
                     }),
                 })),
-            })
+            }
         );
     }
 
@@ -9805,7 +9781,7 @@ mod tests {
                 profile("@alice:example.org"),
                 false,
             ),
-            Some(RoomActivity {
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$video:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_300,
@@ -9830,33 +9806,72 @@ mod tests {
                         }),
                     }),
                 })),
-            })
+            }
         );
     }
 
+    /// Every msgtype has a line: the server counts every message unread.
     #[test]
-    fn location_sync_message_mapping_remains_ignored() {
-        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
-            "type": "m.room.message",
-            "content": {
-                "msgtype": "m.location",
-                "body": "geo:37.786971,-122.399677",
-                "geo_uri": "geo:37.786971,-122.399677"
-            },
-            "event_id": "$location:example.org",
-            "sender": "@alice:example.org",
-            "origin_server_ts": 1700000000400u64
-        }))
-        .expect("deserialize sync location event");
-
-        assert_eq!(
+    fn messages_without_a_line_of_their_own_show_their_body() {
+        let line = |content: serde_json::Value| {
+            let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+                "type": "m.room.message",
+                "content": content,
+                "event_id": "$m:example.org",
+                "sender": "@alice:example.org",
+                "origin_server_ts": 1700000000400u64
+            }))
+            .expect("deserialize sync message event");
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
                 profile("@alice:example.org"),
                 false,
-            ),
-            None
+            )
+            .kind
+        };
+        let unsupported = |msgtype: &str, body: &str| {
+            RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+                event_id: "$m:example.org".to_owned(),
+                sender: profile("@alice:example.org"),
+                msgtype: msgtype.to_owned(),
+                body: body.to_owned(),
+            })
+        };
+
+        assert_eq!(
+            line(serde_json::json!({
+                "msgtype": "m.location",
+                "body": "Big Ben, London",
+                "geo_uri": "geo:51.5008,0.1247"
+            })),
+            unsupported("m.location", "Big Ben, London")
+        );
+        assert_eq!(
+            line(serde_json::json!({
+                "msgtype": "m.server_notice",
+                "body": "You have exceeded your quota",
+                "server_notice_type": "m.server_notice.usage_limit_reached"
+            })),
+            unsupported("m.server_notice", "You have exceeded your quota")
+        );
+        assert_eq!(
+            line(serde_json::json!({ "msgtype": "org.example.clip", "body": "a clip" })),
+            unsupported("org.example.clip", "a clip")
+        );
+        assert_eq!(
+            line(serde_json::json!({
+                "msgtype": "m.key.verification.request",
+                "body": "Alice is requesting to verify your key",
+                "from_device": "ALICEDEVICE",
+                "methods": ["m.sas.v1"],
+                "to": "@carol:example.org"
+            })),
+            RoomActivityKind::VerificationRequest(RoomVerificationRequestActivity {
+                event_id: "$m:example.org".to_owned(),
+                sender: profile("@alice:example.org"),
+                to: "@carol:example.org".to_owned(),
+            })
         );
     }
 
@@ -9886,7 +9901,7 @@ mod tests {
                 profile("@alice:example.org"),
                 false,
             ),
-            Some(RoomActivity {
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$custom:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_450,
@@ -9898,7 +9913,7 @@ mod tests {
                     msgtype: "com.example.custom".to_owned(),
                     body: "Custom body".to_owned(),
                 }),
-            })
+            }
         );
     }
 

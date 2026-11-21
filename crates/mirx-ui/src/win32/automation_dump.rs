@@ -517,6 +517,7 @@ fn ui_timeline_line_kind(kind: &TimelineRowKind) -> UiTimelineLineKind {
         TimelineRowKind::Audio { .. } => UiTimelineLineKind::Audio,
         TimelineRowKind::Video { .. } => UiTimelineLineKind::Video,
         TimelineRowKind::Poll { .. } => UiTimelineLineKind::Poll,
+        TimelineRowKind::VerificationRequest { .. } => UiTimelineLineKind::VerificationRequest,
         TimelineRowKind::Unsupported { .. } => UiTimelineLineKind::Unsupported,
         TimelineRowKind::UnableToDecrypt => UiTimelineLineKind::UnableToDecrypt,
         // A redacted line was a message or a notice; the dump has always

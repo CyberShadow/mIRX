@@ -246,6 +246,10 @@ pub(super) enum TimelineRowKind {
     Poll {
         highlight: bool,
     },
+    /// An in-room verification request.
+    VerificationRequest {
+        highlight: bool,
+    },
     Unsupported {
         highlight: bool,
     },
@@ -722,6 +726,29 @@ fn activity_line_text(
             action_line_with_link(timestamp, &poll.sender, &poll_line_body(room_view, poll)),
             None,
         ),
+        RoomActivityKind::VerificationRequest(request) => {
+            const WANTS: &str = "wants to verify ";
+            let line = action_line(
+                timestamp,
+                &request.sender,
+                &format!("{WANTS}{}", request.to),
+            );
+            let to_start = line.body_offset + WANTS.len();
+            let user_links = vec![
+                sender_link(&line, &request.sender),
+                RowUserLink {
+                    range: to_start..to_start + request.to.len(),
+                    user_id: request.to.clone(),
+                },
+            ];
+            (
+                TimelineRowKind::VerificationRequest {
+                    highlight: activity.highlight,
+                },
+                (line.text, user_links),
+                None,
+            )
+        }
         RoomActivityKind::File(message) => {
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
             let metadata_suffix = format_room_file_metadata_suffix(message.info.as_ref());
@@ -1169,6 +1196,33 @@ mod tests {
     fn line_of(room_view: &RoomViewModel, activity: &RoomActivity) -> (TimelineRowKind, String) {
         let line = activity_line_text(room_view, activity, "[12:00] ", None);
         (line.kind, line.text)
+    }
+
+    #[test]
+    fn a_verification_request_links_whom_it_asks() {
+        let request =
+            verification_request_activity("!room:example", "$verify", 1, "@carol:example");
+        let line = activity_line_text(&RoomViewModel::default(), &request, "[12:00] ", None);
+        assert_eq!(
+            line.kind,
+            TimelineRowKind::VerificationRequest { highlight: false }
+        );
+        assert_eq!(
+            line.text,
+            "[12:00] * @bob:example wants to verify @carol:example"
+        );
+        let linked = line
+            .user_links
+            .iter()
+            .map(|link| (&line.text[link.range.clone()], link.user_id.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            linked,
+            [
+                ("@bob:example", "@bob:example"),
+                ("@carol:example", "@carol:example")
+            ]
+        );
     }
 
     #[test]

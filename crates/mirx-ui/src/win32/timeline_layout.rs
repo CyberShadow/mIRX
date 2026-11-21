@@ -677,6 +677,7 @@ pub(super) fn timeline_row_color(
         | TimelineRowKind::Audio { highlight: true }
         | TimelineRowKind::Video { highlight: true }
         | TimelineRowKind::Poll { highlight: true }
+        | TimelineRowKind::VerificationRequest { highlight: true }
         | TimelineRowKind::Unsupported { highlight: true }
         | TimelineRowKind::StateNotice {
             highlight: true, ..
@@ -729,6 +730,7 @@ pub(super) fn timeline_row_color(
         | TimelineRowKind::Audio { highlight: false }
         | TimelineRowKind::Video { highlight: false }
         | TimelineRowKind::Poll { highlight: false }
+        | TimelineRowKind::VerificationRequest { highlight: false }
         | TimelineRowKind::Unsupported { highlight: false }
         | TimelineRowKind::UnableToDecrypt => ColorItem::Other,
     };

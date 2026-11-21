@@ -32,21 +32,22 @@ use mirx_testkit::{
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState, RoomPollActivity,
     RoomPollContent, RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReactionSummary,
     RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag,
-    RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomVideoActivity, RoomVideoInfo,
-    SendFileArgs, SessionAuth, SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedHistoryCommand, SubmittedMemberModerationCommand,
-    SubmittedMembershipCommand, SubmittedMessageCommand, SubmittedPowerLevelCommand,
-    SubmittedProfileCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
-    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
-    SubmittedSetupRecoveryCommand, SubmittedUserCommand, SwitchbarItem, SwitchbarState,
-    TestkitError, UiActiveTimeline, UiActivityColors, UiColorItem, UiColors, UiComposeTarget,
-    UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState,
-    UiFrameLayout, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
-    UiRect, UiRefreshCounters, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState,
-    UiRoomState, UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink,
-    UiTimestamp, UiTipsOptions, UiToolbarButton, UiTray, UiTrayMenuItem, UiTrayOptions,
-    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionArgs,
-    VerificationDecimals, VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
+    RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomVerificationRequestActivity,
+    RoomVideoActivity, RoomVideoInfo, SendFileArgs, SessionAuth, SetupE2eeRecoveryArgs, SpaceChild,
+    StatusBarState, StoredSession, SubmittedDirectRoomCommand, SubmittedHistoryCommand,
+    SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedMessageCommand,
+    SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
+    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
+    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SubmittedUserCommand, SwitchbarItem,
+    SwitchbarState, TestkitError, UiActiveTimeline, UiActivityColors, UiColorItem, UiColors,
+    UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
+    UiFindState, UiFrameLayout, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem,
+    UiOptionsDialog, UiPoint, UiRect, UiRefreshCounters, UiRoomHistoryBackfillState, UiRoomList,
+    UiRoomReadState, UiRoomState, UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind,
+    UiTimelineLink, UiTimestamp, UiTipsOptions, UiToolbarButton, UiTray, UiTrayMenuItem,
+    UiTrayOptions, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
+    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
+    ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -2342,6 +2343,45 @@ fn room_activity_sticker_round_trips_through_json() {
     );
     assert_eq!(
         serde_json::to_value(&core).expect("serialize core sticker activity"),
+        core_json
+    );
+}
+
+#[test]
+fn room_verification_request_activity_round_trips_through_json() {
+    let kind = RoomActivityKind::VerificationRequest(RoomVerificationRequestActivity {
+        event_id: "$e".to_owned(),
+        sender: "@bob:example".to_owned(),
+        to: "@carol:example".to_owned(),
+    });
+    let json = serde_json::json!({
+        "type": "verification_request",
+        "event_id": "$e",
+        "sender": "@bob:example",
+        "to": "@carol:example"
+    });
+    assert_eq!(
+        serde_json::to_value(&kind).expect("serialize request"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivityKind>(json).expect("deserialize request"),
+        kind
+    );
+    let core_json = serde_json::json!({
+        "type": "verification_request",
+        "event_id": "$e",
+        "sender": {
+            "user_id": "@bob:example",
+            "display_name": null,
+            "display_name_ambiguous": false
+        },
+        "to": "@carol:example"
+    });
+    let core = serde_json::from_value::<CoreRoomActivityKind>(core_json.clone())
+        .expect("deserialize core request");
+    assert_eq!(
+        serde_json::to_value(&core).expect("serialize core request"),
         core_json
     );
 }

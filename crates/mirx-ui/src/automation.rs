@@ -1226,6 +1226,7 @@ pub(crate) enum UiTimelineLineKind {
     Audio,
     Video,
     Poll,
+    VerificationRequest,
     Unsupported,
     UnableToDecrypt,
     StateNotice,
@@ -2329,6 +2330,7 @@ pub(crate) enum DumpRoomActivityKind {
     Video(Box<DumpRoomVideoActivity>),
     Sticker(Box<DumpRoomImageActivity>),
     Poll(Box<DumpRoomPollActivity>),
+    VerificationRequest(DumpRoomVerificationRequestActivity),
     UnsupportedMessage(DumpUnsupportedRoomMessageActivity),
     UnableToDecrypt(DumpRoomUnableToDecryptActivity),
     StateNotice(DumpRoomStateNoticeActivity),
@@ -2483,6 +2485,14 @@ pub(crate) struct DumpRoomPollActivity {
     pub(crate) event_id: String,
     pub(crate) sender: String,
     pub(crate) content: mirx_core::RoomPollContent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomVerificationRequestActivity {
+    pub(crate) event_id: String,
+    pub(crate) sender: String,
+    pub(crate) to: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2747,6 +2757,13 @@ pub(crate) fn dump_room_activity_kind_from_core(kind: &RoomActivityKind) -> Dump
                 sender: poll.sender.user_id.clone(),
                 content: poll.content.clone(),
             }))
+        }
+        RoomActivityKind::VerificationRequest(request) => {
+            DumpRoomActivityKind::VerificationRequest(DumpRoomVerificationRequestActivity {
+                event_id: request.event_id.clone(),
+                sender: request.sender.user_id.clone(),
+                to: request.to.clone(),
+            })
         }
         RoomActivityKind::UnsupportedMessage(message) => DumpRoomActivityKind::UnsupportedMessage(
             dump_unsupported_room_message_activity_from_core(message),
@@ -3936,6 +3953,27 @@ mod tests {
                 "event_id":"$e",
                 "sender":"@bob:example",
                 "content":{"type":"end","poll_start_event_id":"$poll","text":"Pizza won"}
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(
+                super::dump_room_activity_from_activity(&activity(
+                    RoomActivityKind::VerificationRequest(
+                        mirx_core::RoomVerificationRequestActivity {
+                            event_id: "$e".to_owned(),
+                            sender: user_profile("@bob:example"),
+                            to: "@carol:example".to_owned(),
+                        }
+                    )
+                ))
+                .kind
+            )
+            .expect("serialize a verification request's dump"),
+            json!({
+                "type":"verification_request",
+                "event_id":"$e",
+                "sender":"@bob:example",
+                "to":"@carol:example"
             })
         );
     }

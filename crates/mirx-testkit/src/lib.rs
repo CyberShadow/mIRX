@@ -843,6 +843,7 @@ pub enum RoomActivityKind {
     /// An `m.sticker`, as an image; `filename` is always `None`.
     Sticker(Box<RoomImageActivity>),
     Poll(Box<RoomPollActivity>),
+    VerificationRequest(RoomVerificationRequestActivity),
     UnsupportedMessage(UnsupportedRoomMessageActivity),
     UnableToDecrypt(RoomUnableToDecryptActivity),
     StateNotice(RoomStateNoticeActivity),
@@ -1052,6 +1053,15 @@ pub struct RoomPollActivity {
     pub event_id: String,
     pub sender: String,
     pub content: RoomPollContent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomVerificationRequestActivity {
+    pub event_id: String,
+    pub sender: String,
+    /// The user ID asked to verify.
+    pub to: String,
 }
 
 /// A poll's start or its end, as `mirx_core::RoomPollContent`.
@@ -1499,6 +1509,7 @@ pub enum UiTimelineLineKind {
     Audio,
     Video,
     Poll,
+    VerificationRequest,
     Unsupported,
     UnableToDecrypt,
     StateNotice,

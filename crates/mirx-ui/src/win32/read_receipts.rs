@@ -303,6 +303,15 @@ mod tests {
             named("$poll-end")
         );
         assert_eq!(
+            room_line(verification_request_activity(
+                "!room:example",
+                "$verify",
+                2,
+                "@carol:example"
+            )),
+            named("$verify")
+        );
+        assert_eq!(
             room_line(unsupported_message_activity(
                 "!room:example",
                 "$custom",

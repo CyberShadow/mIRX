@@ -485,6 +485,7 @@ impl RoomViewModel {
             | RoomActivityKind::Video(_)
             | RoomActivityKind::Sticker(_)
             | RoomActivityKind::Poll(_)
+            | RoomActivityKind::VerificationRequest(_)
             | RoomActivityKind::UnsupportedMessage(_)
             | RoomActivityKind::UnableToDecrypt(_) => self.push_live(activity),
             RoomActivityKind::StateNotice(notice) => {
@@ -809,6 +810,7 @@ impl RoomViewModel {
             | RoomActivityKind::Video(_)
             | RoomActivityKind::Sticker(_)
             | RoomActivityKind::Poll(_)
+            | RoomActivityKind::VerificationRequest(_)
             | RoomActivityKind::UnsupportedMessage(_)
             | RoomActivityKind::StateNotice(_)
             | RoomActivityKind::Redacted(_) => return false,
@@ -1433,6 +1435,16 @@ pub(super) fn last_activity_from_room_activity(
             },
             send_state: RoomMessageSendState::Sent,
         }),
+        RoomActivityKind::VerificationRequest(request) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: Some(request.event_id.clone()),
+            transaction_id: None,
+            sender: request.sender.user_id.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
+            body: "[verification request]".to_owned(),
+            send_state: RoomMessageSendState::Sent,
+        }),
         RoomActivityKind::StateNotice(_) => None,
         RoomActivityKind::Redacted(_) => None,
     }
@@ -1449,6 +1461,7 @@ pub(super) fn room_activity_sender_user_id(activity: &RoomActivity) -> Option<&s
         RoomActivityKind::Video(message) => Some(&message.sender.user_id),
         RoomActivityKind::Sticker(message) => Some(&message.sender.user_id),
         RoomActivityKind::Poll(poll) => Some(&poll.sender.user_id),
+        RoomActivityKind::VerificationRequest(request) => Some(&request.sender.user_id),
         RoomActivityKind::UnsupportedMessage(message) => Some(&message.sender.user_id),
         RoomActivityKind::UnableToDecrypt(message) => Some(&message.sender.user_id),
         RoomActivityKind::StateNotice(notice) => Some(&notice.sender.user_id),
@@ -1477,6 +1490,7 @@ pub(super) fn activity_level_for(
         | RoomActivityKind::Video(_)
         | RoomActivityKind::Sticker(_)
         | RoomActivityKind::Poll(_)
+        | RoomActivityKind::VerificationRequest(_)
         | RoomActivityKind::UnsupportedMessage(_)
         | RoomActivityKind::UnableToDecrypt(_) => ViewActivityLevel::Message,
         RoomActivityKind::StateNotice(_) | RoomActivityKind::Redacted(_) => {
@@ -1513,6 +1527,7 @@ pub(super) fn room_activity_event_id(activity: &RoomActivity) -> Option<&str> {
         RoomActivityKind::Video(message) => Some(message.event_id.as_str()),
         RoomActivityKind::Sticker(message) => Some(message.event_id.as_str()),
         RoomActivityKind::Poll(poll) => Some(poll.event_id.as_str()),
+        RoomActivityKind::VerificationRequest(request) => Some(request.event_id.as_str()),
         RoomActivityKind::UnsupportedMessage(message) => Some(message.event_id.as_str()),
         RoomActivityKind::UnableToDecrypt(message) => Some(message.event_id.as_str()),
         RoomActivityKind::StateNotice(notice) => Some(notice.event_id.as_str()),
@@ -1568,6 +1583,7 @@ fn room_activity_thread_root_label(activity: &RoomActivity) -> Option<String> {
             RoomPollContent::Start { question, .. } => question.clone(),
             RoomPollContent::End { text, .. } => text.clone(),
         }),
+        RoomActivityKind::VerificationRequest(_) => Some("Verification request".to_owned()),
         RoomActivityKind::UnsupportedMessage(message) => Some(message.body.clone()),
         RoomActivityKind::UnableToDecrypt(_) => Some("Unable to decrypt message".to_owned()),
         RoomActivityKind::StateNotice(_) => None,
@@ -1675,6 +1691,7 @@ pub(super) fn read_target_for_room_activity(activity: &RoomActivity) -> Option<&
         | RoomActivityKind::Video(_)
         | RoomActivityKind::Sticker(_)
         | RoomActivityKind::Poll(_)
+        | RoomActivityKind::VerificationRequest(_)
         | RoomActivityKind::UnsupportedMessage(_)
         | RoomActivityKind::UnableToDecrypt(_)
         | RoomActivityKind::StateNotice(_)
@@ -2101,6 +2118,7 @@ mod tests {
         let sticker = sticker_activity("!room:example", "$s", "@bob:example", 1, "s");
         let poll = poll_activity("!room:example", "$p", 1, poll_start("q", &["a", "b"]));
         let poll_ended = poll_activity("!room:example", "$pe", 1, poll_end("$p", "a won"));
+        let verification = verification_request_activity("!room:example", "$v", 1, "@me:example");
         let unsupported = unsupported_message_activity(
             "!room:example",
             "$u",
@@ -2132,6 +2150,7 @@ mod tests {
             &sticker,
             &poll,
             &poll_ended,
+            &verification,
             &unsupported,
             &undecryptable,
         ] {
@@ -2190,6 +2209,15 @@ mod tests {
                 poll_end("$p", "Pizza won")
             )),
             "[poll ended] Pizza won"
+        );
+        assert_eq!(
+            body(verification_request_activity(
+                "!room:example",
+                "$v",
+                1,
+                "@carol:example"
+            )),
+            "[verification request]"
         );
     }
 
