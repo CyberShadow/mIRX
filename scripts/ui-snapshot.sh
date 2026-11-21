@@ -1273,6 +1273,21 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!marker:example'
       ;;
+    line-marker-unshown)
+      # The read marker names an event no line shows (an edit of Dave's
+      # line), sent between Dave's line and Alice's: the rule sits below
+      # Dave's line, by the marker's time.
+      expect_selected='!marker:example'
+      expect_active_view='room:!marker:example'
+      room_expect_args=(
+        --expect-room '!marker:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!marker:example::<Dave> I will tag the release'
+        --expect-room-view '!marker:example::<Bob> thanks'
+      )
+      expect_switchbar_active='room:!marker:example'
+      ;;
     redactions)
       expect_selected='!redactions:example'
       expect_active_view='room:!redactions:example'
