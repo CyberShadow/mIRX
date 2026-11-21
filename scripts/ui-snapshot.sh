@@ -480,6 +480,12 @@ configure_case_expectations() {
         --expect-no-navigation-text 'encryption enabled'
         --expect-no-navigation-text 'deploy window opens'
       )
+      # Never signed in: Connect starts the sign-in. Disconnect, shown
+      # only when it applies, keeps its button enabled.
+      toolbar_button_expect_args=(
+        --expect-toolbar-button 'Connect::shown::enabled'
+        --expect-toolbar-button 'Disconnect::hidden::enabled'
+      )
       ;;
     invited-room-list)
       expect_selected='!invite:example'
@@ -977,11 +983,6 @@ configure_case_expectations() {
       expect_switchbar_active='status'
       navigation_forbid_args=(
         --expect-no-navigation-text 'flow-verify-request'
-      )
-      # Never signed in: Connect starts the sign-in.
-      toolbar_button_expect_args=(
-        --expect-toolbar-button 'Connect::shown::enabled'
-        --expect-toolbar-button 'Disconnect::hidden::disabled'
       )
       ;;
     toolbar-connected)
