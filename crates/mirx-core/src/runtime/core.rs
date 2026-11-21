@@ -2,14 +2,26 @@
 //! jobs and the session's lifecycle bring back.
 //!
 //! In a session, a command runs as a job on its lane (`jobs`), beside the
-//! actor. The actor answers every command with exactly one
-//! `CommandHandled`, after the command's own events: an immediate command
-//! after its handling, a lane command after its job's followup is applied,
-//! and a command that a logout or shutdown drops when it drops it.
+//! actor. Signing in, restoring and logging out are transitions: futures
+//! the actor polls beside the commands, so `CancelLogin` and `Shutdown`
+//! cut them short. The commands that come during a transition wait in
+//! `deferred` and run, in order, when it ends.
+//!
+//! The actor answers every command with exactly one `CommandHandled`,
+//! after the command's own events: an immediate command after its
+//! handling, a lane command after its job's followup is applied, a
+//! transition's command at its end, and a command that a logout, a cancel
+//! or a shutdown drops when it drops it.
+//!
+//! The actor awaits only in its `select!` and in teardowns that end
+//! without the server (aborting and joining tasks): it never waits for
+//! the network.
 
+use std::collections::VecDeque;
 use std::io;
 use std::ops::ControlFlow;
 
+use futures_util::future::LocalBoxFuture;
 use matrix_sdk::Client;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
@@ -25,21 +37,45 @@ use crate::api::{
     Command, CoreConfig, Event, LoginRequest, Operation, RestoreSessionRequest, SyncStopReason,
 };
 use crate::loopback::LoopbackRedirect;
-use crate::matrix::{self, BrowserFlow};
+use crate::matrix::{self, BrowserFlow, MatrixCoreError};
 
 pub(super) struct Core {
     config: CoreConfig,
     events: EventSender,
     state: Lifecycle,
     jobs: Jobs<Session, Followup>,
+    /// The commands that came during the transition under way, in order.
+    /// Empty when none is.
+    deferred: VecDeque<Route>,
 }
 
 enum Lifecycle {
     Idle,
+    /// A sign-in or restore under way: until the session is read, or until
+    /// the browser's page is ready.
+    SigningIn(SigningIn),
     /// A browser sign-in waits for the browser to come back to the
     /// loopback listener.
     AwaitingBrowser(Box<PendingBrowserLogin>),
     Ready(Session),
+    /// A logout waits for the server. Its jobs go on; the session stays
+    /// whole if the server refuses.
+    LoggingOut(LoggingOut),
+}
+
+struct SigningIn {
+    /// Spawns nothing (see `lifecycle`): dropping it cancels the sign-in.
+    transition: LocalBoxFuture<'static, SignInEnd>,
+    /// A `Login` or `RestoreSession` is owed its ack at the end; the end
+    /// of a browser sign-in is not.
+    owes: Owes,
+}
+
+struct LoggingOut {
+    session: Session,
+    transition: LocalBoxFuture<'static, Result<(), MatrixCoreError>>,
+    /// Sync ran before the logout stopped it.
+    resume_sync: bool,
 }
 
 struct PendingBrowserLogin {
@@ -56,14 +92,32 @@ struct PendingBrowserLogin {
 enum Next {
     Command(Option<Command>),
     Job(Finished<Followup>),
+    SignInEnd(SignInEnd),
     Redirect(io::Result<LoopbackRedirect>),
+    LogoutEnd(Result<(), MatrixCoreError>),
     IdentityResetEnd(IdentityResetEnd),
 }
 
 impl Lifecycle {
+    fn in_transition(&self) -> bool {
+        matches!(self, Self::SigningIn(_) | Self::LoggingOut(_))
+    }
+
+    /// The session, while jobs can run.
+    fn session(&mut self) -> &mut Session {
+        match self {
+            Self::Ready(session) | Self::LoggingOut(LoggingOut { session, .. }) => session,
+            Self::Idle | Self::SigningIn(_) | Self::AwaitingBrowser(_) => {
+                unreachable!("jobs run only in a session")
+            }
+        }
+    }
+
     /// What this state waits for besides commands and jobs. Cancel-safe.
     async fn next(&mut self) -> Next {
         match self {
+            Self::SigningIn(signing_in) => Next::SignInEnd((&mut signing_in.transition).await),
+            Self::LoggingOut(logging_out) => Next::LogoutEnd((&mut logging_out.transition).await),
             Self::AwaitingBrowser(pending) => Next::Redirect(
                 (&mut pending.redirect)
                     .await
@@ -84,6 +138,7 @@ impl Core {
             events,
             state: Lifecycle::Idle,
             jobs: Jobs::new(),
+            deferred: VecDeque::new(),
         }
     }
 
@@ -120,9 +175,11 @@ impl Core {
                 self.shut_down().await;
                 return ControlFlow::Break(());
             }
-            Next::Command(Some(command)) => return self.dispatch(command).await,
+            Next::Command(Some(command)) => self.dispatch(route(command)).await?,
             Next::Job(finished) => self.finish_job(finished),
-            Next::Redirect(redirect) => self.finish_browser_login(redirect).await,
+            Next::SignInEnd(end) => self.sign_in_ended(end),
+            Next::Redirect(redirect) => self.finish_browser_login(redirect),
+            Next::LogoutEnd(result) => self.logout_ended(result).await,
             Next::IdentityResetEnd(end) => {
                 let Lifecycle::Ready(session) = &mut self.state else {
                     unreachable!("only a session waits for an identity reset");
@@ -132,29 +189,38 @@ impl Core {
                     .enqueue(Lane::E2ee, identity_reset_ended(end), session);
             }
         }
+        // A transition that ended lets the commands that came during it run.
+        while !self.state.in_transition()
+            && let Some(route) = self.deferred.pop_front()
+        {
+            self.dispatch(route).await?;
+        }
         ControlFlow::Continue(())
     }
 
-    async fn dispatch(&mut self, command: Command) -> ControlFlow<()> {
-        match route(command) {
-            Route::Login(request) => self.log_in(request).await,
-            Route::RestoreSession(request) => self.restore(request).await,
-            Route::CancelLogin => self.cancel_login().await,
-            Route::Logout => self.log_out().await,
-            Route::StartSync => self.start_sync(),
-            Route::StopSync => self.stop_sync(),
-            Route::Shutdown => {
+    async fn dispatch(&mut self, route: Route) -> ControlFlow<()> {
+        match (route, &self.state) {
+            (Route::Shutdown, _) => {
                 self.shut_down().await;
                 ack(&self.events);
                 return ControlFlow::Break(());
             }
-            Route::Lane(command) => return self.enqueue(command),
+            (Route::CancelLogin, Lifecycle::SigningIn(_)) => self.cancel_sign_in(),
+            (route, Lifecycle::SigningIn(_) | Lifecycle::LoggingOut(_)) => {
+                self.deferred.push_back(route);
+            }
+            (Route::Login(request), _) => self.log_in(request),
+            (Route::RestoreSession(request), _) => self.restore(request),
+            (Route::CancelLogin, _) => self.cancel_login().await,
+            (Route::Logout, _) => self.log_out().await,
+            (Route::StartSync, _) => self.start_sync(),
+            (Route::StopSync, _) => self.stop_sync(),
+            (Route::Lane(command), _) => self.enqueue(command),
         }
-        ack(&self.events);
         ControlFlow::Continue(())
     }
 
-    fn enqueue(&mut self, command: LaneCommand) -> ControlFlow<()> {
+    fn enqueue(&mut self, command: LaneCommand) {
         let LaneCommand {
             lane,
             refusal,
@@ -166,15 +232,15 @@ impl Core {
                 refusal.emit(&self.events);
                 ack(&self.events);
             }
+            Lifecycle::SigningIn(_) | Lifecycle::LoggingOut(_) => {
+                unreachable!("commands wait out a transition")
+            }
         }
-        ControlFlow::Continue(())
     }
 
     fn finish_job(&mut self, finished: Finished<Followup>) {
         let Finished { lane, owes, output } = finished;
-        let Lifecycle::Ready(session) = &mut self.state else {
-            unreachable!("jobs run only in a session");
-        };
+        let session = self.state.session();
         match output {
             Followup::Done => {}
             Followup::Watch(flow, watcher) => session.watch(&flow, watcher),
@@ -186,38 +252,55 @@ impl Core {
         self.jobs.release(&lane, session);
     }
 
-    async fn log_in(&mut self, request: LoginRequest) {
+    fn log_in(&mut self, request: LoginRequest) {
         if !matches!(self.state, Lifecycle::Idle) {
             emit_invalid_state(
                 &self.events,
                 Operation::Login,
                 "login requires an idle core; logout first",
             );
+            ack(&self.events);
             return;
         }
-        let end = lifecycle::log_in(self.config.clone(), self.events.clone(), request).await;
-        self.signed_in(end);
+        self.state = Lifecycle::SigningIn(SigningIn {
+            transition: Box::pin(lifecycle::log_in(
+                self.config.clone(),
+                self.events.clone(),
+                request,
+            )),
+            owes: Owes::Ack,
+        });
     }
 
-    async fn restore(&mut self, request: RestoreSessionRequest) {
+    fn restore(&mut self, request: RestoreSessionRequest) {
         if !matches!(self.state, Lifecycle::Idle) {
             emit_invalid_state(
                 &self.events,
                 Operation::RestoreSession,
                 "session restore requires an idle core; logout first",
             );
+            ack(&self.events);
             return;
         }
-        let end = lifecycle::restore(self.config.clone(), self.events.clone(), request).await;
-        self.signed_in(end);
+        self.state = Lifecycle::SigningIn(SigningIn {
+            transition: Box::pin(lifecycle::restore(
+                self.config.clone(),
+                self.events.clone(),
+                request,
+            )),
+            owes: Owes::Ack,
+        });
     }
 
-    /// Applies the end of a sign-in or restore to an idle core.
-    fn signed_in(&mut self, end: SignInEnd) {
-        assert!(
-            matches!(self.state, Lifecycle::Idle),
-            "a sign-in starts idle"
-        );
+    /// The sign-in or restore under way ended: applies its end.
+    fn sign_in_ended(&mut self, end: SignInEnd) {
+        let Lifecycle::SigningIn(SigningIn {
+            transition: _,
+            owes,
+        }) = std::mem::replace(&mut self.state, Lifecycle::Idle)
+        else {
+            unreachable!("only a sign-in ends a sign-in");
+        };
         match end {
             SignInEnd::Entered(entered) => {
                 self.state = Lifecycle::Ready(Session::start(*entered, &self.events));
@@ -237,10 +320,14 @@ impl Core {
                 emit_error(&self.events, operation, None, message);
             }
         }
+        if owes == Owes::Ack {
+            ack(&self.events);
+        }
     }
 
-    /// The browser came back.
-    async fn finish_browser_login(&mut self, redirect: io::Result<LoopbackRedirect>) {
+    /// The browser came back: the sign-in goes on, as a transition the
+    /// `Login` is no longer owed by.
+    fn finish_browser_login(&mut self, redirect: io::Result<LoopbackRedirect>) {
         let Lifecycle::AwaitingBrowser(pending) =
             std::mem::replace(&mut self.state, Lifecycle::Idle)
         else {
@@ -255,16 +342,17 @@ impl Core {
         } = *pending;
         match redirect {
             Ok(redirect) => {
-                let end = lifecycle::finish_browser_login(
-                    client,
-                    snapshots,
-                    flow,
-                    redirect,
-                    self.events.clone(),
-                    start_sync,
-                )
-                .await;
-                self.signed_in(end);
+                self.state = Lifecycle::SigningIn(SigningIn {
+                    transition: Box::pin(lifecycle::finish_browser_login(
+                        client,
+                        snapshots,
+                        flow,
+                        redirect,
+                        self.events.clone(),
+                        start_sync,
+                    )),
+                    owes: Owes::Nothing,
+                });
             }
             Err(err) => emit_error(
                 &self.events,
@@ -275,17 +363,35 @@ impl Core {
         }
     }
 
+    /// Drops the sign-in or restore under way, and the client it built,
+    /// here on the runtime.
+    fn cancel_sign_in(&mut self) {
+        let Lifecycle::SigningIn(SigningIn { transition, owes }) =
+            std::mem::replace(&mut self.state, Lifecycle::Idle)
+        else {
+            unreachable!("only a sign-in is cancelled");
+        };
+        drop(transition);
+        emit_event(&self.events, Event::LoginCancelled);
+        if owes == Owes::Ack {
+            ack(&self.events);
+        }
+        ack(&self.events);
+    }
+
     async fn cancel_login(&mut self) {
         let Lifecycle::AwaitingBrowser(pending) =
             std::mem::replace(&mut self.state, Lifecycle::Idle)
         else {
             emit_invalid_state(&self.events, Operation::Login, "no sign-in to cancel");
+            ack(&self.events);
             return;
         };
         // Closes the listener's port; the half-signed-in client drops here,
         // on the runtime.
         abort_and_join(pending.redirect).await;
         emit_event(&self.events, Event::LoginCancelled);
+        ack(&self.events);
     }
 
     fn start_sync(&mut self) {
@@ -295,11 +401,13 @@ impl Core {
                 Operation::StartSync,
                 "start sync requires an authenticated session",
             );
+            ack(&self.events);
             return;
         };
         if let Err(refusal) = session.start_sync() {
             emit_invalid_state(&self.events, Operation::StartSync, refusal);
         }
+        ack(&self.events);
     }
 
     /// Stops continuous sync and keeps the session: mIRC's Disconnect, not
@@ -311,33 +419,54 @@ impl Core {
                 Operation::StopSync,
                 "stop sync requires an authenticated session",
             );
+            ack(&self.events);
             return;
         };
         match session.stop_sync() {
             Ok(()) => emit_event(&self.events, Event::SyncStopped(SyncStopReason::Requested)),
             Err(refusal) => emit_invalid_state(&self.events, Operation::StopSync, refusal),
         }
+        ack(&self.events);
     }
 
     async fn log_out(&mut self) {
-        let Lifecycle::Ready(session) = &mut self.state else {
-            emit_invalid_state(
-                &self.events,
-                Operation::Logout,
-                "logout requires an authenticated session",
-            );
-            return;
+        let mut session = match std::mem::replace(&mut self.state, Lifecycle::Idle) {
+            Lifecycle::Ready(session) => session,
+            state => {
+                self.state = state;
+                emit_invalid_state(
+                    &self.events,
+                    Operation::Logout,
+                    "logout requires an authenticated session",
+                );
+                ack(&self.events);
+                return;
+            }
         };
         // Before the server ends the session: a sync racing it would report
         // `SyncStopped(SessionEnded)` first.
         let resume_sync = session.stop_sync_quietly().await;
-        match matrix::logout(session.client().clone()).await {
+        let transition = Box::pin(matrix::logout(session.client().clone()));
+        self.state = Lifecycle::LoggingOut(LoggingOut {
+            session,
+            transition,
+            resume_sync,
+        });
+    }
+
+    /// The server answered the logout under way.
+    async fn logout_ended(&mut self, result: Result<(), MatrixCoreError>) {
+        let Lifecycle::LoggingOut(LoggingOut {
+            mut session,
+            transition: _,
+            resume_sync,
+        }) = std::mem::replace(&mut self.state, Lifecycle::Idle)
+        else {
+            unreachable!("only a logout ends a logout");
+        };
+        match result {
             Ok(()) => {
                 let dropped = self.jobs.abort_all().await;
-                let Lifecycle::Ready(session) = std::mem::replace(&mut self.state, Lifecycle::Idle)
-                else {
-                    unreachable!("the logout ran in a session");
-                };
                 session.shut_down().await;
                 acks(&self.events, dropped);
                 emit_event(&self.events, Event::LoggedOut);
@@ -348,35 +477,65 @@ impl Core {
                 if resume_sync {
                     session.start_sync().expect("the logout stopped sync");
                 }
+                self.state = Lifecycle::Ready(session);
             }
         }
+        ack(&self.events);
     }
 
-    /// Stops every job and the session's tasks, and waits until each is
-    /// gone, inside the runtime (see `Session::shut_down`); then acks the
-    /// commands dropped.
+    /// Stops every job, the transition under way and the session's tasks,
+    /// and waits until each is gone, inside the runtime (see
+    /// `Session::shut_down`); then acks the commands dropped.
     async fn shut_down(&mut self) {
-        let dropped = self.jobs.abort_all().await;
+        let mut dropped = self.jobs.abort_all().await + self.deferred.len();
+        self.deferred.clear();
         match std::mem::replace(&mut self.state, Lifecycle::Idle) {
             Lifecycle::Idle => {}
+            // The client it built drops here, on the runtime.
+            Lifecycle::SigningIn(SigningIn { transition, owes }) => {
+                drop(transition);
+                if owes == Owes::Ack {
+                    dropped += 1;
+                }
+            }
             // The listener's task does not own the client, which drops here,
             // on the runtime.
             Lifecycle::AwaitingBrowser(pending) => abort_and_join(pending.redirect).await,
             Lifecycle::Ready(session) => session.shut_down().await,
+            // The `Logout` is dropped with it.
+            Lifecycle::LoggingOut(LoggingOut {
+                session,
+                transition,
+                resume_sync: _,
+            }) => {
+                drop(transition);
+                session.shut_down().await;
+                dropped += 1;
+            }
         }
         acks(&self.events, dropped);
     }
 
-    /// Dispatches `command` and drives the actor until no job runs, for
-    /// the tests of what commands do: one command at a time, that is until
-    /// its ack. Returns whether the core stopped.
+    /// Handles `command` and drives the actor until no job or transition
+    /// runs, for the tests of what commands do: one command at a time,
+    /// that is until its ack. Returns whether the core stopped.
     #[cfg(test)]
     pub(super) async fn run_until_idle(&mut self, command: Command) -> ControlFlow<()> {
-        self.dispatch(command).await?;
-        while let Some(finished) = self.jobs.next().await {
-            self.finish_job(finished);
+        self.handle(Next::Command(Some(command))).await?;
+        loop {
+            let next = if self.state.in_transition() {
+                tokio::select! {
+                    Some(finished) = self.jobs.next() => Next::Job(finished),
+                    next = self.state.next() => next,
+                }
+            } else {
+                match self.jobs.next().await {
+                    Some(finished) => Next::Job(finished),
+                    None => return ControlFlow::Continue(()),
+                }
+            };
+            self.handle(next).await?;
         }
-        ControlFlow::Continue(())
     }
 
     /// Ends the tests' core as `Shutdown` does, without its ack.

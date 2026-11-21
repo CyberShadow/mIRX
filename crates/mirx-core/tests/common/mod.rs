@@ -34,6 +34,40 @@ pub struct Harness {
 }
 
 impl Harness {
+    /// A core with no session, and a server that knows its versions and
+    /// answers every `/sync` with nothing.
+    pub fn idle() -> Self {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        let server = runtime.block_on(async {
+            let server = MatrixMockServer::new().await;
+            server.mock_versions().ok().mount().await;
+            server
+                .mock_sync()
+                .expect_any_access_token()
+                .ok(|_| {})
+                .mount()
+                .await;
+            server
+        });
+        let profile = TempDir::new().expect("temporary profile directory");
+        let core = start(CoreConfig {
+            profile_dir: profile.path().join("profile"),
+            store_passphrase: "test-store-passphrase".to_owned(),
+        })
+        .expect("start core");
+        let harness = Self {
+            runtime,
+            server,
+            core,
+            _profile: profile,
+        };
+        harness.wait_for("Started", |event| *event == Event::Started);
+        harness
+    }
+
     /// The core, restored into a password session.
     pub fn restored() -> Self {
         Self::restored_with(SessionAuth::Matrix, |_| {})

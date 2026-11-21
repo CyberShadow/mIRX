@@ -13,8 +13,9 @@ pub struct CoreConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Login(LoginRequest),
-    /// Stops waiting for a browser sign-in (after `Event::SignInUrl`);
-    /// answered by `Event::LoginCancelled`.
+    /// Stops a sign-in or restore in progress, or the wait for the browser
+    /// after `Event::SignInUrl`; answered by `Event::LoginCancelled`. The
+    /// cancelled `Login` or `RestoreSession` is answered after it too.
     CancelLogin,
     RestoreSession(RestoreSessionRequest),
     StartSync,

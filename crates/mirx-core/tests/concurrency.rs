@@ -6,12 +6,14 @@
 
 mod common;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use common::Harness;
 use mirx_core::{
     BackfillRoomHistoryRequest, Command, EditMessageRequest, Event, ListPublicRoomsRequest,
-    Operation, RoomMessagePresentationKind, SendFileRequest, SendMessageRequest,
+    LoginMethod, LoginRequest, Operation, RestoreSessionRequest, RoomMessagePresentationKind,
+    SendFileRequest, SendMessageRequest, SessionAuth, StoredSession,
 };
 use serde_json::json;
 use wiremock::matchers::{method, path_regex};
@@ -433,5 +435,233 @@ fn every_command_is_acked_once_by_stopped() {
 
     let events = seen.shut_down();
     assert_eq!(acks(&events), sent + 1, "{events:#?}");
+    harness.join_stopped();
+}
+
+fn is_error_of(event: &Event, operation: Operation) -> bool {
+    matches!(event, Event::Error(error) if error.operation == operation)
+}
+
+#[test]
+fn a_failed_logout_keeps_the_session_whole() {
+    let harness = Harness::restored_in_rooms(&[ROOM], &[]);
+    // Not a 5xx, which the SDK retries.
+    harness.mount(
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/_matrix/client/v3/logout$"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+                "errcode": "M_FORBIDDEN",
+                "error": "not today",
+            }))),
+    );
+    harness.mount(
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/_matrix/client/v3/profile/@bob:example.org$"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "displayname": "Bob" })),
+            ),
+    );
+    mount_sends(&harness);
+    let mut seen = Seen::new(&harness);
+    harness.send(Command::StartSync);
+    seen.until("SyncConnected", |event| *event == Event::SyncConnected);
+
+    harness.send(Command::Logout);
+    seen.until("the logout error", |event| {
+        is_error_of(event, Operation::Logout)
+    });
+    seen.until_acks(2);
+    let syncs = harness.requests("GET", "/sync").len();
+    // The sync runs again.
+    harness.wait_for_requests("GET", "/sync", syncs + 2);
+
+    harness.send(Command::FetchUserProfile("@bob:example.org".to_owned()));
+    seen.until("the profile", |event| {
+        matches!(event, Event::UserProfile(_))
+    });
+    // The send queue's task is alive: the line's local echo comes.
+    harness.send(line(ROOM, "still here"));
+    seen.until(
+        "the local echo",
+        |event| matches!(event, Event::RoomActivity(activity) if activity.room_id == ROOM),
+    );
+
+    let events = seen.shut_down();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::LoggedOut | Event::SyncStopped(_))),
+        "{events:#?}"
+    );
+    harness.join_stopped();
+}
+
+fn password_login(harness: &Harness) -> Command {
+    Command::Login(LoginRequest {
+        server: harness.server.uri(),
+        method: LoginMethod::Password {
+            username: "example".to_owned(),
+            password: "wordpass".to_owned(),
+        },
+        device_display_name: "mirx".to_owned(),
+        start_sync: false,
+    })
+}
+
+#[test]
+fn cancel_login_stops_a_hung_password_sign_in() {
+    let harness = Harness::idle();
+    // The first sign-in's request hangs; the next is answered.
+    let first = AtomicBool::new(true);
+    harness.mount(
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/_matrix/client/v3/login$"))
+            .respond_with(move |_: &Request| {
+                if first.swap(false, Ordering::SeqCst) {
+                    ResponseTemplate::new(200).set_delay(Duration::from_secs(3600))
+                } else {
+                    ResponseTemplate::new(200).set_body_json(json!({
+                        "user_id": "@example:localhost",
+                        "access_token": "abc123",
+                        "device_id": "GHTYAJCE",
+                    }))
+                }
+            }),
+    );
+    let mut seen = Seen::new(&harness);
+
+    harness.send(password_login(&harness));
+    harness.wait_for_requests("POST", "/login", 1);
+    harness.send(Command::CancelLogin);
+    seen.until("LoginCancelled", |event| *event == Event::LoginCancelled);
+    // The login's ack, then the cancel's.
+    seen.until_acks(2);
+    assert!(
+        !seen
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::LoggedIn { .. })),
+        "{:#?}",
+        seen.events
+    );
+
+    // Idle again, with nothing left over: the next sign-in goes through.
+    harness.send(password_login(&harness));
+    seen.until("LoggedIn", |event| matches!(event, Event::LoggedIn { .. }));
+    seen.until_acks(3);
+
+    let events = seen.shut_down();
+    assert_eq!(acks(&events), 4, "{events:#?}");
+    harness.join_stopped();
+}
+
+#[test]
+fn cancel_login_stops_a_hung_restore_before_it_is_announced() {
+    let harness = Harness::idle();
+    harness.hang("GET", r"^/_matrix/client/v3/sync");
+    let mut seen = Seen::new(&harness);
+
+    harness.send(Command::RestoreSession(RestoreSessionRequest {
+        homeserver_url: harness.server.uri(),
+        session: StoredSession {
+            user_id: "@alice:example.org".to_owned(),
+            device_id: "MIRX".to_owned(),
+            access_token: "TOKEN".to_owned(),
+            refresh_token: None,
+            auth: SessionAuth::Matrix,
+        },
+        start_sync: false,
+    }));
+    harness.wait_for_requests("GET", "/sync", 1);
+    harness.send(Command::CancelLogin);
+    seen.until("LoginCancelled", |event| *event == Event::LoginCancelled);
+    seen.until_acks(2);
+
+    let events = seen.shut_down();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::RestoredSession | Event::SyncedRooms(_))),
+        "{events:#?}"
+    );
+    assert_eq!(acks(&events), 3, "{events:#?}");
+    harness.join_stopped();
+}
+
+#[test]
+fn shutdown_never_waits_for_a_sign_in() {
+    let harness = Harness::idle();
+    harness.hang("POST", r"^/_matrix/client/v3/login$");
+    let seen = Seen::new(&harness);
+
+    harness.send(password_login(&harness));
+    harness.wait_for_requests("POST", "/login", 1);
+    // It waits for the sign-in.
+    harness.send(Command::FetchUserProfile("@bob:example.org".to_owned()));
+    let events = seen.shut_down();
+    // The login's, the profile's and the shutdown's.
+    assert_eq!(acks(&events), 3, "{events:#?}");
+    harness.join_stopped();
+}
+
+#[test]
+fn commands_sent_during_a_restore_run_after_it() {
+    let harness = Harness::idle();
+    harness.mount(
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/_matrix/client/v3/sync"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "next_batch": "s1" }))
+                    .set_delay(Duration::from_millis(300)),
+            )
+            .with_priority(1),
+    );
+    harness.mount(
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/_matrix/client/v3/profile/@bob:example.org$"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "displayname": "Bob" })),
+            ),
+    );
+    let mut seen = Seen::new(&harness);
+
+    harness.send(Command::RestoreSession(RestoreSessionRequest {
+        homeserver_url: harness.server.uri(),
+        session: StoredSession {
+            user_id: "@alice:example.org".to_owned(),
+            device_id: "MIRX".to_owned(),
+            access_token: "TOKEN".to_owned(),
+            refresh_token: None,
+            auth: SessionAuth::Matrix,
+        },
+        start_sync: false,
+    }));
+    harness.send(Command::FetchUserProfile("@bob:example.org".to_owned()));
+    seen.until("the profile", |event| {
+        matches!(event, Event::UserProfile(_))
+    });
+
+    let restored = seen
+        .events
+        .iter()
+        .position(|event| *event == Event::RestoredSession)
+        .unwrap_or_else(|| panic!("RestoredSession in {:#?}", seen.events));
+    let profile = seen
+        .events
+        .iter()
+        .position(|event| matches!(event, Event::UserProfile(_)))
+        .expect("the profile");
+    assert!(restored < profile, "{:#?}", seen.events);
+    assert!(
+        !seen
+            .events
+            .iter()
+            .any(|event| is_error_of(event, Operation::FetchUserProfile)),
+        "{:#?}",
+        seen.events
+    );
+    let events = seen.shut_down();
+    assert_eq!(acks(&events), 3, "{events:#?}");
     harness.join_stopped();
 }
