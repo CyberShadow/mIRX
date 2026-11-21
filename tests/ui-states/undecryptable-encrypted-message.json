@@ -3,9 +3,9 @@
   {
     "SyncedRooms": [
       {
-        "room_id": "!alpha:example.org",
-        "display_name": "Alpha", "topic": null,
-        "encrypted": false,
+        "room_id": "!encrypted:example.org",
+        "display_name": "Encrypted", "topic": null,
+        "encrypted": true,
         "is_space": false,
         "is_direct": false,
         "direct_user_ids": [],
@@ -17,9 +17,9 @@
         "membership": "join"
       },
       {
-        "room_id": "!encrypted:example.org",
-        "display_name": "Encrypted", "topic": null,
-        "encrypted": true,
+        "room_id": "!alpha:example.org",
+        "display_name": "Alpha", "topic": null,
+        "encrypted": false,
         "is_space": false,
         "is_direct": false,
         "direct_user_ids": [],
@@ -35,7 +35,7 @@
   {
     "RoomActivity": {
       "room_id": "!encrypted:example.org",
-      "activity_id": "$encrypted-utd1:example.org",
+      "activity_id": "event:$encrypted-utd1:example.org",
       "timestamp_ms": 1710000000000,
       "highlight": false,
       "kind": {

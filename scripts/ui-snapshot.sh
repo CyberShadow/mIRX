@@ -24,7 +24,7 @@ dpi144_prefix=
 # expectations, the default frame size (scaled, clamped to the screen) and
 # --expect-dpi 144.
 dpi144_cases=(multi-room image-message-loaded room-list-listing compose-color-index
-  dialog-options-display dialog-colors dialog-sign-out-session)
+  dialog-options-display dialog-colors dialog-sign-out-session dialog-export-room-keys)
 
 die() {
   echo "ui-snapshot: $*" >&2
@@ -381,6 +381,21 @@ configure_case_expectations() {
             dialog:compose_return
           )
           expect_dialog_title='Sign Out Session'
+          ;;
+        dialog-export-room-keys)
+          # A file given: the passphrase dialog, asked twice.
+          ordered_actions=(
+            'compose-text:/e2ee export C:\Users\me\Documents\mirx-keys.txt'
+            dialog:compose_return
+          )
+          expect_dialog_title='Export Room Keys'
+          ;;
+        dialog-import-room-keys)
+          ordered_actions=(
+            'compose-text:/e2ee import C:\Users\me\Documents\mirx-keys.txt'
+            dialog:compose_return
+          )
+          expect_dialog_title='Import Room Keys'
           ;;
         dialog-close-confirm)
           ordered_actions=(dialog:close_active_view)
@@ -2806,8 +2821,8 @@ configure_case_expectations() {
       )
       ;;
     undecryptable-encrypted-message)
-      expect_selected='!alpha:example.org'
-      expect_active_view='room:!alpha:example.org'
+      expect_selected='!encrypted:example.org'
+      expect_active_view='room:!encrypted:example.org'
       room_expect_args=(
         --expect-room '!alpha:example.org'
         --expect-room '!encrypted:example.org'
@@ -2830,14 +2845,36 @@ configure_case_expectations() {
         --expect-switchbar-item 'room:!alpha:example.org::Alpha'
         --expect-switchbar-item 'room:!encrypted:example.org::Encrypted'
       )
-      switchbar_activity_expect_args=(
-        --expect-switchbar-activity 'room:!encrypted:example.org::message'
-      )
       switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!encrypted:example.org'
         --expect-no-switchbar-activity 'room:!alpha:example.org'
         --expect-no-switchbar-activity 'status'
       )
-      expect_switchbar_active='room:!alpha:example.org'
+      expect_switchbar_active='room:!encrypted:example.org'
+      ;;
+    # Bob's reply decrypts once its key comes, in place; his later line
+    # still waits for its key.
+    room-keys-decrypted)
+      expect_selected='!encrypted:example.org'
+      expect_active_view='room:!encrypted:example.org'
+      append_events_path="$root_dir/tests/ui-state-updates/room-keys-decrypted.json"
+      room_view_expect_args=(
+        --expect-room-view '!encrypted:example.org::<Alice> when do we ship?'
+        --expect-room-view '!encrypted:example.org::at noon, once the build is green'
+        --expect-room-view '!encrypted:example.org::* Bob sent an encrypted message that could not be decrypted'
+      )
+      expect_switchbar_active='room:!encrypted:example.org'
+      ;;
+    # Room key file answers, the failure in red.
+    room-keys-imported)
+      expect_active_view='status'
+      select_views=('status')
+      expect_error='wrong passphrase, or the file is damaged'
+      status_view_expect_args=(
+        --expect-status-view '* Room keys exported to C:\Users\me\Documents\mirx-keys.txt. Keep the file and its passphrase safe.'
+        --expect-status-view '* Error during room key import: wrong passphrase, or the file is damaged'
+        --expect-status-view '* Imported 3 of 5 room keys from C:\Users\me\Documents\mirx-keys.txt (2 already known)'
+      )
       ;;
     file-message)
       expect_selected='!media:example.org'

@@ -1,0 +1,54 @@
+[
+  "Started",
+  {
+    "LoggedIn": {
+      "session": {
+        "user_id": "@me:example",
+        "device_id": "MIRXDEVICE",
+        "access_token": "fixture-access-token",
+        "refresh_token": null,
+        "auth": "Matrix"
+      },
+      "homeserver_url": "https://matrix.example/"
+    }
+  },
+  "SyncStarted",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!ops:example",
+        "display_name": "Ops",
+        "topic": null,
+        "encrypted": true,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomKeysExported": {
+      "path": "C:\\Users\\me\\Documents\\mirx-keys.txt"
+    }
+  },
+  {
+    "Error": {
+      "operation": "ImportRoomKeys",
+      "room_id": null,
+      "message": "wrong passphrase, or the file is damaged"
+    }
+  },
+  {
+    "RoomKeysImported": {
+      "path": "C:\\Users\\me\\Documents\\mirx-keys.txt",
+      "imported": 3,
+      "total": 5
+    }
+  }
+]
