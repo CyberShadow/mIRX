@@ -1253,6 +1253,8 @@ pub(crate) struct UiOptionsDialog {
     pub(crate) highlight_delete_enabled: bool,
     /// The Display page's switchbar Event, Message and Highlight colours.
     pub(crate) activity_colors: UiActivityColors,
+    /// The Display page's line marker checkbox and colour.
+    pub(crate) marker: UiMarkerOptions,
     /// The Logging page's checkboxes.
     pub(crate) logging: UiLoggingOptions,
     /// The Tray page's checkboxes.
@@ -1272,6 +1274,14 @@ pub(crate) struct UiConnectOptions {
     pub(crate) retry_times: String,
     pub(crate) retry_delay: String,
     pub(crate) retry_fields_enabled: bool,
+}
+
+/// Options > Display's line marker: shown, and its palette index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiMarkerOptions {
+    pub(crate) show: bool,
+    pub(crate) color: u8,
 }
 
 /// Options > Display > Tray's checkboxes.
@@ -6563,6 +6573,10 @@ mod tests {
                             message: 4,
                             highlight: 12,
                         },
+                        marker: super::UiMarkerOptions {
+                            show: true,
+                            color: 4,
+                        },
                         logging: super::UiLoggingOptions {
                             channels: true,
                             queries: false,
@@ -6829,6 +6843,7 @@ mod tests {
                         "highlight_controls_enabled":true,
                         "highlight_delete_enabled":false,
                         "activity_colors":{"event":5,"message":4,"highlight":12},
+                        "marker":{"show":true,"color":4},
                         "logging":{"channels":true,"queries":false,"strip_codes":false,"timestamp":true},
                         "tray":{"always":true,"startup":false,"minimize":true,"single_click":false},
                         "tips":{"highlights":true,"queries":false,"channels":true}

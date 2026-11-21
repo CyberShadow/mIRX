@@ -1499,6 +1499,8 @@ pub struct UiOptionsDialog {
     pub highlight_delete_enabled: bool,
     /// The Display page's switchbar Event, Message and Highlight colours.
     pub activity_colors: UiActivityColors,
+    /// The Display page's line marker checkbox and colour.
+    pub marker: UiMarkerOptions,
     /// The Logging page's checkboxes.
     pub logging: UiLoggingOptions,
     /// The Tray page's checkboxes.
@@ -1518,6 +1520,14 @@ pub struct UiConnectOptions {
     pub retry_times: String,
     pub retry_delay: String,
     pub retry_fields_enabled: bool,
+}
+
+/// Options > Display's line marker: shown, and its palette index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiMarkerOptions {
+    pub show: bool,
+    pub color: u8,
 }
 
 /// Options > Display > Tray's checkboxes.

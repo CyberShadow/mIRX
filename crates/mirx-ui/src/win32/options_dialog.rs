@@ -47,7 +47,9 @@ use super::options::{
     FIRST_PAGE, HighlightChanges, HighlightList, OPTIONS_TREE, OptionsField, OptionsForm,
     OptionsPage, page_tree_index, tree_index, tree_paths,
 };
-use super::settings::{ActivityColors, LoggingSetting, Settings, TipsSetting, TraySetting};
+use super::settings::{
+    ActivityColors, LoggingSetting, MarkerSetting, Settings, TipsSetting, TraySetting,
+};
 use super::timestamp::format_tokens;
 use super::window_data::{self, WindowData};
 use super::{
@@ -56,7 +58,8 @@ use super::{
     run_modal_dialog, selected_tree_item, set_window_text, wide_null,
 };
 use crate::automation::{
-    UiConnectOptions, UiLoggingOptions, UiOptionsDialog, UiTipsOptions, UiTrayOptions,
+    UiConnectOptions, UiLoggingOptions, UiMarkerOptions, UiOptionsDialog, UiTipsOptions,
+    UiTrayOptions,
 };
 
 pub(super) const OPTIONS_DIALOG_CLASS_NAME: &str = "mirxWin32OptionsDialog";
@@ -73,6 +76,8 @@ pub(super) const OPTIONS_TIMESTAMP_TOKENS_ID: u16 = 6203;
 pub(super) const OPTIONS_SWITCHBAR_BUTTONS_ID: u16 = 6301;
 /// The switchbar's Event, Message and Highlight colours: 6302-6304.
 pub(super) const OPTIONS_ACTIVITY_COLOR_IDS: [u16; 3] = [6302, 6303, 6304];
+pub(super) const OPTIONS_MARKER_SHOW_ID: u16 = 6305;
+pub(super) const OPTIONS_MARKER_COLOR_ID: u16 = 6306;
 pub(super) const OPTIONS_HIGHLIGHT_LIST_ID: u16 = 6401;
 pub(super) const OPTIONS_HIGHLIGHT_WORD_ID: u16 = 6402;
 pub(super) const OPTIONS_HIGHLIGHT_ADD_ID: u16 = 6403;
@@ -112,9 +117,9 @@ const HIGHLIGHT_LIST_HEIGHT: i32 = 130;
 /// A closed drop-down's height around its item: its edges, in pixels at
 /// every DPI.
 const DROP_DOWN_EDGES: i32 = 6;
-const ACTIVITY_COLOR_WIDTH: i32 = 60;
+const COLOR_DROP_DOWN_WIDTH: i32 = 60;
 /// The open list shows half the palette.
-const ACTIVITY_COLOR_DROPPED_ITEMS: i32 = 8;
+const COLOR_DROPPED_ITEMS: i32 = 8;
 
 /// The form's controls.
 struct Fields {
@@ -130,6 +135,8 @@ struct Fields {
     switchbar_buttons: HWND,
     /// Event, Message, Highlight.
     activity_colors: [HWND; 3],
+    marker_show: HWND,
+    marker_color: HWND,
     log_channels: HWND,
     log_queries: HWND,
     log_strip_codes: HWND,
@@ -157,6 +164,10 @@ impl Fields {
             timestamp_format: read_window_text(self.timestamp_format),
             switchbar_buttons: read_window_text(self.switchbar_buttons),
             activity_colors: self.read_activity_colors(),
+            marker: MarkerSetting {
+                show: checked(self.marker_show),
+                color: read_color(self.marker_color),
+            },
             logging: LoggingSetting {
                 channels: checked(self.log_channels),
                 queries: checked(self.log_queries),
@@ -179,10 +190,7 @@ impl Fields {
     }
 
     unsafe fn read_activity_colors(&self) -> ActivityColors {
-        let [event, message, highlight] = self.activity_colors.map(|combo| {
-            let index = SendMessageW(combo, CB_GETCURSEL, 0, 0);
-            palette_index(usize::try_from(index).expect("a colour drop-down always has a pick"))
-        });
+        let [event, message, highlight] = self.activity_colors.map(|combo| read_color(combo));
         ActivityColors {
             event,
             message,
@@ -272,6 +280,8 @@ impl OptionsDialog {
                 timestamp_format: null_mut(),
                 switchbar_buttons: null_mut(),
                 activity_colors: [null_mut(); 3],
+                marker_show: null_mut(),
+                marker_color: null_mut(),
                 log_channels: null_mut(),
                 log_queries: null_mut(),
                 log_strip_codes: null_mut(),
@@ -560,21 +570,20 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     for control in [buttons_label, state.fields.switchbar_buttons, pixels_label] {
         state.page_controls.push((OptionsPage::Display, control));
     }
-    // mIRC's switchbar colours, one row each under the buttons' width.
-    let activity_labels = ["Event:", "Message:", "Highlight:"];
-    let activity_x = page_x
-        + activity_labels
+    // mIRC's switchbar colours, one row each under the buttons' width,
+    // then its line marker's checkbox and colour. The colours share a
+    // column.
+    let color_labels = ["Event:", "Message:", "Highlight:", "Line marker:"];
+    let color_x = page_x
+        + color_labels
             .iter()
             .map(|text| dialog_text_size(text, page_width).0)
             .max()
-            .expect("there are three labels")
+            .expect("there are four labels")
         + gap;
-    for (row, (text, id)) in activity_labels
-        .into_iter()
-        .zip(OPTIONS_ACTIVITY_COLOR_IDS)
-        .enumerate()
-    {
-        let row_y = page_top + (row as i32 + 1) * (edit_height + gap);
+    let row_y = |row: i32| page_top + row * (edit_height + gap);
+    // A labelled colour drop-down on the row at `row_y`.
+    let color_row = |text: &str, id: u16, row_y: i32| {
         let (row_label, _) = label_beside_field(text, page_x, row_y)?;
         let combo = place(
             control(
@@ -584,22 +593,47 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
                 0,
                 id,
             )?,
-            activity_x,
+            color_x,
             row_y,
-            dpi.px(ACTIVITY_COLOR_WIDTH),
+            dpi.px(COLOR_DROP_DOWN_WIDTH),
             // A drop-down's height includes its open list.
-            edit_height
-                + ACTIVITY_COLOR_DROPPED_ITEMS * activity_color_item_height(edit_height)
-                + 2,
+            edit_height + COLOR_DROPPED_ITEMS * color_item_height(edit_height) + 2,
         );
         // Without CBS_HASSTRINGS an item is its data: the palette index.
         for index in 0..PALETTE_COLORS {
             SendMessageW(combo, CB_ADDSTRING, 0, index as LPARAM);
         }
+        Ok::<_, String>((row_label, combo))
+    };
+    for (row, (text, id)) in color_labels[..3]
+        .iter()
+        .zip(OPTIONS_ACTIVITY_COLOR_IDS)
+        .enumerate()
+    {
+        let (row_label, combo) = color_row(text, id, row_y(row as i32 + 1))?;
         state.fields.activity_colors[row] = combo;
         for control in [row_label, combo] {
             state.page_controls.push((OptionsPage::Display, control));
         }
+    }
+    state.fields.marker_show = place(
+        control(
+            BUTTON_CLASS_NAME,
+            "Show line marker",
+            checkbox,
+            0,
+            OPTIONS_MARKER_SHOW_ID,
+        )?,
+        page_x,
+        row_y(4) + (edit_height - checkbox_height) / 2,
+        page_width,
+        checkbox_height,
+    );
+    let (marker_label, marker_color) =
+        color_row(color_labels[3], OPTIONS_MARKER_COLOR_ID, row_y(5))?;
+    state.fields.marker_color = marker_color;
+    for control in [state.fields.marker_show, marker_label, marker_color] {
+        state.page_controls.push((OptionsPage::Display, control));
     }
 
     let (highlight_label, (_, highlight_label_height)) = label(
@@ -878,6 +912,7 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         (state.fields.reconnect, form.reconnect),
         (state.fields.retry, form.retry),
         (state.fields.timestamp_show, form.timestamp_show),
+        (state.fields.marker_show, form.marker.show),
         (state.fields.log_channels, form.logging.channels),
         (state.fields.log_queries, form.logging.queries),
         (state.fields.log_strip_codes, form.logging.strip_codes),
@@ -908,6 +943,7 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         .activity_colors
         .into_iter()
         .zip([event, message, highlight])
+        .chain([(state.fields.marker_color, form.marker.color)])
     {
         SendMessageW(combo, CB_SETCURSEL, usize::from(index.get()), 0);
     }
@@ -981,8 +1017,14 @@ unsafe fn handle_selection(hwnd: HWND) {
 
 /// A colour drop-down's item: a numbered palette box, as tall as the
 /// closed drop-down is with an edit field's `edit_height`.
-fn activity_color_item_height(edit_height: i32) -> i32 {
+fn color_item_height(edit_height: i32) -> i32 {
     edit_height - DROP_DOWN_EDGES
+}
+
+/// A colour drop-down's pick.
+unsafe fn read_color(combo: HWND) -> PaletteIndex {
+    let index = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+    palette_index(usize::try_from(index).expect("a colour drop-down always has a pick"))
 }
 
 fn palette_index(index: usize) -> PaletteIndex {
@@ -992,7 +1034,7 @@ fn palette_index(index: usize) -> PaletteIndex {
 
 /// A colour drop-down's item: its numbered palette box on the list's
 /// background, or the selection's.
-unsafe fn draw_activity_color(item: &DRAWITEMSTRUCT) {
+unsafe fn draw_color_item(item: &DRAWITEMSTRUCT) {
     assert_eq!(
         item.CtlType, ODT_COMBOBOX,
         "only the colour drop-downs are owner-drawn"
@@ -1166,11 +1208,11 @@ pub(super) unsafe extern "system" fn window_proc(
                 "only the colour drop-downs are owner-drawn"
             );
             let edit_height = DialogMetrics::of(hwnd).edit_height;
-            item.itemHeight = activity_color_item_height(edit_height) as u32;
+            item.itemHeight = color_item_height(edit_height) as u32;
             1
         }
         WM_DRAWITEM => {
-            draw_activity_color(&*(lparam as *const DRAWITEMSTRUCT));
+            draw_color_item(&*(lparam as *const DRAWITEMSTRUCT));
             1
         }
         WM_NOTIFY => {
@@ -1275,6 +1317,10 @@ pub(super) unsafe fn dump(hwnd: HWND) -> Result<UiOptionsDialog, String> {
         highlight_controls_enabled,
         highlight_delete_enabled: IsWindowEnabled(controls.delete) != 0,
         activity_colors: dump_activity_colors(&form.activity_colors),
+        marker: UiMarkerOptions {
+            show: form.marker.show,
+            color: form.marker.color.get(),
+        },
         logging: dump_logging_options(&form.logging),
         tray: UiTrayOptions {
             always: form.tray.always,

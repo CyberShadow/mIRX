@@ -1469,6 +1469,13 @@ pub(super) unsafe fn run_options_dialog(hwnd: HWND) -> Result<(), String> {
             InvalidateRect(bar, null(), 1);
         }
     }
+    if new.marker.show != old.marker.show {
+        // The rows key holds the marker while it shows.
+        refresh_every_view_content(hwnd)?;
+    }
+    if new.marker.color != old.marker.color {
+        redraw_every_window(hwnd);
+    }
     if new.tray != old.tray {
         // `always` may have changed whether the icon shows.
         sync_tray_icon(hwnd)?;

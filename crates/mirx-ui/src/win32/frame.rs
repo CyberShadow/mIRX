@@ -399,9 +399,6 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
 /// selected nowhere (they are only handed out while painting), so they go
 /// at once.
 pub(super) unsafe fn apply_color_scheme(hwnd: HWND, scheme: ColorScheme) -> Result<(), String> {
-    use windows_sys::Win32::Graphics::Gdi::{
-        RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE, RedrawWindow,
-    };
     let brushes = SchemeBrushes::create(&scheme);
     let state = state_mut(hwnd);
     state
@@ -409,15 +406,22 @@ pub(super) unsafe fn apply_color_scheme(hwnd: HWND, scheme: ColorScheme) -> Resu
         .update(|settings| settings.colors = scheme.clone())?;
     drop(std::mem::replace(&mut state.scheme_brushes, brushes));
     set_treebar_colors(state.controls.tree, &scheme);
-    // Every window's text area, editbox and nick list. Hidden and
-    // minimized ones paint when they show.
+    redraw_every_window(hwnd);
+    Ok(())
+}
+
+/// Every window's text area, editbox and nick list. Hidden and minimized
+/// ones paint when they show.
+pub(super) unsafe fn redraw_every_window(hwnd: HWND) {
+    use windows_sys::Win32::Graphics::Gdi::{
+        RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE, RedrawWindow,
+    };
     RedrawWindow(
-        state.controls.mdi_client,
+        state_ref(hwnd).controls.mdi_client,
         null(),
         null_mut(),
         RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN,
     );
-    Ok(())
 }
 
 /// The treebar in the scheme's Treebar colours. Its selected item keeps

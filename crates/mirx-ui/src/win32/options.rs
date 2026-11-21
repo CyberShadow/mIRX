@@ -7,8 +7,8 @@
 use mirx_core::{HighlightWord, validate_highlight_word};
 
 use super::settings::{
-    ActivityColors, LoggingSetting, Settings, TipsSetting, TraySetting, parse_button_width,
-    parse_retry_delay, parse_retry_times, parse_window_buffer,
+    ActivityColors, LoggingSetting, MarkerSetting, Settings, TipsSetting, TraySetting,
+    parse_button_width, parse_retry_delay, parse_retry_times, parse_window_buffer,
 };
 use super::timestamp::TimestampFormat;
 
@@ -116,6 +116,8 @@ pub(super) struct OptionsForm {
     pub(super) switchbar_buttons: String,
     /// Picked from the palette, so never wrong.
     pub(super) activity_colors: ActivityColors,
+    /// A checkbox and a palette pick, so never wrong.
+    pub(super) marker: MarkerSetting,
     /// Checkboxes, so never wrong.
     pub(super) logging: LoggingSetting,
     /// Checkboxes, so never wrong.
@@ -137,6 +139,7 @@ impl OptionsForm {
             timestamp_format: settings.timestamp.format.to_string(),
             switchbar_buttons: settings.switchbar.buttons.to_string(),
             activity_colors: settings.switchbar.activity,
+            marker: settings.marker,
             logging: settings.logging,
             tray: settings.tray,
             tips: settings.tips,
@@ -177,6 +180,7 @@ impl OptionsForm {
         settings.timestamp.format = format;
         settings.switchbar.buttons = buttons;
         settings.switchbar.activity = self.activity_colors;
+        settings.marker = self.marker;
         settings.logging = self.logging;
         settings.tray = self.tray;
         settings.tips = self.tips;
@@ -428,6 +432,17 @@ mod tests {
         expected.switchbar.activity.message = PaletteIndex::new(9).unwrap();
         assert_eq!(
             applied(|form| form.activity_colors.message = PaletteIndex::new(9).unwrap()),
+            expected
+        );
+
+        let mut expected = current.clone();
+        expected.marker.show = false;
+        assert_eq!(applied(|form| form.marker.show = false), expected);
+
+        let mut expected = current.clone();
+        expected.marker.color = PaletteIndex::new(14).unwrap();
+        assert_eq!(
+            applied(|form| form.marker.color = PaletteIndex::new(14).unwrap()),
             expected
         );
 

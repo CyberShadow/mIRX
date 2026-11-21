@@ -352,8 +352,8 @@ use fonts::{
 use frame::window_class_is;
 use frame::{
     apply_color_scheme, create_main_window, default_window_proc, frame_status_text,
-    frame_window_for, init_common_controls, layout_controls, message_loop, refresh_status_bar,
-    register_frame_class, set_switchbar_button_width,
+    frame_window_for, init_common_controls, layout_controls, message_loop, redraw_every_window,
+    refresh_status_bar, register_frame_class, set_switchbar_button_width,
 };
 #[cfg(test)]
 use frame_menus::active_message_action_state;

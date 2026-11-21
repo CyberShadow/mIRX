@@ -41,12 +41,12 @@ use mirx_testkit::{
     SubmittedUserCommand, SwitchbarItem, SwitchbarState, TestkitError, UiActiveTimeline,
     UiActivityColors, UiColorItem, UiColors, UiComposeTarget, UiComposeTargetKind,
     UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState, UiFrameLayout,
-    UiLoggingOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRect, UiRefreshCounters,
-    UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState, UiState, UiTextFont,
-    UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiTipsOptions,
-    UiToolbarButton, UiTray, UiTrayMenuItem, UiTrayOptions, UnsupportedRoomMessageActivity,
-    UserCommandAction, Verification, VerificationActionArgs, VerificationDecimals,
-    VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
+    UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRect,
+    UiRefreshCounters, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState,
+    UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
+    UiTipsOptions, UiToolbarButton, UiTray, UiTrayMenuItem, UiTrayOptions,
+    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionArgs,
+    VerificationDecimals, VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -1033,6 +1033,10 @@ fn data_models_round_trip_through_json() {
                 message: 9,
                 highlight: 12,
             },
+            marker: UiMarkerOptions {
+                show: false,
+                color: 14,
+            },
             logging: UiLoggingOptions {
                 channels: false,
                 queries: true,
@@ -1380,6 +1384,7 @@ fn data_models_round_trip_through_json() {
                 "highlight_controls_enabled": true,
                 "highlight_delete_enabled": true,
                 "activity_colors": {"event": 5, "message": 9, "highlight": 12},
+                "marker": {"show": false, "color": 14},
                 "logging": {"channels": false, "queries": true, "strip_codes": true, "timestamp": false},
                 "tray": {"always": false, "startup": true, "minimize": false, "single_click": true},
                 "tips": {"highlights": false, "queries": true, "channels": false},

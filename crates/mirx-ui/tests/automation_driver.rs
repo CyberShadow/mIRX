@@ -51,7 +51,7 @@ use mirx_testkit::{
     SubmittedUserCommand, SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem,
     TestkitError, UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
     UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
-    UiFindState, UiLoggingOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
+    UiFindState, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
     UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
     UiTimelineLink, UiTimestamp, UiTipsOptions, UiTrayOptions, UnsupportedRoomMessageActivity,
     UserCommandAction, Verification, VerificationActionKind, VerificationState, ViewActivityLevel,
@@ -3733,6 +3733,88 @@ fn automation_driver_leaving_a_room_moves_the_read_marker() -> Result<(), Box<dy
     assert_eq!(app.dump_model()?.last_error, None);
 
     drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Options > Display recolours the line marker, and hides it, in the
+/// window showing it; both are saved.
+#[test]
+fn options_display_recolours_and_hides_the_line_marker() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let server = spawn_mock_homeserver_with_read_marker(bob_lines(4), "$bob-2")?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    wait_for_line_marker(&app)?;
+    app.select_navigation_view(&room_identity("!beta:example"))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let rule_colors = |ui_state: &UiState| {
+        ui_state
+            .active_timeline
+            .as_ref()
+            .expect("Beta has a timeline")
+            .visible_lines
+            .iter()
+            .filter(|line| line.kind == UiTimelineLineKind::LineMarker)
+            .map(|line| line.color.clone())
+            .collect::<Vec<_>>()
+    };
+    let set_marker = |change: &dyn Fn(HWND)| -> Result<(), Box<dyn std::error::Error>> {
+        let menu_thread = open_options_from_menu(&app);
+        let dialog = wait_for_options_dialog(&app)?;
+        app.select_options_page("Display")?;
+        change(dialog);
+        post_options_command(dialog, IDOK)?;
+        wait_for_window_gone(dialog, "Options dialog")?;
+        menu_thread.join().expect("the menu thread must not panic");
+        app.wait_idle(Duration::from_secs(5))?;
+        Ok(())
+    };
+    set_marker(&|dialog| {
+        let options = app
+            .dump_ui_state()
+            .unwrap()
+            .options_dialog
+            .expect("the dialog is open");
+        assert_eq!(
+            options.marker,
+            UiMarkerOptions {
+                show: true,
+                color: 4
+            }
+        );
+        unsafe {
+            SendMessageW(
+                GetDlgItem(dialog, OPTIONS_MARKER_COLOR_ID),
+                CB_SETCURSEL,
+                12,
+                0,
+            )
+        };
+    })?;
+    assert_eq!(rule_colors(&app.dump_ui_state()?), ["#0000fc"]);
+
+    set_marker(&|dialog| unsafe { set_options_check(dialog, OPTIONS_MARKER_SHOW_ID, false) })?;
+    assert_eq!(rule_colors(&app.dump_ui_state()?), Vec::<String>::new());
+    let beta = find_view(&app.dump_ui_state()?, &room_identity("!beta:example"))
+        .lines
+        .clone();
+    assert!(!beta.iter().any(String::is_empty), "{beta:?}");
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    assert!(
+        ini.contains("[marker]\r\nshow=off\r\ncolor=12\r\n"),
+        "{ini:?}"
+    );
+
+    drop(app);
+    drop(server);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
@@ -16547,6 +16629,8 @@ const OPTIONS_TIMESTAMP_TOKENS_ID: u16 = 6203;
 const OPTIONS_SWITCHBAR_BUTTONS_ID: i32 = 6301;
 /// Display's Event, Message and Highlight colours.
 const OPTIONS_ACTIVITY_COLOR_IDS: [i32; 3] = [6302, 6303, 6304];
+const OPTIONS_MARKER_SHOW_ID: i32 = 6305;
+const OPTIONS_MARKER_COLOR_ID: i32 = 6306;
 const OPTIONS_HIGHLIGHT_LIST_ID: i32 = 6401;
 const OPTIONS_HIGHLIGHT_WORD_ID: i32 = 6402;
 const OPTIONS_HIGHLIGHT_ADD_ID: i32 = 6403;
@@ -17025,6 +17109,8 @@ fn options_dialog_rejects_a_bad_field_and_cancel_changes_nothing()
             OPTIONS_ACTIVITY_COLOR_IDS[0] as u16,
             OPTIONS_ACTIVITY_COLOR_IDS[1] as u16,
             OPTIONS_ACTIVITY_COLOR_IDS[2] as u16,
+            OPTIONS_MARKER_SHOW_ID as u16,
+            OPTIONS_MARKER_COLOR_ID as u16,
         ]
     );
     answer_message_box(&app, message_box, IDOK)?;
