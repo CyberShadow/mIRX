@@ -369,7 +369,7 @@ fn tip_line(state: &WindowState, candidate: &TipCandidate) -> Option<String> {
     };
     let timestamps = TimestampStyle::new(&timestamp, state.local_time);
     let rows = match &candidate.view {
-        ViewId::Room(room_id) => build_room_timeline_rows(&state.model, room_id, timestamps),
+        ViewId::Room(room_id) => build_room_timeline_rows(&state.model, room_id, timestamps, None),
         ViewId::Thread {
             room_id,
             thread_root_event_id,

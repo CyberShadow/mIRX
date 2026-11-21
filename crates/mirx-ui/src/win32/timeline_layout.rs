@@ -8,7 +8,7 @@ use std::rc::Rc;
 use mirx_core::{TextStyle, TextStyleSpan};
 use windows_sys::Win32::Graphics::Gdi::{HDC, InvertRect};
 
-use super::colors::{ColorScheme, ERROR_COLOR, colorref, rgb};
+use super::colors::{ColorScheme, ERROR_COLOR, PaletteIndex, colorref, rgb};
 use super::settings::ActivityColors;
 use super::text_selection::line_selection;
 use super::*;
@@ -34,6 +34,9 @@ pub(super) enum TimelinePaintLineVisual {
         range: Range<usize>,
     },
     ImageSlot,
+    /// The line marker's rule across the line's middle. No text: nothing
+    /// hit-tests, marks or links on it.
+    Rule,
 }
 
 /// The timeline's lengths at its window's DPI, in pixels.
@@ -52,6 +55,8 @@ pub(super) struct TimelineMetrics {
     /// Between the text's left edge and the thumbnail.
     image_left_indent: i32,
     image_placeholder_inset: i32,
+    /// How thick the line marker's rule is.
+    rule_thickness: i32,
 }
 
 impl TimelineMetrics {
@@ -65,6 +70,7 @@ impl TimelineMetrics {
             image_slot_padding: dpi.px(TIMELINE_IMAGE_SLOT_PADDING),
             image_left_indent: dpi.px(TIMELINE_IMAGE_LEFT_INDENT),
             image_placeholder_inset: dpi.px(TIMELINE_IMAGE_PLACEHOLDER_INSET),
+            rule_thickness: dpi.px(1),
         }
     }
 
@@ -329,6 +335,16 @@ where
     let (wraps, wrapped) = cache.rewrap(rows, metrics.text_width(client_width), measure);
     let mut paint_lines = Vec::new();
     for (source_row_index, (row, wrap)) in rows.iter().zip(wraps).enumerate() {
+        if row.layout == TimelineRowLayout::Rule {
+            paint_lines.push(TimelinePaintLine {
+                kind: row.kind.clone(),
+                visual: TimelinePaintLineVisual::Rule,
+                image_state: None,
+                image_slot_index: None,
+                source_row_index: Some(source_row_index),
+            });
+            continue;
+        }
         let segments = match wrap {
             None => rendered_line_ranges(&row.logical_text)
                 .into_iter()
@@ -417,11 +433,26 @@ fn style_pieces<'a>(text: &'a str, styles: &[TextStyleSpan]) -> Vec<(&'a str, Op
     pieces
 }
 
+/// Whether a rule (the line marker) is among the `visible_rows` lines from
+/// `top_line`.
+pub(super) fn rule_visible(
+    paint_lines: &[TimelinePaintLine],
+    top_line: usize,
+    visible_rows: usize,
+) -> bool {
+    paint_lines
+        .iter()
+        .skip(top_line)
+        .take(visible_rows)
+        .any(|line| line.visual == TimelinePaintLineVisual::Rule)
+}
+
 pub(super) unsafe fn paint_timeline(hwnd: HWND) {
     let mut paint = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut paint);
     let frame_state = state_ref(frame_window_for(hwnd));
-    let scheme = &frame_state.settings.settings().colors;
+    let settings = frame_state.settings.settings();
+    let scheme = &settings.colors;
     // The class has no background brush: this fills every pixel.
     FillRect(hdc, &paint.rcPaint, frame_state.scheme_brushes.background);
     SetBkMode(hdc, TRANSPARENT as i32);
@@ -502,7 +533,7 @@ pub(super) unsafe fn paint_timeline(hwnd: HWND) {
                     &rect,
                     text,
                     styles,
-                    timeline_row_color(&line.kind, scheme),
+                    timeline_row_color(&line.kind, scheme, settings.marker.color),
                 );
                 // mIRC shows marked text in inverse video, which keeps
                 // every style's colours readable.
@@ -519,6 +550,21 @@ pub(super) unsafe fn paint_timeline(hwnd: HWND) {
                 }
             }
             TimelinePaintLineVisual::ImageSlot => {}
+            TimelinePaintLineVisual::Rule => {
+                let left = state.metrics.left_padding;
+                let thickness = state.metrics.rule_thickness;
+                let top = line_y + (state.line_height - thickness) / 2;
+                let right = client_rect.right - state.metrics.right_padding;
+                fill_clipped(
+                    hdc,
+                    &client_rect,
+                    left,
+                    top,
+                    right - left,
+                    thickness,
+                    timeline_row_color(&line.kind, scheme, settings.marker.color),
+                );
+            }
         }
     }
 
@@ -527,6 +573,10 @@ pub(super) unsafe fn paint_timeline(hwnd: HWND) {
     SelectObject(hdc, previous);
 
     EndPaint(hwnd, &paint);
+    // The line marker was on screen: leaving the window may move it.
+    if rule_visible(&state.paint_lines, state.top_line, visible_rows) {
+        timeline_state_mut(hwnd).line_marker_seen = true;
+    }
 }
 
 /// Draws one line of `text` from `left` within `rect`, a line's height,
@@ -606,9 +656,14 @@ unsafe fn fill_clipped(hdc: HDC, clip: &RECT, x: i32, y: i32, width: i32, height
 }
 
 /// A row's colour where its styles set none: its scheme item's, mIRC's
-/// line colours.
-pub(super) fn timeline_row_color(kind: &TimelineRowKind, scheme: &ColorScheme) -> u32 {
+/// line colours, and the line marker's own `marker` colour.
+pub(super) fn timeline_row_color(
+    kind: &TimelineRowKind,
+    scheme: &ColorScheme,
+    marker: PaletteIndex,
+) -> u32 {
     let item = match kind {
+        TimelineRowKind::LineMarker => return marker.colorref(),
         // mIRC draws a highlighted line wholly in the highlight colour.
         TimelineRowKind::Message {
             highlight: true, ..
@@ -844,6 +899,7 @@ mod tests {
         image_slot_padding: 20,
         image_left_indent: 24,
         image_placeholder_inset: 8,
+        rule_thickness: 1,
     };
 
     #[test]
@@ -865,6 +921,7 @@ mod tests {
                 image_slot_padding: 30,
                 image_left_indent: 36,
                 image_placeholder_inset: 12,
+                rule_thickness: 2,
             }
         );
         // (180 + 30) / 15, rounded up.
@@ -912,7 +969,9 @@ mod tests {
             .into_iter()
             .map(|line| match line.visual {
                 TimelinePaintLineVisual::Text { indent, .. } => indent,
-                TimelinePaintLineVisual::ImageSlot => unreachable!("info rows have no image"),
+                TimelinePaintLineVisual::ImageSlot | TimelinePaintLineVisual::Rule => {
+                    unreachable!("info rows are text")
+                }
             })
             .collect::<Vec<_>>()
         };
@@ -1039,7 +1098,9 @@ mod tests {
                     range,
                     ..
                 } => (text, indent, range),
-                TimelinePaintLineVisual::ImageSlot => unreachable!("message rows have no image"),
+                TimelinePaintLineVisual::ImageSlot | TimelinePaintLineVisual::Rule => {
+                    unreachable!("message rows are text")
+                }
             })
             .collect()
     }
@@ -1207,7 +1268,9 @@ mod tests {
             .into_iter()
             .map(|line| match line.visual {
                 TimelinePaintLineVisual::Text { text, styles, .. } => (text, styles),
-                TimelinePaintLineVisual::ImageSlot => unreachable!("message rows have no image"),
+                TimelinePaintLineVisual::ImageSlot | TimelinePaintLineVisual::Rule => {
+                    unreachable!("message rows are text")
+                }
             })
             .collect::<Vec<_>>();
         assert_eq!(
@@ -1506,6 +1569,36 @@ mod tests {
         assert_eq!(clamped_timeline_top_line(8, paint_lines.len(), 3), 1);
     }
 
+    #[test]
+    fn a_line_marker_row_is_one_rule_line() {
+        let rows = vec![
+            TimelineRow::log(TimelineRowKind::Info, "* above".to_owned()),
+            TimelineRow::line_marker(),
+            TimelineRow::log(TimelineRowKind::Info, "* below".to_owned()),
+        ];
+        let lines = fresh_paint_lines(&rows, client_width_for_text(30), 20, &measure_ascii_width);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[1].visual, TimelinePaintLineVisual::Rule);
+        assert_eq!(lines[1].kind, TimelineRowKind::LineMarker);
+        assert_eq!(lines[1].source_row_index, Some(1));
+    }
+
+    #[test]
+    fn a_rule_is_visible_only_inside_the_shown_lines() {
+        let rows = (0..3)
+            .map(|line| TimelineRow::log(TimelineRowKind::Info, format!("* {line}")))
+            .chain([TimelineRow::line_marker()])
+            .chain((4..8).map(|line| TimelineRow::log(TimelineRowKind::Info, format!("* {line}"))))
+            .collect::<Vec<_>>();
+        let lines = fresh_paint_lines(&rows, client_width_for_text(30), 20, &measure_ascii_width);
+        // The rule is line 3.
+        assert!(rule_visible(&lines, 0, 4), "at the bottom");
+        assert!(!rule_visible(&lines, 0, 3), "just below");
+        assert!(rule_visible(&lines, 3, 2), "at the top");
+        assert!(!rule_visible(&lines, 4, 4), "just above");
+        assert!(!rule_visible(&lines[..3], 0, 10), "no rule");
+    }
+
     fn index(index: u8) -> PaletteIndex {
         PaletteIndex::new(index).unwrap()
     }
@@ -1608,10 +1701,14 @@ mod tests {
         let classic = ColorScheme::default();
         for (kind, item) in rows_and_items() {
             let expected = item.map_or(rgb(0xff, 0, 0), |item| classic.colorref(item));
-            assert_eq!(timeline_row_color(&kind, &classic), expected, "{kind:?}");
+            assert_eq!(
+                timeline_row_color(&kind, &classic, index(4)),
+                expected,
+                "{kind:?}"
+            );
         }
         // mIRC Classic's line colours.
-        let color = |kind| timeline_row_color(&kind, &classic);
+        let color = |kind| timeline_row_color(&kind, &classic, index(4));
         assert_eq!(
             color(TimelineRowKind::Event {
                 item: EventItem::Join
@@ -1631,6 +1728,25 @@ mod tests {
     }
 
     #[test]
+    fn the_line_marker_takes_its_own_colour_in_any_scheme() {
+        let classic = ColorScheme::default();
+        for marker in [index(4), index(12)] {
+            assert_eq!(
+                timeline_row_color(&TimelineRowKind::LineMarker, &classic, marker),
+                marker.colorref()
+            );
+        }
+        let mut scheme = classic.clone();
+        for item in ColorItem::ALL {
+            scheme.set(item, index(13));
+        }
+        assert_eq!(
+            timeline_row_color(&TimelineRowKind::LineMarker, &scheme, index(4)),
+            index(4).colorref()
+        );
+    }
+
+    #[test]
     fn changing_an_item_moves_only_its_rows() {
         let classic = ColorScheme::default();
         for changed in ColorItem::ALL {
@@ -1638,8 +1754,8 @@ mod tests {
             // A colour no default uses.
             scheme.set(changed, index(13));
             for (kind, item) in rows_and_items() {
-                let moved =
-                    timeline_row_color(&kind, &scheme) != timeline_row_color(&kind, &classic);
+                let moved = timeline_row_color(&kind, &scheme, index(4))
+                    != timeline_row_color(&kind, &classic, index(4));
                 assert_eq!(moved, item == Some(changed), "{changed:?} {kind:?}");
             }
         }

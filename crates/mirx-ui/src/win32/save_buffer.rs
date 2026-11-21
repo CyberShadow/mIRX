@@ -11,8 +11,8 @@ use super::*;
 
 /// The text a window's buffer saves as: its lines, plain, as it shows them,
 /// each ending in CRLF. The lines about the window's state now (who is
-/// typing, older history loading, what the editbox replies to) are not
-/// lines of its buffer.
+/// typing, older history loading, what the editbox replies to, where the
+/// user stopped reading) are not lines of its buffer.
 fn save_buffer_text(rows: &[TimelineRow]) -> String {
     rows.iter()
         .filter(|row| {
@@ -21,7 +21,8 @@ fn save_buffer_text(rows: &[TimelineRow]) -> String {
                 TimelineRowIdentity::Synthetic {
                     label: TimelineSyntheticRowLabel::Typing
                         | TimelineSyntheticRowLabel::Backfill
-                        | TimelineSyntheticRowLabel::ComposeTarget,
+                        | TimelineSyntheticRowLabel::ComposeTarget
+                        | TimelineSyntheticRowLabel::LineMarker,
                     ..
                 }
             )
@@ -98,6 +99,8 @@ mod tests {
                 TimelineRowKind::Info,
                 "<Alice> one\ntwo\r\nthree".to_owned(),
             ),
+            TimelineRow::line_marker(),
+            TimelineRow::full_width(TimelineRowKind::Info, "<Bob> four".to_owned()),
             TimelineRow::full_width(TimelineRowKind::Typing, "* Alice is typing".to_owned())
                 .with_identity(TimelineRowIdentity::synthetic(
                     TimelineSyntheticRowLabel::Typing,
@@ -111,7 +114,7 @@ mod tests {
         ];
         assert_eq!(
             save_buffer_text(&rows),
-            "* Now talking in Ops\r\n<Alice> one\r\ntwo\r\nthree\r\n"
+            "* Now talking in Ops\r\n<Alice> one\r\ntwo\r\nthree\r\n<Bob> four\r\n"
         );
         assert_eq!(save_buffer_text(&[]), "");
     }

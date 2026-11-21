@@ -44,6 +44,8 @@ pub(super) enum TimelineSyntheticRowLabel {
     ComposeTarget,
     Context,
     Plain,
+    /// mIRC's line marker: where the user stopped reading.
+    LineMarker,
 }
 
 impl TimelineRowIdentity {
@@ -114,6 +116,9 @@ pub(super) enum TimelineRowLayout {
     /// mIRC log lines: wrapped to the view, continuation lines indented by
     /// two spaces.
     Log,
+    /// One line's height with a horizontal rule across it, and no text: the
+    /// line marker.
+    Rule,
 }
 
 impl TimelineRow {
@@ -140,6 +145,22 @@ impl TimelineRow {
             styles: Vec::new(),
             user_links: Vec::new(),
             layout: TimelineRowLayout::Log,
+            image_state: None,
+            arrival: None,
+        }
+    }
+
+    /// The line marker's row: a rule, below the last line the user read.
+    /// It is not text: nothing logs, saves, copies or finds it.
+    pub(super) fn line_marker() -> Self {
+        Self {
+            identity: TimelineRowIdentity::synthetic(TimelineSyntheticRowLabel::LineMarker, ""),
+            event_id: None,
+            kind: TimelineRowKind::LineMarker,
+            logical_text: String::new(),
+            styles: Vec::new(),
+            user_links: Vec::new(),
+            layout: TimelineRowLayout::Rule,
             image_state: None,
             arrival: None,
         }
@@ -232,6 +253,8 @@ pub(super) enum TimelineRowKind {
     /// What is left of a redacted event.
     Redacted,
     Plain,
+    /// The line marker, `TimelineRow::line_marker`.
+    LineMarker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -739,10 +762,13 @@ fn activity_line_text(
     }
 }
 
+/// A room window's rows. `line_marker`: the event the line marker follows,
+/// `None` for no marker (see `room_line_marker`).
 pub(super) fn build_room_timeline_rows(
     model: &UiModel,
     room_id: &str,
     timestamps: TimestampStyle,
+    line_marker: Option<&str>,
 ) -> Vec<TimelineRow> {
     let room = room_by_id(&model.rooms, room_id).expect("room view must target an existing room");
     let room_view = model.room_views.get(room_id);
@@ -770,6 +796,7 @@ pub(super) fn build_room_timeline_rows(
             None,
             timestamps,
             model.own_user_id(),
+            line_marker,
         );
         push_room_typing_row(&mut rows, room_view);
     }
@@ -780,6 +807,11 @@ pub(super) fn build_room_timeline_rows(
 /// The window's activity rows with its echo lines merged by time: an echo
 /// line goes before the first activity newer than it, so it stays below
 /// what the user saw when typing the command.
+///
+/// The line marker goes right above the first activity after the one
+/// `line_marker` names, below the echo lines before it: it parts what the
+/// user read from what arrived since. With no activity after the marked
+/// one there is nothing unread, and no marker.
 fn push_activity_rows_with_echo<'a>(
     rows: &mut Vec<TimelineRow>,
     room_view: &RoomViewModel,
@@ -787,13 +819,19 @@ fn push_activity_rows_with_echo<'a>(
     thread_root: Option<&str>,
     timestamps: TimestampStyle,
     own_user_id: Option<&str>,
+    line_marker: Option<&str>,
 ) {
     let mut echo = room_view.echo.lines_for(thread_root).peekable();
+    let mut marker_due = false;
     for activity in activities {
         while let Some(line) = echo.next_if(|line| line.timestamp_ms < activity.timestamp_ms) {
             rows.push(echo_row(line, timestamps));
         }
+        if std::mem::take(&mut marker_due) {
+            rows.push(TimelineRow::line_marker());
+        }
         push_room_activity_row(rows, room_view, activity, timestamps, own_user_id);
+        marker_due = line_marker.is_some() && room_activity_event_id(activity) == line_marker;
     }
     rows.extend(echo.map(|line| echo_row(line, timestamps)));
 }
@@ -830,6 +868,8 @@ pub(super) fn build_thread_timeline_rows(
         Some(thread_root_event_id),
         timestamps,
         model.own_user_id(),
+        // Matrix keeps one read marker per room, for its room window.
+        None,
     );
     push_room_typing_row(&mut rows, room_view);
     rows
@@ -845,7 +885,23 @@ pub(super) fn render_room_lines(state: &WindowState, room_id: &str) -> Vec<Strin
         &state.model,
         room_id,
         state.timestamps(),
+        room_line_marker(state, room_id),
     ))
+}
+
+/// The event a room window's line marker follows: the room's read marker
+/// (`m.fully_read`), as the server last said, while Options > Display >
+/// Line marker is on.
+pub(super) fn room_line_marker<'a>(state: &'a WindowState, room_id: &str) -> Option<&'a str> {
+    if !state.settings.settings().marker.show {
+        return None;
+    }
+    state
+        .model
+        .room_read_states
+        .get(room_id)?
+        .fully_read_event_id
+        .as_deref()
 }
 
 fn format_room_image_metadata_suffix(info: Option<&RoomImageInfo>) -> String {
@@ -1062,6 +1118,7 @@ mod tests {
             &state.model,
             "!ops:example",
             state.timestamps(),
+            None,
         ));
         assert!(initial.contains(&"* Now talking in Ops (!ops:example)".to_owned()));
         assert!(initial.contains(&"* Topic is 'incident review'".to_owned()));
@@ -1076,6 +1133,7 @@ mod tests {
             &state.model,
             "!ops:example",
             state.timestamps(),
+            None,
         ));
         assert!(updated.contains(&"* Topic is 'deployment window'".to_owned()));
         assert!(
@@ -1091,6 +1149,7 @@ mod tests {
             &state.model,
             "!ops:example",
             state.timestamps(),
+            None,
         ));
         assert!(!cleared.iter().any(|line| line.starts_with("* Topic is ''")));
     }
@@ -1129,13 +1188,14 @@ mod tests {
             &state.model,
             "!ops:example",
             state.timestamps(),
+            None,
         ))
     }
 
     #[test]
     fn a_reply_quotes_its_loaded_target_above_it_with_the_replys_event() {
         let state = reply_quote_state("$q");
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
         assert_eq!(
             project_timeline_rows(&rows)[2..],
             [
@@ -1354,7 +1414,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
@@ -1435,7 +1495,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
         assert_eq!(
             rows.iter()
                 .filter(|row| row.kind == TimelineRowKind::ReactionSummary)
@@ -1475,7 +1535,7 @@ mod tests {
             .unwrap();
         }
         let reaction_row = |state: &WindowState| {
-            build_room_timeline_rows(&state.model, "!ops:example", state.timestamps())
+            build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None)
                 .into_iter()
                 .find(|row| row.kind == TimelineRowKind::ReactionSummary)
                 .expect("the message has a reaction row")
@@ -1706,7 +1766,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
@@ -1865,7 +1925,7 @@ mod tests {
         }];
         apply_core_event(&mut state, Event::RoomActivityUpdate(edit)).unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps())
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps(), None)
             .into_iter()
             .filter(|row| row.event_id.is_some())
             .collect::<Vec<_>>();
@@ -1957,7 +2017,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps())
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps(), None)
             .into_iter()
             .filter(|row| row.event_id.is_some())
             .collect::<Vec<_>>();
@@ -1999,7 +2059,7 @@ mod tests {
     fn reply_quotes_and_other_rows_have_no_user_links() {
         let mut state = reply_quote_state("$q");
         apply_core_event(&mut state, topic_state("!ops:example", "incident review")).unwrap();
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps(), None);
         let linked = rows
             .iter()
             .filter(|row| !row.user_links.is_empty())
@@ -2156,7 +2216,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
@@ -2419,7 +2479,7 @@ mod tests {
             from: HistoryFrom::Latest,
         };
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
 
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
@@ -2470,7 +2530,7 @@ mod tests {
             message: "homeserver unavailable".to_owned(),
         };
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
 
         assert_eq!(rows[2].kind, TimelineRowKind::Plain);
         assert_eq!(
@@ -2497,7 +2557,7 @@ mod tests {
             .expect("room view exists after room activity")
             .history = RoomHistoryBackfillState::Exhausted;
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
 
         assert_eq!(rows[2].kind, TimelineRowKind::Plain);
         assert_eq!(rows[2].logical_text, "* No older history available.");
@@ -2515,7 +2575,7 @@ mod tests {
         .unwrap();
         apply_core_event(&mut state, timeline("!ops:example", "latest row")).unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
 
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
@@ -2582,7 +2642,8 @@ mod tests {
         direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
         state.model.rooms = vec![direct_room];
 
-        let rows = build_room_timeline_rows(&state.model, "!direct:example", state.timestamps());
+        let rows =
+            build_room_timeline_rows(&state.model, "!direct:example", state.timestamps(), None);
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
@@ -2830,7 +2891,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
         let image_row = rows
             .iter()
             .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
@@ -2889,7 +2950,7 @@ mod tests {
             })
         );
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
         let image_row = rows
             .iter()
             .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
@@ -2930,7 +2991,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            build_room_timeline_rows(&state.model, "!ops:example", state.timestamps())
+            build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None)
                 .iter()
                 .any(|row| matches!(
                     row.image_state,
@@ -2987,7 +3048,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
         let image_row = rows
             .iter()
             .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
@@ -3052,7 +3113,7 @@ mod tests {
         );
         assert!(state.decoded_images.contains_key(&image_key));
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
         let image_row = rows
             .iter()
             .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
@@ -3540,7 +3601,7 @@ mod tests {
                 ))],
             },
         );
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
         let arrivals = rows
             .iter()
             .filter_map(|row| match &row.identity {
@@ -3554,6 +3615,199 @@ mod tests {
             arrivals,
             [("event:$old", None), ("event:$!ops:example:live", Some(0))]
         );
+    }
+
+    /// Ops: Alice's `$a`, a reply `$b` to it with a reaction, an echo line,
+    /// a thread reply `$t` to `$a`, and `$c`.
+    fn line_marker_state() -> WindowState {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        let events = vec![
+            timeline_with_transaction_id("!ops:example", "$a", None, "first", 1_700_000_060_000),
+            timeline_with_relation_and_presentation(
+                "!ops:example",
+                "$b",
+                None,
+                Some(reply_relation("$a")),
+                RoomMessagePresentationKind::Text,
+                "second",
+                1_700_000_120_000,
+            ),
+            incoming_reaction_added(
+                "!ops:example",
+                "$b",
+                "$reaction",
+                "@bob:example.org",
+                "heart",
+                1_700_000_121_000,
+            ),
+            timeline_with_relation_and_presentation(
+                "!ops:example",
+                "$t",
+                None,
+                Some(thread_relation("$a")),
+                RoomMessagePresentationKind::Text,
+                "in thread",
+                1_700_000_170_000,
+            ),
+            timeline_with_transaction_id("!ops:example", "$c", None, "third", 1_700_000_180_000),
+        ];
+        for event in events {
+            apply_core_event(&mut state, event).unwrap();
+        }
+        state
+            .model
+            .room_views
+            .get_mut("!ops:example")
+            .unwrap()
+            .push_echo(
+                1_700_000_150_000,
+                None,
+                StatusLineKind::Info,
+                "* between".to_owned(),
+            );
+        state
+    }
+
+    /// The rows' texts after the opening lines, the marker as `----`.
+    fn marked_texts(rows: &[TimelineRow]) -> Vec<String> {
+        rows.iter()
+            .skip_while(|row| row.event_id.is_none())
+            .map(|row| match row.kind {
+                TimelineRowKind::LineMarker => "----".to_owned(),
+                _ => row.logical_text.clone(),
+            })
+            .collect()
+    }
+
+    fn rows_marked_at(state: &WindowState, line_marker: Option<&str>) -> Vec<TimelineRow> {
+        build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            line_marker,
+        )
+    }
+
+    #[test]
+    fn the_line_marker_parts_the_marked_line_from_the_next_activity() {
+        let state = line_marker_state();
+        assert_eq!(
+            marked_texts(&rows_marked_at(&state, Some("$b"))),
+            [
+                "[22:14] <@alice:example> first",
+                "    > <@alice:example> first",
+                "[22:15] <@alice:example> second",
+                "    reactions: heart @bob:example.org",
+                "[22:15] * between",
+                "----",
+                "[22:16] <@alice:example> in thread",
+                "[22:16] <@alice:example> third",
+            ]
+        );
+        // A thread reply is a line of the room window too.
+        assert_eq!(
+            marked_texts(&rows_marked_at(&state, Some("$t")))[5..],
+            [
+                "[22:16] <@alice:example> in thread",
+                "----",
+                "[22:16] <@alice:example> third",
+            ]
+        );
+        let marker = rows_marked_at(&state, Some("$a"))
+            .into_iter()
+            .find(|row| row.kind == TimelineRowKind::LineMarker)
+            .expect("a line follows $a");
+        assert_eq!(marker, TimelineRow::line_marker());
+        assert_eq!(
+            marker.identity,
+            TimelineRowIdentity::synthetic(TimelineSyntheticRowLabel::LineMarker, "")
+        );
+        assert_eq!((marker.event_id, marker.arrival), (None, None));
+    }
+
+    #[test]
+    fn no_line_marker_without_a_line_after_it_or_a_marked_line_shown() {
+        let mut state = line_marker_state();
+        apply_core_event(
+            &mut state,
+            typing_event("!ops:example", &["@bob:example.org"]),
+        )
+        .unwrap();
+        let unmarked = rows_marked_at(&state, None);
+        assert!(
+            unmarked
+                .iter()
+                .all(|row| row.kind != TimelineRowKind::LineMarker)
+        );
+        // The last line is read: below it come only the typing line.
+        assert_eq!(rows_marked_at(&state, Some("$c")), unmarked);
+        // An event the window does not show: not loaded, or no line.
+        assert_eq!(rows_marked_at(&state, Some("$reaction")), unmarked);
+        assert_eq!(rows_marked_at(&state, Some("$unknown")), unmarked);
+    }
+
+    #[test]
+    fn thread_windows_have_no_line_marker() {
+        let mut state = line_marker_state();
+        state.model.room_read_states.insert(
+            "!ops:example".to_owned(),
+            mirx_core::RoomReadState {
+                room_id: "!ops:example".to_owned(),
+                latest_active_event_id: None,
+                fully_read_event_id: Some("$a".to_owned()),
+                marked_unread: false,
+                num_unread: 0,
+                num_notifications: 0,
+                num_mentions: 0,
+            },
+        );
+        assert_eq!(room_line_marker(&state, "!ops:example"), Some("$a"));
+        let rows =
+            build_thread_timeline_rows(&state.model, "!ops:example", "$a", state.timestamps());
+        assert!(
+            rows.iter()
+                .all(|row| row.kind != TimelineRowKind::LineMarker)
+        );
+    }
+
+    #[test]
+    fn the_line_marker_is_the_read_marker_while_it_is_shown() {
+        let mut state = line_marker_state();
+        assert_eq!(
+            room_line_marker(&state, "!ops:example"),
+            None,
+            "no read state"
+        );
+        let read_state = |fully_read: Option<&str>| mirx_core::RoomReadState {
+            room_id: "!ops:example".to_owned(),
+            latest_active_event_id: Some("$c".to_owned()),
+            fully_read_event_id: fully_read.map(str::to_owned),
+            marked_unread: false,
+            num_unread: 2,
+            num_notifications: 0,
+            num_mentions: 0,
+        };
+        state
+            .model
+            .room_read_states
+            .insert("!ops:example".to_owned(), read_state(None));
+        assert_eq!(room_line_marker(&state, "!ops:example"), None);
+        state
+            .model
+            .room_read_states
+            .insert("!ops:example".to_owned(), read_state(Some("$b")));
+        assert_eq!(room_line_marker(&state, "!ops:example"), Some("$b"));
+        assert!(
+            render_room_lines(&state, "!ops:example").contains(&String::new()),
+            "the marker projects as an empty line"
+        );
+        state
+            .settings
+            .update(|settings| settings.marker.show = false)
+            .unwrap();
+        assert_eq!(room_line_marker(&state, "!ops:example"), None);
+        assert_eq!(room_line_marker(&state, "!other:example"), None);
     }
 
     #[test]
@@ -3597,7 +3851,7 @@ mod tests {
             "* tie".to_owned(),
         );
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
         let texts = project_timeline_rows(&rows);
         let tail = &texts[texts.len() - 6..];
         assert_eq!(
@@ -3646,7 +3900,7 @@ mod tests {
             "* warning".to_owned(),
         );
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
         let kinds = rows[rows.len() - 2..]
             .iter()
             .map(|row| row.kind.clone())

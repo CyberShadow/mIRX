@@ -4,9 +4,9 @@
 
 use std::ops::Range;
 
-use super::TimelineRow;
 use super::mirc_format::mirc_input_from_styled;
 use super::timeline_layout::{TimelinePaintLine, TimelinePaintLineVisual, clip_styles};
+use super::{TimelineRow, TimelineRowLayout};
 
 /// A place in a timeline's text: a byte offset, at a char boundary, in a
 /// row's `logical_text`. Ordered as the text reads.
@@ -120,7 +120,7 @@ fn text_line(line: &TimelinePaintLine) -> Option<(usize, &str, i32, &Range<usize
             range,
             ..
         } => Some((line.source_row_index?, text.as_str(), *indent, range)),
-        TimelinePaintLineVisual::ImageSlot => None,
+        TimelinePaintLineVisual::ImageSlot | TimelinePaintLineVisual::Rule => None,
     }
 }
 
@@ -142,6 +142,10 @@ pub(super) fn point_at(
     };
     let line = &lines[index];
     let row = line.source_row_index?;
+    if line.visual == TimelinePaintLineVisual::Rule {
+        // The line marker's row has no text: a point on it is its start.
+        return Some(TextPoint { row, offset: 0 });
+    }
     let Some((_, text, indent, range)) = text_line(line) else {
         let (_, _, _, range) = lines[..index]
             .iter()
@@ -184,7 +188,8 @@ pub(super) fn exact_point_at(
 
 /// The text between `a` and `b` in either order, rows joined by CRLF as
 /// the clipboard takes lines. A wrapped row is one line, so what wrapping
-/// dropped comes back. `with_codes`: as mIRC control codes for its styles.
+/// dropped comes back. The line marker is no line of text and copies as
+/// nothing. `with_codes`: as mIRC control codes for its styles.
 pub(super) fn selected_text(
     rows: &[TimelineRow],
     a: TextPoint,
@@ -193,6 +198,7 @@ pub(super) fn selected_text(
 ) -> String {
     let (start, end) = (a.min(b), a.max(b));
     (start.row..=end.row)
+        .filter(|index| rows[*index].layout != TimelineRowLayout::Rule)
         .map(|index| {
             let row = &rows[index];
             let from = if index == start.row { start.offset } else { 0 };
@@ -391,6 +397,39 @@ mod tests {
             Some(point(0, 21))
         );
         assert_eq!(exact_point_at(&lines, GEOMETRY, 0, 6 + 3 * 15, &mono), None);
+    }
+
+    #[test]
+    fn the_line_marker_is_a_point_but_copies_as_nothing() {
+        let rows = vec![
+            row("above", "a"),
+            TimelineRow::line_marker(),
+            row("below", "b"),
+        ];
+        let mut rule = text_line(1, &rows, 0..0, 0);
+        rule.kind = TimelineRowKind::LineMarker;
+        rule.visual = TimelinePaintLineVisual::Rule;
+        let lines = vec![
+            text_line(0, &rows, 0..5, 0),
+            rule,
+            text_line(2, &rows, 0..5, 0),
+        ];
+        assert_eq!(
+            point_at(&lines, GEOMETRY, x_of(3, 0), 6 + 15, &mono),
+            Some(point(1, 0))
+        );
+        assert_eq!(
+            exact_point_at(&lines, GEOMETRY, x_of(0, 0), 6 + 15, &mono),
+            None
+        );
+        // Across it: the lines above and below, one CRLF apart.
+        assert_eq!(
+            selected_text(&rows, point(0, 2), point(2, 3), false),
+            "ove\r\nbel"
+        );
+        // From or to it: only the other line's part.
+        assert_eq!(selected_text(&rows, point(1, 0), point(2, 3), false), "bel");
+        assert_eq!(selected_text(&rows, point(0, 2), point(1, 0), false), "ove");
     }
 
     #[test]

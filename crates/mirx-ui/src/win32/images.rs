@@ -722,7 +722,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            build_room_timeline_rows(&state.model, "!ops:example", state.timestamps())
+            build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None)
                 .iter()
                 .any(|row| matches!(
                     row.image_state,

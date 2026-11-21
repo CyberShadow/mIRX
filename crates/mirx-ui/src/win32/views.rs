@@ -1175,6 +1175,10 @@ pub(super) struct ViewRowsKey {
     can_fetch_media: bool,
     can_fetch_events: bool,
     compose_target: Option<ComposeTarget>,
+    /// A room window's line marker: the read marker's event while the
+    /// marker is shown. Not the whole read state: its unread counts change
+    /// with every receipt and draw nothing.
+    line_marker: Option<String>,
 }
 
 /// The inputs of `view_id`'s rows now; the Rooms List has none.
@@ -1199,6 +1203,11 @@ pub(super) fn view_rows_key(state: &WindowState, view_id: &ViewId) -> ViewRowsKe
         can_fetch_media: can_fetch_room_media(state),
         can_fetch_events: can_fetch_room_events(state),
         compose_target: state.views[view_id].compose().target.clone(),
+        line_marker: match view_id {
+            ViewId::Room(room_id) => room_line_marker(state, room_id).map(str::to_owned),
+            ViewId::Status | ViewId::Thread { .. } => None,
+            ViewId::RoomList => unreachable!("the Rooms List has no rows to gate"),
+        },
     }
 }
 
@@ -1262,7 +1271,12 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
         let timestamps = state.timestamps();
         let mut rows = match view_id {
             ViewId::Status => build_status_timeline_rows(&state.model.status_log, timestamps),
-            ViewId::Room(room_id) => build_room_timeline_rows(&state.model, room_id, timestamps),
+            ViewId::Room(room_id) => build_room_timeline_rows(
+                &state.model,
+                room_id,
+                timestamps,
+                room_line_marker(state, room_id),
+            ),
             ViewId::Thread {
                 room_id,
                 thread_root_event_id,
@@ -1489,6 +1503,18 @@ mod tests {
     /// Ops with its room window and Status, stand-in windows only.
     fn keyed_state() -> WindowState {
         let mut state = compose_target_state();
+        state.model.room_read_states.insert(
+            "!ops:example".to_owned(),
+            RoomReadState {
+                room_id: "!ops:example".to_owned(),
+                latest_active_event_id: None,
+                fully_read_event_id: Some("$q".to_owned()),
+                marked_unread: false,
+                num_unread: 1,
+                num_notifications: 0,
+                num_mentions: 0,
+            },
+        );
         state.views.insert(ViewId::Status, tracked_view(100));
         state
             .views
@@ -1500,7 +1526,7 @@ mod tests {
     fn view_rows_key_changes_with_each_input() {
         let ops = room_view_id("!ops:example");
         type Change = fn(&mut WindowState);
-        let changes: [(&str, Change, bool, bool); 8] = [
+        let changes: [(&str, Change, bool, bool); 12] = [
             // (what, change, moves the room's key, moves Status's key)
             (
                 "a rename",
@@ -1567,6 +1593,59 @@ mod tests {
                 },
                 true,
                 true,
+            ),
+            (
+                "a read marker move",
+                |state| {
+                    state
+                        .model
+                        .room_read_states
+                        .get_mut("!ops:example")
+                        .unwrap()
+                        .fully_read_event_id = Some("$moved".to_owned())
+                },
+                true,
+                false,
+            ),
+            (
+                "an unread count",
+                |state| {
+                    let read_state = state
+                        .model
+                        .room_read_states
+                        .get_mut("!ops:example")
+                        .unwrap();
+                    read_state.num_unread += 1;
+                    read_state.num_notifications += 1;
+                },
+                false,
+                false,
+            ),
+            (
+                "hiding the line marker",
+                |state| {
+                    state
+                        .settings
+                        .update(|settings| settings.marker.show = false)
+                        .unwrap()
+                },
+                true,
+                false,
+            ),
+            (
+                // Paint takes the colour; the rows stay.
+                "the line marker's colour",
+                |state| {
+                    state
+                        .settings
+                        .update(|settings| {
+                            settings.marker.color = crate::win32::colors::PaletteIndex::new(12)
+                                .expect("a palette index")
+                        })
+                        .unwrap()
+                },
+                false,
+                false,
             ),
         ];
         for (what, change, moves_room, moves_status) in changes {

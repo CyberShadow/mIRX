@@ -94,6 +94,7 @@ pub(super) struct Settings {
     pub(super) logging: LoggingSetting,
     pub(super) tray: TraySetting,
     pub(super) tips: TipsSetting,
+    pub(super) marker: MarkerSetting,
     pub(super) other: OtherSetting,
     /// mIRC's Tools > Colors.
     pub(super) colors: ColorScheme,
@@ -449,6 +450,25 @@ impl Default for TipsSetting {
     }
 }
 
+/// mIRC's Options > Display > Marker: the line marker, a rule below the
+/// last line the user read in a room window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct MarkerSetting {
+    pub(super) show: bool,
+    /// The rule's colour. Red: mIRC users know the marker as "the red
+    /// line".
+    pub(super) color: PaletteIndex,
+}
+
+impl Default for MarkerSetting {
+    fn default() -> Self {
+        Self {
+            show: true,
+            color: PaletteIndex::new(4).expect("red is a palette index"),
+        }
+    }
+}
+
 /// mIRC's Options > Other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct OtherSetting {
@@ -510,6 +530,7 @@ enum Section {
     Logging,
     Tray,
     Tips,
+    Marker,
     Other,
     Colors,
 }
@@ -539,6 +560,7 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                 "logging" => Section::Logging,
                 "tray" => Section::Tray,
                 "tips" => Section::Tips,
+                "marker" => Section::Marker,
                 "other" => Section::Other,
                 "colors" => Section::Colors,
                 _ => return Err(error(format!("unknown section [{name}]"))),
@@ -642,6 +664,12 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Tips, "channels") => {
                 settings.tips.channels = parse_on_off(value, "channels").map_err(error)?;
             }
+            (Section::Marker, "show") => {
+                settings.marker.show = parse_on_off(value, "show").map_err(error)?;
+            }
+            (Section::Marker, "color") => {
+                settings.marker.color = parse_palette_index(value).map_err(error)?;
+            }
             (Section::Other, "buffer") => {
                 settings.other.window_buffer =
                     parse_window_buffer(value.trim_end()).map_err(error)?;
@@ -713,6 +741,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
          [logging]\r\nchannels={}\r\nqueries={}\r\nstrip={}\r\ntimestamp={}\r\n\
          [tray]\r\nalways={}\r\nstartup={}\r\nminimize={}\r\nsingle_click={}\r\n\
          [tips]\r\nhighlights={}\r\nqueries={}\r\nchannels={}\r\n\
+         [marker]\r\nshow={}\r\ncolor={}\r\n\
          [other]\r\nbuffer={}\r\n\
          [colors]\r\n{colors}",
         font.face,
@@ -743,6 +772,8 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         on_off(tips.highlights),
         on_off(tips.queries),
         on_off(tips.channels),
+        on_off(settings.marker.show),
+        settings.marker.color.get(),
         settings.other.window_buffer,
     )
 }
@@ -825,6 +856,7 @@ mod tests {
         [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
         [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
         [tips]\r\nhighlights=on\r\nqueries=on\r\nchannels=off\r\n\
+        [marker]\r\nshow=on\r\ncolor=4\r\n\
         [other]\r\nbuffer=5000\r\n\
         [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\ninvite=3\r\n\
         join=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\nnotice=5\r\nother=6\r\nown=1\r\n\
@@ -904,6 +936,24 @@ mod tests {
         assert!(text.contains("retry_delay=30\r\n[toolbar]\r\nshow=off\r\n[switchbar]"));
         assert!(text.contains("[treebar]\r\nshow=off\r\nwidth=300\r\n"));
         assert_eq!(parse_ini(&text), Ok(settings));
+    }
+
+    #[test]
+    fn the_line_marker_setting_round_trips() {
+        let settings = Settings {
+            marker: MarkerSetting {
+                show: false,
+                color: PaletteIndex::new(12).unwrap(),
+            },
+            ..Settings::default()
+        };
+        let text = to_ini(&settings);
+        assert!(text.contains("[marker]\r\nshow=off\r\ncolor=12\r\n[other]"));
+        assert_eq!(parse_ini(&text), Ok(settings));
+        assert_eq!(
+            parse_ini("[marker]\r\nshow=on\r\n").map(|settings| settings.marker),
+            Ok(MarkerSetting::default())
+        );
     }
 
     #[test]
@@ -997,7 +1047,7 @@ mod tests {
             ..Settings::default()
         };
         let text = to_ini(&settings);
-        assert!(text.contains("[tips]\r\nhighlights=off\r\nqueries=on\r\nchannels=on\r\n[other]"));
+        assert!(text.contains("[tips]\r\nhighlights=off\r\nqueries=on\r\nchannels=on\r\n[marker]"));
         assert_eq!(parse_ini(&text), Ok(settings));
         assert_eq!(
             parse_ini("[tips]\nqueries=off").map(|settings| settings.tips),
@@ -1023,7 +1073,7 @@ mod tests {
             ..Settings::default()
         };
         let text = to_ini(&settings);
-        assert!(text.contains("channels=off\r\n[other]\r\nbuffer=100\r\n[colors]"));
+        assert!(text.contains("color=4\r\n[other]\r\nbuffer=100\r\n[colors]"));
         assert_eq!(parse_ini(&text), Ok(settings));
         assert_eq!(
             parse_ini("[Other]\nBuffer=50000").map(|settings| settings.other.window_buffer),
@@ -1176,6 +1226,9 @@ mod tests {
             ("[switchbar]\nmessage=99", "line 2: colors must be 0-15"),
             ("[treebar]\nevent=5", "line 2: unknown key event"),
             ("[toolbar]\nshow=yes", "line 2: show must be on or off"),
+            ("[marker]\nshow=yes", "line 2: show must be on or off"),
+            ("[marker]\ncolor=16", "line 2: colors must be 0-15"),
+            ("[marker]\ncolour=4", "line 2: unknown key colour"),
             ("[toolbar]\nwidth=9", "line 2: unknown key width"),
         ] {
             assert_eq!(parse_ini(text), Err(error.to_owned()), "{text:?}");

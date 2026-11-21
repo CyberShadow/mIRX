@@ -462,7 +462,7 @@ use timeline_rows::{
     TimelineImageState, TimelineMessageSendState, TimelineRow, TimelineRowIdentity,
     TimelineRowKind, TimelineRowLayout, build_room_timeline_rows, build_status_timeline_rows,
     build_thread_timeline_rows, can_fetch_room_events, collect_reply_target_requests,
-    compose_target_row, dispatch_reply_target_fetches, project_timeline_rows,
+    compose_target_row, dispatch_reply_target_fetches, project_timeline_rows, room_line_marker,
 };
 #[cfg(test)]
 use timeline_rows::{TimelineSyntheticRowLabel, render_room_lines};

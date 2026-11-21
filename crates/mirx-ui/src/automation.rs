@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 71;
+pub(crate) const PROTOCOL_VERSION: u32 = 72;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1229,6 +1229,8 @@ pub(crate) enum UiTimelineLineKind {
     UnableToDecrypt,
     StateNotice,
     Plain,
+    /// The line marker's rule; its text is empty.
+    LineMarker,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3840,8 +3842,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_71() {
-        assert_eq!(PROTOCOL_VERSION, 71);
+    fn protocol_version_is_72() {
+        assert_eq!(PROTOCOL_VERSION, 72);
     }
 
     #[test]
@@ -5873,7 +5875,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":71,
+                    "protocol_version":72,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })

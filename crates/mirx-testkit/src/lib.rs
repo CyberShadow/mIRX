@@ -1475,6 +1475,8 @@ pub enum UiTimelineLineKind {
     UnableToDecrypt,
     StateNotice,
     Plain,
+    /// The line marker's rule; its text is empty.
+    LineMarker,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

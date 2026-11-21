@@ -428,7 +428,8 @@ unsafe fn menu_item_count(menu: HMENU) -> Result<u32, String> {
 
 /// The lines `timeline` shows now, with the click point of each: the
 /// arithmetic `timeline_source_row_index_at_client_y` inverts.
-unsafe fn dump_active_timeline(timeline: HWND, scheme: &ColorScheme) -> UiActiveTimeline {
+unsafe fn dump_active_timeline(timeline: HWND, settings: &Settings) -> UiActiveTimeline {
+    let (scheme, marker_color) = (&settings.colors, settings.marker.color);
     let state = timeline_state_ref(timeline);
     let visible_rows = timeline_visible_rows(timeline);
     let visible_lines = state
@@ -452,13 +453,15 @@ unsafe fn dump_active_timeline(timeline: HWND, scheme: &ColorScheme) -> UiActive
                         dump_line_links(&state.source_rows[row], range)
                     }),
                 ),
-                TimelinePaintLineVisual::ImageSlot => (String::new(), Vec::new(), 0, Vec::new()),
+                TimelinePaintLineVisual::ImageSlot | TimelinePaintLineVisual::Rule => {
+                    (String::new(), Vec::new(), 0, Vec::new())
+                }
             };
             UiTimelineLine {
                 text,
                 styles,
                 kind: ui_timeline_line_kind(&line.kind),
-                color: colorref_hex(timeline_row_color(&line.kind, scheme)),
+                color: colorref_hex(timeline_row_color(&line.kind, scheme, marker_color)),
                 // Text set as a whole (WM_SETTEXT) has no rows.
                 event_id: line
                     .source_row_index
@@ -521,6 +524,7 @@ fn ui_timeline_line_kind(kind: &TimelineRowKind) -> UiTimelineLineKind {
             UiTimelineLineKind::StateNotice
         }
         TimelineRowKind::Plain => UiTimelineLineKind::Plain,
+        TimelineRowKind::LineMarker => UiTimelineLineKind::LineMarker,
     }
 }
 
@@ -626,7 +630,7 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             ViewId::RoomList => None,
             view_id => Some(dump_active_timeline(
                 view_timeline(view_id, active_view.content),
-                &state.settings.settings().colors,
+                state.settings.settings(),
             )),
         },
         navigation,
