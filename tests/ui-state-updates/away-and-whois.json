@@ -1,0 +1,26 @@
+[
+  {
+    "AwayChanged": {
+      "message": "lunch",
+      "seen_as": "online"
+    }
+  },
+  {
+    "UserProfile": {
+      "user_id": "@bob:example",
+      "display_name": "Bob Builder",
+      "presence": {
+        "kind": "unavailable",
+        "status_msg": "in a meeting",
+        "last_active_ago_ms": 3720000,
+        "currently_active": false
+      }
+    }
+  },
+  {
+    "AwayChanged": {
+      "message": null,
+      "seen_as": "online"
+    }
+  }
+]

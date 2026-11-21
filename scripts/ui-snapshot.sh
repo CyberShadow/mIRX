@@ -2293,6 +2293,39 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!ops:example'
       ;;
+    away-and-whois)
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      # The server's answers to /away, /whois Bob and /back, appended at
+      # the fixed 22:12 clock: the snapshot core is not signed in and
+      # would refuse the typed commands at no fixed moment.
+      ordered_actions=(
+        "append:$root_dir/tests/ui-state-updates/away-and-whois.json"
+      )
+      room_expect_args=(
+        --expect-room '!ops:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::[22:12] * You have been marked as being away'
+        --expect-room-view '!ops:example::[22:12] * Others still see you as online: another of your sessions is active'
+        --expect-room-view '!ops:example::[22:12] * Bob is @bob:example * Bob Builder'
+        --expect-room-view '!ops:example::[22:12] * Bob on Ops'
+        --expect-room-view '!ops:example::[22:12] * Bob using example'
+        --expect-room-view '!ops:example::[22:12] * Bob is away: in a meeting'
+        --expect-room-view '!ops:example::[22:12] * Bob has been idle 1hr 2mins'
+        --expect-room-view '!ops:example::[22:12] * Bob End of /WHOIS list'
+        --expect-room-view '!ops:example::[22:12] * You are no longer marked as being away'
+      )
+      # /back is the last thing to set the status.
+      status_bar_expect_args=(
+        --expect-status-bar 'back'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+      )
+      expect_switchbar_active='room:!ops:example'
+      ;;
     room-list|room-list-listing)
       expect_active_view='room_list'
       # `/list` opens the Rooms List over the room; the directory's one

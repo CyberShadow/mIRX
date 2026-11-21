@@ -1,0 +1,120 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!ops:example",
+        "display_name": "Ops",
+        "topic": "incident review",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": "#ops:example",
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$ops-1",
+      "timestamp_ms": 1699999800000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@creator:example",
+          "display_name": "Creator",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "welcome to ops",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$ops-2",
+      "timestamp_ms": 1699999860000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-2",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "who is around?",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!ops:example",
+      "members": [
+        {
+          "user_id": "@admin:example",
+          "display_name": "Admin",
+          "display_name_ambiguous": false,
+          "is_own_user": true,
+          "rank": "administrator",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@mod:example",
+          "display_name": "Mod",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "moderator",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        }
+      ]
+    }
+  },
+  {
+    "IgnoredUsers": []
+  }
+]
