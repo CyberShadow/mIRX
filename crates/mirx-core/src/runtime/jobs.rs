@@ -20,6 +20,9 @@ pub(super) enum Lane {
     Room(String),
     /// A room's read receipts: in order, but never behind an upload.
     Receipts(String),
+    /// A room's typing notices: in order, never behind a send or an
+    /// upload, and apart from the receipts the exit waits for.
+    Typing(String),
     /// The account's read-modify-writes: display name, highlight words,
     /// ignore list.
     Account,
@@ -41,6 +44,7 @@ impl Lane {
             Self::Unordered => usize::MAX,
             Self::Room(_)
             | Self::Receipts(_)
+            | Self::Typing(_)
             | Self::Account
             | Self::Devices
             | Self::E2ee

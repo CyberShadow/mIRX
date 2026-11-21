@@ -2597,6 +2597,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::SetRoomMemberPowerLevel => "set_room_member_power_level",
         Operation::SetDisplayName => "set_display_name",
         Operation::SetPresence => "set_presence",
+        Operation::SetTyping => "set_typing",
         Operation::SetRoomTopic => "set_room_topic",
         Operation::SetRoomNotificationMode => "set_room_notification_mode",
         Operation::HighlightWords => "highlight_words",

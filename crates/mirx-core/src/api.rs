@@ -87,6 +87,11 @@ pub enum Command {
     /// other clients show as their "new messages" line. Its new place comes
     /// back as `RoomReadState` with the next sync; a failure is an error.
     SetReadMarker(SetReadMarkerRequest),
+    /// Tells the room you are typing (`m.typing`), or have stopped.
+    /// Answered only by an error. The SDK sends `typing` at most every 3 s
+    /// (each lasting 4 s), and a stop only while a notice is live, so this
+    /// may come with every key typed.
+    SetTyping(SetTypingRequest),
     BackfillRoomHistory(BackfillRoomHistoryRequest),
     FetchRoomMedia(FetchRoomMediaRequest),
     FetchRoomEvent(FetchRoomEventRequest),
@@ -468,6 +473,13 @@ pub struct MarkRoomReadRequest {
 pub struct SetReadMarkerRequest {
     pub room_id: String,
     pub event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetTypingRequest {
+    pub room_id: String,
+    pub typing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2111,6 +2123,7 @@ pub enum Operation {
     RedactEvent,
     MarkRoomRead,
     SetReadMarker,
+    SetTyping,
     BackfillRoomHistory,
     FetchRoomMedia,
     FetchRoomEvent,

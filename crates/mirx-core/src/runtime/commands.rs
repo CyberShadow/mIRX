@@ -25,8 +25,8 @@ use crate::api::{
     RequestVerificationRequest, ResetE2eeIdentityRequest, RestoreSessionRequest,
     RetryDecryptionRequest, RoomJoined, SendFileRequest, SendMessageRequest, SendReactionRequest,
     SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,
-    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    SignOutDeviceRequest, UnbanRoomMemberRequest, VerificationFlowId,
+    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetTypingRequest,
+    SetupE2eeRecoveryRequest, SignOutDeviceRequest, UnbanRoomMemberRequest, VerificationFlowId,
 };
 use crate::matrix::{self, AwayFlag, BackupServerStatusMode};
 
@@ -235,6 +235,16 @@ pub(super) fn route(command: Command) -> Route {
                 "set read marker requires an authenticated session",
             ),
             |ctx| set_read_marker(ctx, request),
+        ),
+
+        Command::SetTyping(request) => lane(
+            Lane::Typing(request.room_id.clone()),
+            Refusal::room(
+                Op::SetTyping,
+                &request.room_id,
+                "send typing notice requires an authenticated session",
+            ),
+            |ctx| set_typing(ctx, request),
         ),
 
         Command::SetDisplayName(request) => lane(
@@ -847,6 +857,15 @@ async fn mark_room_read(ctx: JobCtx, request: MarkRoomReadRequest) -> Followup {
     let JobCtx { client, events, .. } = &ctx;
     if let Err(err) = matrix::mark_room_read(client, &request).await {
         emit_room_matrix_error(events, Operation::MarkRoomRead, &request.room_id, err);
+    }
+
+    Followup::Done
+}
+
+async fn set_typing(ctx: JobCtx, request: SetTypingRequest) -> Followup {
+    let JobCtx { client, events, .. } = &ctx;
+    if let Err(err) = matrix::set_typing(client, &request).await {
+        emit_room_matrix_error(events, Operation::SetTyping, &request.room_id, err);
     }
 
     Followup::Done

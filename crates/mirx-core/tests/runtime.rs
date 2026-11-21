@@ -22,11 +22,12 @@ use mirx_core::{
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
     RoomUserProfile, SendFileRequest, SendMessageRequest, SendReactionRequest, SessionAuth,
     SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,
-    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    SignOutDeviceRequest, SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
-    UnsupportedRoomMessageActivity, UserDevices, UserIdentityState, UserPresence, UserProfile,
-    VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start, validate_highlight_word,
+    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetTypingRequest,
+    SetupE2eeRecoveryRequest, SignOutDeviceRequest, SpaceChildSummary, StoredSession,
+    SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserDevices,
+    UserIdentityState, UserPresence, UserProfile, VerificationDecimals, VerificationDirection,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start, validate_highlight_word,
 };
 use tempfile::TempDir;
 
@@ -141,6 +142,7 @@ fn error_room_id(command: &Command) -> Option<&str> {
         Command::RedactEvent(request) => Some(&request.room_id),
         Command::MarkRoomRead(request) => Some(&request.room_id),
         Command::SetReadMarker(request) => Some(&request.room_id),
+        Command::SetTyping(request) => Some(&request.room_id),
         Command::BackfillRoomHistory(request) => Some(&request.room_id),
         Command::FetchRoomMedia(request) => Some(&request.room_id),
         Command::FetchRoomEvent(request) => Some(&request.room_id),
@@ -559,6 +561,18 @@ fn set_display_name_before_login_emits_set_display_name_error() {
         }),
         Operation::SetDisplayName,
         "set display name requires an authenticated session",
+    );
+}
+
+#[test]
+fn set_typing_before_login_emits_its_room_error() {
+    assert_invalid_authenticated_command(
+        Command::SetTyping(SetTypingRequest {
+            room_id: "!ops:example.org".to_owned(),
+            typing: true,
+        }),
+        Operation::SetTyping,
+        "send typing notice requires an authenticated session",
     );
 }
 

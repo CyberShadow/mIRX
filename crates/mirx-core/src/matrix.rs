@@ -153,11 +153,11 @@ use crate::api::{
     RoomVerificationRequestActivity, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
     SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,
-    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
-    UnsupportedRoomMessageActivity, UserDevices, UserIdentityState, UserPresence, UserProfile,
-    VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetTypingRequest,
+    SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, SyncStopReason,
+    UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserDevices, UserIdentityState,
+    UserPresence, UserProfile, VerificationDecimals, VerificationDirection, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::api::{
     PresenceKind, TextStyleSpan, UserLinkSpan, check_text_styles, validate_highlight_word,
@@ -5322,6 +5322,18 @@ pub(crate) async fn set_read_marker(
         .send_multiple_receipts(Receipts::new().fully_read_marker(event_id))
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to set Matrix read marker: {err}")))
+}
+
+/// Tells the room the user is typing, or has stopped (see
+/// `Room::typing_notice`, which keeps the notices it sends apart).
+pub(crate) async fn set_typing(
+    client: &Client,
+    request: &SetTypingRequest,
+) -> Result<(), MatrixCoreError> {
+    joined_room_by_id(client, &request.room_id)?
+        .typing_notice(request.typing)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to send typing notice: {err}")))
 }
 
 pub(crate) async fn backfill_room_history(

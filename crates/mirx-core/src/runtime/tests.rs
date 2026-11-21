@@ -15,7 +15,7 @@ use crate::api::{
 };
 use crate::api::{
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-    RoomMessagePresentationKind, SendMessageRequest,
+    RoomMessagePresentationKind, SendMessageRequest, SetTypingRequest,
 };
 use matrix_sdk::{
     ruma::{
@@ -1278,6 +1278,86 @@ fn a_failed_away_leaves_the_syncs_present() {
         wait_for_sync_requests(&mock_server, 2).await;
         for query in sync_queries(&mock_server).await {
             assert_eq!(query_value(&query, "set_presence"), None, "{query:?}");
+        }
+        core.stop().await;
+    });
+}
+
+#[test]
+fn set_typing_tells_the_room_and_stops_once() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        let client = mock_server.client_builder().build().await;
+        mock_server
+            .sync_room(&client, JoinedRoomBuilder::new(room_id().as_ref()))
+            .await;
+        let typing_path = format!(
+            "/_matrix/client/v3/rooms/{}/typing/@example:localhost",
+            room_id()
+        );
+        wiremock::Mock::given(wiremock::matchers::method("PUT"))
+            .and(wiremock::matchers::path(typing_path.clone()))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(mock_server.server())
+            .await;
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut core = Core::for_client(client, event_tx.clone());
+        let typing = |typing| {
+            Command::SetTyping(SetTypingRequest {
+                room_id: room_id().to_string(),
+                typing,
+            })
+        };
+
+        // The SDK keeps them apart: a second `true` within 3 s and a
+        // second stop send nothing.
+        for command in [typing(true), typing(true), typing(false), typing(false)] {
+            run(&mut core, command).await;
+        }
+
+        assert_eq!(drain_events(&event_rx), Vec::new());
+        let bodies: Vec<serde_json::Value> = mock_server
+            .server()
+            .received_requests()
+            .await
+            .expect("the mock server records requests")
+            .into_iter()
+            .filter(|request| request.url.path() == typing_path)
+            .map(|request| serde_json::from_slice(&request.body).expect("a JSON typing body"))
+            .collect();
+        assert_eq!(
+            bodies,
+            [
+                serde_json::json!({ "typing": true, "timeout": 4000 }),
+                serde_json::json!({ "typing": false }),
+            ]
+        );
+        core.stop().await;
+    });
+}
+
+#[test]
+fn set_typing_in_an_unknown_room_is_the_rooms_error() {
+    run_local(async {
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut core = Core::for_client(offline_client().await, event_tx.clone());
+
+        run(
+            &mut core,
+            Command::SetTyping(SetTypingRequest {
+                room_id: "!gone:example.org".to_owned(),
+                typing: true,
+            }),
+        )
+        .await;
+
+        match drain_events(&event_rx).as_slice() {
+            [Event::Error(err)] => {
+                assert_eq!(err.operation, Operation::SetTyping);
+                assert_eq!(err.room_id.as_deref(), Some("!gone:example.org"));
+                assert_eq!(err.message, "joined room not found: !gone:example.org");
+            }
+            other => panic!("expected a typing error, got {other:?}"),
         }
         core.stop().await;
     });

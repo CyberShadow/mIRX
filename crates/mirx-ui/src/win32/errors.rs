@@ -36,7 +36,9 @@ pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> 
         | Operation::SendFile
         | Operation::EditMessage
         | Operation::SendReaction
-        | Operation::RedactEvent => ErrorDestination::Room(
+        | Operation::RedactEvent
+        // The typing in a window: its failure prints there.
+        | Operation::SetTyping => ErrorDestination::Room(
             error
                 .room_id
                 .as_deref()
@@ -105,7 +107,7 @@ mod tests {
         }
     }
 
-    const ROOM_OPERATIONS: [Operation; 15] = [
+    const ROOM_OPERATIONS: [Operation; 16] = [
         Operation::AcceptRoomInvite,
         Operation::RejectRoomInvite,
         Operation::LeaveRoom,
@@ -121,6 +123,7 @@ mod tests {
         Operation::EditMessage,
         Operation::SendReaction,
         Operation::RedactEvent,
+        Operation::SetTyping,
     ];
 
     #[test]
