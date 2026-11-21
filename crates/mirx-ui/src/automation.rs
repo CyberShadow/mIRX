@@ -1225,6 +1225,7 @@ pub(crate) enum UiTimelineLineKind {
     File,
     Audio,
     Video,
+    Poll,
     Unsupported,
     UnableToDecrypt,
     StateNotice,
@@ -2327,6 +2328,7 @@ pub(crate) enum DumpRoomActivityKind {
     Audio(Box<DumpRoomAudioActivity>),
     Video(Box<DumpRoomVideoActivity>),
     Sticker(Box<DumpRoomImageActivity>),
+    Poll(Box<DumpRoomPollActivity>),
     UnsupportedMessage(DumpUnsupportedRoomMessageActivity),
     UnableToDecrypt(DumpRoomUnableToDecryptActivity),
     StateNotice(DumpRoomStateNoticeActivity),
@@ -2473,6 +2475,14 @@ pub(crate) struct DumpRoomVideoInfo {
     pub(crate) width: Option<u64>,
     pub(crate) height: Option<u64>,
     pub(crate) thumbnail_source: Option<DumpRoomMediaSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomPollActivity {
+    pub(crate) event_id: String,
+    pub(crate) sender: String,
+    pub(crate) content: mirx_core::RoomPollContent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2730,6 +2740,13 @@ pub(crate) fn dump_room_activity_kind_from_core(kind: &RoomActivityKind) -> Dump
         }
         RoomActivityKind::Sticker(sticker) => {
             DumpRoomActivityKind::Sticker(Box::new(dump_room_image_activity_from_core(sticker)))
+        }
+        RoomActivityKind::Poll(poll) => {
+            DumpRoomActivityKind::Poll(Box::new(DumpRoomPollActivity {
+                event_id: poll.event_id.clone(),
+                sender: poll.sender.user_id.clone(),
+                content: poll.content.clone(),
+            }))
         }
         RoomActivityKind::UnsupportedMessage(message) => DumpRoomActivityKind::UnsupportedMessage(
             dump_unsupported_room_message_activity_from_core(message),
@@ -3436,9 +3453,9 @@ mod tests {
         RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
         RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberRank, RoomMembership,
         RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-        RoomNotificationMode, RoomReadState, RoomRedactedActivity, RoomSummary, RoomTagSummary,
-        RoomVideoActivity, RoomVideoInfo, SessionAuth, SpaceChildSummary, StoredSession,
-        UnsupportedRoomMessageActivity, VerificationDirection, VerificationRequest,
+        RoomNotificationMode, RoomPollActivity, RoomReadState, RoomRedactedActivity, RoomSummary,
+        RoomTagSummary, RoomVideoActivity, RoomVideoInfo, SessionAuth, SpaceChildSummary,
+        StoredSession, UnsupportedRoomMessageActivity, VerificationDirection, VerificationRequest,
         VerificationState, VerificationStateEvent,
     };
     use serde_json::{Value, json};
@@ -3896,6 +3913,29 @@ mod tests {
                 "source":{"type":"plain","url":"mxc://example/sticker"},
                 "info":null,
                 "media_state":null
+            })
+        );
+        let poll = RoomPollActivity {
+            event_id: "$e".to_owned(),
+            sender: user_profile("@bob:example"),
+            content: mirx_core::RoomPollContent::End {
+                poll_start_event_id: "$poll".to_owned(),
+                text: "Pizza won".to_owned(),
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(
+                super::dump_room_activity_from_activity(&activity(RoomActivityKind::Poll(
+                    Box::new(poll)
+                )))
+                .kind
+            )
+            .expect("serialize a poll's dump"),
+            json!({
+                "type":"poll",
+                "event_id":"$e",
+                "sender":"@bob:example",
+                "content":{"type":"end","poll_start_event_id":"$poll","text":"Pizza won"}
             })
         );
     }

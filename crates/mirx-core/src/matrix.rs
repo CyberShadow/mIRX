@@ -78,6 +78,8 @@ use matrix_sdk::{
             key::verification::{
                 VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
             },
+            message::TextContentBlock,
+            poll::{start::PollKind, unstable_start::UnstablePollStartEventContent},
             push_rules::PushRulesEvent,
             reaction::{OriginalSyncReactionEvent, ReactionEventContent},
             relation::{Annotation, Reply, Thread},
@@ -89,8 +91,8 @@ use matrix_sdk::{
                 message::{
                     AudioInfo, FileInfo, FormattedBody, MessageFormat, MessageType,
                     OriginalSyncRoomMessageEvent, Relation as MessageContentRelation,
-                    Relation as MessageRelation, RoomMessageEventContent,
-                    RoomMessageEventContentWithoutRelation, VideoInfo,
+                    Relation as MessageRelation, RelationWithoutReplacement,
+                    RoomMessageEventContent, RoomMessageEventContentWithoutRelation, VideoInfo,
                     sanitize::remove_plain_reply_fallback,
                 },
                 power_levels::{
@@ -141,17 +143,17 @@ use crate::api::{
     RoomHistoryBackfillEvent, RoomIdentityChanges, RoomImageActivity, RoomImageInfo, RoomMedia,
     RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
     RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
-    RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
-    RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
-    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
-    SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,
-    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
-    UnsupportedRoomMessageActivity, UserDevices, UserIdentityState, UserProfile,
-    VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomPollActivity,
+    RoomPollContent, RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
+    RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity,
+    RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
+    SendMessageThreadTarget, SendReactionRequest, SessionAuth, SetDisplayNameRequest,
+    SetReadMarkerRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
+    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession,
+    SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserDevices,
+    UserIdentityState, UserProfile, VerificationDecimals, VerificationDirection, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::api::{TextStyleSpan, UserLinkSpan, check_text_styles, validate_highlight_word};
 use crate::mentions::body_mentions;
@@ -2846,11 +2848,18 @@ fn room_activity_from_sync_message(
 /// The types of message-like events other than `m.room.message` that are
 /// lines: the ones the SDK counts unread (`marks_as_unread`). Every other
 /// type has a handler of its own (reactions, redactions) or no line.
-const MESSAGE_LIKE_LINE_TYPES: [&str; 1] = ["m.sticker"];
+const MESSAGE_LIKE_LINE_TYPES: [&str; 5] = [
+    "m.sticker",
+    "m.poll.start",
+    "org.matrix.msc3381.poll.start",
+    "m.poll.end",
+    "org.matrix.msc3381.poll.end",
+];
 
 /// The line of a message-like event of one of `MESSAGE_LIKE_LINE_TYPES`;
 /// `None` for an edit of one (`m.replace`: not counted unread, and no line)
-/// or a redacted one.
+/// or a redacted one. A poll's end relates to its start, so it belongs to
+/// no thread or reply.
 fn room_activity_from_sync_message_like(
     room_id: &str,
     event: &AnySyncMessageLikeEvent,
@@ -2877,7 +2886,83 @@ fn room_activity_from_sync_message_like(
                 })),
             )
         }
-        AnySyncMessageLikeEvent::Sticker(SyncMessageLikeEvent::Redacted(_)) => return None,
+        AnySyncMessageLikeEvent::UnstablePollStart(SyncMessageLikeEvent::Original(poll)) => {
+            let UnstablePollStartEventContent::New(content) = &poll.content else {
+                return None;
+            };
+            let start = &content.poll_start;
+            (
+                content
+                    .relates_to
+                    .as_ref()
+                    .and_then(room_activity_relation_without_replacement),
+                room_poll_activity(
+                    &poll.event_id,
+                    sender,
+                    RoomPollContent::Start {
+                        question: start.question.text.clone(),
+                        answers: start
+                            .answers
+                            .iter()
+                            .map(|answer| answer.text.clone())
+                            .collect(),
+                        max_selections: start.max_selections.into(),
+                        results_hidden: matches!(start.kind, PollKind::Undisclosed),
+                    },
+                ),
+            )
+        }
+        AnySyncMessageLikeEvent::PollStart(SyncMessageLikeEvent::Original(poll)) => {
+            let relates_to = poll.content.relates_to.as_ref();
+            if let Some(MessageRelation::Replacement(_)) = relates_to {
+                return None;
+            }
+            let start = &poll.content.poll;
+            (
+                room_activity_relation_from_content(relates_to),
+                room_poll_activity(
+                    &poll.event_id,
+                    sender,
+                    RoomPollContent::Start {
+                        question: plain_text_of_block(&start.question.text),
+                        answers: start
+                            .answers
+                            .iter()
+                            .map(|answer| plain_text_of_block(&answer.text))
+                            .collect(),
+                        max_selections: start.max_selections.into(),
+                        results_hidden: matches!(start.kind, PollKind::Undisclosed),
+                    },
+                ),
+            )
+        }
+        AnySyncMessageLikeEvent::UnstablePollEnd(SyncMessageLikeEvent::Original(end)) => (
+            None,
+            room_poll_activity(
+                &end.event_id,
+                sender,
+                RoomPollContent::End {
+                    poll_start_event_id: end.content.relates_to.event_id.to_string(),
+                    text: end.content.text.clone(),
+                },
+            ),
+        ),
+        AnySyncMessageLikeEvent::PollEnd(SyncMessageLikeEvent::Original(end)) => (
+            None,
+            room_poll_activity(
+                &end.event_id,
+                sender,
+                RoomPollContent::End {
+                    poll_start_event_id: end.content.relates_to.event_id.to_string(),
+                    text: plain_text_of_block(&end.content.text),
+                },
+            ),
+        ),
+        AnySyncMessageLikeEvent::Sticker(SyncMessageLikeEvent::Redacted(_))
+        | AnySyncMessageLikeEvent::UnstablePollStart(SyncMessageLikeEvent::Redacted(_))
+        | AnySyncMessageLikeEvent::PollStart(SyncMessageLikeEvent::Redacted(_))
+        | AnySyncMessageLikeEvent::UnstablePollEnd(SyncMessageLikeEvent::Redacted(_))
+        | AnySyncMessageLikeEvent::PollEnd(SyncMessageLikeEvent::Redacted(_)) => return None,
         _ => unreachable!(
             "{} is none of the message-like line types",
             event.event_type()
@@ -2891,6 +2976,28 @@ fn room_activity_from_sync_message_like(
         relation,
         kind,
     })
+}
+
+fn room_poll_activity(
+    event_id: &EventId,
+    sender: RoomUserProfile,
+    content: RoomPollContent,
+) -> RoomActivityKind {
+    RoomActivityKind::Poll(Box::new(RoomPollActivity {
+        event_id: event_id.to_string(),
+        sender,
+        content,
+    }))
+}
+
+/// An extensible event's text: its plain representation, else the first
+/// one it has (HTML, say). A block without any has no text.
+fn plain_text_of_block(block: &TextContentBlock) -> String {
+    block
+        .find_plain()
+        .or_else(|| block.iter().next().map(|text| text.body.as_str()))
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn room_activity_update_from_sync_message_replacement(
@@ -2954,6 +3061,17 @@ fn room_activity_update_from_sync_redaction(
         kind: RoomActivityUpdateKind::ActivityRedacted {
             redaction_event_id: event.event_id.to_string(),
         },
+    }
+}
+
+/// The thread or reply of a content whose relation cannot be an edit.
+fn room_activity_relation_without_replacement(
+    relation: &RelationWithoutReplacement,
+) -> Option<RoomActivityRelation> {
+    match relation {
+        RelationWithoutReplacement::Reply(reply) => Some(room_activity_reply_relation(reply)),
+        RelationWithoutReplacement::Thread(thread) => Some(room_activity_thread_relation(thread)),
+        _ => None,
     }
 }
 
@@ -7087,14 +7205,14 @@ mod tests {
         RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo,
         RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
         RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
-        RoomMessageSendState, RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState,
-        RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
-        RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity,
-        RoomVideoInfo, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
-        SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, StoredSession,
-        UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, VerificationDecimals,
-        VerificationDirection, VerificationEmoji, VerificationFlowId, VerificationRequest,
-        VerificationState,
+        RoomMessageSendState, RoomPollActivity, RoomPollContent, RoomPowerLevelUserChange,
+        RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
+        RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity, RoomUnableToDecryptReason,
+        RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendMessageReplyTarget,
+        SendMessageRequest, SendMessageThreadTarget, SetDisplayNameRequest,
+        SetRoomMemberPowerLevelRequest, StoredSession, UnbanRoomMemberRequest,
+        UnsupportedRoomMessageActivity, VerificationDecimals, VerificationDirection,
+        VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
     };
     use matrix_sdk::ruma::push::{
         Action, EventMatchConditionData, NewConditionalPushRule, NewPatternedPushRule, NewPushRule,
@@ -10253,7 +10371,90 @@ mod tests {
                     }
                 }),
             ),
+            event(
+                "$poll",
+                "org.matrix.msc3381.poll.start",
+                serde_json::json!({
+                    "org.matrix.msc3381.poll.start": {
+                        "question": { "org.matrix.msc1767.text": "Lunch?" },
+                        "kind": "org.matrix.msc3381.poll.undisclosed",
+                        "max_selections": 2,
+                        "answers": [
+                            { "id": "pizza", "org.matrix.msc1767.text": "Pizza" },
+                            { "id": "sushi", "org.matrix.msc1767.text": "Sushi" },
+                            { "id": "salad", "org.matrix.msc1767.text": "Salad" }
+                        ]
+                    },
+                    "org.matrix.msc1767.text": "Lunch?\n1. Pizza\n2. Sushi\n3. Salad"
+                }),
+            ),
+            event(
+                "$stable-poll",
+                "m.poll.start",
+                serde_json::json!({
+                    "m.poll": {
+                        "question": { "m.text": [{ "body": "Tea or coffee?" }] },
+                        "kind": "m.disclosed",
+                        "max_selections": 1,
+                        "answers": [
+                            { "m.id": "tea", "m.text": [{ "body": "Tea" }] },
+                            {
+                                "m.id": "coffee",
+                                "m.text": [
+                                    { "mimetype": "text/html", "body": "<b>Coffee</b>" },
+                                    { "body": "Coffee" }
+                                ]
+                            }
+                        ]
+                    },
+                    "m.text": [{ "body": "Tea or coffee?\n1. Tea\n2. Coffee" }],
+                    "m.relates_to": { "m.in_reply_to": { "event_id": "$asked" } }
+                }),
+            ),
+            event(
+                "$poll-end",
+                "org.matrix.msc3381.poll.end",
+                serde_json::json!({
+                    "org.matrix.msc3381.poll.end": {},
+                    "org.matrix.msc1767.text": "The poll has ended. Top answer: Pizza",
+                    "m.relates_to": { "rel_type": "m.reference", "event_id": "$poll" }
+                }),
+            ),
+            event(
+                "$stable-poll-end",
+                "m.poll.end",
+                serde_json::json!({
+                    "m.text": [{ "body": "Tea won" }],
+                    "m.relates_to": { "rel_type": "m.reference", "event_id": "$stable-poll" }
+                }),
+            ),
             // Not counted: no lines.
+            event(
+                "$poll-response",
+                "org.matrix.msc3381.poll.response",
+                serde_json::json!({
+                    "org.matrix.msc3381.poll.response": { "answers": ["pizza"] },
+                    "m.relates_to": { "rel_type": "m.reference", "event_id": "$poll" }
+                }),
+            ),
+            event(
+                "$poll-edit",
+                "org.matrix.msc3381.poll.start",
+                serde_json::json!({
+                    "m.new_content": {
+                        "org.matrix.msc3381.poll.start": {
+                            "question": { "org.matrix.msc1767.text": "Dinner?" },
+                            "max_selections": 1,
+                            "answers": [
+                                { "id": "a", "org.matrix.msc1767.text": "A" },
+                                { "id": "b", "org.matrix.msc1767.text": "B" }
+                            ]
+                        },
+                        "org.matrix.msc1767.text": "Dinner?"
+                    },
+                    "m.relates_to": { "rel_type": "m.replace", "event_id": "$poll" }
+                }),
+            ),
             event(
                 "$sticker-edit",
                 "m.sticker",
@@ -10287,6 +10488,13 @@ mod tests {
                     url: url.to_owned(),
                 },
                 info: Some(info),
+            }))
+        };
+        let poll = |event_id: &str, content| {
+            RoomActivityKind::Poll(Box::new(RoomPollActivity {
+                event_id: event_id.to_owned(),
+                sender: profile("@bob:example.org"),
+                content,
             }))
         };
         vec![
@@ -10325,6 +10533,56 @@ mod tests {
                         height: None,
                         is_animated: None,
                         thumbnail_source: None,
+                    },
+                ),
+            ),
+            activity(
+                "$poll",
+                None,
+                poll(
+                    "$poll",
+                    RoomPollContent::Start {
+                        question: "Lunch?".to_owned(),
+                        answers: vec!["Pizza".to_owned(), "Sushi".to_owned(), "Salad".to_owned()],
+                        max_selections: 2,
+                        results_hidden: true,
+                    },
+                ),
+            ),
+            activity(
+                "$stable-poll",
+                Some(RoomActivityRelation::Reply {
+                    in_reply_to_event_id: "$asked".to_owned(),
+                }),
+                poll(
+                    "$stable-poll",
+                    RoomPollContent::Start {
+                        question: "Tea or coffee?".to_owned(),
+                        answers: vec!["Tea".to_owned(), "Coffee".to_owned()],
+                        max_selections: 1,
+                        results_hidden: false,
+                    },
+                ),
+            ),
+            activity(
+                "$poll-end",
+                None,
+                poll(
+                    "$poll-end",
+                    RoomPollContent::End {
+                        poll_start_event_id: "$poll".to_owned(),
+                        text: "The poll has ended. Top answer: Pizza".to_owned(),
+                    },
+                ),
+            ),
+            activity(
+                "$stable-poll-end",
+                None,
+                poll(
+                    "$stable-poll-end",
+                    RoomPollContent::End {
+                        poll_start_event_id: "$stable-poll".to_owned(),
+                        text: "Tea won".to_owned(),
                     },
                 ),
             ),

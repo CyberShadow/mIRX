@@ -842,6 +842,7 @@ pub enum RoomActivityKind {
     Video(Box<RoomVideoActivity>),
     /// An `m.sticker`, as an image; `filename` is always `None`.
     Sticker(Box<RoomImageActivity>),
+    Poll(Box<RoomPollActivity>),
     UnsupportedMessage(UnsupportedRoomMessageActivity),
     UnableToDecrypt(RoomUnableToDecryptActivity),
     StateNotice(RoomStateNoticeActivity),
@@ -1043,6 +1044,30 @@ pub struct RoomVideoInfo {
     pub width: Option<u64>,
     pub height: Option<u64>,
     pub thumbnail_source: Option<RoomMediaSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomPollActivity {
+    pub event_id: String,
+    pub sender: String,
+    pub content: RoomPollContent,
+}
+
+/// A poll's start or its end, as `mirx_core::RoomPollContent`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomPollContent {
+    Start {
+        question: String,
+        answers: Vec<String>,
+        max_selections: u64,
+        results_hidden: bool,
+    },
+    End {
+        poll_start_event_id: String,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1473,6 +1498,7 @@ pub enum UiTimelineLineKind {
     File,
     Audio,
     Video,
+    Poll,
     Unsupported,
     UnableToDecrypt,
     StateNotice,

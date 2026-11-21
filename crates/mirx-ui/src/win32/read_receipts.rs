@@ -285,6 +285,24 @@ mod tests {
             named("$sticker")
         );
         assert_eq!(
+            room_line(poll_activity(
+                "!room:example",
+                "$poll",
+                2,
+                poll_start("Lunch?", &["Pizza", "Sushi"])
+            )),
+            named("$poll")
+        );
+        assert_eq!(
+            room_line(poll_activity(
+                "!room:example",
+                "$poll-end",
+                2,
+                poll_end("$poll", "Pizza won")
+            )),
+            named("$poll-end")
+        );
+        assert_eq!(
             room_line(unsupported_message_activity(
                 "!room:example",
                 "$custom",

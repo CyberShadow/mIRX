@@ -484,6 +484,7 @@ impl RoomViewModel {
             | RoomActivityKind::Audio(_)
             | RoomActivityKind::Video(_)
             | RoomActivityKind::Sticker(_)
+            | RoomActivityKind::Poll(_)
             | RoomActivityKind::UnsupportedMessage(_)
             | RoomActivityKind::UnableToDecrypt(_) => self.push_live(activity),
             RoomActivityKind::StateNotice(notice) => {
@@ -807,6 +808,7 @@ impl RoomViewModel {
             | RoomActivityKind::Audio(_)
             | RoomActivityKind::Video(_)
             | RoomActivityKind::Sticker(_)
+            | RoomActivityKind::Poll(_)
             | RoomActivityKind::UnsupportedMessage(_)
             | RoomActivityKind::StateNotice(_)
             | RoomActivityKind::Redacted(_) => return false,
@@ -1418,6 +1420,19 @@ pub(super) fn last_activity_from_room_activity(
             body: format!("[sticker] {}", message.body),
             send_state: RoomMessageSendState::Sent,
         }),
+        RoomActivityKind::Poll(poll) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: Some(poll.event_id.clone()),
+            transaction_id: None,
+            sender: poll.sender.user_id.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
+            body: match &poll.content {
+                RoomPollContent::Start { question, .. } => format!("[poll] {question}"),
+                RoomPollContent::End { text, .. } => format!("[poll ended] {text}"),
+            },
+            send_state: RoomMessageSendState::Sent,
+        }),
         RoomActivityKind::StateNotice(_) => None,
         RoomActivityKind::Redacted(_) => None,
     }
@@ -1433,6 +1448,7 @@ pub(super) fn room_activity_sender_user_id(activity: &RoomActivity) -> Option<&s
         RoomActivityKind::Audio(message) => Some(&message.sender.user_id),
         RoomActivityKind::Video(message) => Some(&message.sender.user_id),
         RoomActivityKind::Sticker(message) => Some(&message.sender.user_id),
+        RoomActivityKind::Poll(poll) => Some(&poll.sender.user_id),
         RoomActivityKind::UnsupportedMessage(message) => Some(&message.sender.user_id),
         RoomActivityKind::UnableToDecrypt(message) => Some(&message.sender.user_id),
         RoomActivityKind::StateNotice(notice) => Some(&notice.sender.user_id),
@@ -1460,6 +1476,7 @@ pub(super) fn activity_level_for(
         | RoomActivityKind::Audio(_)
         | RoomActivityKind::Video(_)
         | RoomActivityKind::Sticker(_)
+        | RoomActivityKind::Poll(_)
         | RoomActivityKind::UnsupportedMessage(_)
         | RoomActivityKind::UnableToDecrypt(_) => ViewActivityLevel::Message,
         RoomActivityKind::StateNotice(_) | RoomActivityKind::Redacted(_) => {
@@ -1495,6 +1512,7 @@ pub(super) fn room_activity_event_id(activity: &RoomActivity) -> Option<&str> {
         RoomActivityKind::Audio(message) => Some(message.event_id.as_str()),
         RoomActivityKind::Video(message) => Some(message.event_id.as_str()),
         RoomActivityKind::Sticker(message) => Some(message.event_id.as_str()),
+        RoomActivityKind::Poll(poll) => Some(poll.event_id.as_str()),
         RoomActivityKind::UnsupportedMessage(message) => Some(message.event_id.as_str()),
         RoomActivityKind::UnableToDecrypt(message) => Some(message.event_id.as_str()),
         RoomActivityKind::StateNotice(notice) => Some(notice.event_id.as_str()),
@@ -1546,6 +1564,10 @@ fn room_activity_thread_root_label(activity: &RoomActivity) -> Option<String> {
                 .to_owned(),
         ),
         RoomActivityKind::Sticker(message) => Some(message.body.clone()),
+        RoomActivityKind::Poll(poll) => Some(match &poll.content {
+            RoomPollContent::Start { question, .. } => question.clone(),
+            RoomPollContent::End { text, .. } => text.clone(),
+        }),
         RoomActivityKind::UnsupportedMessage(message) => Some(message.body.clone()),
         RoomActivityKind::UnableToDecrypt(_) => Some("Unable to decrypt message".to_owned()),
         RoomActivityKind::StateNotice(_) => None,
@@ -1652,6 +1674,7 @@ pub(super) fn read_target_for_room_activity(activity: &RoomActivity) -> Option<&
         | RoomActivityKind::Audio(_)
         | RoomActivityKind::Video(_)
         | RoomActivityKind::Sticker(_)
+        | RoomActivityKind::Poll(_)
         | RoomActivityKind::UnsupportedMessage(_)
         | RoomActivityKind::UnableToDecrypt(_)
         | RoomActivityKind::StateNotice(_)
@@ -2076,6 +2099,8 @@ mod tests {
         let audio = audio_activity("!room:example", "$a", "@bob:example", 1, "a", None, None);
         let video = event_room_activity(video_message("!room:example", "$v"));
         let sticker = sticker_activity("!room:example", "$s", "@bob:example", 1, "s");
+        let poll = poll_activity("!room:example", "$p", 1, poll_start("q", &["a", "b"]));
+        let poll_ended = poll_activity("!room:example", "$pe", 1, poll_end("$p", "a won"));
         let unsupported = unsupported_message_activity(
             "!room:example",
             "$u",
@@ -2105,6 +2130,8 @@ mod tests {
             &audio,
             &video,
             &sticker,
+            &poll,
+            &poll_ended,
             &unsupported,
             &undecryptable,
         ] {
@@ -2121,7 +2148,7 @@ mod tests {
                 "{activity:?}"
             );
         }
-        for activity in [message, image, sticker, state_notice, redacted] {
+        for activity in [message, image, sticker, poll, state_notice, redacted] {
             assert_eq!(
                 activity_level_for(&highlighted(activity), None),
                 Some(ViewActivityLevel::Highlight)
@@ -2145,6 +2172,24 @@ mod tests {
                 "a waving cat"
             )),
             "[sticker] a waving cat"
+        );
+        assert_eq!(
+            body(poll_activity(
+                "!room:example",
+                "$p",
+                1,
+                poll_start("Lunch?", &["Pizza", "Sushi"])
+            )),
+            "[poll] Lunch?"
+        );
+        assert_eq!(
+            body(poll_activity(
+                "!room:example",
+                "$pe",
+                1,
+                poll_end("$p", "Pizza won")
+            )),
+            "[poll ended] Pizza won"
         );
     }
 

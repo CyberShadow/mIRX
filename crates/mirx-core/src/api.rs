@@ -827,6 +827,8 @@ pub enum RoomActivityKind {
     /// `m.sticker`: an image sent as a sticker. Its body is the sticker's
     /// description; `filename` is always `None`.
     Sticker(Box<RoomImageActivity>),
+    /// A poll started or ended (`m.poll.*` and MSC3381's unstable types).
+    Poll(Box<RoomPollActivity>),
     UnsupportedMessage(UnsupportedRoomMessageActivity),
     UnableToDecrypt(RoomUnableToDecryptActivity),
     StateNotice(RoomStateNoticeActivity),
@@ -1229,6 +1231,34 @@ pub struct RoomVideoInfo {
     pub width: Option<u64>,
     pub height: Option<u64>,
     pub thumbnail_source: Option<RoomMediaSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomPollActivity {
+    pub event_id: String,
+    pub sender: RoomUserProfile,
+    pub content: RoomPollContent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomPollContent {
+    /// The question and its answers, in order, as plain text.
+    Start {
+        question: String,
+        answers: Vec<String>,
+        /// How many answers a vote may choose.
+        max_selections: u64,
+        /// The votes show only once the poll ends (an undisclosed poll).
+        results_hidden: bool,
+    },
+    /// `text` is the end event's own text: its results, as the sender's
+    /// client wrote them.
+    End {
+        poll_start_event_id: String,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

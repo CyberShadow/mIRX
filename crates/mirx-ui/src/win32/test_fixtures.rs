@@ -646,6 +646,43 @@ pub(super) fn image_activity(
     }
 }
 
+/// Bob's poll line: a start or an end.
+pub(super) fn poll_activity(
+    room_id: &str,
+    event_id: &str,
+    timestamp_ms: u64,
+    content: RoomPollContent,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("event:{event_id}"),
+        timestamp_ms,
+        highlight: false,
+        relation: None,
+        kind: RoomActivityKind::Poll(Box::new(RoomPollActivity {
+            event_id: event_id.to_owned(),
+            sender: user_profile("@bob:example"),
+            content,
+        })),
+    }
+}
+
+pub(super) fn poll_start(question: &str, answers: &[&str]) -> RoomPollContent {
+    RoomPollContent::Start {
+        question: question.to_owned(),
+        answers: answers.iter().map(|answer| (*answer).to_owned()).collect(),
+        max_selections: 1,
+        results_hidden: false,
+    }
+}
+
+pub(super) fn poll_end(poll_start_event_id: &str, text: &str) -> RoomPollContent {
+    RoomPollContent::End {
+        poll_start_event_id: poll_start_event_id.to_owned(),
+        text: text.to_owned(),
+    }
+}
+
 /// A sticker with a plain source and no thumbnail.
 pub(super) fn sticker_activity(
     room_id: &str,

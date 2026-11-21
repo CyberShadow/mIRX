@@ -29,22 +29,22 @@ use mirx_testkit::{
     RoomAudioInfo, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
     RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
     RoomImageMediaState, RoomMediaSource, RoomMemberChange, RoomMemberView, RoomMessageActivity,
-    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReactionSummary, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, RoomUnableToDecryptActivity,
-    RoomUnableToDecryptReason, RoomVideoActivity, RoomVideoInfo, SendFileArgs, SessionAuth,
-    SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession, SubmittedDirectRoomCommand,
-    SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
-    SubmittedMessageCommand, SubmittedPowerLevelCommand, SubmittedProfileCommand,
-    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
-    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
-    SubmittedUserCommand, SwitchbarItem, SwitchbarState, TestkitError, UiActiveTimeline,
-    UiActivityColors, UiColorItem, UiColors, UiComposeTarget, UiComposeTargetKind,
-    UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState, UiFrameLayout,
-    UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRect,
-    UiRefreshCounters, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState,
-    UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
-    UiTipsOptions, UiToolbarButton, UiTray, UiTrayMenuItem, UiTrayOptions,
+    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState, RoomPollActivity,
+    RoomPollContent, RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReactionSummary,
+    RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag,
+    RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomVideoActivity, RoomVideoInfo,
+    SendFileArgs, SessionAuth, SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession,
+    SubmittedDirectRoomCommand, SubmittedHistoryCommand, SubmittedMemberModerationCommand,
+    SubmittedMembershipCommand, SubmittedMessageCommand, SubmittedPowerLevelCommand,
+    SubmittedProfileCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
+    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
+    SubmittedSetupRecoveryCommand, SubmittedUserCommand, SwitchbarItem, SwitchbarState,
+    TestkitError, UiActiveTimeline, UiActivityColors, UiColorItem, UiColors, UiComposeTarget,
+    UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState,
+    UiFrameLayout, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
+    UiRect, UiRefreshCounters, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState,
+    UiRoomState, UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink,
+    UiTimestamp, UiTipsOptions, UiToolbarButton, UiTray, UiTrayMenuItem, UiTrayOptions,
     UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionArgs,
     VerificationDecimals, VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
 };
@@ -2343,6 +2343,85 @@ fn room_activity_sticker_round_trips_through_json() {
     assert_eq!(
         serde_json::to_value(&core).expect("serialize core sticker activity"),
         core_json
+    );
+}
+
+#[test]
+fn room_poll_activities_round_trip_through_json() {
+    for (content, json) in [
+        (
+            RoomPollContent::Start {
+                question: "Lunch?".to_owned(),
+                answers: vec!["Pizza".to_owned(), "Sushi".to_owned()],
+                max_selections: 1,
+                results_hidden: false,
+            },
+            serde_json::json!({
+                "type": "start",
+                "question": "Lunch?",
+                "answers": ["Pizza", "Sushi"],
+                "max_selections": 1,
+                "results_hidden": false
+            }),
+        ),
+        (
+            RoomPollContent::End {
+                poll_start_event_id: "$poll".to_owned(),
+                text: "Pizza won".to_owned(),
+            },
+            serde_json::json!({
+                "type": "end",
+                "poll_start_event_id": "$poll",
+                "text": "Pizza won"
+            }),
+        ),
+    ] {
+        let kind = RoomActivityKind::Poll(Box::new(RoomPollActivity {
+            event_id: "$e".to_owned(),
+            sender: "@bob:example".to_owned(),
+            content,
+        }));
+        let kind_json = serde_json::json!({
+            "type": "poll",
+            "event_id": "$e",
+            "sender": "@bob:example",
+            "content": json.clone()
+        });
+        assert_eq!(
+            serde_json::to_value(&kind).expect("serialize poll"),
+            kind_json
+        );
+        assert_eq!(
+            serde_json::from_value::<RoomActivityKind>(kind_json).expect("deserialize poll"),
+            kind
+        );
+
+        // The core's: its sender is a profile.
+        let core_json = serde_json::json!({
+            "type": "poll",
+            "event_id": "$e",
+            "sender": {
+                "user_id": "@bob:example",
+                "display_name": null,
+                "display_name_ambiguous": false
+            },
+            "content": json
+        });
+        let core = serde_json::from_value::<CoreRoomActivityKind>(core_json.clone())
+            .expect("deserialize core poll");
+        assert_eq!(
+            serde_json::to_value(&core).expect("serialize core poll"),
+            core_json
+        );
+    }
+    assert!(
+        serde_json::from_value::<RoomPollContent>(serde_json::json!({
+            "type": "end",
+            "poll_start_event_id": "$poll",
+            "text": "Pizza won",
+            "votes": 3
+        }))
+        .is_err()
     );
 }
 

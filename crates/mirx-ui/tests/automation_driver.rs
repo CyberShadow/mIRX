@@ -1005,6 +1005,12 @@ fn spawn_mock_homeserver_with_auth(
                 continue;
             }
 
+            // The sticker of `bob_sticker_and_poll`.
+            if path.contains("/media/") && path.contains("/example/sticker") {
+                respond_png(&mut stream);
+                continue;
+            }
+
             respond_json(
                 &mut stream,
                 404,
@@ -1043,6 +1049,21 @@ fn public_room_chunk(
         chunk["canonical_alias"] = serde_json::json!(alias);
     }
     chunk
+}
+
+/// A 1x1 PNG.
+fn respond_png(stream: &mut std::net::TcpStream) {
+    let body: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4,
+        0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252, 255, 31, 0, 3, 3,
+        2, 0, 239, 191, 107, 212, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.write_all(body);
 }
 
 fn respond_json(stream: &mut std::net::TcpStream, status: u16, body: &serde_json::Value) {
@@ -3643,6 +3664,59 @@ fn bob_lines(count: u64) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// After `bob_lines(4)`: Bob's sticker `$sticker`, his poll `$poll` (MSC3381,
+/// as Element sends it) and its end `$poll-end`, a second apart.
+fn bob_sticker_and_poll() -> Vec<serde_json::Value> {
+    let event = |event_id: &str, index: u64, event_type: &str, content: serde_json::Value| {
+        serde_json::json!({
+            "content": content,
+            "event_id": event_id,
+            "origin_server_ts": 1700000000010u64 + index * 1000,
+            "sender": "@bob:example",
+            "type": event_type
+        })
+    };
+    vec![
+        event(
+            "$sticker",
+            5,
+            "m.sticker",
+            serde_json::json!({
+                "body": "a waving cat",
+                "info": { "mimetype": "image/png", "w": 1, "h": 1, "size": 67 },
+                "url": "mxc://example/sticker"
+            }),
+        ),
+        event(
+            "$poll",
+            6,
+            "org.matrix.msc3381.poll.start",
+            serde_json::json!({
+                "org.matrix.msc3381.poll.start": {
+                    "question": { "org.matrix.msc1767.text": "Lunch?" },
+                    "kind": "org.matrix.msc3381.poll.disclosed",
+                    "max_selections": 1,
+                    "answers": [
+                        { "id": "pizza", "org.matrix.msc1767.text": "Pizza" },
+                        { "id": "sushi", "org.matrix.msc1767.text": "Sushi" }
+                    ]
+                },
+                "org.matrix.msc1767.text": "Lunch?\n1. Pizza\n2. Sushi"
+            }),
+        ),
+        event(
+            "$poll-end",
+            7,
+            "org.matrix.msc3381.poll.end",
+            serde_json::json!({
+                "org.matrix.msc3381.poll.end": {},
+                "org.matrix.msc1767.text": "The poll has ended. Top answer: Pizza",
+                "m.relates_to": { "rel_type": "m.reference", "event_id": "$poll" }
+            }),
+        ),
+    ]
+}
+
 /// Waits until Beta's window shows its line marker; its lines.
 fn wait_for_line_marker(app: &MirxApp) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let beta = room_identity("!beta:example");
@@ -3742,6 +3816,64 @@ fn automation_driver_leaving_a_room_moves_the_read_marker() -> Result<(), Box<dy
     assert_eq!(
         server.wait_for_read_markers(2)?[1..],
         [serde_json::json!({ "m.fully_read": "$bob-4" })]
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(server.read_markers.lock().unwrap().len(), 2);
+    assert_eq!(app.dump_model()?.last_error, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The server counts a sticker and a poll unread, so they are lines: the
+/// receipt and the read marker reach the poll's end.
+#[test]
+fn automation_driver_a_sticker_and_a_poll_are_read_lines() -> Result<(), Box<dyn std::error::Error>>
+{
+    let local_app_data = unique_local_app_data_path();
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let mut timeline = bob_lines(4);
+    timeline.extend(bob_sticker_and_poll());
+    let server = spawn_mock_homeserver_with_read_marker(timeline, "$bob-2")?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    let lines = wait_for_line_marker(&app)?;
+    let tail = lines
+        .iter()
+        .rev()
+        .take(3)
+        .rev()
+        .map(|line| {
+            line.split_once("] ")
+                .map_or(line.as_str(), |(_, text)| text)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tail,
+        [
+            "* Bob sent sticker: a waving cat",
+            "* Bob started a poll: Lunch? 1) Pizza 2) Sushi",
+            "* Bob ended the poll \"Lunch?\": The poll has ended. Top answer: Pizza",
+        ],
+        "{lines:?}"
+    );
+
+    app.select_navigation_view(&room_identity("!beta:example"))?;
+    assert_eq!(
+        server.wait_for_read_markers(1)?,
+        [serde_json::json!({ "m.read": "$poll-end" })]
+    );
+    app.select_navigation_view(&ViewIdentity::Status)?;
+    assert_eq!(
+        server.wait_for_read_markers(2)?[1..],
+        [serde_json::json!({ "m.fully_read": "$poll-end" })]
     );
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(server.read_markers.lock().unwrap().len(), 2);

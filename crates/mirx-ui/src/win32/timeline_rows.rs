@@ -242,6 +242,10 @@ pub(super) enum TimelineRowKind {
     Video {
         highlight: bool,
     },
+    /// A poll's start or end.
+    Poll {
+        highlight: bool,
+    },
     Unsupported {
         highlight: bool,
     },
@@ -534,6 +538,56 @@ fn action_line_with_link(
     (line.text, vec![link])
 }
 
+/// What a poll line says after its sender's nick: a start lists its
+/// answers, numbered; an end names its poll's question when the room has
+/// the start loaded. mirx shows no votes: the end's text is its results.
+fn poll_line_body(room_view: &RoomViewModel, poll: &RoomPollActivity) -> String {
+    match &poll.content {
+        RoomPollContent::Start {
+            question,
+            answers,
+            max_selections,
+            results_hidden,
+        } => {
+            let mut body = format!("started a poll: {question}");
+            for (index, answer) in answers.iter().enumerate() {
+                body.push_str(&format!(" {}) {answer}", index + 1));
+            }
+            if *max_selections > 1 {
+                body.push_str(&format!(" (up to {max_selections} answers)"));
+            }
+            if *results_hidden {
+                body.push_str(" (results when it ends)");
+            }
+            body
+        }
+        RoomPollContent::End {
+            poll_start_event_id,
+            text,
+        } => match poll_question(room_view, poll_start_event_id) {
+            Some(question) => format!("ended the poll \"{question}\": {text}"),
+            None => format!("ended a poll: {text}"),
+        },
+    }
+}
+
+/// The question of the poll `poll_start_event_id` starts, among the room's
+/// loaded lines.
+fn poll_question<'a>(room_view: &'a RoomViewModel, poll_start_event_id: &str) -> Option<&'a str> {
+    room_view
+        .activities
+        .iter()
+        .find_map(|activity| match &activity.kind {
+            RoomActivityKind::Poll(poll) if poll.event_id == poll_start_event_id => {
+                match &poll.content {
+                    RoomPollContent::Start { question, .. } => Some(question.as_str()),
+                    RoomPollContent::End { .. } => None,
+                }
+            }
+            _ => None,
+        })
+}
+
 /// The colour item of a membership change's line.
 fn member_change_item(change: &RoomMemberChange) -> EventItem {
     match change {
@@ -661,6 +715,13 @@ fn activity_line_text(
                 image_state,
             )
         }
+        RoomActivityKind::Poll(poll) => (
+            TimelineRowKind::Poll {
+                highlight: activity.highlight,
+            },
+            action_line_with_link(timestamp, &poll.sender, &poll_line_body(room_view, poll)),
+            None,
+        ),
         RoomActivityKind::File(message) => {
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
             let metadata_suffix = format_room_file_metadata_suffix(message.info.as_ref());
@@ -1104,6 +1165,66 @@ mod tests {
 
     use super::super::test_fixtures::*;
     use super::*;
+
+    fn line_of(room_view: &RoomViewModel, activity: &RoomActivity) -> (TimelineRowKind, String) {
+        let line = activity_line_text(room_view, activity, "[12:00] ", None);
+        (line.kind, line.text)
+    }
+
+    #[test]
+    fn polls_start_with_their_answers_and_end_with_their_question() {
+        let mut room_view = RoomViewModel::default();
+        let start = poll_activity(
+            "!room:example",
+            "$poll",
+            1,
+            poll_start("Lunch?", &["Pizza", "Sushi"]),
+        );
+        let end = poll_activity("!room:example", "$end", 2, poll_end("$poll", "Pizza won"));
+        let poll_row = TimelineRowKind::Poll { highlight: false };
+        // The start not loaded: the end cannot name it.
+        room_view.apply_activity(end.clone());
+        assert_eq!(
+            line_of(&room_view, &end),
+            (
+                poll_row.clone(),
+                "[12:00] * @bob:example ended a poll: Pizza won".to_owned()
+            )
+        );
+        room_view.apply_activity(start.clone());
+        assert_eq!(
+            line_of(&room_view, &start),
+            (
+                poll_row.clone(),
+                "[12:00] * @bob:example started a poll: Lunch? 1) Pizza 2) Sushi".to_owned()
+            )
+        );
+        assert_eq!(
+            line_of(&room_view, &end).1,
+            "[12:00] * @bob:example ended the poll \"Lunch?\": Pizza won"
+        );
+
+        let open_choice = poll_activity(
+            "!room:example",
+            "$open",
+            3,
+            RoomPollContent::Start {
+                question: "Days?".to_owned(),
+                answers: vec!["Mon".to_owned(), "Tue".to_owned(), "Wed".to_owned()],
+                max_selections: 2,
+                results_hidden: true,
+            },
+        );
+        assert_eq!(
+            line_of(&room_view, &open_choice).1,
+            "[12:00] * @bob:example started a poll: Days? 1) Mon 2) Tue 3) Wed (up to 2 answers) \
+             (results when it ends)"
+        );
+        assert_eq!(
+            line_of(&room_view, &highlighted(start)).0,
+            TimelineRowKind::Poll { highlight: true }
+        );
+    }
 
     /// A message waiting for the connection is drawn and logged as one on
     /// its way: dim, and written once it is sent.
