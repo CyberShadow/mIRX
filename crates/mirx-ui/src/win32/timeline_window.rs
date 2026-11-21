@@ -2,7 +2,7 @@
 //! selection, history backfill anchor and Go to Original.
 
 use super::*;
-use windows_sys::Win32::System::SystemServices::MK_CONTROL;
+use windows_sys::Win32::System::SystemServices::{MK_CONTROL, MK_LBUTTON};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetSystemMetrics, HTCLIENT, IDC_HAND, PostMessageW, SM_CXDRAG, SM_CYDRAG,
@@ -157,8 +157,11 @@ unsafe extern "system" fn timeline_window_proc(
             start_text_drag(hwnd, client_point(lparam));
             0
         }
+        // Only a move with the button down marks: ending a capture makes
+        // the system queue a move at the pointer, with the button up, which
+        // a drag started before it is read must not take.
         WM_MOUSEMOVE => {
-            if timeline_state_ref(hwnd).drag.is_some() {
+            if wparam as u32 & MK_LBUTTON != 0 && timeline_state_ref(hwnd).drag.is_some() {
                 extend_text_drag(hwnd, client_point(lparam));
             }
             0

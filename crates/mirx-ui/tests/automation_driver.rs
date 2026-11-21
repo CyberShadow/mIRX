@@ -22084,6 +22084,33 @@ fn dragging_with_ctrl_copies_control_codes() -> Result<(), Box<dyn std::error::E
 }
 
 #[test]
+fn a_move_with_the_button_up_does_not_mark() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_render_state("rich-text.json")?;
+    let timeline = app.active_timeline_hwnd()? as HWND;
+    let from = text_point(&app, "<Alice> bold italic", "<Alice> ".len())?;
+    let to = text_point(&app, "<Alice> bold italic", "<Alice> bold italic".len())?;
+    let mut client = RECT::default();
+    assert_ne!(unsafe { GetClientRect(timeline, &mut client) }, 0);
+    send_mouse(timeline, WM_LBUTTONDOWN, MK_LBUTTON, &from);
+    send_mouse(timeline, WM_MOUSEMOVE, MK_LBUTTON, &to);
+    // The move the system queues at the pointer when a capture ends (a
+    // previous drag's release) may be read in the middle of this one; the
+    // pointer is anywhere, here below the last line.
+    let pointer = UiPoint {
+        x: from.x,
+        y: client.bottom - 2,
+    };
+    assert_ne!(
+        unsafe { PostMessageW(timeline, WM_MOUSEMOVE, 0, mouse_lparam(&pointer)) },
+        0
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+    send_mouse(timeline, WM_LBUTTONUP, 0, &to);
+    assert_eq!(clipboard_text()?, "bold italic");
+    Ok(())
+}
+
+#[test]
 fn a_click_without_a_drag_copies_nothing() -> Result<(), Box<dyn std::error::Error>> {
     let app = launch_render_state("hotlinks.json")?;
     let timeline = app.active_timeline_hwnd()? as HWND;
