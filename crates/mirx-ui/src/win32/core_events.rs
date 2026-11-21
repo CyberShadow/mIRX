@@ -739,8 +739,9 @@ fn session_server(state: &WindowState) -> &str {
 }
 
 /// A join the user asked for opens the room's window and makes it active,
-/// as `/join` does in mIRC; the next view sync realizes it. A space has no
-/// window, so the Status window notes the join instead.
+/// as `/join` does in mIRC: the next view sync creates the window and
+/// activates it (`pending_activation`). A space has no window, so the
+/// Status window notes the join instead.
 fn apply_room_joined_event(state: &mut WindowState, room_id: &str) -> Result<(), String> {
     // The core sends the snapshot listing the room right before.
     let room = state
@@ -754,13 +755,8 @@ fn apply_room_joined_event(state: &mut WindowState, room_id: &str) -> Result<(),
         log_status(state, StatusLineKind::Info, line);
         return Ok(());
     }
-    let view_id = ViewId::Room(room_id.to_owned());
     state.closed_queries.remove(room_id);
-    state.model.selected_room = Some(room_id.to_owned());
-    if state.active_view != view_id {
-        state.selected_timeline_event = None;
-        state.active_view = view_id;
-    }
+    state.pending_activation = Some(ViewId::Room(room_id.to_owned()));
     Ok(())
 }
 
@@ -922,7 +918,7 @@ pub(super) unsafe fn apply_event_load(
     apply_synthetic_events_and_refresh(hwnd, events)?;
 
     let (rooms, timeline_events, active_view) = {
-        let state = state_mut(hwnd);
+        let state = state_ref(hwnd);
         let rooms = state.model.rooms.len();
         let timeline_events = state
             .model
@@ -930,29 +926,16 @@ pub(super) unsafe fn apply_event_load(
             .values()
             .map(|room_view| room_view.activities.len())
             .sum();
-        let selected_room = state
+        // The first room's window, as after signing in.
+        let active_view = state
             .model
             .rooms
             .iter()
             .find(|room| is_navigable_room(room))
-            .map(|room| room.room_id.clone());
-
-        let active_view = match selected_room {
-            Some(room_id) => {
-                state.model.selected_room = Some(room_id.clone());
-                ViewId::Room(room_id)
-            }
-            None => {
-                state.model.selected_room = None;
-                ViewId::Status
-            }
-        };
-        state.active_view = active_view.clone();
-
+            .map_or(ViewId::Status, |room| ViewId::Room(room.room_id.clone()));
         (rooms, timeline_events, active_view)
     };
 
-    sync_views_and_tree(hwnd)?;
     activate_view(hwnd, &active_view, None)?;
 
     Ok((rooms, timeline_events))
@@ -3258,7 +3241,7 @@ mod tests {
     }
 
     #[test]
-    fn room_joined_makes_the_joined_room_the_active_view() {
+    fn room_joined_asks_the_view_sync_to_activate_the_joined_room() {
         let mut state = test_state();
         state.model.rooms = vec![
             room("!ops:example", "Ops", false),
@@ -3269,18 +3252,10 @@ mod tests {
 
         apply_core_event(&mut state, room_joined("!new:example")).unwrap();
 
-        assert_eq!(state.active_view, room_view_id("!new:example"));
-        assert_eq!(state.model.selected_room.as_deref(), Some("!new:example"));
-        assert_eq!(
-            resolve_active_view(
-                &state.active_view,
-                state.model.selected_room.as_deref(),
-                &state.model,
-                &state.closed_queries,
-            ),
-            room_view_id("!new:example"),
-            "the view sync keeps the joined room active"
-        );
+        // Only the activation makes it the active view, entering it.
+        assert_eq!(state.pending_activation, Some(room_view_id("!new:example")));
+        assert_eq!(state.active_view, room_view_id("!ops:example"));
+        assert_eq!(state.model.selected_room.as_deref(), Some("!ops:example"));
     }
 
     #[test]
@@ -3293,7 +3268,7 @@ mod tests {
         apply_core_event(&mut state, room_joined("!dm:example")).unwrap();
 
         assert!(state.closed_queries.is_empty());
-        assert_eq!(state.active_view, room_view_id("!dm:example"));
+        assert_eq!(state.pending_activation, Some(room_view_id("!dm:example")));
     }
 
     #[test]
@@ -3308,6 +3283,7 @@ mod tests {
         apply_core_event(&mut state, room_joined("!space:example")).unwrap();
 
         assert_eq!(state.active_view, room_view_id("!ops:example"));
+        assert_eq!(state.pending_activation, None);
         assert_eq!(
             state
                 .model

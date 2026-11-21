@@ -244,17 +244,22 @@ pub(super) unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
         }
     }
 
-    // Activation makes it the active view: one that changes here (its room
-    // went) unfolds its treebar folder and takes the focus, as any newly
-    // active window does. The same one is only re-applied.
+    // A room the user joined is activated now that its window exists,
+    // unless the room went again in the same batch. Otherwise the active
+    // window stays (a gone one was replaced above, in
+    // `destroy_stale_room_views`), and is only re-applied. A newly active
+    // window is entered, unfolds its treebar folder and takes the focus.
     let active_view = {
-        let state = state_ref(hwnd);
-        resolve_active_view(
-            &state.active_view,
-            state.model.selected_room.as_deref(),
-            &state.model,
-            &state.closed_queries,
-        )
+        let state = state_mut(hwnd);
+        assert!(
+            state.views.contains_key(&state.active_view),
+            "the active view has a window after the view sync"
+        );
+        state
+            .pending_activation
+            .take()
+            .filter(|view_id| state.views.contains_key(view_id))
+            .unwrap_or_else(|| state.active_view.clone())
     };
     sync_tree(hwnd);
     sync_switchbar(hwnd)?;

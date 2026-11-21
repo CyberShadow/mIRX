@@ -506,9 +506,8 @@ use views::{
     check_window_menu_logging, close_action, destroy_stale_room_views, ensure_room_view,
     ensure_status_view, ensure_view, layout_mdi_child, mdi_child_content, mdi_child_edit,
     mdi_window_placement, refresh_every_view_content, refresh_view_content,
-    register_mdi_child_class, register_room_content_class, resolve_active_view,
-    room_content_member_list, room_content_timeline, set_view_window_state, show_view,
-    sync_view_content, view_timeline,
+    register_mdi_child_class, register_room_content_class, room_content_member_list,
+    room_content_timeline, set_view_window_state, show_view, sync_view_content, view_timeline,
 };
 #[cfg(test)]
 use views::{ROOM_CONTENT_CLASS_NAME, take_stale_room_views};
@@ -757,6 +756,10 @@ struct WindowState {
     /// (`views::destroy_stale_room_views`), so this names a registered
     /// view except inside that function and at frame teardown.
     active_view: ViewId,
+    /// A window to activate at the next view sync, which takes it: a room
+    /// the user joined. Joining is applied before the sync creates the
+    /// room's window, so it can only be activated there.
+    pending_activation: Option<ViewId>,
     selected_timeline_event: Option<SelectedTimelineEvent>,
     find_states: BTreeMap<ViewId, ViewFindState>,
     /// The Go to Original waiting for older history; one at a time.
@@ -1022,6 +1025,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         room_activity: BTreeMap::new(),
         sent_receipts: Default::default(),
         closed_queries: BTreeSet::new(),
+        pending_activation: None,
         nick_completion: None,
         edit_window_proc: None,
         model: initial_model(),

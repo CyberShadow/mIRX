@@ -883,6 +883,7 @@ pub(super) fn test_state() -> WindowState {
         room_activity: BTreeMap::new(),
         sent_receipts: Default::default(),
         closed_queries: BTreeSet::new(),
+        pending_activation: None,
         nick_completion: None,
         edit_window_proc: None,
         model: initial_model(),

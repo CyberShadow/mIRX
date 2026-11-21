@@ -446,7 +446,12 @@ mod tests {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         let resolve = |state: &WindowState| {
-            resolve_active_view(&ViewId::RoomList, None, &state.model, &state.closed_queries)
+            super::super::views::resolve_active_view(
+                &ViewId::RoomList,
+                None,
+                &state.model,
+                &state.closed_queries,
+            )
         };
         assert!(!view_id_is_valid(&state.model, &ViewId::RoomList));
         assert_eq!(resolve(&state), room_view_id("!ops:example"));

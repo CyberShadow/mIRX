@@ -580,9 +580,8 @@ unsafe fn layout_room_content(hwnd: HWND) {
 
 /// mirx's choice of the window that follows a gone one: the active one if
 /// it still has a window, else its room, the selected room, the first room
-/// or Status. A closed query has no window, so it is never picked. Used
-/// where the active window may have gone (`destroy_stale_room_views`) and
-/// at the end of every view sync (`sync_views_and_tree`).
+/// or Status. A closed query has no window, so it is never picked.
+/// `destroy_stale_room_views` activates it when the active window goes.
 pub(super) fn resolve_active_view(
     active_view: &ViewId,
     selected_room: Option<&str>,
@@ -2234,6 +2233,84 @@ mod tests {
                     line_marker::MarkerSight::Unseen
                 );
                 assert!(has_focus(hwnd, &ops));
+            });
+        }
+    }
+
+    #[test]
+    fn a_joined_room_is_entered_and_the_window_before_it_left() {
+        unsafe {
+            with_rooms_frame(|hwnd| {
+                let ops = room_view_id("!ops:example");
+                let new = room_view_id("!new:example");
+                activate_view(hwnd, &ops, None).unwrap();
+                state_mut(hwnd).recorded_commands.clear();
+
+                let mut rooms = ops_bob_dev();
+                rooms.push(room("!new:example", "New", false));
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![
+                        Event::SyncedRooms(rooms),
+                        Event::RoomJoined(mirx_core::RoomJoined {
+                            room_id: "!new:example".to_owned(),
+                        }),
+                    ],
+                )
+                .unwrap();
+
+                assert_eq!(state_ref(hwnd).active_view, new);
+                // Ops had no rule: leaving it moved its marker.
+                assert_eq!(
+                    recorded_read_commands(state_ref(hwnd)),
+                    vec!["marker !ops:example $0"]
+                );
+                assert_eq!(
+                    line_marker_sight(hwnd, &new),
+                    line_marker::MarkerSight::Unseen
+                );
+                assert_eq!(
+                    line_marker_sight(hwnd, &ops),
+                    line_marker::MarkerSight::Away
+                );
+                assert!(has_focus(hwnd, &new));
+            });
+        }
+    }
+
+    #[test]
+    fn a_join_and_its_leave_in_one_batch_keep_the_active_window() {
+        unsafe {
+            with_rooms_frame(|hwnd| {
+                let dev = room_view_id("!dev:example");
+                let mut rooms = ops_bob_dev();
+                rooms.push(room("!x:example", "X", false));
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![
+                        Event::SyncedRooms(rooms),
+                        Event::RoomJoined(mirx_core::RoomJoined {
+                            room_id: "!x:example".to_owned(),
+                        }),
+                        Event::SyncedRooms(ops_bob_dev()),
+                    ],
+                )
+                .unwrap();
+
+                assert_eq!(state_ref(hwnd).active_view, dev);
+                assert!(
+                    !state_ref(hwnd)
+                        .views
+                        .contains_key(&room_view_id("!x:example"))
+                );
+                assert_eq!(
+                    recorded_read_commands(state_ref(hwnd)),
+                    Vec::<String>::new()
+                );
+                assert_eq!(
+                    line_marker_sight(hwnd, &dev),
+                    line_marker::MarkerSight::Unseen
+                );
             });
         }
     }
