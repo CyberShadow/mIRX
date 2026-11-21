@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 74;
+pub(crate) const PROTOCOL_VERSION: u32 = 75;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1255,6 +1255,8 @@ pub(crate) struct UiOptionsDialog {
     pub(crate) highlight_delete_enabled: bool,
     /// The Display page's switchbar Event, Message and Highlight colours.
     pub(crate) activity_colors: UiActivityColors,
+    /// The IRC > Messages page's Send typing notifications checkbox.
+    pub(crate) send_typing: bool,
     /// The Display page's line marker checkbox and colour.
     pub(crate) marker: UiMarkerOptions,
     /// The Logging page's checkboxes.
@@ -1902,6 +1904,8 @@ pub(crate) struct DumpModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_away_commands: Vec<DumpSubmittedAwayCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_typing_commands: Vec<DumpSubmittedTypingCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_user_commands: Vec<DumpSubmittedUserCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_direct_room_commands: Vec<DumpSubmittedDirectRoomCommand>,
@@ -2011,6 +2015,14 @@ pub(crate) struct DumpSubmittedProfileCommand {
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpSubmittedAwayCommand {
     pub(crate) message: Option<String>,
+}
+
+/// A typing notice an editbox sent: typing, or stopped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedTypingCommand {
+    pub(crate) room_id: String,
+    pub(crate) typing: bool,
 }
 
 /// A request about another user (`/ignore`, `/unignore`, `/whois`,
@@ -3531,7 +3543,7 @@ mod tests {
         DumpSubmittedMemberModerationCommand, DumpSubmittedPowerLevelCommand,
         DumpSubmittedProfileCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
         DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
-        DumpSubmittedSetupRecoveryCommand, DumpSubmittedUserCommand,
+        DumpSubmittedSetupRecoveryCommand, DumpSubmittedTypingCommand, DumpSubmittedUserCommand,
         DumpSubmittedVerificationRequest, DumpUnsupportedRoomMessageActivity,
         DumpUserCommandAction, FindActiveViewArgs, FindActiveViewResponse, GetVersionResponse,
         IdleProbe, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiArrangement,
@@ -3671,6 +3683,10 @@ mod tests {
             },
             DumpSubmittedAwayCommand { message: None },
         ];
+        model.submitted_typing_commands = vec![DumpSubmittedTypingCommand {
+            room_id: "!ops:example".to_owned(),
+            typing: true,
+        }];
         model.submitted_user_commands = vec![DumpSubmittedUserCommand {
             action: DumpUserCommandAction::FetchProfile,
             user_id: "@bob:example".to_owned(),
@@ -3728,6 +3744,13 @@ mod tests {
                 },
                 mirx_testkit::SubmittedAwayCommand { message: None },
             ]
+        );
+        assert_eq!(
+            testkit_model.submitted_typing_commands,
+            vec![mirx_testkit::SubmittedTypingCommand {
+                room_id: "!ops:example".to_owned(),
+                typing: true,
+            }]
         );
         assert_eq!(
             testkit_model.submitted_user_commands,
@@ -4005,8 +4028,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_74() {
-        assert_eq!(PROTOCOL_VERSION, 74);
+    fn protocol_version_is_75() {
+        assert_eq!(PROTOCOL_VERSION, 75);
     }
 
     #[test]
@@ -6041,7 +6064,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":74,
+                    "protocol_version":75,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6104,6 +6127,7 @@ mod tests {
                     submitted_power_level_commands: Vec::new(),
                     submitted_profile_commands: Vec::new(),
                     submitted_away_commands: Vec::new(),
+                    submitted_typing_commands: Vec::new(),
                     submitted_user_commands: Vec::new(),
                     submitted_direct_room_commands: Vec::new(),
                     submitted_room_topic_commands: Vec::new(),
@@ -6730,6 +6754,7 @@ mod tests {
                             message: 4,
                             highlight: 12,
                         },
+                        send_typing: true,
                         marker: super::UiMarkerOptions {
                             show: true,
                             color: 4,
@@ -7000,6 +7025,7 @@ mod tests {
                         "highlight_controls_enabled":true,
                         "highlight_delete_enabled":false,
                         "activity_colors":{"event":5,"message":4,"highlight":12},
+                        "send_typing":true,
                         "marker":{"show":true,"color":4},
                         "logging":{"channels":true,"queries":false,"strip_codes":false,"timestamp":true},
                         "tray":{"always":true,"startup":false,"minimize":true,"single_click":false},
@@ -7076,6 +7102,7 @@ mod tests {
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
+            submitted_typing_commands: Vec::new(),
             submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
@@ -7178,6 +7205,7 @@ mod tests {
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
+            submitted_typing_commands: Vec::new(),
             submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
@@ -7244,6 +7272,7 @@ mod tests {
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
+            submitted_typing_commands: Vec::new(),
             submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: vec![DumpSubmittedRoomTopicCommand {
@@ -7319,6 +7348,7 @@ mod tests {
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
+            submitted_typing_commands: Vec::new(),
             submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
@@ -7421,6 +7451,7 @@ mod tests {
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
+            submitted_typing_commands: Vec::new(),
             submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
@@ -7529,6 +7560,7 @@ mod tests {
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
+            submitted_typing_commands: Vec::new(),
             submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
@@ -7647,6 +7679,7 @@ mod tests {
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
+            submitted_typing_commands: Vec::new(),
             submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
@@ -7786,6 +7819,7 @@ mod tests {
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
+            submitted_typing_commands: Vec::new(),
             submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
@@ -7886,6 +7920,7 @@ mod tests {
                 submitted_power_level_commands: Vec::new(),
                 submitted_profile_commands: Vec::new(),
                 submitted_away_commands: Vec::new(),
+                submitted_typing_commands: Vec::new(),
                 submitted_user_commands: Vec::new(),
                 submitted_direct_room_commands: Vec::new(),
                 submitted_room_topic_commands: Vec::new(),

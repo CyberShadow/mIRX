@@ -48,14 +48,15 @@ use mirx_testkit::{
     SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
     SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomKeyTransfer,
     SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSessionCommand,
-    SubmittedSetupRecoveryCommand, SubmittedUserCommand, SubmittedVerificationAction,
-    SubmittedVerificationRequest, SwitchbarItem, TestkitError, UiActiveTimeline, UiActivityColors,
-    UiColorCodePart, UiColorItem, UiColorsDialog, UiComposeTarget, UiComposeTargetKind,
-    UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState, UiLoggingOptions,
-    UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRoomHistoryBackfillState,
-    UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
-    UiTipsOptions, UiTrayOptions, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
-    VerificationActionKind, VerificationState, ViewActivityLevel, ViewIdentity,
+    SubmittedSetupRecoveryCommand, SubmittedTypingCommand, SubmittedUserCommand,
+    SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem, TestkitError,
+    UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
+    UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
+    UiFindState, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
+    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
+    UiTimelineLink, UiTimestamp, UiTipsOptions, UiTrayOptions, UnsupportedRoomMessageActivity,
+    UserCommandAction, Verification, VerificationActionKind, VerificationState, ViewActivityLevel,
+    ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -415,6 +416,8 @@ struct MockBackfillHomeserver {
     presence_puts: Arc<Mutex<Vec<serde_json::Value>>>,
     /// Each `/sync`'s `set_presence`, in arrival order.
     sync_presence: Arc<Mutex<Vec<Option<String>>>>,
+    /// The bodies of the typing notices, in arrival order.
+    typing: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
 /// What the mock homeserver fails, as the network would: a failed request
@@ -491,6 +494,29 @@ impl MockBackfillHomeserver {
                     "no sync after the first {after} said {presence:?}: {syncs:?}"
                 )
                 .into());
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
+    }
+
+    /// The typing notices so far.
+    fn typing_notices(&self) -> Vec<serde_json::Value> {
+        self.typing.lock().expect("the typing notices").clone()
+    }
+
+    /// Waits until the mock got `count` typing notices; their bodies.
+    fn wait_for_typing_notices(
+        &self,
+        count: usize,
+    ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let bodies = self.typing_notices();
+            if bodies.len() >= count {
+                return Ok(bodies);
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("the mock got {bodies:?}, not {count} typing notices").into());
             }
             std::thread::sleep(POLL_INTERVAL);
         }
@@ -603,6 +629,8 @@ fn spawn_mock_homeserver_with_auth(
     let mock_presence_puts = Arc::clone(&presence_puts);
     let sync_presence = Arc::new(Mutex::new(Vec::new()));
     let mock_sync_presence = Arc::clone(&sync_presence);
+    let typing = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+    let mock_typing = Arc::clone(&typing);
     let room_account_data = fully_read
         .into_iter()
         .map(|event_id| {
@@ -889,6 +917,20 @@ fn spawn_mock_homeserver_with_auth(
                 continue;
             }
 
+            // A typing notice, in any room: every test that types in a
+            // connected window sends them.
+            if path.starts_with("/_matrix/client/v3/rooms/!") && path.contains("/typing/") {
+                let body = &request[request
+                    .find("\r\n\r\n")
+                    .map_or(request.len(), |end| end + 4)..];
+                mock_typing
+                    .lock()
+                    .expect("the typing notices")
+                    .push(serde_json::from_str(body).expect("a typing JSON body"));
+                respond_json(&mut stream, 200, &serde_json::json!({}));
+                continue;
+            }
+
             // The read receipt and the read marker; the sync body never
             // echoes them.
             if path.ends_with("/read_markers") {
@@ -1118,6 +1160,7 @@ fn spawn_mock_homeserver_with_auth(
         timeline,
         presence_puts,
         sync_presence,
+        typing,
     })
 }
 
@@ -3318,7 +3361,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 74);
+    assert_eq!(version.protocol_version, 75);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -4565,6 +4608,58 @@ fn away_rides_the_sync_loop() -> Result<(), Box<dyn std::error::Error>> {
         find_view(&app.dump_ui_state()?, &beta),
         "Others"
     ));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Typing a message in a connected room window tells the room; sending it
+/// stops the notice. With the option off nothing is sent.
+#[test]
+fn typing_in_a_room_window_tells_the_room() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_homeserver(MockMessages::Hang, vec![])?;
+    let app = launch_automation_app(&local_app_data)?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    app.select_room("!beta:example")?;
+
+    // A command is not typing in the room.
+    app.set_compose_text("/whois bob")?;
+    app.set_compose_text("hello")?;
+    assert_eq!(
+        server.wait_for_typing_notices(1)?,
+        [serde_json::json!({ "typing": true, "timeout": 4000 })]
+    );
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(
+        server.wait_for_typing_notices(2)?[1],
+        serde_json::json!({ "typing": false })
+    );
+    assert_eq!(
+        app.dump_model()?.submitted_typing_commands,
+        [true, false].map(|typing| SubmittedTypingCommand {
+            room_id: "!beta:example".to_owned(),
+            typing,
+        })
+    );
+
+    // Options > IRC > Messages > Send typing notifications, off.
+    let menu_thread = open_options_from_menu(&app);
+    let dialog = wait_for_options_dialog(&app)?;
+    unsafe { set_options_check(dialog, OPTIONS_SEND_TYPING_ID, false) };
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+    app.set_compose_text("hello again")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(server.typing_notices().len(), 2);
+    assert_eq!(app.dump_model()?.submitted_typing_commands.len(), 2);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -7917,6 +8012,7 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
          [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
          [tips]\r\nhighlights=on\r\nqueries=on\r\nchannels=off\r\n\
          [marker]\r\nshow=on\r\ncolor=4\r\n\
+         [typing]\r\nsend=on\r\n\
          [other]\r\nbuffer=5000\r\n\
          [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\n\
          invite=3\r\njoin=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\n\
@@ -17068,6 +17164,7 @@ const OPTIONS_RETRY_DELAY_ID: i32 = 6105;
 const OPTIONS_TIMESTAMP_SHOW_ID: i32 = 6201;
 const OPTIONS_TIMESTAMP_FORMAT_ID: i32 = 6202;
 const OPTIONS_TIMESTAMP_TOKENS_ID: u16 = 6203;
+const OPTIONS_SEND_TYPING_ID: i32 = 6204;
 const OPTIONS_SWITCHBAR_BUTTONS_ID: i32 = 6301;
 /// Display's Event, Message and Highlight colours.
 const OPTIONS_ACTIVITY_COLOR_IDS: [i32; 3] = [6302, 6303, 6304];
@@ -17191,6 +17288,7 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
             OPTIONS_TIMESTAMP_SHOW_ID as u16,
             OPTIONS_TIMESTAMP_FORMAT_ID as u16,
             OPTIONS_TIMESTAMP_TOKENS_ID,
+            OPTIONS_SEND_TYPING_ID as u16,
         ]
     );
     assert_eq!(

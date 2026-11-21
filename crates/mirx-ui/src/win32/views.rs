@@ -2,7 +2,7 @@
 
 use windows_sys::Win32::Graphics::Gdi::{HDC, SetBkColor};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_ERASEBKGND, WS_CLIPSIBLINGS,
+    EN_CHANGE, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_ERASEBKGND, WS_CLIPSIBLINGS,
 };
 
 use super::*;
@@ -192,6 +192,18 @@ unsafe extern "system" fn mdi_child_window_proc(
             let result = DefMDIChildProcW(hwnd, message, wparam, lparam);
             SetFocus(mdi_child_focus(hwnd));
             result
+        }
+        // Its one editbox changed, however: typed, pasted, set.
+        WM_COMMAND if (wparam >> 16) as u32 == EN_CHANGE => {
+            assert_eq!(
+                lparam as HWND,
+                mdi_child_edit(hwnd),
+                "an MDI child's only edit control is its editbox"
+            );
+            if let Err(message) = typing::editbox_changed(frame_window_for(hwnd), hwnd) {
+                eprintln!("{message}");
+            }
+            0
         }
         // Its one editbox, in the scheme's Editbox colours.
         WM_CTLCOLOREDIT => {

@@ -413,6 +413,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_away_commands: Vec<SubmittedAwayCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_typing_commands: Vec<SubmittedTypingCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_user_commands: Vec<SubmittedUserCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_direct_room_commands: Vec<SubmittedDirectRoomCommand>,
@@ -522,6 +524,14 @@ pub struct SubmittedProfileCommand {
 #[serde(deny_unknown_fields)]
 pub struct SubmittedAwayCommand {
     pub message: Option<String>,
+}
+
+/// A typing notice an editbox sent: typing, or stopped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedTypingCommand {
+    pub room_id: String,
+    pub typing: bool,
 }
 
 /// A request about another user (`/ignore`, `/unignore`, `/whois`,
@@ -1547,6 +1557,8 @@ pub struct UiOptionsDialog {
     pub highlight_delete_enabled: bool,
     /// The Display page's switchbar Event, Message and Highlight colours.
     pub activity_colors: UiActivityColors,
+    /// The IRC > Messages page's Send typing notifications checkbox.
+    pub send_typing: bool,
     /// The Display page's line marker checkbox and colour.
     pub marker: UiMarkerOptions,
     /// The Logging page's checkboxes.

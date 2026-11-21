@@ -95,6 +95,7 @@ pub(super) struct Settings {
     pub(super) tray: TraySetting,
     pub(super) tips: TipsSetting,
     pub(super) marker: MarkerSetting,
+    pub(super) typing: TypingSetting,
     pub(super) other: OtherSetting,
     /// mIRC's Tools > Colors.
     pub(super) colors: ColorScheme,
@@ -469,6 +470,18 @@ impl Default for MarkerSetting {
     }
 }
 
+/// Options > IRC > Messages: whether a room is told you are typing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TypingSetting {
+    pub(super) send: bool,
+}
+
+impl Default for TypingSetting {
+    fn default() -> Self {
+        Self { send: true }
+    }
+}
+
 /// mIRC's Options > Other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct OtherSetting {
@@ -531,6 +544,7 @@ enum Section {
     Tray,
     Tips,
     Marker,
+    Typing,
     Other,
     Colors,
 }
@@ -561,6 +575,7 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                 "tray" => Section::Tray,
                 "tips" => Section::Tips,
                 "marker" => Section::Marker,
+                "typing" => Section::Typing,
                 "other" => Section::Other,
                 "colors" => Section::Colors,
                 _ => return Err(error(format!("unknown section [{name}]"))),
@@ -670,6 +685,9 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Marker, "color") => {
                 settings.marker.color = parse_palette_index(value).map_err(error)?;
             }
+            (Section::Typing, "send") => {
+                settings.typing.send = parse_on_off(value, "send").map_err(error)?;
+            }
             (Section::Other, "buffer") => {
                 settings.other.window_buffer =
                     parse_window_buffer(value.trim_end()).map_err(error)?;
@@ -742,6 +760,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
          [tray]\r\nalways={}\r\nstartup={}\r\nminimize={}\r\nsingle_click={}\r\n\
          [tips]\r\nhighlights={}\r\nqueries={}\r\nchannels={}\r\n\
          [marker]\r\nshow={}\r\ncolor={}\r\n\
+         [typing]\r\nsend={}\r\n\
          [other]\r\nbuffer={}\r\n\
          [colors]\r\n{colors}",
         font.face,
@@ -774,6 +793,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         on_off(tips.channels),
         on_off(settings.marker.show),
         settings.marker.color.get(),
+        on_off(settings.typing.send),
         settings.other.window_buffer,
     )
 }
@@ -857,6 +877,7 @@ mod tests {
         [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
         [tips]\r\nhighlights=on\r\nqueries=on\r\nchannels=off\r\n\
         [marker]\r\nshow=on\r\ncolor=4\r\n\
+        [typing]\r\nsend=on\r\n\
         [other]\r\nbuffer=5000\r\n\
         [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\ninvite=3\r\n\
         join=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\nnotice=5\r\nother=6\r\nown=1\r\n\
@@ -948,11 +969,30 @@ mod tests {
             ..Settings::default()
         };
         let text = to_ini(&settings);
-        assert!(text.contains("[marker]\r\nshow=off\r\ncolor=12\r\n[other]"));
+        assert!(text.contains("[marker]\r\nshow=off\r\ncolor=12\r\n[typing]"));
         assert_eq!(parse_ini(&text), Ok(settings));
         assert_eq!(
             parse_ini("[marker]\r\nshow=on\r\n").map(|settings| settings.marker),
             Ok(MarkerSetting::default())
+        );
+    }
+
+    #[test]
+    fn the_typing_setting_round_trips() {
+        let settings = Settings {
+            typing: TypingSetting { send: false },
+            ..Settings::default()
+        };
+        let text = to_ini(&settings);
+        assert!(text.contains("[typing]\r\nsend=off\r\n[other]"));
+        assert_eq!(parse_ini(&text), Ok(settings));
+        assert_eq!(
+            parse_ini("[typing]\r\n").map(|settings| settings.typing),
+            Ok(TypingSetting { send: true })
+        );
+        assert_eq!(
+            parse_ini("[typing]\nsend=yes"),
+            Err("line 2: send must be on or off".to_owned())
         );
     }
 
@@ -1073,7 +1113,7 @@ mod tests {
             ..Settings::default()
         };
         let text = to_ini(&settings);
-        assert!(text.contains("color=4\r\n[other]\r\nbuffer=100\r\n[colors]"));
+        assert!(text.contains("send=on\r\n[other]\r\nbuffer=100\r\n[colors]"));
         assert_eq!(parse_ini(&text), Ok(settings));
         assert_eq!(
             parse_ini("[Other]\nBuffer=50000").map(|settings| settings.other.window_buffer),

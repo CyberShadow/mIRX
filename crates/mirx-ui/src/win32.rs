@@ -165,20 +165,20 @@ use crate::{
         DumpSubmittedProfileCommand, DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand,
         DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
         DumpSubmittedRoomKeyTransfer, DumpSubmittedRoomListRequest, DumpSubmittedRoomTopicCommand,
-        DumpSubmittedSessionCommand, DumpSubmittedSetupRecoveryCommand, DumpSubmittedUserCommand,
-        DumpSubmittedVerificationAction, DumpSubmittedVerificationRequest, DumpUserCommandAction,
-        DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
-        FindActiveViewResponse, GetVersionResponse, IdleProbe, LifecycleState, ListRoomsResponse,
-        LoadEventsResponse, MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState,
-        NavigationNode, NavigationNodeKey, NavigationPathSegment, ParsedCommand, PongResponse,
-        ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
-        SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind,
-        UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiPoint, UiRect,
-        UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState, UiTextFont, UiTimelineLine,
-        UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiToolbarButton, VerificationActionArgs,
-        ViewActivityLevel, ViewIdentity, WaitIdleResponse, dump_error_from_core,
-        dump_room_activity_from_activity, dump_room_from_summary,
+        DumpSubmittedSessionCommand, DumpSubmittedSetupRecoveryCommand, DumpSubmittedTypingCommand,
+        DumpSubmittedUserCommand, DumpSubmittedVerificationAction,
+        DumpSubmittedVerificationRequest, DumpUserCommandAction, DumpVerificationActionKind,
+        DumpVerificationMenuState, FailureEnvelope, FindActiveViewResponse, GetVersionResponse,
+        IdleProbe, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiArrangement, MdiState,
+        MdiView, MdiWindowPlacement, MdiWindowState, NavigationNode, NavigationNodeKey,
+        NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView,
+        SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse,
+        StatusBarState, SwitchbarItem, SwitchbarState, UiActiveTimeline, UiComposeTarget,
+        UiComposeTargetKind, UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu,
+        UiMenuItem, UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState,
+        UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
+        UiToolbarButton, VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleResponse,
+        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
         dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
         dump_verification_from_state_event, failure_response, parse_command_request,
         success_response,
@@ -256,6 +256,7 @@ mod timeline_window;
 mod timestamp;
 mod toolbar;
 mod tray;
+mod typing;
 mod verification;
 mod views;
 mod window_buffer;
@@ -786,6 +787,8 @@ struct WindowState {
     gdiplus_session: Option<GdiplusSession>,
     gdiplus_startup_error: Option<String>,
     recorded_commands: Vec<Command>,
+    /// The typing notices said live, by room.
+    typing_notices: typing::TypingNotices,
     /// The web links handed to the shell, in order.
     opened_links: Vec<String>,
     submitted_setup_e2ee_recovery: Vec<SubmittedSetupE2eeRecovery>,
@@ -1033,6 +1036,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         gdiplus_session,
         gdiplus_startup_error,
         recorded_commands: Vec::new(),
+        typing_notices: typing::TypingNotices::default(),
         opened_links: Vec::new(),
         submitted_setup_e2ee_recovery: Vec::new(),
         submitted_identity_resets: Vec::new(),

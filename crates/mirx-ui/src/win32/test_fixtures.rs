@@ -977,6 +977,7 @@ pub(super) fn test_state() -> WindowState {
         gdiplus_startup_error,
         #[cfg(test)]
         recorded_commands: Vec::new(),
+        typing_notices: super::typing::TypingNotices::default(),
         opened_links: Vec::new(),
         #[cfg(test)]
         submitted_setup_e2ee_recovery: Vec::new(),

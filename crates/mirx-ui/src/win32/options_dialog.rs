@@ -73,6 +73,7 @@ pub(super) const OPTIONS_RETRY_DELAY_ID: u16 = 6105;
 pub(super) const OPTIONS_TIMESTAMP_SHOW_ID: u16 = 6201;
 pub(super) const OPTIONS_TIMESTAMP_FORMAT_ID: u16 = 6202;
 pub(super) const OPTIONS_TIMESTAMP_TOKENS_ID: u16 = 6203;
+pub(super) const OPTIONS_SEND_TYPING_ID: u16 = 6204;
 pub(super) const OPTIONS_SWITCHBAR_BUTTONS_ID: u16 = 6301;
 /// The switchbar's Event, Message and Highlight colours: 6302-6304.
 pub(super) const OPTIONS_ACTIVITY_COLOR_IDS: [u16; 3] = [6302, 6303, 6304];
@@ -132,6 +133,7 @@ struct Fields {
     retry_rows: Vec<HWND>,
     timestamp_show: HWND,
     timestamp_format: HWND,
+    send_typing: HWND,
     switchbar_buttons: HWND,
     /// Event, Message, Highlight.
     activity_colors: [HWND; 3],
@@ -162,6 +164,7 @@ impl Fields {
             retry_delay: read_window_text(self.retry_delay),
             timestamp_show: checked(self.timestamp_show),
             timestamp_format: read_window_text(self.timestamp_format),
+            send_typing: checked(self.send_typing),
             switchbar_buttons: read_window_text(self.switchbar_buttons),
             activity_colors: self.read_activity_colors(),
             marker: MarkerSetting {
@@ -278,6 +281,7 @@ impl OptionsDialog {
                 retry_rows: Vec::new(),
                 timestamp_show: null_mut(),
                 timestamp_format: null_mut(),
+                send_typing: null_mut(),
                 switchbar_buttons: null_mut(),
                 activity_colors: [null_mut(); 3],
                 marker_show: null_mut(),
@@ -528,18 +532,33 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         dpi.px(TIMESTAMP_FORMAT_WIDTH),
         edit_height,
     );
-    let (tokens, _) = label(
+    let tokens_y = format_y + edit_height + gap;
+    let (tokens, (_, tokens_height)) = label(
         &format!("Tokens: {}", format_tokens()),
         OPTIONS_TIMESTAMP_TOKENS_ID,
         0,
         page_x,
-        format_y + edit_height + gap,
+        tokens_y,
     )?;
+    state.fields.send_typing = place(
+        control(
+            BUTTON_CLASS_NAME,
+            "Send typing notifications",
+            checkbox,
+            0,
+            OPTIONS_SEND_TYPING_ID,
+        )?,
+        page_x,
+        tokens_y + tokens_height + 2 * gap,
+        page_width,
+        checkbox_height,
+    );
     for control in [
         state.fields.timestamp_show,
         format_label,
         state.fields.timestamp_format,
         tokens,
+        state.fields.send_typing,
     ] {
         state
             .page_controls
@@ -912,6 +931,7 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         (state.fields.reconnect, form.reconnect),
         (state.fields.retry, form.retry),
         (state.fields.timestamp_show, form.timestamp_show),
+        (state.fields.send_typing, form.send_typing),
         (state.fields.marker_show, form.marker.show),
         (state.fields.log_channels, form.logging.channels),
         (state.fields.log_queries, form.logging.queries),
@@ -1317,6 +1337,7 @@ pub(super) unsafe fn dump(hwnd: HWND) -> Result<UiOptionsDialog, String> {
         highlight_controls_enabled,
         highlight_delete_enabled: IsWindowEnabled(controls.delete) != 0,
         activity_colors: dump_activity_colors(&form.activity_colors),
+        send_typing: form.send_typing,
         marker: UiMarkerOptions {
             show: form.marker.show,
             color: form.marker.color.get(),

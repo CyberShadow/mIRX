@@ -113,6 +113,7 @@ pub(super) struct OptionsForm {
     pub(super) retry_delay: String,
     pub(super) timestamp_show: bool,
     pub(super) timestamp_format: String,
+    pub(super) send_typing: bool,
     pub(super) switchbar_buttons: String,
     /// Picked from the palette, so never wrong.
     pub(super) activity_colors: ActivityColors,
@@ -137,6 +138,7 @@ impl OptionsForm {
             retry_delay: settings.connect.retry_delay.to_string(),
             timestamp_show: settings.timestamp.show,
             timestamp_format: settings.timestamp.format.to_string(),
+            send_typing: settings.typing.send,
             switchbar_buttons: settings.switchbar.buttons.to_string(),
             activity_colors: settings.switchbar.activity,
             marker: settings.marker,
@@ -178,6 +180,7 @@ impl OptionsForm {
         settings.connect.retry_delay = retry_delay;
         settings.timestamp.show = self.timestamp_show;
         settings.timestamp.format = format;
+        settings.typing.send = self.send_typing;
         settings.switchbar.buttons = buttons;
         settings.switchbar.activity = self.activity_colors;
         settings.marker = self.marker;
@@ -406,6 +409,10 @@ mod tests {
         let mut expected = current.clone();
         expected.timestamp.show = false;
         assert_eq!(applied(|form| form.timestamp_show = false), expected);
+
+        let mut expected = current.clone();
+        expected.typing.send = false;
+        assert_eq!(applied(|form| form.send_typing = false), expected);
 
         let mut expected = current.clone();
         expected.timestamp.format = TimestampFormat::parse("[HH:nn:ss]").unwrap();
