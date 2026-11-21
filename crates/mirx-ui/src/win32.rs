@@ -231,6 +231,7 @@ mod open_link;
 mod options;
 mod options_dialog;
 mod reactions;
+mod read_receipts;
 mod reconnect;
 mod replies;
 mod room_list;
@@ -318,9 +319,8 @@ use connection::{ConnectAction, DisconnectAction};
 #[cfg(test)]
 use core_events::apply_core_event;
 use core_events::{
-    apply_event_load, apply_events_and_refresh, clear_view_activity_marker,
-    drain_core_events_and_refresh, handle_core_events, handle_view_activation, operation_name,
-    resolve_timeline_room_id, submit_set_read_marker,
+    apply_event_load, apply_events_and_refresh, drain_core_events_and_refresh, handle_core_events,
+    handle_view_activation, operation_name, resolve_timeline_room_id, submit_set_read_marker,
 };
 #[cfg(test)]
 use dialogs::{
@@ -764,7 +764,6 @@ struct WindowState {
     /// windows, they stay closed until a new message from the other side or
     /// an explicit activation. Holds only joined DM rooms in `model.rooms`.
     closed_queries: BTreeSet<String>,
-    room_activity_read_targets: BTreeMap<ViewId, String>,
     /// The last Tab completion, for further Tabs to cycle.
     nick_completion: Option<ComposeNickCompletion>,
     edit_window_proc: WNDPROC,
@@ -1011,7 +1010,6 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         applied_navigation: None,
         room_activity: BTreeMap::new(),
         closed_queries: BTreeSet::new(),
-        room_activity_read_targets: BTreeMap::new(),
         nick_completion: None,
         edit_window_proc: None,
         model: initial_model(),

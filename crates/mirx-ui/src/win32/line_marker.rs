@@ -26,17 +26,6 @@ pub(super) fn read_marker_move<'a>(
         .then_some(last_line_event)
 }
 
-/// The newest line of a room window that the read marker can name: the
-/// last activity with a read target, which pending sends and echo lines
-/// are not. A room window shows every activity of its room.
-fn last_line_event(room_view: &RoomViewModel) -> Option<&str> {
-    room_view
-        .activities
-        .iter()
-        .rev()
-        .find_map(read_target_for_room_activity)
-}
-
 /// The user leaves `view_id`'s window: another window is activated, or
 /// the active window closes. A room window whose marker was seen moves the
 /// room's read marker to its last line, while mirx is connected: the move
@@ -66,7 +55,7 @@ pub(super) unsafe fn leave_window(hwnd: HWND, view_id: &ViewId) -> Result<(), St
         .and_then(|read_state| read_state.fully_read_event_id.as_deref());
     let Some(event_id) = read_marker_move(
         server_marker,
-        last_line_event(room_view),
+        read_receipts::window_read_line(room_view, view_id),
         marker_row_shown,
         timeline.line_marker_seen,
     )
@@ -124,30 +113,6 @@ pub(super) unsafe fn go_to_line_marker(hwnd: HWND) -> Result<(), String> {
 mod tests {
     use super::super::test_fixtures::*;
     use super::*;
-
-    #[test]
-    fn the_last_line_is_the_newest_sent_one() {
-        let mut room_view = RoomViewModel::default();
-        assert_eq!(last_line_event(&room_view), None);
-        for (event_id, timestamp_ms) in [("$a", 1_699_999_000_000), ("$b", 1_699_999_001_000)] {
-            room_view.apply_activity(sent_message_activity(
-                "!ops:example",
-                event_id,
-                None,
-                "hi",
-                timestamp_ms,
-            ));
-        }
-        room_view.apply_activity(pending_message_activity("!ops:example", "txn1", "sending"));
-        assert_eq!(
-            room_view
-                .activities
-                .last()
-                .map(|activity| activity.activity_id.as_str()),
-            Some("txn:txn1")
-        );
-        assert_eq!(last_line_event(&room_view), Some("$b"));
-    }
 
     /// A frame showing Ops, 40 lines `$m0`..`$m39` with the read marker
     /// on `fully_read`, and a query with Bob; connected, with a sender

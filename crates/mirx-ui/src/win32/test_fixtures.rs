@@ -880,7 +880,6 @@ pub(super) fn test_state() -> WindowState {
         switchbar_labels: Vec::new(),
         applied_navigation: None,
         room_activity: BTreeMap::new(),
-        room_activity_read_targets: BTreeMap::new(),
         closed_queries: BTreeSet::new(),
         nick_completion: None,
         edit_window_proc: None,

@@ -1396,10 +1396,17 @@ unsafe fn apply_view_activation_state(
             ensure_thread_view(hwnd, room_id, thread_root_event_id)?
         }
     };
-    handle_view_activation(state_mut(hwnd), view_id)?;
-
     let previous_active = state_ref(hwnd).active_view.clone();
     let newly_active = previous_active != *view_id;
+    if newly_active {
+        handle_view_activation(state_mut(hwnd), view_id)?;
+    } else {
+        // Re-applying the active window after a model change reads nothing
+        // again. A load or a join that made it the active one may have
+        // left it activity from before, which the active window never
+        // shows.
+        state_mut(hwnd).room_activity.remove(view_id);
+    }
     // The window left, if it is still there: closing the active window
     // left it already, and a window whose room went has no marker to move.
     if newly_active && state_ref(hwnd).views.contains_key(&previous_active) {

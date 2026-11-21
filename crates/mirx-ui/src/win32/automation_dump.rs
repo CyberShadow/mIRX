@@ -684,10 +684,15 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
                     .room_activity
                     .get(&ViewId::Room(room.room_id.clone()))
                     .copied(),
-                read_target_event_id: state
-                    .room_activity_read_targets
-                    .get(&ViewId::Room(room.room_id.clone()))
-                    .cloned(),
+                read_target_event_id: {
+                    let view_id = ViewId::Room(room.room_id.clone());
+                    read_receipts::view_activation_receipt(
+                        state,
+                        &view_id,
+                        state.room_activity.contains_key(&view_id),
+                    )
+                    .map(str::to_owned)
+                },
                 read_state: state
                     .model
                     .room_read_states

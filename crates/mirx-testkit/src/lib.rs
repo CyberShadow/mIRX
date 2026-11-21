@@ -1831,6 +1831,9 @@ pub struct UiRoomState {
     pub tags: Vec<RoomTag>,
     pub space_children: Vec<SpaceChild>,
     pub activity: Option<ViewActivityLevel>,
+    /// The read receipt activating the room's window would send now: its
+    /// newest line a receipt can name, when the server says the room is
+    /// unread.
     pub read_target_event_id: Option<String>,
     pub read_state: Option<UiRoomReadState>,
     pub history_backfill: UiRoomHistoryBackfillState,

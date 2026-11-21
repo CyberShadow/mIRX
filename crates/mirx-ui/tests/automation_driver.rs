@@ -3689,9 +3689,11 @@ fn automation_driver_line_marker_from_the_server() -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-/// Activating a window sends the read receipt alone: Element's "new
-/// messages" line, at the read marker, stays. Leaving the window after its
-/// marker was on screen moves the read marker to its last line.
+/// Activating a window the server counts unread (here from the first
+/// sync: Bob's lines after the marker, and no receipt) sends the read
+/// receipt alone: Element's "new messages" line, at the read marker, stays.
+/// Leaving the window after its marker was on screen moves the read marker
+/// to its last line.
 #[test]
 fn automation_driver_leaving_a_room_moves_the_read_marker() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -3710,26 +3712,25 @@ fn automation_driver_leaving_a_room_moves_the_read_marker() -> Result<(), Box<dy
     let beta = room_identity("!beta:example");
     assert_eq!(app.dump_ui_state()?.mdi.active, ViewIdentity::Status);
 
-    app.select_navigation_view(&beta)?;
-    app.wait_idle(Duration::from_secs(5))?;
-    let receipts = server.read_markers.lock().unwrap().clone();
-    assert!(
-        receipts
-            .iter()
-            .all(|body| body.get("m.fully_read").is_none()),
-        "{receipts:?}"
-    );
-    app.select_navigation_view(&ViewIdentity::Status)?;
-    let bodies = server.wait_for_read_markers(receipts.len() + 1)?;
     assert_eq!(
-        bodies[receipts.len()..],
+        *server.read_markers.lock().unwrap(),
+        Vec::<serde_json::Value>::new()
+    );
+    app.select_navigation_view(&beta)?;
+    assert_eq!(
+        server.wait_for_read_markers(1)?,
+        [serde_json::json!({ "m.read": "$bob-4" })]
+    );
+    // Once: the mock never echoes it, and the window stays active.
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(server.read_markers.lock().unwrap().len(), 1);
+    app.select_navigation_view(&ViewIdentity::Status)?;
+    assert_eq!(
+        server.wait_for_read_markers(2)?[1..],
         [serde_json::json!({ "m.fully_read": "$bob-4" })]
     );
     app.wait_idle(Duration::from_secs(5))?;
-    assert_eq!(
-        server.read_markers.lock().unwrap().len(),
-        receipts.len() + 1
-    );
+    assert_eq!(server.read_markers.lock().unwrap().len(), 2);
     assert_eq!(app.dump_model()?.last_error, None);
 
     drop(app);

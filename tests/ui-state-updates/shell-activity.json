@@ -22,6 +22,17 @@
     }
   },
   {
+    "RoomReadState": {
+      "room_id": "!beta:example",
+      "latest_active_event_id": null,
+      "fully_read_event_id": null,
+      "marked_unread": false,
+      "num_unread": 1,
+      "num_notifications": 1,
+      "num_mentions": 0
+    }
+  },
+  {
     "RoomActivity": {
       "room_id": "!alpha:example",
       "activity_id": "event:$alpha-thread-activity",

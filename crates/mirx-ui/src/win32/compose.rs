@@ -523,7 +523,7 @@ fn submit_compose(
         },
     )?;
     if clears_active_thread_marker {
-        clear_view_activity_marker(state, &state.active_view.clone());
+        state.room_activity.remove(&state.active_view);
     }
 
     Ok(destination.room_id)
@@ -1838,10 +1838,6 @@ mod tests {
             thread_view_id("!ops:example", "$thread-root:example"),
             ViewActivityLevel::Message,
         );
-        state.room_activity_read_targets.insert(
-            thread_view_id("!ops:example", "$thread-root:example"),
-            "$thread-1:example".to_owned(),
-        );
 
         let room_id =
             submit_compose(&mut state, RoomMessagePresentationKind::Text, "hello", None).unwrap();
@@ -1849,11 +1845,6 @@ mod tests {
         assert!(
             !state
                 .room_activity
-                .contains_key(&thread_view_id("!ops:example", "$thread-root:example"))
-        );
-        assert!(
-            !state
-                .room_activity_read_targets
                 .contains_key(&thread_view_id("!ops:example", "$thread-root:example"))
         );
         let emote_room_id = submit_compose(
