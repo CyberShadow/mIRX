@@ -1143,6 +1143,7 @@ fn window_key_accelerators() -> impl Iterator<Item = ACCEL> {
             accel(FCONTROL | FVIRTKEY, u16::from(b'Q'), ACCEL_ID_NEXT_QUERY),
             accel(FALT | FVIRTKEY, u16::from(b'X'), ACCEL_ID_TOGGLE_MAXIMIZE),
             accel(FCONTROL | FVIRTKEY, u16::from(b'T'), ACCEL_ID_TREEBAR_FOCUS),
+            accel(FCONTROL | FVIRTKEY, u16::from(b'L'), ACCEL_ID_LINE_MARKER),
         ])
 }
 
@@ -1162,6 +1163,12 @@ pub(super) unsafe fn handle_window_key_command(hwnd: HWND, wparam: WPARAM) -> bo
         }
         WindowKey::TreebarFocus => {
             toggle_treebar_focus(hwnd);
+            None
+        }
+        WindowKey::LineMarker => {
+            if let Err(message) = line_marker::go_to_line_marker(hwnd) {
+                show_error_message(hwnd, "Line Marker", &message);
+            }
             None
         }
     };

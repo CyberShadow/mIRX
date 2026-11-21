@@ -1042,7 +1042,9 @@ pub(super) unsafe fn continue_event_jump(
 
 /// Scrolls `view_id`'s window, activated first, so the jump's target is at
 /// the top (as low as the end allows). Go to Original scrolls to the
-/// message's first line and selects it.
+/// message's first line and selects it; Ctrl+L scrolls to the line marker,
+/// or to its line where no rule is drawn (the option is off, or the line
+/// is the last).
 unsafe fn show_jump_target(
     hwnd: HWND,
     view_id: &ViewId,
@@ -1062,6 +1064,16 @@ unsafe fn show_jump_target(
                 view_id: view_id.clone(),
                 event_id: event_id.to_owned(),
             });
+        }
+        replies::JumpPurpose::LineMarker => {
+            let marker_row_index = timeline_state_ref(timeline)
+                .source_rows
+                .iter()
+                .position(|row| row.kind == TimelineRowKind::LineMarker);
+            scroll_timeline_to_source_row_index(
+                timeline,
+                marker_row_index.unwrap_or(source_row_index),
+            );
         }
     }
     InvalidateRect(timeline, null(), 1);

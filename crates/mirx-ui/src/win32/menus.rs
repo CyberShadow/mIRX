@@ -90,6 +90,7 @@ pub(super) const ACCEL_ID_NEXT_CHANNEL: usize = 40091;
 pub(super) const ACCEL_ID_NEXT_QUERY: usize = 40092;
 pub(super) const ACCEL_ID_TOGGLE_MAXIMIZE: usize = 40093;
 pub(super) const ACCEL_ID_TREEBAR_FOCUS: usize = 40094;
+pub(super) const ACCEL_ID_LINE_MARKER: usize = 40095;
 /// `COMMANDS_MENU[i]` has the id `MENU_ID_COMMANDS_FIRST + i`. The range
 /// ends below the switchbar's (41001) and MDI's child ids (50000).
 pub(super) const MENU_ID_COMMANDS_FIRST: usize = 40100;
@@ -312,6 +313,8 @@ pub(super) enum WindowKey {
     ToggleMaximize,
     /// Ctrl+T: between the treebar and the active window.
     TreebarFocus,
+    /// Ctrl+L: scrolls the active window back to its line marker.
+    LineMarker,
 }
 
 pub(super) fn window_key(command_id: usize) -> Option<WindowKey> {
@@ -326,6 +329,7 @@ pub(super) fn window_key(command_id: usize) -> Option<WindowKey> {
         ACCEL_ID_NEXT_QUERY => cycle(WindowCycle::Queries, true),
         ACCEL_ID_TOGGLE_MAXIMIZE => WindowKey::ToggleMaximize,
         ACCEL_ID_TREEBAR_FOCUS => WindowKey::TreebarFocus,
+        ACCEL_ID_LINE_MARKER => WindowKey::LineMarker,
         _ => return None,
     })
 }
@@ -902,7 +906,7 @@ mod tests {
         })
         .chain((0..COMMANDS_MENU.len()).map(|index| MENU_ID_COMMANDS_FIRST + index))
         .chain(ROOM_NOTIFICATIONS_MENU.iter().map(|(_, id, _)| *id))
-        .chain(ACCEL_ID_WINDOW_FIRST..=ACCEL_ID_TREEBAR_FOCUS)
+        .chain(ACCEL_ID_WINDOW_FIRST..=ACCEL_ID_LINE_MARKER)
         .chain([TOOLBAR_ID_SEND_FILE])
         .collect::<Vec<_>>();
         let count = ids.len();
@@ -927,11 +931,13 @@ mod tests {
                 forward: false
             })
         );
-        assert!(
-            (ACCEL_ID_WINDOW_FIRST..=ACCEL_ID_TREEBAR_FOCUS).all(|id| window_key(id).is_some())
+        assert!((ACCEL_ID_WINDOW_FIRST..=ACCEL_ID_LINE_MARKER).all(|id| window_key(id).is_some()));
+        assert_eq!(
+            window_key(ACCEL_ID_LINE_MARKER),
+            Some(WindowKey::LineMarker)
         );
         assert_eq!(window_key(ACCEL_ID_WINDOW_FIRST - 1), None);
-        assert_eq!(window_key(ACCEL_ID_TREEBAR_FOCUS + 1), None);
+        assert_eq!(window_key(ACCEL_ID_LINE_MARKER + 1), None);
         assert_eq!(window_key(MENU_ID_FIND), None);
     }
 

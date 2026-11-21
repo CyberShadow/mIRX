@@ -3737,6 +3737,70 @@ fn automation_driver_leaving_a_room_moves_the_read_marker() -> Result<(), Box<dy
     Ok(())
 }
 
+/// Ctrl+L, through the frame's accelerators, scrolls a long room back to
+/// its line marker: the rule at the top of the window.
+#[test]
+fn automation_driver_ctrl_l_scrolls_back_to_the_line_marker()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let server = spawn_mock_homeserver_with_read_marker(bob_lines(80), "$bob-2")?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    // The first response's "connected to" status comes after the rooms:
+    // it must not overwrite Ctrl+L's.
+    wait_until_connected(&app)?;
+    wait_for_line_marker(&app)?;
+    app.select_navigation_view(&room_identity("!beta:example"))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let top_kind = |ui_state: &UiState| {
+        ui_state
+            .active_timeline
+            .as_ref()
+            .expect("Beta has a timeline")
+            .visible_lines[0]
+            .kind
+    };
+    let ui_state = app.dump_ui_state()?;
+    assert!(
+        ui_state
+            .active_timeline
+            .as_ref()
+            .expect("Beta has a timeline")
+            .visible_lines
+            .iter()
+            .all(|line| line.kind != UiTimelineLineKind::LineMarker),
+        "the window opens at its end, the marker far above"
+    );
+
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe { SetForegroundWindow(frame) };
+    assert_compose_has_focus(&app);
+    press_keys(&[VK_CONTROL, u16::from(b'L')]);
+    let ui_state = app.wait_for_ui_state(
+        "Ctrl+L to scroll to the line marker",
+        Duration::from_secs(5),
+        |ui_state| top_kind(ui_state) == UiTimelineLineKind::LineMarker,
+    )?;
+    assert!(
+        ui_state.status_bar.text.starts_with("line marker found |"),
+        "{}",
+        ui_state.status_bar.text
+    );
+    assert_eq!(app.compose_text()?, "");
+
+    drop(app);
+    drop(server);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 #[test]
 fn startup_with_connect_on_startup_off_restores_without_syncing()
 -> Result<(), Box<dyn std::error::Error>> {

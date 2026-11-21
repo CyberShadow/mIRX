@@ -6,7 +6,7 @@
 //!
 //! Go to Original (double-click a quote line, or the message menu) scrolls
 //! to the message a reply quotes, paging older room history until it is
-//! loaded.
+//! loaded. Ctrl+L's scroll back to the line marker is the same event jump.
 //!
 //! Pure code: which relation quotes which event, the one-line excerpt of
 //! the quoted line, which messages the user can edit, and the next step of
@@ -129,10 +129,12 @@ pub(super) fn compose_text_for_edit(message: &RoomMessageActivity) -> String {
     }
 }
 
-/// What an event jump is for.
+/// What an event jump is for: Go to Original, or Ctrl+L's scroll back to
+/// the line marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum JumpPurpose {
     Original,
+    LineMarker,
 }
 
 impl JumpPurpose {
@@ -140,18 +142,21 @@ impl JumpPurpose {
     pub(super) fn finding_status(self) -> &'static str {
         match self {
             Self::Original => "finding the original message...",
+            Self::LineMarker => "finding the line marker...",
         }
     }
 
     pub(super) fn found_status(self) -> &'static str {
         match self {
             Self::Original => "original message found",
+            Self::LineMarker => "line marker found",
         }
     }
 
     pub(super) fn not_found_status(self) -> &'static str {
         match self {
             Self::Original => "* the original message is not in this room's history",
+            Self::LineMarker => "* the line marker is not in this room's history",
         }
     }
 }

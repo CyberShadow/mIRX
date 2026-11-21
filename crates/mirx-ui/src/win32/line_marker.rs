@@ -88,6 +88,38 @@ pub(super) unsafe fn window_activated(hwnd: HWND, view_id: &ViewId) {
     }
 }
 
+/// What Ctrl+L says in a window without a line marker.
+const NO_LINE_MARKER_STATUS: &str = "* this window has no line marker";
+
+/// Ctrl+L: scrolls the active room window back to its line marker, loading
+/// older history until the marked line is there, as mIRC's "Scrolls back
+/// text in a window to the Line Marker". It scrolls to the marked line even
+/// where no rule is drawn.
+pub(super) unsafe fn go_to_line_marker(hwnd: HWND) -> Result<(), String> {
+    let state = state_ref(hwnd);
+    let view_id = state.active_view.clone();
+    let target_event_id = match &view_id {
+        ViewId::Room(room_id) => state
+            .model
+            .room_read_states
+            .get(room_id)
+            .and_then(|read_state| read_state.fully_read_event_id.clone()),
+        // Matrix keeps one read marker per room, for its room window.
+        ViewId::Status | ViewId::Thread { .. } | ViewId::RoomList => None,
+    };
+    let Some(target_event_id) = target_event_id else {
+        return set_local_command_status(hwnd, NO_LINE_MARKER_STATUS.to_owned());
+    };
+    start_event_jump(
+        hwnd,
+        replies::EventJump {
+            view_id,
+            target_event_id,
+            purpose: replies::JumpPurpose::LineMarker,
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_fixtures::*;
@@ -242,6 +274,125 @@ mod tests {
                 state_mut(hwnd).model.connection = ConnectionState::SignedIn;
                 activate_view(hwnd, &ViewId::Status, None).unwrap();
                 assert_eq!(read_marker_moves(state_ref(hwnd)), moved_to("$m39"));
+            });
+        }
+    }
+
+    /// The kind of the timeline's top line, and the event of its row.
+    unsafe fn top_line(timeline: HWND) -> (TimelineRowKind, Option<String>) {
+        let state = timeline_state_ref(timeline);
+        let line = &state.paint_lines[state.top_line];
+        let row = &state.source_rows[line.source_row_index.unwrap()];
+        (row.kind.clone(), row.event_id.clone())
+    }
+
+    fn backfill_requests(state: &WindowState) -> usize {
+        state
+            .recorded_commands
+            .iter()
+            .filter(|command| matches!(command, Command::BackfillRoomHistory(_)))
+            .count()
+    }
+
+    #[test]
+    fn ctrl_l_scrolls_the_marker_to_the_top_without_selecting() {
+        unsafe {
+            with_marker_frame(Some("$m1"), |hwnd| {
+                let timeline = ops_timeline(hwnd);
+                assert_ne!(top_line(timeline).0, TimelineRowKind::LineMarker);
+                go_to_line_marker(hwnd).unwrap();
+                assert_eq!(top_line(timeline), (TimelineRowKind::LineMarker, None));
+                assert_eq!(state_ref(hwnd).model.status, "line marker found");
+                assert_eq!(state_ref(hwnd).selected_timeline_event, None);
+                assert_eq!(state_ref(hwnd).pending_jump, None);
+                assert_eq!(backfill_requests(state_ref(hwnd)), 0);
+            });
+        }
+    }
+
+    #[test]
+    fn ctrl_l_scrolls_to_the_marked_line_where_no_rule_is_drawn() {
+        unsafe {
+            with_marker_frame(Some("$m1"), |hwnd| {
+                state_mut(hwnd)
+                    .settings
+                    .update(|settings| settings.marker.show = false)
+                    .unwrap();
+                sync_views_and_tree(hwnd).unwrap();
+                let timeline = ops_timeline(hwnd);
+                go_to_line_marker(hwnd).unwrap();
+                assert_eq!(top_line(timeline).1.as_deref(), Some("$m1"));
+                assert_eq!(state_ref(hwnd).model.status, "line marker found");
+            });
+            // The last line: as low as the end allows.
+            with_marker_frame(Some("$m39"), |hwnd| {
+                let timeline = ops_timeline(hwnd);
+                SendMessageW(timeline, WM_VSCROLL, SB_TOP as WPARAM, 0);
+                go_to_line_marker(hwnd).unwrap();
+                let state = timeline_state_ref(timeline);
+                assert_eq!(
+                    state.top_line,
+                    timeline_max_top_line(state.paint_lines.len(), timeline_visible_rows(timeline))
+                );
+                assert_eq!(state_ref(hwnd).model.status, "line marker found");
+            });
+        }
+    }
+
+    #[test]
+    fn ctrl_l_pages_history_until_the_marked_line_arrives() {
+        unsafe {
+            with_marker_frame(Some("$old"), |hwnd| {
+                go_to_line_marker(hwnd).unwrap();
+                assert_eq!(backfill_requests(state_ref(hwnd)), 1);
+                assert_eq!(state_ref(hwnd).model.status, "finding the line marker...");
+                let old = match timeline_with_transaction_id(
+                    "!ops:example",
+                    "$old",
+                    None,
+                    "the old line",
+                    1_699_999_000_000,
+                ) {
+                    Event::RoomActivity(activity) => RoomHistoryBackfillEvent::Activity(activity),
+                    _ => unreachable!("a timeline event is an activity"),
+                };
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![room_history_backfill("!ops:example", Some("t1"), vec![old])],
+                )
+                .unwrap();
+                let timeline = ops_timeline(hwnd);
+                assert_eq!(top_line(timeline), (TimelineRowKind::LineMarker, None));
+                assert_eq!(state_ref(hwnd).model.status, "line marker found");
+            });
+            with_marker_frame(Some("$old"), |hwnd| {
+                go_to_line_marker(hwnd).unwrap();
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![room_history_backfill("!ops:example", None, vec![])],
+                )
+                .unwrap();
+                assert_eq!(state_ref(hwnd).pending_jump, None);
+                assert_eq!(
+                    state_ref(hwnd).model.status,
+                    "* the line marker is not in this room's history"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn ctrl_l_without_a_marker_says_so() {
+        unsafe {
+            with_marker_frame(None, |hwnd| {
+                go_to_line_marker(hwnd).unwrap();
+                assert_eq!(state_ref(hwnd).model.status, NO_LINE_MARKER_STATUS);
+            });
+            with_marker_frame(Some("$m1"), |hwnd| {
+                activate_view(hwnd, &ViewId::Status, None).unwrap();
+                go_to_line_marker(hwnd).unwrap();
+                assert_eq!(state_ref(hwnd).model.status, NO_LINE_MARKER_STATUS);
+                assert_eq!(state_ref(hwnd).pending_jump, None);
             });
         }
     }
