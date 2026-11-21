@@ -93,6 +93,7 @@ pub(super) struct Settings {
     pub(super) logging: LoggingSetting,
     pub(super) tray: TraySetting,
     pub(super) tips: TipsSetting,
+    pub(super) other: OtherSetting,
     /// mIRC's Tools > Colors.
     pub(super) colors: ColorScheme,
 }
@@ -386,6 +387,52 @@ impl Default for TipsSetting {
     }
 }
 
+/// mIRC's Options > Other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct OtherSetting {
+    pub(super) window_buffer: WindowBuffer,
+}
+
+impl Default for OtherSetting {
+    fn default() -> Self {
+        Self {
+            window_buffer: WindowBuffer::new(5000)
+                .expect("the default window buffer must be valid"),
+        }
+    }
+}
+
+/// mIRC's Window buffer: how many lines a window keeps, 100-50000.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct WindowBuffer(u16);
+
+impl WindowBuffer {
+    const LINES: std::ops::RangeInclusive<u16> = 100..=50000;
+
+    pub(super) fn new(lines: u16) -> Result<Self, String> {
+        if Self::LINES.contains(&lines) {
+            Ok(Self(lines))
+        } else {
+            Err(WINDOW_BUFFER_ERROR.to_owned())
+        }
+    }
+}
+
+impl std::fmt::Display for WindowBuffer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+const WINDOW_BUFFER_ERROR: &str = "buffer must be 100-50000";
+
+/// Parses a window buffer: `buffer must be 100-50000` for anything else.
+pub(super) fn parse_window_buffer(text: &str) -> Result<WindowBuffer, String> {
+    text.parse::<u16>()
+        .map_err(|_| WINDOW_BUFFER_ERROR.to_owned())
+        .and_then(WindowBuffer::new)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Fonts,
@@ -396,6 +443,7 @@ enum Section {
     Logging,
     Tray,
     Tips,
+    Other,
     Colors,
 }
 
@@ -423,6 +471,7 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                 "logging" => Section::Logging,
                 "tray" => Section::Tray,
                 "tips" => Section::Tips,
+                "other" => Section::Other,
                 "colors" => Section::Colors,
                 _ => return Err(error(format!("unknown section [{name}]"))),
             });
@@ -519,6 +568,10 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Tips, "channels") => {
                 settings.tips.channels = parse_on_off(value, "channels").map_err(error)?;
             }
+            (Section::Other, "buffer") => {
+                settings.other.window_buffer =
+                    parse_window_buffer(value.trim_end()).map_err(error)?;
+            }
             (Section::Colors, key) if let Some(item) = ColorItem::from_ini_key(key) => {
                 settings
                     .colors
@@ -585,6 +638,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
          [logging]\r\nchannels={}\r\nqueries={}\r\nstrip={}\r\ntimestamp={}\r\n\
          [tray]\r\nalways={}\r\nstartup={}\r\nminimize={}\r\nsingle_click={}\r\n\
          [tips]\r\nhighlights={}\r\nqueries={}\r\nchannels={}\r\n\
+         [other]\r\nbuffer={}\r\n\
          [colors]\r\n{colors}",
         font.face,
         font.points,
@@ -612,6 +666,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         on_off(tips.highlights),
         on_off(tips.queries),
         on_off(tips.channels),
+        settings.other.window_buffer,
     )
 }
 
@@ -692,6 +747,7 @@ mod tests {
         [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
         [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
         [tips]\r\nhighlights=on\r\nqueries=on\r\nchannels=off\r\n\
+        [other]\r\nbuffer=5000\r\n\
         [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\ninvite=3\r\n\
         join=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\nnotice=5\r\nother=6\r\nown=1\r\n\
         part=3\r\ntopic=3\r\neditbox=0\r\neditbox_text=1\r\nlistbox=0\r\nlistbox_text=1\r\n\
@@ -854,7 +910,7 @@ mod tests {
             ..Settings::default()
         };
         let text = to_ini(&settings);
-        assert!(text.contains("[tips]\r\nhighlights=off\r\nqueries=on\r\nchannels=on\r\n[colors]"));
+        assert!(text.contains("[tips]\r\nhighlights=off\r\nqueries=on\r\nchannels=on\r\n[other]"));
         assert_eq!(parse_ini(&text), Ok(settings));
         assert_eq!(
             parse_ini("[tips]\nqueries=off").map(|settings| settings.tips),
@@ -866,6 +922,33 @@ mod tests {
         for (text, error) in [
             ("[tips]\nchannels=1", "line 2: channels must be on or off"),
             ("[tips]\nqueue=5", "line 2: unknown key queue"),
+        ] {
+            assert_eq!(parse_ini(text), Err(error.to_owned()), "{text}");
+        }
+    }
+
+    #[test]
+    fn other_settings_round_trip() {
+        let settings = Settings {
+            other: OtherSetting {
+                window_buffer: WindowBuffer::new(100).unwrap(),
+            },
+            ..Settings::default()
+        };
+        let text = to_ini(&settings);
+        assert!(text.contains("channels=off\r\n[other]\r\nbuffer=100\r\n[colors]"));
+        assert_eq!(parse_ini(&text), Ok(settings));
+        assert_eq!(
+            parse_ini("[Other]\nBuffer=50000").map(|settings| settings.other.window_buffer),
+            WindowBuffer::new(50000)
+        );
+        for (text, error) in [
+            ("[other]\nbuffer=99", "line 2: buffer must be 100-50000"),
+            ("[other]\nbuffer=50001", "line 2: buffer must be 100-50000"),
+            ("[other]\nbuffer=70000", "line 2: buffer must be 100-50000"),
+            ("[other]\nbuffer=lots", "line 2: buffer must be 100-50000"),
+            ("[other]\nbuffer=", "line 2: buffer must be 100-50000"),
+            ("[other]\nprefix=/", "line 2: unknown key prefix"),
         ] {
             assert_eq!(parse_ini(text), Err(error.to_owned()), "{text}");
         }

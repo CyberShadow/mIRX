@@ -6820,6 +6820,7 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
          [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
          [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
          [tips]\r\nhighlights=on\r\nqueries=on\r\nchannels=off\r\n\
+         [other]\r\nbuffer=5000\r\n\
          [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\n\
          invite=3\r\njoin=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\n\
          notice=5\r\nother=6\r\nown=1\r\npart=3\r\ntopic=3\r\neditbox=0\r\n\
@@ -15784,6 +15785,7 @@ const OPTIONS_TIPS_HIGHLIGHTS_ID: i32 = 6701;
 const OPTIONS_TIPS_QUERIES_ID: i32 = 6702;
 const OPTIONS_TIPS_CHANNELS_ID: i32 = 6703;
 const OPTIONS_TIPS_NOTE_ID: i32 = 6704;
+const OPTIONS_WINDOW_BUFFER_ID: i32 = 6801;
 
 /// Waits for the Options dialog to be open and shown, and returns it.
 fn wait_for_options_dialog(app: &MirxApp) -> Result<HWND, Box<dyn std::error::Error>> {
@@ -15848,7 +15850,8 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
             "IRC/Logging",
             "Display",
             "Display/Tray",
-            "Display/Tips"
+            "Display/Tips",
+            "Other"
         ]
     );
     assert_eq!(options.selected, "Connect/Options");
@@ -15889,12 +15892,25 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
         "[HH:nn]"
     );
 
+    app.select_options_page("Other")?;
+    let options = app
+        .dump_ui_state()?
+        .options_dialog
+        .expect("the dialog is open");
+    assert_eq!(options.selected, "Other");
+    assert_eq!(options.visible_controls, [OPTIONS_WINDOW_BUFFER_ID as u16]);
+    assert_eq!(
+        unsafe { read_window_text(GetDlgItem(dialog, OPTIONS_WINDOW_BUFFER_ID)) },
+        "5000"
+    );
+
     // Controls on hidden pages take their values too.
     unsafe {
         set_options_check(dialog, OPTIONS_CONNECT_ON_STARTUP_ID, false);
         set_options_check(dialog, OPTIONS_TIMESTAMP_SHOW_ID, false);
         set_options_text(dialog, OPTIONS_TIMESTAMP_FORMAT_ID, "[HH:nn:ss]");
         set_options_text(dialog, OPTIONS_SWITCHBAR_BUTTONS_ID, "90");
+        set_options_text(dialog, OPTIONS_WINDOW_BUFFER_ID, "20000");
     }
     post_options_command(dialog, IDOK)?;
     wait_for_window_gone(dialog, "Options dialog")?;
@@ -15925,6 +15941,7 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
         "[timestamp]\r\nshow=off\r\nformat=[HH:nn:ss]\r\n",
         "[connect]\r\nstartup=off\r\n",
         "buttons=90\r\n",
+        "[other]\r\nbuffer=20000\r\n",
     ] {
         assert!(ini.contains(line), "{line:?} in {ini:?}");
     }

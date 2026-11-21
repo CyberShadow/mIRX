@@ -91,6 +91,7 @@ pub(super) const OPTIONS_TIPS_HIGHLIGHTS_ID: u16 = 6701;
 pub(super) const OPTIONS_TIPS_QUERIES_ID: u16 = 6702;
 pub(super) const OPTIONS_TIPS_CHANNELS_ID: u16 = 6703;
 pub(super) const OPTIONS_TIPS_NOTE_ID: u16 = 6704;
+pub(super) const OPTIONS_WINDOW_BUFFER_ID: u16 = 6801;
 const LISTBOX_CLASS_NAME: &str = "LISTBOX";
 const HIGHLIGHT_NOTE: &str = "Words are matched as whole words; * and ? are wildcards. \
 Highlight words are kept on your Matrix server and shared with your other clients.";
@@ -105,6 +106,8 @@ const PAGE_WIDTH: i32 = 320;
 const TIMESTAMP_FORMAT_WIDTH: i32 = 120;
 /// A number field: up to four digits.
 const NUMBER_FIELD_WIDTH: i32 = 40;
+/// The window buffer's field: up to five digits.
+const WINDOW_BUFFER_FIELD_WIDTH: i32 = 48;
 const HIGHLIGHT_LIST_HEIGHT: i32 = 130;
 /// A colour drop-down's item: a numbered palette box, as tall as the
 /// closed drop-down is with an edit field's height.
@@ -138,6 +141,7 @@ struct Fields {
     tips_highlights: HWND,
     tips_queries: HWND,
     tips_channels: HWND,
+    window_buffer: HWND,
 }
 
 impl Fields {
@@ -170,6 +174,7 @@ impl Fields {
                 queries: checked(self.tips_queries),
                 channels: checked(self.tips_channels),
             },
+            window_buffer: read_window_text(self.window_buffer),
         }
     }
 
@@ -191,6 +196,7 @@ impl Fields {
             OptionsField::RetryDelay => self.retry_delay,
             OptionsField::TimestampFormat => self.timestamp_format,
             OptionsField::SwitchbarButtons => self.switchbar_buttons,
+            OptionsField::WindowBuffer => self.window_buffer,
         }
     }
 }
@@ -277,6 +283,7 @@ impl OptionsDialog {
                 tips_highlights: null_mut(),
                 tips_queries: null_mut(),
                 tips_channels: null_mut(),
+                window_buffer: null_mut(),
             },
             saved: None,
         }));
@@ -798,6 +805,32 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             .push((OptionsPage::DisplayTips, control));
     }
 
+    // mIRC's Options > Other: its Window buffer row.
+    let (buffer_label, buffer_label_width) =
+        label_beside_field("Window buffer:", PAGE_X, page_top)?;
+    let buffer_x = PAGE_X + buffer_label_width + DIALOG_GAP;
+    state.fields.window_buffer = place(
+        control(
+            EDIT_CLASS_NAME,
+            "",
+            DIALOG_EDIT_STYLE | ES_NUMBER as u32,
+            DIALOG_EDIT_EX_STYLE,
+            OPTIONS_WINDOW_BUFFER_ID,
+        )?,
+        buffer_x,
+        page_top,
+        WINDOW_BUFFER_FIELD_WIDTH,
+        DIALOG_EDIT_HEIGHT,
+    );
+    let (lines_label, _) = label_beside_field(
+        "lines (100-50000)",
+        buffer_x + WINDOW_BUFFER_FIELD_WIDTH + DIALOG_GAP,
+        page_top,
+    )?;
+    for control in [buffer_label, state.fields.window_buffer, lines_label] {
+        state.page_controls.push((OptionsPage::Other, control));
+    }
+
     // OK is `IDOK` and Cancel `IDCANCEL`: what `IsDialogMessageW` sends
     // for Enter and Esc. They sit a margin under the tree and every page,
     // right-aligned with the pages.
@@ -857,6 +890,7 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     grey_retry_rows(&state.fields);
     set_window_text(state.fields.timestamp_format, &form.timestamp_format);
     set_window_text(state.fields.switchbar_buttons, &form.switchbar_buttons);
+    set_window_text(state.fields.window_buffer, &form.window_buffer);
     let ActivityColors {
         event,
         message,

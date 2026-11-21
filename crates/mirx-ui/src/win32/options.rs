@@ -8,7 +8,7 @@ use mirx_core::{HighlightWord, validate_highlight_word};
 
 use super::settings::{
     ActivityColors, LoggingSetting, Settings, TipsSetting, TraySetting, parse_button_width,
-    parse_retry_delay, parse_retry_times,
+    parse_retry_delay, parse_retry_times, parse_window_buffer,
 };
 use super::timestamp::TimestampFormat;
 
@@ -21,10 +21,11 @@ pub(super) enum OptionsPage {
     Display,
     DisplayTray,
     DisplayTips,
+    Other,
 }
 
 use OptionsPage::{
-    ConnectOptions, Display, DisplayTips, DisplayTray, IrcHighlight, IrcLogging, IrcMessages,
+    ConnectOptions, Display, DisplayTips, DisplayTray, IrcHighlight, IrcLogging, IrcMessages, Other,
 };
 
 /// The tree, in order: (label, depth, page). A category without a page of
@@ -39,6 +40,7 @@ pub(super) const OPTIONS_TREE: &[(&str, u8, OptionsPage)] = &[
     ("Display", 0, Display),
     ("Tray", 1, DisplayTray),
     ("Tips", 1, DisplayTips),
+    ("Other", 0, Other),
 ];
 
 /// The page the dialog opens on.
@@ -81,6 +83,7 @@ pub(super) enum OptionsField {
     RetryDelay,
     TimestampFormat,
     SwitchbarButtons,
+    WindowBuffer,
 }
 
 impl OptionsField {
@@ -89,6 +92,7 @@ impl OptionsField {
             Self::RetryTimes | Self::RetryDelay => ConnectOptions,
             Self::TimestampFormat => IrcMessages,
             Self::SwitchbarButtons => Display,
+            Self::WindowBuffer => Other,
         }
     }
 }
@@ -118,6 +122,7 @@ pub(super) struct OptionsForm {
     pub(super) tray: TraySetting,
     /// Checkboxes, so never wrong.
     pub(super) tips: TipsSetting,
+    pub(super) window_buffer: String,
 }
 
 impl OptionsForm {
@@ -135,6 +140,7 @@ impl OptionsForm {
             logging: settings.logging,
             tray: settings.tray,
             tips: settings.tips,
+            window_buffer: settings.other.window_buffer.to_string(),
         }
     }
 
@@ -158,6 +164,9 @@ impl OptionsForm {
                 format!("Switchbar {reason}"),
             )
         })?;
+        let window_buffer = parse_window_buffer(&self.window_buffer).map_err(|reason| {
+            error(OptionsField::WindowBuffer, format!("Window {reason} lines"))
+        })?;
         let mut settings = current.clone();
         settings.connect.on_startup = self.connect_on_startup;
         settings.connect.reconnect = self.reconnect;
@@ -171,6 +180,7 @@ impl OptionsForm {
         settings.logging = self.logging;
         settings.tray = self.tray;
         settings.tips = self.tips;
+        settings.other.window_buffer = window_buffer;
         Ok(settings)
     }
 }
@@ -282,7 +292,7 @@ impl HighlightList {
 #[cfg(test)]
 mod tests {
     use super::super::colors::PaletteIndex;
-    use super::super::settings::{ButtonWidth, FontSetting, RetryDelay, RetryTimes};
+    use super::super::settings::{ButtonWidth, FontSetting, RetryDelay, RetryTimes, WindowBuffer};
     use super::*;
 
     fn custom_settings() -> Settings {
@@ -308,7 +318,8 @@ mod tests {
                 "IRC/Logging",
                 "Display",
                 "Display/Tray",
-                "Display/Tips"
+                "Display/Tips",
+                "Other"
             ]
         );
         assert_eq!(page_tree_index(ConnectOptions), 1);
@@ -319,12 +330,14 @@ mod tests {
         assert_eq!(page_tree_index(Display), 6);
         assert_eq!(page_tree_index(DisplayTray), 7);
         assert_eq!(page_tree_index(DisplayTips), 8);
+        assert_eq!(page_tree_index(Other), 9);
         assert_eq!(tree_index("Connect"), Some(0));
         assert_eq!(tree_index("IRC/Messages"), Some(3));
         assert_eq!(tree_index("IRC/Logging"), Some(5));
         assert_eq!(tree_index("Display"), Some(6));
         assert_eq!(tree_index("Display/Tray"), Some(7));
         assert_eq!(tree_index("Display/Tips"), Some(8));
+        assert_eq!(tree_index("Other"), Some(9));
         for path in ["", "IRC/", "Messages", "irc/messages", "IRC > Messages"] {
             assert_eq!(tree_index(path), None, "{path:?}");
         }
@@ -334,6 +347,7 @@ mod tests {
             OptionsField::RetryDelay,
             OptionsField::TimestampFormat,
             OptionsField::SwitchbarButtons,
+            OptionsField::WindowBuffer,
         ] {
             assert!(
                 OPTIONS_TREE
@@ -404,6 +418,13 @@ mod tests {
         );
 
         let mut expected = current.clone();
+        expected.other.window_buffer = WindowBuffer::new(100).unwrap();
+        assert_eq!(
+            applied(|form| form.window_buffer = "100".to_owned()),
+            expected
+        );
+
+        let mut expected = current.clone();
         expected.switchbar.activity.message = PaletteIndex::new(9).unwrap();
         assert_eq!(
             applied(|form| form.activity_colors.message = PaletteIndex::new(9).unwrap()),
@@ -460,7 +481,26 @@ mod tests {
             );
         }
 
+        let mut form = OptionsForm::from_settings(&current);
+        for lines in ["99", "50001", "many", ""] {
+            form.window_buffer = lines.to_owned();
+            assert_eq!(
+                form.apply(&current),
+                Err(OptionsError {
+                    field: OptionsField::WindowBuffer,
+                    message: "Window buffer must be 100-50000 lines".to_owned(),
+                }),
+                "{lines:?}"
+            );
+        }
+        assert_eq!(OptionsField::WindowBuffer.page(), Other);
+
         // The first wrong field in tree order is the one reported.
+        form.switchbar_buttons = "0".to_owned();
+        assert_eq!(
+            form.apply(&current).unwrap_err().field,
+            OptionsField::SwitchbarButtons
+        );
         form.timestamp_format.clear();
         assert_eq!(
             form.apply(&current).unwrap_err().field,
