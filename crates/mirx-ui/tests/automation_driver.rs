@@ -15071,6 +15071,7 @@ fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
             &[
                 ("Set Up E2EE &Recovery...", true),
                 ("Recover &E2EE...", true),
+                ("Rese&t E2EE Identity...", true),
                 ("&Verify This Session", true),
                 ("Sess&ions", true),
                 ("&Accept Verification", false),
