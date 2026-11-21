@@ -1092,6 +1092,7 @@ pub(super) fn operation_name(operation: Operation) -> &'static str {
         Operation::SendReaction => "send reaction",
         Operation::RedactEvent => "redact event",
         Operation::MarkRoomRead => "mark room read",
+        Operation::SetReadMarker => "set read marker",
         Operation::BackfillRoomHistory => "backfill room history",
         Operation::FetchRoomMedia => "fetch room image media",
         Operation::FetchRoomEvent => "fetch message",

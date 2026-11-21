@@ -72,7 +72,14 @@ pub enum Command {
     EditMessage(EditMessageRequest),
     SendReaction(SendReactionRequest),
     RedactEvent(RedactEventRequest),
+    /// Sends the room's public read receipt (`m.read`), which clears its
+    /// unread counts. It leaves the read marker alone. Answered only by an
+    /// error.
     MarkRoomRead(MarkRoomReadRequest),
+    /// Moves the room's read marker (`m.fully_read`), which the user's
+    /// other clients show as their "new messages" line. Its new place comes
+    /// back as `RoomReadState` with the next sync; a failure is an error.
+    SetReadMarker(SetReadMarkerRequest),
     BackfillRoomHistory(BackfillRoomHistoryRequest),
     FetchRoomMedia(FetchRoomMediaRequest),
     FetchRoomEvent(FetchRoomEventRequest),
@@ -445,6 +452,13 @@ pub fn validate_highlight_word(word: &str) -> Result<(), String> {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MarkRoomReadRequest {
+    pub room_id: String,
+    pub event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetReadMarkerRequest {
     pub room_id: String,
     pub event_id: String,
 }
@@ -1998,6 +2012,7 @@ pub enum Operation {
     SendReaction,
     RedactEvent,
     MarkRoomRead,
+    SetReadMarker,
     BackfillRoomHistory,
     FetchRoomMedia,
     FetchRoomEvent,

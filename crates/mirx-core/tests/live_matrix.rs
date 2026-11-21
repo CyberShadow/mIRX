@@ -18,10 +18,10 @@ use matrix_sdk::{
 };
 use mirx_core::{
     Command, CoreConfig, CoreHandle, CreateDirectRoomRequest, EditMessageRequest, Event,
-    FetchRoomMediaRequest, LoginMethod, LoginRequest, MarkRoomReadRequest, RedactEventRequest,
-    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMessagePresentationKind, RoomSummary,
-    SendFileRequest, SendMessageRequest, SendReactionRequest, SetRoomTopicRequest, StoredSession,
-    start,
+    FetchRoomMediaRequest, LoginMethod, LoginRequest, RedactEventRequest, RoomMediaFormat,
+    RoomMediaKind, RoomMediaSource, RoomMessagePresentationKind, RoomSummary, SendFileRequest,
+    SendMessageRequest, SendReactionRequest, SetReadMarkerRequest, SetRoomTopicRequest,
+    StoredSession, start,
 };
 use tempfile::TempDir;
 
@@ -564,7 +564,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
 }
 
 #[test]
-fn live_matrix_mark_room_read_updates_fully_read_marker_is_env_gated() {
+fn live_matrix_set_read_marker_updates_fully_read_marker_is_env_gated() {
     let Some(env) = live_matrix_env_with_room() else {
         return;
     };
@@ -603,17 +603,17 @@ fn live_matrix_mark_room_read_updates_fully_read_marker_is_env_gated() {
 
     handle
         .command_sender()
-        .send(Command::MarkRoomRead(MarkRoomReadRequest {
+        .send(Command::SetReadMarker(SetReadMarkerRequest {
             room_id: env.room_id.clone(),
             event_id: event_id.to_string(),
         }))
-        .expect("send mark room read");
+        .expect("send set read marker");
     handle
         .command_sender()
         .send(Command::Logout)
         .expect("send logout");
 
-    wait_for_live_logged_out(&handle, "live mark room read");
+    wait_for_live_logged_out(&handle, "live set read marker");
 
     let fully_read_event_id = runtime
         .block_on(live_get_fully_read_marker(&fixture_client, &room))

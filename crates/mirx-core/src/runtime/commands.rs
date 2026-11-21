@@ -24,8 +24,9 @@ use crate::api::{
     RedactEventRequest, RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
     ResetE2eeIdentityRequest, RestoreSessionRequest, RetryDecryptionRequest, RoomJoined,
     SendFileRequest, SendMessageRequest, SendReactionRequest, SetDisplayNameRequest,
-    SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
-    SetupE2eeRecoveryRequest, SignOutDeviceRequest, UnbanRoomMemberRequest, VerificationFlowId,
+    SetReadMarkerRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
+    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SignOutDeviceRequest, UnbanRoomMemberRequest,
+    VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode};
 
@@ -225,6 +226,15 @@ pub(super) fn route(command: Command) -> Route {
                 "mark room read requires an authenticated session",
             ),
             |ctx| mark_room_read(ctx, request),
+        ),
+        Command::SetReadMarker(request) => lane(
+            Lane::Receipts(request.room_id.clone()),
+            Refusal::room(
+                Op::SetReadMarker,
+                &request.room_id,
+                "set read marker requires an authenticated session",
+            ),
+            |ctx| set_read_marker(ctx, request),
         ),
 
         Command::SetDisplayName(request) => lane(
@@ -806,6 +816,15 @@ async fn mark_room_read(ctx: JobCtx, request: MarkRoomReadRequest) -> Followup {
     let JobCtx { client, events, .. } = &ctx;
     if let Err(err) = matrix::mark_room_read(client, &request).await {
         emit_room_matrix_error(events, Operation::MarkRoomRead, &request.room_id, err);
+    }
+
+    Followup::Done
+}
+
+async fn set_read_marker(ctx: JobCtx, request: SetReadMarkerRequest) -> Followup {
+    let JobCtx { client, events, .. } = &ctx;
+    if let Err(err) = matrix::set_read_marker(client, &request).await {
+        emit_room_matrix_error(events, Operation::SetReadMarker, &request.room_id, err);
     }
 
     Followup::Done

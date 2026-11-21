@@ -145,7 +145,7 @@ use crate::api::{
     RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
     RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
-    SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
+    SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
     SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
     UnsupportedRoomMessageActivity, UserDevices, UserIdentityState, UserProfile,
@@ -4976,31 +4976,31 @@ pub(crate) async fn redact_event(
     Ok(())
 }
 
+/// Sends the public read receipt (`m.read`): the user has seen the room up
+/// to this event, which clears its unread counts. The read marker
+/// (`m.fully_read`) is `set_read_marker`'s.
 pub(crate) async fn mark_room_read(
     client: &Client,
     request: &MarkRoomReadRequest,
 ) -> Result<(), MatrixCoreError> {
-    let room_id = <&RoomId>::try_from(request.room_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
-    let event_id = <&EventId>::try_from(request.event_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))?
-        .to_owned();
+    let event_id = owned_event_id_from_str(&request.event_id)?;
+    joined_room_by_id(client, &request.room_id)?
+        .send_multiple_receipts(Receipts::new().public_read_receipt(event_id))
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix read receipt: {err}")))
+}
 
-    let room = client
-        .joined_rooms()
-        .into_iter()
-        .find(|room| room.room_id().as_str() == room_id.as_str())
-        .ok_or_else(|| MatrixCoreError::new(format!("joined room not found: {room_id}")))?;
-
-    room.send_multiple_receipts(
-        Receipts::new()
-            .fully_read_marker(event_id.clone())
-            .public_read_receipt(event_id),
-    )
-    .await
-    .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix read receipts: {err}")))?;
-
-    Ok(())
+/// Moves the room's read marker (`m.fully_read`, shared with the user's
+/// other clients) to this event: the user has read everything up to it.
+pub(crate) async fn set_read_marker(
+    client: &Client,
+    request: &SetReadMarkerRequest,
+) -> Result<(), MatrixCoreError> {
+    let event_id = owned_event_id_from_str(&request.event_id)?;
+    joined_room_by_id(client, &request.room_id)?
+        .send_multiple_receipts(Receipts::new().fully_read_marker(event_id))
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to set Matrix read marker: {err}")))
 }
 
 pub(crate) async fn backfill_room_history(
@@ -5470,6 +5470,7 @@ mod tests {
         sorted_room_member_summaries_from_parts, summarize_rooms, sync_message_replacement,
         unban_room_member, unignore_user,
     };
+    use super::{MarkRoomReadRequest, SetReadMarkerRequest, mark_room_read, set_read_marker};
     use crate::api::{
         CreateRoomRequest, CreateRoomVisibility, HighlightWord, ListPublicRoomsRequest, PublicRoom,
         PublicRoomsPage, PublicRoomsResult, RoomNotificationMode, RoomSummary, SendFileRequest,
@@ -5760,6 +5761,104 @@ mod tests {
                     .filter(|request| request.url.path().ends_with("/kick"))
                     .count(),
                 1
+            );
+        });
+    }
+
+    /// The bodies of every `read_markers` request the mock server got.
+    async fn read_markers_bodies(mock_server: &MatrixMockServer) -> Vec<serde_json::Value> {
+        mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled")
+            .iter()
+            .filter(|request| request.url.path().ends_with("/read_markers"))
+            .map(|request| {
+                assert_eq!(
+                    request.url.path(),
+                    "/_matrix/client/v3/rooms/!room:example.org/read_markers"
+                );
+                request.body_json().expect("read_markers JSON body")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn mark_room_read_sends_only_the_public_read_receipt() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_joined_room(&client, room_id().as_ref())
+                .await;
+            mock_server.mock_send_read_markers().ok().mount().await;
+
+            mark_room_read(
+                &client,
+                &MarkRoomReadRequest {
+                    room_id: "!room:example.org".to_owned(),
+                    event_id: "$read:example.org".to_owned(),
+                },
+            )
+            .await
+            .expect("mark room read");
+
+            // Exactly this body: the receipt moves, the read marker
+            // (`m.fully_read`) stays where the user left it.
+            assert_eq!(
+                read_markers_bodies(&mock_server).await,
+                vec![serde_json::json!({ "m.read": "$read:example.org" })]
+            );
+        });
+    }
+
+    #[test]
+    fn set_read_marker_sends_only_the_read_marker() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_joined_room(&client, room_id().as_ref())
+                .await;
+            mock_server.mock_send_read_markers().ok().mount().await;
+
+            set_read_marker(
+                &client,
+                &SetReadMarkerRequest {
+                    room_id: "!room:example.org".to_owned(),
+                    event_id: "$marker:example.org".to_owned(),
+                },
+            )
+            .await
+            .expect("set read marker");
+
+            assert_eq!(
+                read_markers_bodies(&mock_server).await,
+                vec![serde_json::json!({ "m.fully_read": "$marker:example.org" })]
+            );
+
+            let not_joined = set_read_marker(
+                &client,
+                &SetReadMarkerRequest {
+                    room_id: "!other:example.org".to_owned(),
+                    event_id: "$marker:example.org".to_owned(),
+                },
+            )
+            .await
+            .expect_err("not a joined room");
+            assert_eq!(
+                not_joined.to_string(),
+                "joined room not found: !other:example.org"
             );
         });
     }

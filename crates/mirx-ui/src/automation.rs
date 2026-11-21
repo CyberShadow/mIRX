@@ -2570,6 +2570,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::SendReaction => "send_reaction",
         Operation::RedactEvent => "redact_event",
         Operation::MarkRoomRead => "mark_room_read",
+        Operation::SetReadMarker => "set_read_marker",
         Operation::BackfillRoomHistory => "backfill_room_history",
         Operation::FetchRoomMedia => "fetch_room_media",
         Operation::FetchRoomEvent => "fetch_room_event",

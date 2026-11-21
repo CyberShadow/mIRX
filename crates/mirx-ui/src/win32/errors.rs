@@ -68,6 +68,7 @@ pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> 
         | Operation::RemoveHighlightWord
         | Operation::IgnoredUsers
         | Operation::MarkRoomRead
+        | Operation::SetReadMarker
         | Operation::RetryDecryption
         | Operation::BackfillRoomHistory
         | Operation::FetchRoomMedia
@@ -170,6 +171,7 @@ mod tests {
         }
         for operation in [
             Operation::MarkRoomRead,
+            Operation::SetReadMarker,
             Operation::RetryDecryption,
             Operation::BackfillRoomHistory,
             Operation::FetchRoomMedia,

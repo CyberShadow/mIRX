@@ -21,12 +21,12 @@ use mirx_core::{
     RoomMessageSendState, RoomNotificationMode, RoomReadState, RoomRedactedActivity,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
     RoomUserProfile, SendFileRequest, SendMessageRequest, SendReactionRequest, SessionAuth,
-    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
-    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SignOutDeviceRequest, SpaceChildSummary,
-    StoredSession, SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity,
-    UserDevices, UserIdentityState, UserProfile, VerificationDecimals, VerificationDirection,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start, validate_highlight_word,
+    SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,
+    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
+    SignOutDeviceRequest, SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
+    UnsupportedRoomMessageActivity, UserDevices, UserIdentityState, UserProfile,
+    VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start, validate_highlight_word,
 };
 use tempfile::TempDir;
 
@@ -140,6 +140,7 @@ fn error_room_id(command: &Command) -> Option<&str> {
         Command::SendReaction(request) => Some(&request.room_id),
         Command::RedactEvent(request) => Some(&request.room_id),
         Command::MarkRoomRead(request) => Some(&request.room_id),
+        Command::SetReadMarker(request) => Some(&request.room_id),
         Command::BackfillRoomHistory(request) => Some(&request.room_id),
         Command::FetchRoomMedia(request) => Some(&request.room_id),
         Command::FetchRoomEvent(request) => Some(&request.room_id),
@@ -381,6 +382,13 @@ fn invalid_command_ordering_emits_typed_error_events() {
         .expect("send mark room read");
     handle
         .command_sender()
+        .send(Command::SetReadMarker(SetReadMarkerRequest {
+            room_id: "!room:example.org".to_owned(),
+            event_id: "$event:example.org".to_owned(),
+        }))
+        .expect("send set read marker");
+    handle
+        .command_sender()
         .send(Command::CreateDirectRoom(CreateDirectRoomRequest {
             user_id: "@alice:example.org".to_owned(),
         }))
@@ -394,6 +402,7 @@ fn invalid_command_ordering_emits_typed_error_events() {
     let stop_sync_error = next_answer(&handle, "stop sync error");
     let send_message_error = next_answer(&handle, "send message error");
     let mark_room_read_error = next_answer(&handle, "mark room read error");
+    let set_read_marker_error = next_answer(&handle, "set read marker error");
     let create_direct_room_error = next_answer(&handle, "create direct room error");
     let logout_error = next_answer(&handle, "logout error");
 
@@ -421,6 +430,17 @@ fn invalid_command_ordering_emits_typed_error_events() {
             );
         }
         other => panic!("expected mark room read error, got {other:?}"),
+    }
+    match set_read_marker_error {
+        Event::Error(err) => {
+            assert_eq!(err.operation, Operation::SetReadMarker);
+            assert_eq!(err.room_id.as_deref(), Some("!room:example.org"));
+            assert_eq!(
+                err.message,
+                "set read marker requires an authenticated session"
+            );
+        }
+        other => panic!("expected set read marker error, got {other:?}"),
     }
     match create_direct_room_error {
         Event::Error(err) => {
@@ -3457,6 +3477,13 @@ fn room_activity_dtos_reject_unknown_fields() {
         )
         .is_err(),
         "mark room read request must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<SetReadMarkerRequest>(
+            r#"{"room_id":"!ops:example.org","event_id":"$event:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "set read marker request must reject unknown fields"
     );
 
     assert!(
