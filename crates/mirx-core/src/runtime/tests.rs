@@ -1,12 +1,10 @@
-use std::collections::HashMap;
 use std::sync::mpsc::{self, TryRecvError};
 use std::time::Duration;
 
 use tokio::sync::mpsc::unbounded_channel;
 
-use super::core::{WorkerState, handle_command, run_worker, shutdown_state};
-use super::lifecycle::{handle_login, handle_restore_session, handle_start_sync, handle_stop_sync};
-use super::{AccountLists, EventSender, InitialSnapshot, RoomSnapshot};
+use super::core::Core;
+use super::{AccountLists, EventSender, RoomSnapshot, RoomSnapshots};
 use crate::api::CoreConfig;
 use crate::api::{
     AcceptRoomInviteRequest, BanRoomMemberRequest, Command, CreateDirectRoomRequest,
@@ -19,7 +17,6 @@ use crate::api::{
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
     RoomMessagePresentationKind, SendMessageRequest,
 };
-use crate::matrix::PausedSendRooms;
 use matrix_sdk::{
     ruma::{
         OwnedEventId, OwnedRoomId,
@@ -79,23 +76,9 @@ fn joined_member_state() -> Vec<Raw<AnySyncStateEvent>> {
     .collect()
 }
 
-fn ready_state(client: matrix_sdk::Client) -> WorkerState {
-    WorkerState::Ready {
-        client,
-        initial_snapshot: InitialSnapshot::pending(false),
-        paused_sends: PausedSendRooms::default(),
-        sync_task: None,
-        room_list_update_task: tokio::task::spawn_local(async {}),
-        room_read_state_update_task: tokio::task::spawn_local(async {}),
-        e2ee_recovery_state_task: tokio::task::spawn_local(async {}),
-        e2ee_backup_state_task: tokio::task::spawn_local(async {}),
-        e2ee_session_state_task: tokio::task::spawn_local(async {}),
-        room_identity_task: tokio::task::spawn_local(async {}),
-        session_update_task: tokio::task::spawn_local(async {}),
-        send_queue_update_task: tokio::task::spawn_local(async {}),
-        verification_tasks: HashMap::new(),
-        identity_reset: None,
-    }
+/// Runs `command` on `core` until its ack.
+async fn run(core: &mut Core, command: Command) {
+    assert!(core.run_until_idle(command).await.is_continue());
 }
 
 async fn assert_ready_moderation_success(command: Command, path: &str, mock_ban: bool) {
@@ -120,17 +103,11 @@ async fn assert_ready_moderation_success(command: Command, path: &str, mock_ban:
     }
 
     let (event_tx, event_rx) = mpsc::channel::<Event>();
-    let mut state = ready_state(client);
-    let config = CoreConfig {
-        profile_dir: std::env::temp_dir().join("mirx-core-runtime-test"),
-        store_passphrase: "test-store-passphrase".to_owned(),
-    };
-    assert!(!handle_command(command, &config, &event_tx, &mut state).await);
+    let mut core = Core::for_client(client, event_tx.clone());
+    run(&mut core, command).await;
 
-    match event_rx
-        .recv_timeout(Duration::from_secs(2))
-        .expect("authoritative room members snapshot")
-    {
+    let mut answers = drain_events(&event_rx).into_iter();
+    match answers.next().expect("authoritative room members snapshot") {
         Event::RoomMembers(snapshot) => {
             assert_eq!(snapshot.room_id, "!room:example.org");
             assert!(
@@ -142,7 +119,7 @@ async fn assert_ready_moderation_success(command: Command, path: &str, mock_ban:
         }
         other => panic!("expected room members snapshot, got {other:?}"),
     }
-    assert_eq!(event_rx.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(answers.next(), None);
     assert_eq!(
         mock_server
             .received_requests()
@@ -153,7 +130,7 @@ async fn assert_ready_moderation_success(command: Command, path: &str, mock_ban:
             .count(),
         1
     );
-    shutdown_state(&mut state).await;
+    core.stop().await;
 }
 
 #[test]
@@ -214,21 +191,15 @@ async fn assert_ready_moderation_rejection(command: Command, operation: Operatio
     );
 
     let (event_tx, event_rx) = mpsc::channel::<Event>();
-    let mut state = ready_state(client);
-    let config = CoreConfig {
-        profile_dir: std::env::temp_dir().join("mirx-core-runtime-test"),
-        store_passphrase: "test-store-passphrase".to_owned(),
-    };
-    assert!(!handle_command(command, &config, &event_tx, &mut state).await);
+    let mut core = Core::for_client(client, event_tx.clone());
+    run(&mut core, command).await;
 
-    match event_rx
-        .recv_timeout(Duration::from_secs(2))
-        .expect("moderation rejection")
-    {
+    let mut answers = drain_events(&event_rx).into_iter();
+    match answers.next().expect("moderation rejection") {
         Event::Error(error) => assert_eq!(error.operation, operation),
         other => panic!("expected moderation error, got {other:?}"),
     }
-    assert_eq!(event_rx.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(answers.next(), None);
     assert_eq!(
         mock_server
             .received_requests()
@@ -246,7 +217,7 @@ async fn assert_ready_moderation_rejection(command: Command, operation: Operatio
             .iter()
             .any(|member| member.user_id().as_str() == "@target:example.org")
     );
-    shutdown_state(&mut state).await;
+    core.stop().await;
 }
 
 #[test]
@@ -327,8 +298,8 @@ async fn assert_join_emits_snapshot_then_room_joined(
         .mount()
         .await;
     let (event_tx, event_rx) = mpsc::channel::<Event>();
-    let mut state = ready_state(client);
-    assert!(!handle_command(command, &test_config(), &event_tx, &mut state).await);
+    let mut core = Core::for_client(client, event_tx.clone());
+    run(&mut core, command).await;
 
     let events = drain_events(&event_rx);
     match events.as_slice() {
@@ -347,7 +318,7 @@ async fn assert_join_emits_snapshot_then_room_joined(
         other => panic!("expected SyncedRooms then RoomJoined, got {other:?}"),
     }
     mock_server.server().verify().await;
-    shutdown_state(&mut state).await;
+    core.stop().await;
 }
 
 #[test]
@@ -407,12 +378,12 @@ fn join_room_rejects_an_invalid_via_server_without_a_request() {
         let mock_server = MatrixMockServer::new().await;
         let client = mock_server.client_builder().build().await;
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = ready_state(client);
+        let mut core = Core::for_client(client, event_tx.clone());
         let command = Command::JoinRoom(JoinRoomRequest {
             room_or_alias: "!ops:other.example".to_owned(),
             via: vec!["not a server".to_owned()],
         });
-        assert!(!handle_command(command, &test_config(), &event_tx, &mut state).await);
+        run(&mut core, command).await;
 
         match drain_events(&event_rx).as_slice() {
             [Event::Error(error)] => {
@@ -434,7 +405,7 @@ fn join_room_rejects_an_invalid_via_server_without_a_request() {
                 .expect("request recording enabled")
                 .is_empty()
         );
-        shutdown_state(&mut state).await;
+        core.stop().await;
     });
 }
 
@@ -453,12 +424,12 @@ fn failed_join_room_emits_the_error_and_no_room_joined() {
             .mount(mock_server.server())
             .await;
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = ready_state(client);
+        let mut core = Core::for_client(client, event_tx.clone());
         let command = Command::JoinRoom(JoinRoomRequest {
             room_or_alias: "#gone:example.org".to_owned(),
             via: Vec::new(),
         });
-        assert!(!handle_command(command, &test_config(), &event_tx, &mut state).await);
+        run(&mut core, command).await;
 
         match drain_events(&event_rx).as_slice() {
             [Event::Error(error)] => {
@@ -468,7 +439,7 @@ fn failed_join_room_emits_the_error_and_no_room_joined() {
             }
             other => panic!("expected one join error, got {other:?}"),
         }
-        shutdown_state(&mut state).await;
+        core.stop().await;
     });
 }
 
@@ -489,13 +460,13 @@ fn kick_failure_error_carries_the_room() {
             .mount(mock_server.server())
             .await;
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = ready_state(client);
+        let mut core = Core::for_client(client, event_tx.clone());
         let command = Command::KickRoomMember(KickRoomMemberRequest {
             room_id: room_id().to_string(),
             user_id: "@bob:example.org".to_owned(),
             reason: None,
         });
-        assert!(!handle_command(command, &test_config(), &event_tx, &mut state).await);
+        run(&mut core, command).await;
 
         match drain_events(&event_rx).as_slice() {
             [Event::Error(error)] => {
@@ -505,7 +476,7 @@ fn kick_failure_error_carries_the_room() {
             }
             other => panic!("expected one kick error, got {other:?}"),
         }
-        shutdown_state(&mut state).await;
+        core.stop().await;
     });
 }
 
@@ -644,63 +615,21 @@ fn duplicate_start_sync_emits_typed_error_event() {
             .build()
             .await
             .expect("build matrix client");
-        let existing_task = tokio::task::spawn_local(std::future::pending::<()>());
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = WorkerState::Ready {
-            client,
-            initial_snapshot: InitialSnapshot::pending(false),
-            paused_sends: PausedSendRooms::default(),
-            sync_task: Some(existing_task),
-            room_list_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            room_read_state_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            e2ee_recovery_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            e2ee_backup_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            e2ee_session_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            room_identity_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            session_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            send_queue_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            verification_tasks: HashMap::new(),
-            identity_reset: None,
-        };
+        let mut core = Core::for_client(client, event_tx.clone());
 
-        assert!(!handle_start_sync(&event_tx as &EventSender, &mut state));
+        run(&mut core, Command::StartSync).await;
+        // The first sync task has not run yet: it still syncs.
+        run(&mut core, Command::StartSync).await;
 
-        match event_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("duplicate sync error")
-        {
-            Event::Error(err) => {
+        match drain_events(&event_rx).as_slice() {
+            [Event::SyncStarted, Event::Error(err)] => {
                 assert_eq!(err.operation, Operation::StartSync);
                 assert_eq!(err.message, "continuous sync is already running");
             }
             other => panic!("expected duplicate sync error, got {other:?}"),
         }
-
-        if let WorkerState::Ready {
-            sync_task,
-            room_list_update_task,
-            room_read_state_update_task,
-            e2ee_recovery_state_task,
-            e2ee_backup_state_task,
-            e2ee_session_state_task,
-            room_identity_task,
-            session_update_task,
-            send_queue_update_task,
-            ..
-        } = &mut state
-        {
-            if let Some(task) = sync_task.take() {
-                task.abort();
-            }
-            room_list_update_task.abort();
-            room_read_state_update_task.abort();
-            e2ee_recovery_state_task.abort();
-            e2ee_backup_state_task.abort();
-            e2ee_session_state_task.abort();
-            room_identity_task.abort();
-            session_update_task.abort();
-            send_queue_update_task.abort();
-        }
+        core.stop().await;
     });
 }
 
@@ -744,7 +673,9 @@ fn initial_room_members_and_read_states_follow_joined_synced_rooms() {
         ),
     ];
 
+    let snapshots = RoomSnapshots::default();
     RoomSnapshot {
+        start: snapshots.start(),
         rooms: rooms.clone(),
         room_members: room_members.clone(),
         room_read_states: read_states.clone(),
@@ -756,7 +687,7 @@ fn initial_room_members_and_read_states_follow_joined_synced_rooms() {
             ignored_users: Ok(vec!["@spam:example.org".to_owned()]),
         },
     }
-    .emit(&event_tx as &EventSender);
+    .emit(&snapshots, &event_tx as &EventSender);
 
     assert_eq!(
         event_rx
@@ -828,33 +759,22 @@ fn shutdown_state_drops_every_task_inside_the_runtime() {
             .await
             .expect("build matrix client");
         let guard = NeedsRuntimeOnDrop(dropped.clone());
-        let verification_task = tokio::task::spawn_local(async move {
-            let _guard = guard;
-            std::future::pending::<()>().await
-        });
-        let mut state = WorkerState::Ready {
-            client,
-            initial_snapshot: InitialSnapshot::pending(false),
-            paused_sends: PausedSendRooms::default(),
-            sync_task: None,
-            room_list_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            room_read_state_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            e2ee_recovery_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            e2ee_backup_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            e2ee_session_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            room_identity_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            session_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            send_queue_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
-            verification_tasks: HashMap::from([(
-                ("@alice:example.org".to_owned(), "txn-123".to_owned()),
-                verification_task,
-            )]),
-            identity_reset: None,
+        let (event_tx, _event_rx) = mpsc::channel::<Event>();
+        let mut core = Core::for_client(client, event_tx);
+        let flow = crate::api::VerificationFlowId {
+            user_id: "@alice:example.org".to_owned(),
+            flow_id: "txn-123".to_owned(),
         };
+        core.session().watch(
+            &flow,
+            Box::pin(async move {
+                let _guard = guard;
+                std::future::pending::<()>().await
+            }),
+        );
 
-        shutdown_state(&mut state).await;
+        core.stop().await;
 
-        assert!(matches!(state, WorkerState::NoClient));
         assert!(dropped.get(), "the task is gone when shutdown returns");
     });
     drop(local);
@@ -877,7 +797,7 @@ fn worker_stops_when_command_channel_closes() {
         };
 
         drop(command_tx);
-        run_worker(config, command_rx, event_tx).await;
+        Core::new(config, event_tx).run(command_rx).await;
 
         assert_eq!(
             event_rx
@@ -910,16 +830,22 @@ async fn offline_client() -> matrix_sdk::Client {
         .expect("build matrix client")
 }
 
+/// The answers emitted so far. These tests are about what commands
+/// answer; the integration tests pin their acks, which this skips.
 fn drain_events(event_rx: &mpsc::Receiver<Event>) -> Vec<Event> {
-    event_rx.try_iter().collect()
+    event_rx
+        .try_iter()
+        .filter(|event| *event != Event::CommandHandled)
+        .collect()
 }
 
-/// Waits for the next event while letting the `LocalSet`'s tasks run;
-/// a blocking `recv_timeout` would starve the sync task.
+/// Waits for the next answer (not an ack) while letting the `LocalSet`'s
+/// tasks run; a blocking `recv_timeout` would starve the sync task.
 async fn next_event(event_rx: &mpsc::Receiver<Event>) -> Event {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         match event_rx.try_recv() {
+            Ok(Event::CommandHandled) => {}
             Ok(event) => return event,
             Err(TryRecvError::Empty) => {
                 assert!(
@@ -931,13 +857,6 @@ async fn next_event(event_rx: &mpsc::Receiver<Event>) -> Event {
             Err(TryRecvError::Disconnected) => panic!("event channel closed"),
         }
     }
-}
-
-fn sync_task_is_none(state: &WorkerState) -> bool {
-    let WorkerState::Ready { sync_task, .. } = state else {
-        panic!("expected a ready worker");
-    };
-    sync_task.is_none()
 }
 
 fn assert_stop_sync_error(event_rx: &mpsc::Receiver<Event>, message: &str) {
@@ -954,20 +873,18 @@ fn assert_stop_sync_error(event_rx: &mpsc::Receiver<Event>, message: &str) {
 fn stop_sync_aborts_running_sync_and_emits_sync_stopped() {
     run_local(async {
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = ready_state(offline_client().await);
-        let WorkerState::Ready { sync_task, .. } = &mut state else {
-            unreachable!();
-        };
-        *sync_task = Some(tokio::task::spawn_local(std::future::pending::<()>()));
+        let mut core = Core::for_client(offline_client().await, event_tx.clone());
+        run(&mut core, Command::StartSync).await;
+        assert_eq!(drain_events(&event_rx), vec![Event::SyncStarted]);
 
-        assert!(!handle_stop_sync(&event_tx, &mut state));
+        run(&mut core, Command::StopSync).await;
 
         assert_eq!(
             drain_events(&event_rx),
             vec![Event::SyncStopped(SyncStopReason::Requested)]
         );
-        assert!(sync_task_is_none(&state));
-        shutdown_state(&mut state).await;
+        assert!(!core.session().sync_running());
+        core.stop().await;
     });
 }
 
@@ -975,45 +892,51 @@ fn stop_sync_aborts_running_sync_and_emits_sync_stopped() {
 fn stop_sync_without_running_sync_emits_typed_error() {
     run_local(async {
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = ready_state(offline_client().await);
+        let client =
+            matrix_sdk::test_utils::client::MockClientBuilder::new(Some(&closed_port_url()))
+                .build()
+                .await;
+        let mut core = Core::for_client(client, event_tx.clone());
 
-        assert!(!handle_stop_sync(&event_tx, &mut state));
+        run(&mut core, Command::StopSync).await;
         assert_stop_sync_error(&event_rx, "sync is not running");
 
-        let finished = tokio::task::spawn_local(async {});
-        while !finished.is_finished() {
-            tokio::task::yield_now().await;
-        }
-        let WorkerState::Ready { sync_task, .. } = &mut state else {
-            unreachable!();
-        };
-        *sync_task = Some(finished);
+        // A sync that ended by itself.
+        run(&mut core, Command::StartSync).await;
+        assert_eq!(next_event(&event_rx).await, Event::SyncStarted);
+        assert!(matches!(
+            next_event(&event_rx).await,
+            Event::SyncStopped(SyncStopReason::Lost(_))
+        ));
 
-        assert!(!handle_stop_sync(&event_tx, &mut state));
+        run(&mut core, Command::StopSync).await;
         assert_stop_sync_error(&event_rx, "sync is not running");
-        shutdown_state(&mut state).await;
+        core.stop().await;
     });
 }
 
 #[test]
 fn stop_sync_without_session_emits_invalid_state() {
-    let (event_tx, event_rx) = mpsc::channel::<Event>();
-    let mut state = WorkerState::NoClient;
+    run_local(async {
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut core = Core::new(test_config(), event_tx);
 
-    assert!(!handle_stop_sync(&event_tx, &mut state));
+        run(&mut core, Command::StopSync).await;
 
-    assert_stop_sync_error(&event_rx, "stop sync requires an authenticated session");
+        assert_stop_sync_error(&event_rx, "stop sync requires an authenticated session");
+        core.stop().await;
+    });
 }
 
 #[test]
 fn start_sync_after_stop_sync_restarts() {
     run_local(async {
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = ready_state(offline_client().await);
+        let mut core = Core::for_client(offline_client().await, event_tx.clone());
 
-        assert!(!handle_start_sync(&event_tx, &mut state));
-        assert!(!handle_stop_sync(&event_tx, &mut state));
-        assert!(!handle_start_sync(&event_tx, &mut state));
+        run(&mut core, Command::StartSync).await;
+        run(&mut core, Command::StopSync).await;
+        run(&mut core, Command::StartSync).await;
 
         assert_eq!(
             drain_events(&event_rx),
@@ -1023,8 +946,8 @@ fn start_sync_after_stop_sync_restarts() {
                 Event::SyncStarted,
             ]
         );
-        assert!(!sync_task_is_none(&state));
-        shutdown_state(&mut state).await;
+        assert!(core.session().sync_running());
+        core.stop().await;
     });
 }
 
@@ -1040,9 +963,9 @@ fn sync_with_an_unknown_token_stops_with_session_ended() {
             .mount()
             .await;
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = ready_state(client);
+        let mut core = Core::for_client(client, event_tx.clone());
 
-        assert!(!handle_start_sync(&event_tx, &mut state));
+        run(&mut core, Command::StartSync).await;
 
         assert_eq!(next_event(&event_rx).await, Event::SyncStarted);
         match next_event(&event_rx).await {
@@ -1052,7 +975,7 @@ fn sync_with_an_unknown_token_stops_with_session_ended() {
             other => panic!("expected a session-ended sync stop, got {other:?}"),
         }
         assert_eq!(drain_events(&event_rx), Vec::new());
-        shutdown_state(&mut state).await;
+        core.stop().await;
     });
 }
 
@@ -1064,9 +987,9 @@ fn sync_without_a_server_stops_with_lost_and_never_connects() {
                 .build()
                 .await;
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = ready_state(client);
+        let mut core = Core::for_client(client, event_tx.clone());
 
-        assert!(!handle_start_sync(&event_tx, &mut state));
+        run(&mut core, Command::StartSync).await;
 
         assert_eq!(next_event(&event_rx).await, Event::SyncStarted);
         match next_event(&event_rx).await {
@@ -1076,7 +999,7 @@ fn sync_without_a_server_stops_with_lost_and_never_connects() {
             other => panic!("expected a lost sync stop, got {other:?}"),
         }
         assert_eq!(drain_events(&event_rx), Vec::new());
-        shutdown_state(&mut state).await;
+        core.stop().await;
     });
 }
 
@@ -1097,9 +1020,9 @@ fn sync_with_another_server_error_stops_with_lost() {
             .mount()
             .await;
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = ready_state(client);
+        let mut core = Core::for_client(client, event_tx.clone());
 
-        assert!(!handle_start_sync(&event_tx, &mut state));
+        run(&mut core, Command::StartSync).await;
 
         assert_eq!(next_event(&event_rx).await, Event::SyncStarted);
         match next_event(&event_rx).await {
@@ -1109,7 +1032,7 @@ fn sync_with_another_server_error_stops_with_lost() {
             other => panic!("expected a lost sync stop, got {other:?}"),
         }
         assert_eq!(drain_events(&event_rx), Vec::new());
-        shutdown_state(&mut state).await;
+        core.stop().await;
     });
 }
 
@@ -1120,15 +1043,15 @@ fn sync_announces_the_first_response_once() {
         let client = mock_server.client_builder().build().await;
         mock_server.mock_sync().ok(|_| {}).mount().await;
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = ready_state(client);
+        let mut core = Core::for_client(client, event_tx.clone());
 
-        assert!(!handle_start_sync(&event_tx, &mut state));
+        run(&mut core, Command::StartSync).await;
 
         assert_eq!(next_event(&event_rx).await, Event::SyncStarted);
         assert_eq!(next_event(&event_rx).await, Event::SyncConnected);
         wait_for_sync_requests(&mock_server, 3).await;
         assert_eq!(drain_events(&event_rx), Vec::new());
-        shutdown_state(&mut state).await;
+        core.stop().await;
     });
 }
 
@@ -1189,26 +1112,22 @@ async fn mock_login_server() -> MatrixMockServer {
 async fn login_events(
     mock_server: &MatrixMockServer,
     start_sync: bool,
-) -> (tempfile::TempDir, WorkerState, Vec<Event>) {
+) -> (tempfile::TempDir, Core, Vec<Event>) {
     let profile = tempfile::TempDir::new().expect("temporary profile directory");
     let config = CoreConfig {
         profile_dir: profile.path().join("profile"),
         store_passphrase: "test-store-passphrase".to_owned(),
     };
     let (event_tx, event_rx) = mpsc::channel::<Event>();
-    let mut state = WorkerState::NoClient;
+    let mut core = Core::new(config.clone(), event_tx.clone());
 
-    assert!(
-        !handle_login(
-            &config,
-            &event_tx,
-            &mut state,
-            login_request(mock_server, start_sync)
-        )
-        .await
-    );
+    run(
+        &mut core,
+        Command::Login(login_request(mock_server, start_sync)),
+    )
+    .await;
 
-    (profile, state, drain_events(&event_rx))
+    (profile, core, drain_events(&event_rx))
 }
 
 fn event_position(events: &[Event], matches: impl Fn(&Event) -> bool) -> Option<usize> {
@@ -1219,7 +1138,7 @@ fn event_position(events: &[Event], matches: impl Fn(&Event) -> bool) -> Option<
 fn login_with_start_sync_emits_logged_in_with_resolved_homeserver_then_sync_started() {
     run_local(async {
         let mock_server = mock_login_server().await;
-        let (_profile, mut state, events) = login_events(&mock_server, true).await;
+        let (_profile, mut core, events) = login_events(&mock_server, true).await;
 
         // The SDK normalises the discovered URL with a trailing slash.
         let resolved = format!("{}/", mock_server.uri());
@@ -1245,8 +1164,8 @@ fn login_with_start_sync_emits_logged_in_with_resolved_homeserver_then_sync_star
             Some(&Event::HighlightWords(Vec::new())),
             "{events:?}"
         );
-        assert!(!sync_task_is_none(&state));
-        shutdown_state(&mut state).await;
+        assert!(core.session().sync_running());
+        core.stop().await;
     });
 }
 
@@ -1262,16 +1181,8 @@ fn a_session_that_starts_online_gets_its_rooms_once() {
             store_passphrase: "test-store-passphrase".to_owned(),
         };
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = WorkerState::NoClient;
-        assert!(
-            !handle_login(
-                &config,
-                &event_tx,
-                &mut state,
-                login_request(&mock_server, true)
-            )
-            .await
-        );
+        let mut core = Core::new(config.clone(), event_tx.clone());
+        run(&mut core, Command::Login(login_request(&mock_server, true))).await;
 
         let events = settled_events(&event_rx).await;
         let snapshot_events = |events: &[Event]| {
@@ -1287,7 +1198,7 @@ fn a_session_that_starts_online_gets_its_rooms_once() {
             sync_started.is_some() && sync_started < sync_connected,
             "{events:?}"
         );
-        shutdown_state(&mut state).await;
+        core.stop().await;
     });
 }
 
@@ -1295,7 +1206,7 @@ fn a_session_that_starts_online_gets_its_rooms_once() {
 fn login_without_start_sync_leaves_sync_idle() {
     run_local(async {
         let mock_server = mock_login_server().await;
-        let (_profile, mut state, events) = login_events(&mock_server, false).await;
+        let (_profile, mut core, events) = login_events(&mock_server, false).await;
 
         assert!(
             events
@@ -1304,8 +1215,8 @@ fn login_without_start_sync_leaves_sync_idle() {
             "{events:?}"
         );
         assert!(!events.contains(&Event::SyncStarted), "{events:?}");
-        assert!(sync_task_is_none(&state));
-        shutdown_state(&mut state).await;
+        assert!(!core.session().sync_running());
+        core.stop().await;
     });
 }
 
@@ -1391,16 +1302,8 @@ fn a_session_that_starts_offline_gets_its_rooms_at_the_first_sync_that_connects(
             store_passphrase: "test-store-passphrase".to_owned(),
         };
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = WorkerState::NoClient;
-        assert!(
-            !handle_login(
-                &config,
-                &event_tx,
-                &mut state,
-                login_request(&mock_server, true)
-            )
-            .await
-        );
+        let mut core = Core::new(config.clone(), event_tx.clone());
+        run(&mut core, Command::Login(login_request(&mock_server, true))).await;
         let events = settled_events(&event_rx).await;
         assert!(
             events.iter().any(|event| matches!(
@@ -1435,7 +1338,7 @@ fn a_session_that_starts_offline_gets_its_rooms_at_the_first_sync_that_connects(
             })
             .mount()
             .await;
-        assert!(!handle_start_sync(&event_tx, &mut state));
+        run(&mut core, Command::StartSync).await;
         let events = settled_events(&event_rx).await;
         let position = |name: &str, matches: &dyn Fn(&Event) -> bool| {
             event_position(&events, matches).unwrap_or_else(|| panic!("{name} in {events:?}"))
@@ -1465,8 +1368,8 @@ fn a_session_that_starts_offline_gets_its_rooms_at_the_first_sync_that_connects(
             "{events:?}"
         );
 
-        assert!(!handle_stop_sync(&event_tx, &mut state));
-        assert!(!handle_start_sync(&event_tx, &mut state));
+        run(&mut core, Command::StopSync).await;
+        run(&mut core, Command::StartSync).await;
         let events = settled_events(&event_rx).await;
         assert!(events.contains(&Event::SyncConnected), "{events:?}");
         assert!(
@@ -1475,7 +1378,7 @@ fn a_session_that_starts_offline_gets_its_rooms_at_the_first_sync_that_connects(
                 .any(|event| matches!(event, Event::HighlightWords(_) | Event::IgnoredUsers(_))),
             "{events:?}"
         );
-        shutdown_state(&mut state).await;
+        core.stop().await;
     });
 }
 
@@ -1485,7 +1388,7 @@ async fn session_in_a_room(
     mock_server: &MatrixMockServer,
     config: &CoreConfig,
     event_tx: &EventSender,
-) -> WorkerState {
+) -> Core {
     mock_server.mock_versions().ok().mount().await;
     mock_server.mock_login().ok().mount().await;
     mock_server
@@ -1510,17 +1413,9 @@ async fn session_in_a_room(
         })
         .mount()
         .await;
-    let mut state = WorkerState::NoClient;
-    assert!(
-        !handle_login(
-            config,
-            event_tx,
-            &mut state,
-            login_request(mock_server, false)
-        )
-        .await
-    );
-    state
+    let mut core = Core::new(config.clone(), event_tx.clone());
+    run(&mut core, Command::Login(login_request(mock_server, false))).await;
+    core
 }
 
 fn send_line(body: &str) -> Command {
@@ -1589,7 +1484,7 @@ fn a_send_the_network_stopped_goes_after_the_next_sync_response() {
             store_passphrase: "test-store-passphrase".to_owned(),
         };
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = session_in_a_room(&mock_server, &config, &event_tx).await;
+        let mut core = session_in_a_room(&mock_server, &config, &event_tx).await;
         // The session's own events, the E2EE status's included.
         settled_events(&event_rx).await;
         let unavailable = mock_server
@@ -1598,7 +1493,7 @@ fn a_send_the_network_stopped_goes_after_the_next_sync_response() {
             .mount_as_scoped()
             .await;
 
-        assert!(!handle_command(send_line("hello"), &config, &event_tx, &mut state).await);
+        run(&mut core, send_line("hello")).await;
         let events = events_until(&event_rx, |event| {
             matches!(
                 message_update(event),
@@ -1633,7 +1528,7 @@ fn a_send_the_network_stopped_goes_after_the_next_sync_response() {
             "{events:?}"
         );
 
-        assert!(!handle_start_sync(&event_tx, &mut state));
+        run(&mut core, Command::StartSync).await;
         let events = events_until(&event_rx, |event| message_update(event).is_some()).await;
         assert_eq!(
             message_update(events.last().expect("the send")),
@@ -1645,7 +1540,7 @@ fn a_send_the_network_stopped_goes_after_the_next_sync_response() {
             )),
             "{events:?}"
         );
-        shutdown_state(&mut state).await;
+        core.stop().await;
     });
 }
 
@@ -1661,7 +1556,7 @@ fn a_refused_send_fails_and_the_next_line_goes() {
             store_passphrase: "test-store-passphrase".to_owned(),
         };
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = session_in_a_room(&mock_server, &config, &event_tx).await;
+        let mut core = session_in_a_room(&mock_server, &config, &event_tx).await;
         // The session's own events, the E2EE status's included.
         settled_events(&event_rx).await;
         let refused = mock_server
@@ -1672,7 +1567,7 @@ fn a_refused_send_fails_and_the_next_line_goes() {
             .mount_as_scoped()
             .await;
 
-        assert!(!handle_command(send_line("refused"), &config, &event_tx, &mut state).await);
+        run(&mut core, send_line("refused")).await;
         let events = events_until(&event_rx, |event| matches!(event, Event::Error(_))).await;
         let transaction_id = local_echo_transaction(&events, "refused");
         assert!(
@@ -1697,7 +1592,7 @@ fn a_refused_send_fails_and_the_next_line_goes() {
             .ok(OwnedEventId::try_from("$next:example.org").expect("valid event id"))
             .mount()
             .await;
-        assert!(!handle_command(send_line("next"), &config, &event_tx, &mut state).await);
+        run(&mut core, send_line("next")).await;
         let events = events_until(&event_rx, |event| {
             matches!(
                 message_update(event),
@@ -1716,7 +1611,7 @@ fn a_refused_send_fails_and_the_next_line_goes() {
             )),
             "{events:?}"
         );
-        shutdown_state(&mut state).await;
+        core.stop().await;
     });
 }
 
@@ -1762,16 +1657,12 @@ fn restore_reports_stored_unread_counts_without_new_events() {
             store_passphrase: "test-store-passphrase".to_owned(),
         };
         let (event_tx, event_rx) = mpsc::channel::<Event>();
-        let mut state = WorkerState::NoClient;
-        assert!(
-            !handle_login(
-                &config,
-                &event_tx,
-                &mut state,
-                login_request(&mock_server, false)
-            )
-            .await
-        );
+        let mut core = Core::new(config.clone(), event_tx.clone());
+        run(
+            &mut core,
+            Command::Login(login_request(&mock_server, false)),
+        )
+        .await;
         let events = settled_events(&event_rx).await;
         let stored = (*read_states_of(&events, room_id.as_str())
             .last()
@@ -1796,8 +1687,9 @@ fn restore_reports_stored_unread_counts_without_new_events() {
                 _ => None,
             })
             .expect("LoggedIn");
-        shutdown_state(&mut state).await;
+        core.stop().await;
         drop(first_sync);
+        let mut core = Core::new(config.clone(), event_tx.clone());
 
         mock_server
             .mock_sync()
@@ -1806,19 +1698,15 @@ fn restore_reports_stored_unread_counts_without_new_events() {
             })
             .mount()
             .await;
-        assert!(
-            !handle_restore_session(
-                &config,
-                &event_tx,
-                &mut state,
-                RestoreSessionRequest {
-                    homeserver_url,
-                    session,
-                    start_sync: false,
-                },
-            )
-            .await
-        );
+        run(
+            &mut core,
+            Command::RestoreSession(RestoreSessionRequest {
+                homeserver_url,
+                session,
+                start_sync: false,
+            }),
+        )
+        .await;
         let events = settled_events(&event_rx).await;
         let synced_rooms = event_position(&events, |event| matches!(event, Event::SyncedRooms(_)))
             .unwrap_or_else(|| panic!("SyncedRooms in {events:?}"));
@@ -1828,6 +1716,6 @@ fn restore_reports_stored_unread_counts_without_new_events() {
             restored.iter().all(|read_state| **read_state == stored),
             "{events:?}"
         );
-        shutdown_state(&mut state).await;
+        core.stop().await;
     });
 }

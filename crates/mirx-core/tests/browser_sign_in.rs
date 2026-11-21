@@ -255,6 +255,10 @@ fn a_restored_oauth_session_saves_its_refreshed_tokens() {
 
     restore(&harness, oauth_session("AT1", "RT1"));
 
+    // The refresh happened during the restore's sync; the session's update
+    // task reports it once the session has started, so it supersedes the
+    // tokens the UI saved before.
+    harness.wait_for("RestoredSession", |event| *event == Event::RestoredSession);
     assert_eq!(
         harness.wait_for("SessionUpdated", |event| matches!(
             event,
@@ -264,7 +268,6 @@ fn a_restored_oauth_session_saves_its_refreshed_tokens() {
             session: oauth_session("AT2", "RT2"),
         }
     );
-    harness.wait_for("RestoredSession", |event| *event == Event::RestoredSession);
     harness.shut_down();
 }
 

@@ -20,11 +20,16 @@ use crate::matrix::{self, MatrixCoreError};
 
 mod commands;
 mod core;
+mod jobs;
 mod lifecycle;
+mod session;
+mod snapshots;
 #[cfg(test)]
 mod tests;
 
-use self::core::run_worker;
+use self::core::Core;
+pub(crate) use self::snapshots::RoomSnapshots;
+use self::snapshots::SnapshotStart;
 
 pub(crate) type EventSender = mpsc::Sender<Event>;
 
@@ -148,7 +153,7 @@ pub fn start(config: CoreConfig) -> Result<CoreHandle, StartError> {
             }
 
             let local = LocalSet::new();
-            local.block_on(&runtime, run_worker(config, command_rx, event_tx));
+            local.block_on(&runtime, Core::new(config, event_tx).run(command_rx));
         })
         .map_err(StartError::ThreadSpawn)?;
 
@@ -188,6 +193,7 @@ impl AccountLists {
 /// every joined room's members and read state. Later changes come as they
 /// happen.
 pub(super) struct RoomSnapshot {
+    start: SnapshotStart,
     rooms: Vec<RoomSummary>,
     room_members: Vec<RoomMembers>,
     room_read_states: Vec<RoomReadState>,
@@ -196,8 +202,12 @@ pub(super) struct RoomSnapshot {
 
 impl RoomSnapshot {
     /// After a successful sync: the store has the rooms.
-    pub(super) async fn read(client: &Client) -> Result<Self, MatrixCoreError> {
+    pub(super) async fn read(
+        client: &Client,
+        snapshots: &RoomSnapshots,
+    ) -> Result<Self, MatrixCoreError> {
         Ok(Self {
+            start: snapshots.start(),
             rooms: matrix::summarize_rooms(client).await?,
             room_members: matrix::summarize_joined_room_members(client).await?,
             room_read_states: matrix::summarize_joined_room_read_states(client),
@@ -205,8 +215,10 @@ impl RoomSnapshot {
         })
     }
 
-    pub(super) fn emit(self, event_tx: &EventSender) {
+    /// Emits the snapshot; its room list only if no later one was emitted.
+    pub(super) fn emit(self, snapshots: &RoomSnapshots, event_tx: &EventSender) {
         let Self {
+            start,
             rooms,
             room_members,
             room_read_states,
@@ -218,7 +230,9 @@ impl RoomSnapshot {
             .map(|room| room.room_id.clone())
             .collect::<std::collections::HashSet<_>>();
 
-        emit_event(event_tx, Event::SyncedRooms(rooms));
+        if snapshots.supersede(start) {
+            emit_event(event_tx, Event::SyncedRooms(rooms));
+        }
         match account_lists.highlight_words {
             Ok(words) => emit_event(event_tx, Event::HighlightWords(words)),
             Err(err) => emit_matrix_error(event_tx, Operation::HighlightWords, err),
@@ -253,13 +267,18 @@ impl InitialSnapshot {
 
     /// At a sync task's first successful response: emits the snapshot if it
     /// is still to come. Failing to read it leaves it to the next task.
-    pub(crate) async fn emit_if_pending(&self, client: &Client, event_tx: &EventSender) {
+    pub(crate) async fn emit_if_pending(
+        &self,
+        client: &Client,
+        snapshots: &RoomSnapshots,
+        event_tx: &EventSender,
+    ) {
         if !self.0.get() {
             return;
         }
-        match RoomSnapshot::read(client).await {
+        match RoomSnapshot::read(client, snapshots).await {
             Ok(snapshot) => {
-                snapshot.emit(event_tx);
+                snapshot.emit(snapshots, event_tx);
                 self.0.set(false);
             }
             Err(err) => emit_matrix_error(event_tx, Operation::RoomList, err),
@@ -299,16 +318,6 @@ pub(super) fn emit_matrix_error(
     err: MatrixCoreError,
 ) {
     emit_error(event_tx, operation, None, err.to_string());
-}
-
-/// The refusal of a request about a room.
-pub(super) fn emit_room_invalid_state(
-    event_tx: &EventSender,
-    operation: Operation,
-    room_id: &str,
-    message: &str,
-) {
-    emit_error(event_tx, operation, Some(room_id), message.to_owned());
 }
 
 /// The failure of a request about a room.

@@ -6,10 +6,15 @@
 //! session (`L0ST`) the user no longer has; this session is `MIRX`. The
 //! mock server's crypto preset keeps the keys it is given.
 
+// Every test binary compiles this module and uses a part of it.
+#![allow(dead_code)]
+
 use std::time::{Duration, Instant};
 
+use matrix_sdk::ruma::serde::Raw;
 use matrix_sdk::ruma::{owned_device_id, owned_user_id};
 use matrix_sdk::test_utils::mocks::MatrixMockServer;
+use matrix_sdk_test::{JoinedRoomBuilder, SyncResponseBuilder};
 use mirx_core::{
     Command, CoreConfig, CoreHandle, Event, RestoreSessionRequest, SessionAuth, StoredSession,
     start,
@@ -17,7 +22,7 @@ use mirx_core::{
 use serde_json::json;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path_regex};
-use wiremock::{Mock, ResponseTemplate};
+use wiremock::{Mock, Request, ResponseTemplate};
 
 pub const EVENT_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -31,17 +36,40 @@ pub struct Harness {
 impl Harness {
     /// The core, restored into a password session.
     pub fn restored() -> Self {
-        Self::restored_with(SessionAuth::Matrix)
+        Self::restored_with(SessionAuth::Matrix, |_| {})
     }
 
     /// The same, signed in through OAuth 2.0.
     pub fn restored_oauth() -> Self {
-        Self::restored_with(SessionAuth::OAuth {
-            client_id: "restored-client".to_owned(),
+        Self::restored_with(
+            SessionAuth::OAuth {
+                client_id: "restored-client".to_owned(),
+            },
+            |_| {},
+        )
+    }
+
+    /// A password session joined to `rooms`, which are not encrypted and
+    /// have only alice in them. Every `/sync` answers with them, and with
+    /// `account_data` as the account's global account data.
+    pub fn restored_in_rooms(rooms: &[&str], account_data: &[serde_json::Value]) -> Self {
+        Self::restored_with(SessionAuth::Matrix, |sync| {
+            for room in rooms {
+                sync.add_joined_room(
+                    JoinedRoomBuilder::new(
+                        &matrix_sdk::ruma::OwnedRoomId::try_from(*room).expect("a room ID"),
+                    )
+                    .add_state_bulk([Raw::from_json_string(alice_member_event().to_string())
+                        .expect("a raw member event")]),
+                );
+            }
+            for event in account_data {
+                sync.add_custom_global_account_data(event.clone());
+            }
         })
     }
 
-    fn restored_with(auth: SessionAuth) -> Self {
+    fn restored_with(auth: SessionAuth, sync: impl FnOnce(&mut SyncResponseBuilder)) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -67,10 +95,24 @@ impl Harness {
             server
                 .mock_sync()
                 .expect_any_access_token()
-                .ok(|_| {})
+                .ok(sync)
                 .mount()
                 .await;
             mount_account_data_and_backups(&server).await;
+            server
+                .mock_room_state_encryption()
+                .expect_any_access_token()
+                .plain()
+                .mount()
+                .await;
+            Mock::given(method("GET"))
+                .and(path_regex(r"^/_matrix/client/v3/rooms/.*/members"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({ "chunk": [alice_member_event()] })),
+                )
+                .mount(server.server())
+                .await;
             (server, "TOKEN_1".to_owned())
         });
         let profile = TempDir::new().expect("temporary profile directory");
@@ -102,6 +144,7 @@ impl Harness {
         harness.wait_for("the session's E2EE status", |event| {
             matches!(event, Event::E2eeStatus(_))
         });
+        harness.wait_for("the restore's ack", |event| *event == Event::CommandHandled);
         harness
     }
 
@@ -141,13 +184,73 @@ impl Harness {
         self.runtime.block_on(mock.mount(self.server.server()));
     }
 
+    /// Mounts a mock that answers `method` requests to paths matching
+    /// `path` only after an hour: a request the server never answers in the
+    /// test's time.
+    pub fn hang(&self, method_name: &str, path: &str) {
+        self.mount(
+            Mock::given(method(method_name))
+                .and(path_regex(path))
+                .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(3600)))
+                .with_priority(1),
+        );
+    }
+
+    /// The requests the server got so far for `method` and paths that
+    /// contain `path`, in arrival order.
+    pub fn requests(&self, method_name: &str, path: &str) -> Vec<Request> {
+        self.runtime
+            .block_on(self.server.server().received_requests())
+            .expect("the mock server records requests")
+            .into_iter()
+            .filter(|request| {
+                (method_name.is_empty() || request.method.as_str() == method_name)
+                    && request.url.path().contains(path)
+            })
+            .collect()
+    }
+
+    /// Waits until the server got `count` requests for `method` and paths
+    /// that contain `path`, and returns them.
+    pub fn wait_for_requests(&self, method_name: &str, path: &str, count: usize) -> Vec<Request> {
+        let deadline = Instant::now() + EVENT_TIMEOUT;
+        loop {
+            let requests = self.requests(method_name, path);
+            if requests.len() >= count {
+                return requests;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "only {} of {count} {method_name} {path} requests",
+                requests.len()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     pub fn shut_down(self) {
         self.send(Command::Shutdown);
         self.wait_for("Stopped", |event| *event == Event::Stopped);
+        self.join_stopped();
+    }
+
+    /// After `Stopped`: the core's thread ends.
+    pub fn join_stopped(self) {
         self.core.join().expect("join core");
         // The mocks' expectations are checked as the server drops.
         self.runtime.block_on(async move { drop(self.server) });
     }
+}
+
+fn alice_member_event() -> serde_json::Value {
+    json!({
+        "type": "m.room.member",
+        "state_key": "@alice:example.org",
+        "sender": "@alice:example.org",
+        "event_id": "$alice-join",
+        "origin_server_ts": 1,
+        "content": { "membership": "join", "displayname": "alice" },
+    })
 }
 
 /// What the SDK's backup handling (and a reset) ask besides the keys: the

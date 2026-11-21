@@ -120,7 +120,6 @@ use matrix_sdk_crypto::{CrossSigningStatus, IdentityState, IdentityStatusChange}
 use mime::Mime;
 use serde::Deserialize;
 use tokio::sync::broadcast;
-use tokio::task::JoinHandle;
 use tokio_stream::StreamMap;
 use url::Url;
 
@@ -154,7 +153,7 @@ use crate::api::{
 use crate::api::{TextStyleSpan, UserLinkSpan, check_text_styles, validate_highlight_word};
 use crate::mentions::body_mentions;
 use crate::rich_text::{StyledText, html_from_styled_text, styled_text_from_html};
-use crate::runtime::{EventSender, InitialSnapshot, emit_event};
+use crate::runtime::{EventSender, InitialSnapshot, RoomSnapshots, emit_event};
 
 #[derive(Debug)]
 pub(crate) struct MatrixCoreError {
@@ -1303,10 +1302,10 @@ fn identity_watch_changes<'a>(
 ///
 /// The task owns the streams: aborting it drops them, and with them the
 /// event handlers they registered.
-pub(crate) fn start_room_identity_task(client: Client, events: EventSender) -> JoinHandle<()> {
+pub(crate) fn room_identity_task(client: Client, events: EventSender) -> impl Future<Output = ()> {
     let mut updates = client.room_info_notable_update_receiver();
 
-    tokio::task::spawn_local(async move {
+    async move {
         let mut streams = StreamMap::<OwnedRoomId, IdentityStatusStream>::new();
         watch_room_identities(&client, &events, &mut streams).await;
         loop {
@@ -1331,7 +1330,7 @@ pub(crate) fn start_room_identity_task(client: Client, events: EventSender) -> J
                 ),
             }
         }
-    })
+    }
 }
 
 /// Brings `streams` in line with the joined encrypted rooms. New streams
@@ -1771,11 +1770,18 @@ pub(crate) async fn set_room_topic(
     Ok(())
 }
 
+/// Emits the room list, unless a snapshot started later has already been
+/// emitted: that one is at least as new.
 pub(crate) async fn emit_room_snapshot(
     client: &Client,
+    snapshots: &RoomSnapshots,
     event_tx: &EventSender,
 ) -> Result<(), MatrixCoreError> {
-    emit_event(event_tx, Event::SyncedRooms(summarize_rooms(client).await?));
+    let snapshot = snapshots.start();
+    let rooms = summarize_rooms(client).await?;
+    if snapshots.supersede(snapshot) {
+        emit_event(event_tx, Event::SyncedRooms(rooms));
+    }
     Ok(())
 }
 
@@ -1793,8 +1799,12 @@ pub(crate) async fn emit_joined_room_members_snapshot(
     Ok(())
 }
 
-async fn emit_room_snapshot_or_room_list_error(client: &Client, events: &EventSender) {
-    if let Err(err) = emit_room_snapshot(client, events).await {
+async fn emit_room_snapshot_or_room_list_error(
+    client: &Client,
+    snapshots: &RoomSnapshots,
+    events: &EventSender,
+) {
+    if let Err(err) = emit_room_snapshot(client, snapshots, events).await {
         emit_event(
             events,
             Event::Error(CoreErrorEvent {
@@ -2108,27 +2118,30 @@ pub(crate) fn room_list_update_is_relevant(reasons: RoomInfoNotableUpdateReasons
     )
 }
 
-pub(crate) fn start_e2ee_recovery_state_task(
+pub(crate) fn e2ee_recovery_state_task(
     client: Client,
     events: EventSender,
-) -> JoinHandle<()> {
+) -> impl Future<Output = ()> {
     let mut states = client.encryption().recovery().state_stream();
 
-    tokio::task::spawn_local(async move {
+    async move {
         while states.next().await.is_some() {
             emit_cached_e2ee_status(&client, &events).await;
         }
-    })
+    }
 }
 
 /// Emits the E2EE status whenever this session's verification state
 /// changes: once verified from another session, or after recovery signs
 /// it. The SDK sets its state after every query of your own keys,
 /// changed or not, and an identity can appear with it.
-pub(crate) fn start_e2ee_session_state_task(client: Client, events: EventSender) -> JoinHandle<()> {
+pub(crate) fn e2ee_session_state_task(
+    client: Client,
+    events: EventSender,
+) -> impl Future<Output = ()> {
     let mut states = client.encryption().verification_state();
 
-    tokio::task::spawn_local(async move {
+    async move {
         // The first value is the current one, which the sign-in summary
         // reports.
         let mut last = None;
@@ -2144,7 +2157,7 @@ pub(crate) fn start_e2ee_session_state_task(client: Client, events: EventSender)
                 Err(err) => emit_e2ee_status_error(&events, err),
             }
         }
-    })
+    }
 }
 
 async fn emit_cached_e2ee_status(client: &Client, events: &EventSender) {
@@ -2165,10 +2178,13 @@ fn emit_e2ee_status_error(events: &EventSender, err: MatrixCoreError) {
     );
 }
 
-pub(crate) fn start_e2ee_backup_state_task(client: Client, events: EventSender) -> JoinHandle<()> {
+pub(crate) fn e2ee_backup_state_task(
+    client: Client,
+    events: EventSender,
+) -> impl Future<Output = ()> {
     let mut states = client.encryption().backups().state_stream();
 
-    tokio::task::spawn_local(async move {
+    async move {
         while let Some(state) = states.next().await {
             match state {
                 Ok(_) => emit_cached_e2ee_status(&client, &events).await,
@@ -2182,7 +2198,7 @@ pub(crate) fn start_e2ee_backup_state_task(client: Client, events: EventSender) 
                 ),
             }
         }
-    })
+    }
 }
 
 pub(crate) fn room_read_state_from_room(room: &Room) -> RoomReadState {
@@ -2401,20 +2417,28 @@ enum PendingOutgoingKind {
 
 type PendingOutgoingRegistry = Arc<Mutex<BTreeMap<String, PendingOutgoingKind>>>;
 
-pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
+pub(crate) fn register_event_handlers(
+    client: &Client,
+    events: EventSender,
+    snapshots: &RoomSnapshots,
+) {
     let direct_account_data_events = events.clone();
+    let direct_snapshots = snapshots.clone();
     client.add_event_handler(move |_event: DirectEvent, client: Client| {
         let events = direct_account_data_events.clone();
+        let snapshots = direct_snapshots.clone();
         async move {
-            emit_room_snapshot_or_room_list_error(&client, &events).await;
+            emit_room_snapshot_or_room_list_error(&client, &snapshots, &events).await;
         }
     });
 
     let tag_account_data_events = events.clone();
+    let tag_snapshots = snapshots.clone();
     client.add_event_handler(move |_event: TagEvent, _room: Room, client: Client| {
         let events = tag_account_data_events.clone();
+        let snapshots = tag_snapshots.clone();
         async move {
-            emit_room_snapshot_or_room_list_error(&client, &events).await;
+            emit_room_snapshot_or_room_list_error(&client, &snapshots, &events).await;
         }
     });
 
@@ -2422,10 +2446,12 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     // handlers, so the snapshot reads the new rules from the store
     // (`push_rules_change_re_snapshots_room_notification_modes`).
     let push_rules_events = events.clone();
+    let push_rules_snapshots = snapshots.clone();
     client.add_event_handler(move |event: PushRulesEvent, client: Client| {
         let events = push_rules_events.clone();
+        let snapshots = push_rules_snapshots.clone();
         async move {
-            emit_room_snapshot_or_room_list_error(&client, &events).await;
+            emit_room_snapshot_or_room_list_error(&client, &snapshots, &events).await;
             emit_event(
                 &events,
                 Event::HighlightWords(highlight_words_from_ruleset(&event.content.global)),
@@ -3929,39 +3955,41 @@ fn map_decimals((first, second, third): (u16, u16, u16)) -> VerificationDecimals
 /// Runs continuous sync until it fails: the initial snapshot if it is still
 /// to come and `SyncConnected` at the first response, then `SyncStopped`
 /// with why it ended.
-pub(crate) fn start_sync_task(
+pub(crate) async fn sync_task(
     client: Client,
     events: EventSender,
+    snapshots: RoomSnapshots,
     initial_snapshot: InitialSnapshot,
     paused_sends: PausedSendRooms,
-) -> JoinHandle<()> {
-    tokio::task::spawn_local(async move {
-        let connected = Cell::new(false);
-        let result = client
-            .sync_with_result_callback(SyncSettings::default(), |result| {
-                let client = client.clone();
-                let events = events.clone();
-                let connected = &connected;
-                let initial_snapshot = &initial_snapshot;
-                let paused_sends = &paused_sends;
-                async move {
-                    let response = result?;
-                    if !connected.replace(true) {
-                        // Before SyncConnected: the UI's connected session
-                        // has its rooms.
-                        initial_snapshot.emit_if_pending(&client, &events).await;
-                        emit_event(&events, Event::SyncConnected);
-                    }
-                    // The server answers again.
-                    paused_sends.resume(&client);
-                    emit_member_snapshots_after_sync(&client, &response, &events).await;
-                    Ok(LoopCtrl::Continue)
+) {
+    let connected = Cell::new(false);
+    let result = client
+        .sync_with_result_callback(SyncSettings::default(), |result| {
+            let client = client.clone();
+            let events = events.clone();
+            let connected = &connected;
+            let snapshots = &snapshots;
+            let initial_snapshot = &initial_snapshot;
+            let paused_sends = &paused_sends;
+            async move {
+                let response = result?;
+                if !connected.replace(true) {
+                    // Before SyncConnected: the UI's connected session
+                    // has its rooms.
+                    initial_snapshot
+                        .emit_if_pending(&client, snapshots, &events)
+                        .await;
+                    emit_event(&events, Event::SyncConnected);
                 }
-            })
-            .await;
-        let err = result.expect_err("the sync callback never breaks the loop");
-        emit_event(&events, Event::SyncStopped(sync_stop_reason(&err)));
-    })
+                // The server answers again.
+                paused_sends.resume(&client);
+                emit_member_snapshots_after_sync(&client, &response, &events).await;
+                Ok(LoopCtrl::Continue)
+            }
+        })
+        .await;
+    let err = result.expect_err("the sync callback never breaks the loop");
+    emit_event(&events, Event::SyncStopped(sync_stop_reason(&err)));
 }
 
 /// Rooms whose send queue a recoverable error stopped (the network, the
@@ -4002,47 +4030,49 @@ fn sync_stop_reason(err: &matrix_sdk::Error) -> SyncStopReason {
 /// before the session's first sync: the event cache counts that sync's unread
 /// messages in its own task, possibly after the initial snapshot was read,
 /// and the change must still reach the UI.
-pub(crate) fn start_room_read_state_update_task(
+pub(crate) async fn room_read_state_update_task(
     client: Client,
     events: EventSender,
     mut updates: broadcast::Receiver<RoomInfoNotableUpdate>,
-) -> JoinHandle<()> {
-    tokio::task::spawn_local(async move {
-        loop {
-            let read_states = match updates.recv().await {
-                Ok(update) => {
-                    if !room_read_update_is_relevant(update.reasons) {
-                        continue;
-                    }
-                    let Some(room) = client
-                        .joined_rooms()
-                        .into_iter()
-                        .find(|room| room.room_id() == update.room_id)
-                    else {
-                        continue;
-                    };
-                    vec![room_read_state_from_room(&room)]
+) {
+    loop {
+        let read_states = match updates.recv().await {
+            Ok(update) => {
+                if !room_read_update_is_relevant(update.reasons) {
+                    continue;
                 }
-                Err(broadcast::error::RecvError::Closed) => break,
-                // A read state is a snapshot: resending every room's makes
-                // up for the missed updates.
-                Err(broadcast::error::RecvError::Lagged(_)) => {
-                    summarize_joined_room_read_states(&client)
-                }
-            };
-            for read_state in read_states {
-                if events.send(Event::RoomReadState(read_state)).is_err() {
-                    return;
-                }
+                let Some(room) = client
+                    .joined_rooms()
+                    .into_iter()
+                    .find(|room| room.room_id() == update.room_id)
+                else {
+                    continue;
+                };
+                vec![room_read_state_from_room(&room)]
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+            // A read state is a snapshot: resending every room's makes
+            // up for the missed updates.
+            Err(broadcast::error::RecvError::Lagged(_)) => {
+                summarize_joined_room_read_states(&client)
+            }
+        };
+        for read_state in read_states {
+            if events.send(Event::RoomReadState(read_state)).is_err() {
+                return;
             }
         }
-    })
+    }
 }
 
-pub(crate) fn start_room_list_update_task(client: Client, events: EventSender) -> JoinHandle<()> {
+pub(crate) fn room_list_update_task(
+    client: Client,
+    events: EventSender,
+    snapshots: RoomSnapshots,
+) -> impl Future<Output = ()> {
     let mut updates = client.room_info_notable_update_receiver();
 
-    tokio::task::spawn_local(async move {
+    async move {
         loop {
             match updates.recv().await {
                 Ok(update) => {
@@ -4050,7 +4080,7 @@ pub(crate) fn start_room_list_update_task(client: Client, events: EventSender) -
                         continue;
                     }
 
-                    emit_room_snapshot_or_room_list_error(&client, &events).await;
+                    emit_room_snapshot_or_room_list_error(&client, &snapshots, &events).await;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => emit_event(
@@ -4063,13 +4093,13 @@ pub(crate) fn start_room_list_update_task(client: Client, events: EventSender) -
                 ),
             }
         }
-    })
+    }
 }
 
-pub(crate) fn start_session_update_task(client: Client, events: EventSender) -> JoinHandle<()> {
+pub(crate) fn session_update_task(client: Client, events: EventSender) -> impl Future<Output = ()> {
     let mut session_changes = client.subscribe_to_session_changes();
 
-    tokio::task::spawn_local(async move {
+    async move {
         loop {
             match session_changes.recv().await {
                 Ok(SessionChange::TokensRefreshed) => emit_event(
@@ -4090,19 +4120,25 @@ pub(crate) fn start_session_update_task(client: Client, events: EventSender) -> 
                 ),
             }
         }
-    })
+    }
 }
 
-pub(crate) fn start_send_queue_update_task(
+pub(crate) fn send_queue_update_task(
     client: Client,
     current_user_id: String,
     events: EventSender,
     paused_sends: PausedSendRooms,
-) -> JoinHandle<()> {
+) -> impl Future<Output = ()> {
     let mut updates = client.send_queue().subscribe();
     let pending = Arc::new(Mutex::new(BTreeMap::new()));
 
-    tokio::task::spawn_local(async move {
+    async move {
+        // Sends what an earlier run left queued; its updates come to
+        // `updates`, after the local echoes below.
+        client
+            .send_queue()
+            .respawn_tasks_for_rooms_with_unsent_requests()
+            .await;
         match hydrate_send_queue_local_echoes(&client, &current_user_id, &pending).await {
             Ok(initial_events) => {
                 for event in initial_events {
@@ -4168,7 +4204,7 @@ pub(crate) fn start_send_queue_update_task(
                 ),
             }
         }
-    })
+    }
 }
 
 /// The authenticated user's profile in a room with queued sends; local echoes
@@ -5559,7 +5595,7 @@ mod tests {
                 .build()
                 .await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone());
+            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             restore_session(
                 &client,
                 StoredSession {
@@ -6779,7 +6815,7 @@ mod tests {
     use matrix_sdk_crypto::CrossSigningStatus;
     use matrix_sdk_test::{InvitedRoomBuilder, JoinedRoomBuilder, ruma_response_from_json};
 
-    use crate::runtime::EventSender;
+    use crate::runtime::{EventSender, RoomSnapshots};
     use matrix_sdk::sync::{JoinedRoomUpdate, State, Timeline};
 
     fn room_id() -> OwnedRoomId {
@@ -9749,7 +9785,7 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone());
+            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             let state_events = serde_json::json!([
                 { "type": "m.room.create", "state_key": "", "sender": "@example:localhost", "event_id": "$create:localhost", "origin_server_ts": 1u64, "content": { "creator": "@example:localhost" } },
                 { "type": "m.room.power_levels", "state_key": "", "sender": "@example:localhost", "event_id": "$power:localhost", "origin_server_ts": 2u64, "content": { "users": { "@example:localhost": 100 } }, "unsigned": { "prev_content": { "users": {} } } },
@@ -9801,7 +9837,7 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone());
+            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             sync_and_refresh_members(
                 &mock_server,
                 &client,
@@ -9885,7 +9921,7 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone());
+            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             sync_and_refresh_members(
                 &mock_server,
                 &client,
@@ -10023,7 +10059,7 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone());
+            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             let state_events = profile_test_state_events();
 
             sync_and_refresh_members(
@@ -10662,7 +10698,7 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events);
+            register_event_handlers(&client, events, &RoomSnapshots::default());
             let state_events = profile_test_state_events();
 
             // No `m.push_rules` account data: the SDK applies the server
@@ -10950,7 +10986,7 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone());
+            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             let levels = |actor: i64| {
                 serde_json::json!({
                     "kick": 50, "ban": 50, "users_default": 0,
@@ -11405,7 +11441,7 @@ mod tests {
                 })
                 .await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events);
+            register_event_handlers(&client, events, &RoomSnapshots::default());
 
             let mut ruleset = notification_mode_ruleset(&client, &muted, &mentions);
             ruleset
@@ -11670,7 +11706,11 @@ mod tests {
                 })
                 .await;
             let (events, event_rx) = mpsc::channel();
-            let task = super::start_room_list_update_task(client.clone(), events);
+            let task = tokio::task::spawn_local(super::room_list_update_task(
+                client.clone(),
+                events,
+                RoomSnapshots::default(),
+            ));
 
             mock_server
                 .mock_sync()
@@ -11841,7 +11881,7 @@ mod tests {
                 Vec::<String>::new()
             );
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events);
+            register_event_handlers(&client, events, &RoomSnapshots::default());
 
             sync_ignored_users(
                 &mock_server,
@@ -11880,14 +11920,18 @@ mod tests {
                 .await;
             mock_server.sync_joined_room(&client, &room_id()).await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone());
+            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             client.event_cache().subscribe().expect("subscribe the event cache");
-            let read_state_task = super::start_room_read_state_update_task(
+            let read_state_task = tokio::task::spawn_local(super::room_read_state_update_task(
                 client.clone(),
                 events.clone(),
                 client.room_info_notable_update_receiver(),
-            );
-            let room_list_task = super::start_room_list_update_task(client.clone(), events);
+            ));
+            let room_list_task = tokio::task::spawn_local(super::room_list_update_task(
+                client.clone(),
+                events,
+                RoomSnapshots::default(),
+            ));
 
             sync_ignored_users(&mock_server, &client, &["@spam:localhost"]).await;
             mock_server
@@ -14261,7 +14305,7 @@ mod tests {
                 server.mock_crypto_endpoints_preset().await;
                 let (alice, _bob) = server.set_up_alice_and_bob_for_encryption().await;
                 let (events, event_rx) = mpsc::channel();
-                register_event_handlers(&alice, events);
+                register_event_handlers(&alice, events, &RoomSnapshots::default());
 
                 server
                     .sync_room(
@@ -14311,7 +14355,7 @@ mod tests {
                 server.mock_crypto_endpoints_preset().await;
                 let (alice, _bob) = server.set_up_alice_and_bob_for_encryption().await;
                 let (events, event_rx) = mpsc::channel();
-                register_event_handlers(&alice, events);
+                register_event_handlers(&alice, events, &RoomSnapshots::default());
 
                 // The SDK drops a request older than ten minutes.
                 let eleven_minutes_ago = now_ms() - 11 * 60 * 1000;
@@ -14349,7 +14393,7 @@ mod tests {
                 server.mock_crypto_endpoints_preset().await;
                 let (alice, _bob) = server.set_up_alice_and_bob_for_encryption().await;
                 let (events, event_rx) = mpsc::channel();
-                register_event_handlers(&alice, events);
+                register_event_handlers(&alice, events, &RoomSnapshots::default());
 
                 let request = |transaction_id: &str, timestamp: u64| {
                     serde_json::from_value(serde_json::json!({
@@ -14748,7 +14792,7 @@ mod tests {
                 relay_to_device_from(&server, &bob, inbox.clone()).await;
                 let (alice_events, alice_rx) = mpsc::channel();
                 let (bob_events, bob_rx) = mpsc::channel();
-                register_event_handlers(&bob, bob_events.clone());
+                register_event_handlers(&bob, bob_events.clone(), &RoomSnapshots::default());
 
                 let (announcement, request) =
                     request_verification(&alice, &verify("@bob:example.org", Some("B0B0B0B0B")))
@@ -14882,8 +14926,8 @@ mod tests {
         use matrix_sdk::ruma::{owned_device_id, owned_user_id};
 
         use super::super::{
-            BackupServerStatusMode, list_user_devices, sorted_devices,
-            start_e2ee_session_state_task, summarize_e2ee_status, user_identity_state,
+            BackupServerStatusMode, e2ee_session_state_task, list_user_devices, sorted_devices,
+            summarize_e2ee_status, user_identity_state,
         };
         use super::*;
         use crate::api::{DeviceSummary, E2eeSessionState, UserDevices, UserIdentityState};
@@ -15113,7 +15157,7 @@ mod tests {
                 );
 
                 let (events, event_rx) = mpsc::channel();
-                let task = start_e2ee_session_state_task(phone.clone(), events);
+                let task = tokio::task::spawn_local(e2ee_session_state_task(phone.clone(), events));
                 let statuses = || async {
                     // Let the task see the SDK's update.
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -15201,9 +15245,7 @@ mod tests {
 
         use matrix_sdk_test::LeftRoomBuilder;
 
-        use super::super::{
-            accept_user_identity, identity_watch_changes, start_room_identity_task,
-        };
+        use super::super::{accept_user_identity, identity_watch_changes, room_identity_task};
         use super::*;
         use crate::api::{IdentityChange, IdentityTrust, RoomIdentityChanges};
 
@@ -15331,7 +15373,7 @@ mod tests {
                 let (alice, bob) = alice_and_bob(&server).await;
                 sync_ops(&server, &alice, true).await;
                 let (events, event_rx) = mpsc::channel();
-                let task = start_room_identity_task(alice.clone(), events);
+                let task = tokio::task::spawn_local(room_identity_task(alice.clone(), events));
                 assert_eq!(identity_events(&event_rx).await, Vec::new());
 
                 bob_resets(&alice, &bob).await;
@@ -15387,7 +15429,7 @@ mod tests {
                 // A new watch (the next start) has nothing to report.
                 task.abort();
                 let (events, event_rx) = mpsc::channel();
-                let task = start_room_identity_task(alice.clone(), events);
+                let task = tokio::task::spawn_local(room_identity_task(alice.clone(), events));
                 assert_eq!(identity_events(&event_rx).await, Vec::new());
                 task.abort();
             });
@@ -15402,7 +15444,7 @@ mod tests {
                 bob_resets(&alice, &bob).await;
 
                 let (events, event_rx) = mpsc::channel();
-                let task = start_room_identity_task(alice.clone(), events);
+                let task = tokio::task::spawn_local(room_identity_task(alice.clone(), events));
                 assert_eq!(
                     identity_events(&event_rx).await,
                     vec![bob_in_ops(IdentityTrust::PinViolation)]
@@ -15418,7 +15460,7 @@ mod tests {
                 let (alice, bob) = alice_and_bob(&server).await;
                 sync_ops(&server, &alice, false).await;
                 let (events, event_rx) = mpsc::channel();
-                let task = start_room_identity_task(alice.clone(), events);
+                let task = tokio::task::spawn_local(room_identity_task(alice.clone(), events));
 
                 // An unencrypted room is not watched.
                 bob_resets(&alice, &bob).await;
