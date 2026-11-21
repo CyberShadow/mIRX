@@ -382,10 +382,12 @@ impl RoomViewModel {
         &mut self,
         timestamp_ms: u64,
         thread_root: Option<String>,
+        kind: StatusLineKind,
         text: String,
     ) {
         let arrival = self.arrivals.take_next();
-        self.echo.push(arrival, timestamp_ms, thread_root, text);
+        self.echo
+            .push(arrival, timestamp_ms, thread_root, kind, text);
     }
 
     pub(super) fn apply_history_backfill(&mut self, room_id: &str, backfill: RoomHistoryBackfill) {
@@ -2311,11 +2313,21 @@ mod tests {
     fn clear_keeps_only_the_pending_arrivals_and_echo_shares_the_count() {
         let mut room_view = RoomViewModel::default();
         room_view.apply_activity(sent("$a", "a"));
-        room_view.push_echo(1_700_000_000_000, None, "* echo".to_owned());
+        room_view.push_echo(
+            1_700_000_000_000,
+            None,
+            StatusLineKind::Info,
+            "* echo".to_owned(),
+        );
         room_view.apply_activity(pending_message_activity("!ops:example", "t1", "hi"));
         room_view.clear_visible_entries();
         assert_eq!(arrivals(&room_view), [("txn:t1", Some(2))]);
-        room_view.push_echo(1_700_000_000_000, None, "* after".to_owned());
+        room_view.push_echo(
+            1_700_000_000_000,
+            None,
+            StatusLineKind::Info,
+            "* after".to_owned(),
+        );
         assert_eq!(
             room_view
                 .echo
@@ -2332,7 +2344,12 @@ mod tests {
         let mut room_view = RoomViewModel::default();
         assert_eq!(room_view.arrivals.unshown_from(), 0);
         room_view.apply_activity(sent("$a", "a"));
-        room_view.push_echo(1_700_000_000_000, None, "* echo".to_owned());
+        room_view.push_echo(
+            1_700_000_000_000,
+            None,
+            StatusLineKind::Info,
+            "* echo".to_owned(),
+        );
         room_view.arrivals.window_closed();
         assert_eq!(room_view.arrivals.unshown_from(), 2);
         room_view.apply_activity(sent("$b", "b"));

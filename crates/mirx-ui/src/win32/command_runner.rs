@@ -621,7 +621,7 @@ pub(super) fn echo_lines_in_view(
                 .model
                 .room_views
                 .entry_or_default(room_id.clone())
-                .push_echo(now, None, text),
+                .push_echo(now, None, StatusLineKind::Info, text),
             ViewId::Thread {
                 room_id,
                 thread_root_event_id,
@@ -630,7 +630,12 @@ pub(super) fn echo_lines_in_view(
                 .room_views
                 .get_mut(room_id)
                 .expect("a thread window's room must have a view")
-                .push_echo(now, Some(thread_root_event_id.clone()), text),
+                .push_echo(
+                    now,
+                    Some(thread_root_event_id.clone()),
+                    StatusLineKind::Info,
+                    text,
+                ),
         }
     }
 }

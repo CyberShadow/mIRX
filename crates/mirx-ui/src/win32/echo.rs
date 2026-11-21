@@ -3,6 +3,8 @@
 //! this client, so they live beside the room's activities rather than among
 //! them, and merge into the timeline by time.
 
+use super::StatusLineKind;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct EchoLine {
     /// The line's place in the room's arrival order (`RoomArrivals`):
@@ -11,6 +13,8 @@ pub(super) struct EchoLine {
     pub(super) timestamp_ms: u64,
     /// The thread window the line was printed in; `None` for the room window.
     pub(super) thread_root: Option<String>,
+    /// `Error` lines are red, as in Status.
+    pub(super) kind: StatusLineKind,
     /// The line after its timestamp.
     pub(super) text: String,
 }
@@ -27,6 +31,7 @@ impl EchoLog {
         arrival: u64,
         timestamp_ms: u64,
         thread_root: Option<String>,
+        kind: StatusLineKind,
         text: String,
     ) {
         assert!(
@@ -37,6 +42,7 @@ impl EchoLog {
             arrival,
             timestamp_ms,
             thread_root,
+            kind,
             text,
         });
     }
@@ -70,9 +76,15 @@ mod tests {
     #[test]
     fn lines_are_per_window_and_room_clear_keeps_thread_lines() {
         let mut log = EchoLog::default();
-        log.push(0, 1, None, "room".to_owned());
-        log.push(1, 2, Some("$root".to_owned()), "thread".to_owned());
-        log.push(2, 3, None, "room".to_owned());
+        log.push(0, 1, None, StatusLineKind::Info, "room".to_owned());
+        log.push(
+            1,
+            2,
+            Some("$root".to_owned()),
+            StatusLineKind::Info,
+            "thread".to_owned(),
+        );
+        log.push(2, 3, None, StatusLineKind::Info, "room".to_owned());
 
         assert_eq!(texts(log.lines_for(None)), vec![(0, "room"), (2, "room")]);
         assert_eq!(texts(log.lines_for(Some("$root"))), vec![(1, "thread")]);
@@ -81,7 +93,7 @@ mod tests {
         log.clear_room_window();
         assert_eq!(texts(log.lines_for(None)), vec![]);
         assert_eq!(texts(log.lines_for(Some("$root"))), vec![(1, "thread")]);
-        log.push(3, 4, None, "after".to_owned());
+        log.push(3, 4, None, StatusLineKind::Info, "after".to_owned());
         assert_eq!(texts(log.lines_for(None)), vec![(3, "after")]);
     }
 }

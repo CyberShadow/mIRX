@@ -685,7 +685,9 @@ pub(super) fn apply_core_event(
                     echo_lines_in_active_view(state, [error.to_string()]);
                 }
                 ErrorDestination::Room(room_id) => match state.model.room_views.get_mut(room_id) {
-                    Some(room_view) => room_view.push_echo(now, None, context_line(&line)),
+                    Some(room_view) => {
+                        room_view.push_echo(now, None, StatusLineKind::Info, context_line(&line))
+                    }
                     // The room was left, or never synced.
                     None => log_status(state, StatusLineKind::Error, line),
                 },

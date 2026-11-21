@@ -804,7 +804,7 @@ fn push_activity_rows_with_echo<'a>(
 
 fn echo_row(line: &EchoLine, timestamps: TimestampStyle) -> TimelineRow {
     let prefix = timestamps.prefix(line.timestamp_ms);
-    TimelineRow::log(TimelineRowKind::Info, format!("{prefix}{}", line.text))
+    TimelineRow::log(log_row_kind(line.kind), format!("{prefix}{}", line.text))
         .with_identity(TimelineRowIdentity::EchoLine {
             sequence: line.arrival,
         })
@@ -944,6 +944,14 @@ fn format_room_video_metadata_suffix(info: Option<&RoomVideoInfo>) -> String {
     }
 }
 
+/// How a Status or echo line of `kind` renders.
+fn log_row_kind(kind: StatusLineKind) -> TimelineRowKind {
+    match kind {
+        StatusLineKind::Info => TimelineRowKind::Info,
+        StatusLineKind::Error => TimelineRowKind::Error,
+    }
+}
+
 pub(super) fn build_status_timeline_rows(
     status_log: &StatusLog,
     timestamps: TimestampStyle,
@@ -952,12 +960,8 @@ pub(super) fn build_status_timeline_rows(
         .lines()
         .iter()
         .map(|line| {
-            let kind = match line.kind {
-                StatusLineKind::Info => TimelineRowKind::Info,
-                StatusLineKind::Error => TimelineRowKind::Error,
-            };
             let prefix = timestamps.prefix(line.timestamp_ms);
-            TimelineRow::log(kind, format!("{prefix}{}", line.text))
+            TimelineRow::log(log_row_kind(line.kind), format!("{prefix}{}", line.text))
                 .with_identity(TimelineRowIdentity::status_line(line.sequence))
                 .arrived(Some(line.sequence))
         })
@@ -3605,11 +3609,31 @@ mod tests {
             .unwrap();
         }
         let echo = state.model.room_views.get_mut("!ops:example").unwrap();
-        echo.push_echo(1_700_000_000_000, None, "* before".to_owned());
-        echo.push_echo(1_700_000_120_000, None, "* between".to_owned());
+        echo.push_echo(
+            1_700_000_000_000,
+            None,
+            StatusLineKind::Info,
+            "* before".to_owned(),
+        );
+        echo.push_echo(
+            1_700_000_120_000,
+            None,
+            StatusLineKind::Info,
+            "* between".to_owned(),
+        );
         // A tie stays after the activity the user already saw.
-        echo.push_echo(1_700_000_180_000, None, "* tie".to_owned());
-        echo.push_echo(1_700_000_240_000, None, "* tie".to_owned());
+        echo.push_echo(
+            1_700_000_180_000,
+            None,
+            StatusLineKind::Info,
+            "* tie".to_owned(),
+        );
+        echo.push_echo(
+            1_700_000_240_000,
+            None,
+            StatusLineKind::Info,
+            "* tie".to_owned(),
+        );
 
         let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
         let texts = project_timeline_rows(&rows);
@@ -3640,6 +3664,35 @@ mod tests {
     }
 
     #[test]
+    fn error_echo_lines_render_red_and_info_lines_stay_info() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        let room_view = state
+            .model
+            .room_views
+            .entry_or_default("!ops:example".to_owned());
+        room_view.push_echo(
+            1_700_000_000_000,
+            None,
+            StatusLineKind::Info,
+            "* info".to_owned(),
+        );
+        room_view.push_echo(
+            1_700_000_000_000,
+            None,
+            StatusLineKind::Error,
+            "* warning".to_owned(),
+        );
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        let kinds = rows[rows.len() - 2..]
+            .iter()
+            .map(|row| row.kind.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, vec![TimelineRowKind::Info, TimelineRowKind::Error]);
+    }
+
+    #[test]
     fn thread_echo_shows_only_in_its_thread_and_survives_room_clear() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
@@ -3663,9 +3716,15 @@ mod tests {
         room_view.push_echo(
             1_700_000_200_000,
             Some("$thread-root".to_owned()),
+            StatusLineKind::Info,
             "* /clear: nothing to clear in thread view".to_owned(),
         );
-        room_view.push_echo(1_700_000_200_000, None, "* room line".to_owned());
+        room_view.push_echo(
+            1_700_000_200_000,
+            None,
+            StatusLineKind::Info,
+            "* room line".to_owned(),
+        );
 
         let thread_lines = project_timeline_rows(&build_thread_timeline_rows(
             &state.model,
