@@ -123,7 +123,8 @@
   {
     "VerificationRequest": {
       "flow_id": "flow-verify-123",
-      "user_id": "@alice:example"
+      "user_id": "@alice:example",
+      "direction": { "type": "incoming", "from_device": "ALICEDEVICE" }
     }
   },
   {

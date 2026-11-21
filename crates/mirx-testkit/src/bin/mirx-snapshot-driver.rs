@@ -3506,6 +3506,7 @@ mod windows_main {
     fn verification_state_name(state: &VerificationState) -> &'static str {
         match state {
             VerificationState::Requested => "requested",
+            VerificationState::Sent => "sent",
             VerificationState::Accepted => "accepted",
             VerificationState::Ready => "ready",
             VerificationState::SasReady { .. } => "sas_ready",
@@ -3554,6 +3555,7 @@ mod windows_main {
                 parts.push(format!("cancelled_by_us={cancelled_by_us}"));
             }
             VerificationState::Requested
+            | VerificationState::Sent
             | VerificationState::Accepted
             | VerificationState::Ready
             | VerificationState::Confirmed

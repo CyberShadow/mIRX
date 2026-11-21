@@ -20257,6 +20257,9 @@ fn automation_driver_status_window_is_a_timestamped_log() -> Result<(), Box<dyn 
     events.push(Event::VerificationRequest(mirx_core::VerificationRequest {
         flow_id: "flow-status-log".to_owned(),
         user_id: "@alice:example".to_owned(),
+        direction: mirx_core::VerificationDirection::Incoming {
+            from_device: "ALICEDEVICE".to_owned(),
+        },
     }));
     let state_path = write_state_file(&events)?;
     let local_app_data = unique_local_app_data_path();

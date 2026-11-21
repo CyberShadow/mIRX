@@ -10,19 +10,37 @@ pub(super) fn apply_verification_event(state: &mut WindowState, event: Verificat
     state.model.last_verification = Some(event);
 }
 
+/// A new flow, in or out, replaces the current one: the UI follows one
+/// verification at a time.
+pub(super) fn apply_verification_request(state: &mut WindowState, request: VerificationRequest) {
+    let lines = status_log::verification_request(&request, state.model.own_user_id.as_deref());
+    for line in lines {
+        log_status(state, StatusLineKind::Info, line);
+    }
+    let event = verification_state_event_from_request(request);
+    state.model.status = verification_status_message(&event);
+    state.model.last_verification = Some(event);
+}
+
+/// The flow's first state: requested by the other side, or sent by this
+/// session.
 pub(super) fn verification_state_event_from_request(
     request: VerificationRequest,
 ) -> VerificationStateEvent {
     VerificationStateEvent {
         flow_id: request.flow_id,
         user_id: request.user_id,
-        state: VerificationState::Requested,
+        state: match request.direction {
+            VerificationDirection::Incoming { .. } => VerificationState::Requested,
+            VerificationDirection::Outgoing { .. } => VerificationState::Sent,
+        },
     }
 }
 
 pub(super) fn verification_state_label(state: &VerificationState) -> &'static str {
     match state {
         VerificationState::Requested => "requested",
+        VerificationState::Sent => "sent",
         VerificationState::Accepted => "accepted",
         VerificationState::Ready => "ready",
         VerificationState::SasReady { .. } => "sas ready",
@@ -120,6 +138,7 @@ pub(super) fn e2ee_cross_signing_label(status: Option<&E2eeCrossSigningStatus>) 
 fn verification_status_message(event: &VerificationStateEvent) -> String {
     match &event.state {
         VerificationState::Requested => format!("verification requested by {}", event.user_id),
+        VerificationState::Sent => format!("verification request sent to {}", event.user_id),
         VerificationState::Accepted => format!("verification accepted with {}", event.user_id),
         VerificationState::Ready => format!("verification ready with {}", event.user_id),
         VerificationState::SasReady { .. } => {
@@ -399,6 +418,7 @@ mod tests {
         };
 
         let requested = test_verification_state_event(VerificationState::Requested);
+        let sent = test_verification_state_event(VerificationState::Sent);
         let accepted = test_verification_state_event(VerificationState::Accepted);
         let ready = test_verification_state_event(VerificationState::Ready);
         let sas_ready = test_verification_state_event(test_verification_sas_ready_state());
@@ -412,6 +432,7 @@ mod tests {
 
         assert_actions(None, false, false, false, false);
         assert_actions(Some(&requested), true, true, false, false);
+        assert_actions(Some(&sent), false, true, false, false);
         assert_actions(Some(&accepted), false, true, false, false);
         assert_actions(Some(&ready), false, true, false, false);
         assert_actions(Some(&sas_ready), false, true, true, true);
@@ -442,6 +463,12 @@ mod tests {
             Some(
                 "Tools > Confirm SAS, Tools > Reject SAS, Tools > Cancel Verification, /verify confirm, /verify reject, /verify cancel"
             )
+        );
+        assert_eq!(
+            verification_actions_text(Some(&test_verification_state_event(
+                VerificationState::Sent
+            ))),
+            Some("Tools > Cancel Verification, /verify cancel")
         );
         assert_eq!(verification_actions_text(Some(&done)), None);
         assert_eq!(verification_actions_text(Some(&cancelled)), None);

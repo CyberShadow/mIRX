@@ -1152,6 +1152,7 @@ pub struct Verification {
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum VerificationState {
     Requested,
+    Sent,
     Accepted,
     Ready,
     SasReady {
@@ -1171,6 +1172,7 @@ pub enum VerificationState {
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 enum VerificationStateSerde {
     Requested {},
+    Sent {},
     Accepted {},
     Ready {},
     SasReady {
@@ -1194,6 +1196,7 @@ impl<'de> Deserialize<'de> for VerificationState {
         let state = VerificationStateSerde::deserialize(deserializer)?;
         Ok(match state {
             VerificationStateSerde::Requested {} => Self::Requested,
+            VerificationStateSerde::Sent {} => Self::Sent,
             VerificationStateSerde::Accepted {} => Self::Accepted,
             VerificationStateSerde::Ready {} => Self::Ready,
             VerificationStateSerde::SasReady { emojis, decimals } => {

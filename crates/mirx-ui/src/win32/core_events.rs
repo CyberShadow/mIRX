@@ -593,9 +593,7 @@ pub(super) fn apply_core_event(
             state.model.last_e2ee_recovery_setup_result = true;
             state.model.status = "e2ee recovery setup complete".to_owned();
         }
-        Event::VerificationRequest(request) => {
-            apply_verification_event(state, verification_state_event_from_request(request));
-        }
+        Event::VerificationRequest(request) => apply_verification_request(state, request),
         Event::VerificationState(event) => apply_verification_event(state, event),
         Event::LoggedOut => {
             state.reconnect.reset();
@@ -2383,6 +2381,9 @@ mod tests {
             Event::VerificationRequest(VerificationRequest {
                 flow_id: "flow-verify-123".to_owned(),
                 user_id: "@alice:example".to_owned(),
+                direction: VerificationDirection::Incoming {
+                    from_device: "ALICEDEVICE".to_owned(),
+                },
             }),
         )
         .unwrap();

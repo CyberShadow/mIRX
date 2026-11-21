@@ -1496,7 +1496,21 @@ pub enum RoomMediaKind {
 #[serde(deny_unknown_fields)]
 pub struct VerificationRequest {
     pub flow_id: String,
+    /// The other side: the user who asked, or the user asked. The own user
+    /// for a verification between your own sessions.
     pub user_id: String,
+    pub direction: VerificationDirection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VerificationDirection {
+    /// The other side's session asked; Accept or Cancel answers.
+    Incoming { from_device: String },
+    /// This session asked; the other side accepts. `to_device` is the one
+    /// device asked, `None` for a request to all your other sessions or to
+    /// another user's identity.
+    Outgoing { to_device: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1517,7 +1531,11 @@ pub struct VerificationStateEvent {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum VerificationState {
+    /// The other side asked (`VerificationDirection::Incoming`).
     Requested,
+    /// This session asked (`VerificationDirection::Outgoing`); waiting for
+    /// the other side to accept.
+    Sent,
     Accepted,
     Ready,
     SasReady {
@@ -1537,6 +1555,7 @@ pub enum VerificationState {
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 enum VerificationStateSerde {
     Requested {},
+    Sent {},
     Accepted {},
     Ready {},
     SasReady {
@@ -1560,6 +1579,7 @@ impl<'de> serde::Deserialize<'de> for VerificationState {
         let state = VerificationStateSerde::deserialize(deserializer)?;
         Ok(match state {
             VerificationStateSerde::Requested {} => Self::Requested,
+            VerificationStateSerde::Sent {} => Self::Sent,
             VerificationStateSerde::Accepted {} => Self::Accepted,
             VerificationStateSerde::Ready {} => Self::Ready,
             VerificationStateSerde::SasReady { emojis, decimals } => {

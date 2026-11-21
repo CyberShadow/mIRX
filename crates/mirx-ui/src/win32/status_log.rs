@@ -6,12 +6,15 @@
 //! line holds the text after its `[hh:mm]` timestamp, so a command's echo
 //! may print other lines too, such as `-> *Alice* hi`.
 
-use mirx_core::{E2eeStatus, VerificationState, VerificationStateEvent};
+use mirx_core::{
+    E2eeStatus, VerificationDirection, VerificationRequest, VerificationState,
+    VerificationStateEvent,
+};
 
 use super::menus::verification_actions_text;
 use super::{
     e2ee_cross_signing_label, e2ee_local_backup_label, e2ee_recovery_state_label,
-    e2ee_server_backup_label, format_verification_emojis,
+    e2ee_server_backup_label, format_verification_emojis, verification_state_event_from_request,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,12 +180,64 @@ pub(super) fn e2ee_status(status: &E2eeStatus) -> Vec<String> {
     ]
 }
 
+/// A new flow: who asked whom, and the actions that answer it. A flow
+/// with the own user is between your own sessions.
+pub(super) fn verification_request(
+    request: &VerificationRequest,
+    own_user_id: Option<&str>,
+) -> Vec<String> {
+    let user = &request.user_id;
+    let own = own_user_id == Some(user.as_str());
+    let flow = &request.flow_id;
+    let line = match (&request.direction, own) {
+        (VerificationDirection::Incoming { from_device }, true) => {
+            format!("Verification requested by your other session {from_device} (flow {flow})")
+        }
+        (VerificationDirection::Incoming { .. }, false) => {
+            format!("Verification requested by {user} (flow {flow})")
+        }
+        (VerificationDirection::Outgoing { to_device: None }, true) => {
+            "Verification request sent to your other sessions; accept it on one of them".to_owned()
+        }
+        (VerificationDirection::Outgoing { to_device: None }, false) => {
+            format!("Verification request sent to {user}; waiting for them to accept")
+        }
+        (
+            VerificationDirection::Outgoing {
+                to_device: Some(device),
+            },
+            true,
+        ) => {
+            format!("Verification request sent to your session {device}; accept it there")
+        }
+        (
+            VerificationDirection::Outgoing {
+                to_device: Some(device),
+            },
+            false,
+        ) => {
+            format!(
+                "Verification request sent to {user} device {device}; waiting for them to accept"
+            )
+        }
+    };
+    let event = verification_state_event_from_request(request.clone());
+    let mut lines = vec![line];
+    lines.extend(
+        verification_actions_text(Some(&event)).map(|actions| format!("Actions: {actions}")),
+    );
+    lines
+}
+
 pub(super) fn verification(event: &VerificationStateEvent) -> Vec<String> {
     let user = &event.user_id;
     let mut lines = match &event.state {
         VerificationState::Requested => vec![format!(
             "Verification requested by {user} (flow {})",
             event.flow_id
+        )],
+        VerificationState::Sent => vec![format!(
+            "Verification request sent to {user}; waiting for them to accept"
         )],
         VerificationState::Accepted => vec![format!("Verification accepted with {user}")],
         VerificationState::Ready => vec![format!("Verification ready with {user}")],
@@ -332,6 +387,76 @@ mod tests {
             flow_id: "flow-1".to_owned(),
             user_id: "@alice:example".to_owned(),
             state,
+        }
+    }
+
+    #[test]
+    fn verification_request_lines_name_who_asked_whom() {
+        let request = |user_id: &str, direction| VerificationRequest {
+            flow_id: "flow-1".to_owned(),
+            user_id: user_id.to_owned(),
+            direction,
+        };
+        let incoming = || VerificationDirection::Incoming {
+            from_device: "PHONE".to_owned(),
+        };
+        let own = Some("@me:example");
+        let accept_or_cancel = "Actions: Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel";
+        let cancel = "Actions: Tools > Cancel Verification, /verify cancel";
+        let cases = [
+            (
+                request("@alice:example", incoming()),
+                "Verification requested by @alice:example (flow flow-1)",
+                accept_or_cancel,
+            ),
+            (
+                request("@me:example", incoming()),
+                "Verification requested by your other session PHONE (flow flow-1)",
+                accept_or_cancel,
+            ),
+            (
+                request(
+                    "@me:example",
+                    VerificationDirection::Outgoing { to_device: None },
+                ),
+                "Verification request sent to your other sessions; accept it on one of them",
+                cancel,
+            ),
+            (
+                request(
+                    "@me:example",
+                    VerificationDirection::Outgoing {
+                        to_device: Some("PHONE".to_owned()),
+                    },
+                ),
+                "Verification request sent to your session PHONE; accept it there",
+                cancel,
+            ),
+            (
+                request(
+                    "@alice:example",
+                    VerificationDirection::Outgoing { to_device: None },
+                ),
+                "Verification request sent to @alice:example; waiting for them to accept",
+                cancel,
+            ),
+            (
+                request(
+                    "@alice:example",
+                    VerificationDirection::Outgoing {
+                        to_device: Some("LAPTOP".to_owned()),
+                    },
+                ),
+                "Verification request sent to @alice:example device LAPTOP; waiting for them to accept",
+                cancel,
+            ),
+        ];
+        for (request, line, actions) in cases {
+            assert_eq!(
+                verification_request(&request, own),
+                vec![line.to_owned(), actions.to_owned()],
+                "{request:?}"
+            );
         }
     }
 

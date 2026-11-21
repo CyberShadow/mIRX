@@ -35,9 +35,9 @@ pub use api::{
     SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
     SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, SyncStopReason, TextColor,
     TextStyle, TextStyleSpan, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserLinkSpan,
-    UserProfile, VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, check_text_styles, check_user_links, login_method,
-    login_server, validate_highlight_word,
+    UserProfile, VerificationDecimals, VerificationDirection, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
+    check_text_styles, check_user_links, login_method, login_server, validate_highlight_word,
 };
 pub use matrix_link::{MatrixLink, matrix_link};
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};

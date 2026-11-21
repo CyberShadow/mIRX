@@ -22,9 +22,9 @@ use mirx_core::{
     SendReactionRequest, SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
     SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
-    UnsupportedRoomMessageActivity, UserProfile, VerificationDecimals, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
-    validate_highlight_word,
+    UnsupportedRoomMessageActivity, UserProfile, VerificationDecimals, VerificationDirection,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start, validate_highlight_word,
 };
 use tempfile::TempDir;
 
@@ -3043,16 +3043,19 @@ fn e2ee_recovery_setup_succeeded_debug_redacts_recovery_key() {
 }
 
 #[test]
-fn verification_request_event_preserves_existing_passive_wire_shape() {
+fn verification_request_event_round_trips_with_direction_and_device() {
     let event = Event::VerificationRequest(VerificationRequest {
         flow_id: "txn-123".to_owned(),
         user_id: "@alice:example.org".to_owned(),
+        direction: VerificationDirection::Incoming {
+            from_device: "ALICEDEVICE".to_owned(),
+        },
     });
 
     let json = serde_json::to_string(&event).expect("serialize verification request");
     assert_eq!(
         json,
-        r#"{"VerificationRequest":{"flow_id":"txn-123","user_id":"@alice:example.org"}}"#
+        r#"{"VerificationRequest":{"flow_id":"txn-123","user_id":"@alice:example.org","direction":{"type":"incoming","from_device":"ALICEDEVICE"}}}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize verification request");
@@ -3095,6 +3098,22 @@ fn verification_dtos_reject_unknown_fields() {
         )
         .is_err(),
         "verification flow id must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<VerificationRequest>(
+            r#"{"flow_id":"txn-123","user_id":"@alice:example.org","direction":{"type":"outgoing","to_device":null},"unexpected":"value"}"#
+        )
+        .is_err(),
+        "verification request must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<VerificationRequest>(
+            r#"{"flow_id":"txn-123","user_id":"@alice:example.org","direction":{"type":"incoming","from_device":"DEV","unexpected":"value"}}"#
+        )
+        .is_err(),
+        "verification direction must reject unknown fields"
     );
 
     assert!(

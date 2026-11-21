@@ -555,7 +555,10 @@ pub(super) fn verification_menu_action_enabled(
             VerificationState::Requested,
             VerificationAction::Accept | VerificationAction::Cancel
         ) | (
-            VerificationState::Accepted | VerificationState::Ready | VerificationState::Confirmed,
+            VerificationState::Sent
+                | VerificationState::Accepted
+                | VerificationState::Ready
+                | VerificationState::Confirmed,
             VerificationAction::Cancel
         ) | (
             VerificationState::SasReady { .. },

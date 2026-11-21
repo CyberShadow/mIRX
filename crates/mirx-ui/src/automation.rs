@@ -3264,7 +3264,7 @@ mod tests {
         RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomReadState,
         RoomRedactedActivity, RoomSummary, RoomTagSummary, RoomVideoActivity, RoomVideoInfo,
         SessionAuth, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-        VerificationRequest, VerificationState, VerificationStateEvent,
+        VerificationDirection, VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use serde_json::{Value, json};
 
@@ -4620,6 +4620,9 @@ mod tests {
             Event::VerificationRequest(VerificationRequest {
                 flow_id: "flow-1".to_owned(),
                 user_id: "@alice:example".to_owned(),
+                direction: VerificationDirection::Incoming {
+                    from_device: "ALICEDEVICE".to_owned(),
+                },
             }),
             Event::RoomReadState(RoomReadState {
                 room_id: "!ops:example".to_owned(),
@@ -4642,7 +4645,7 @@ mod tests {
             json!([
                 "Started",
                 {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]},
-                {"VerificationRequest":{"flow_id":"flow-1","user_id":"@alice:example"}},
+                {"VerificationRequest":{"flow_id":"flow-1","user_id":"@alice:example","direction":{"type":"incoming","from_device":"ALICEDEVICE"}}},
                 {"RoomReadState":{"room_id":"!ops:example","latest_active_event_id":"$latest:example","fully_read_event_id":"$fully-read:example","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}},
                 {"Error":{"operation":"SendMessage","room_id":"!room:example","message":"send failed"}}
             ])

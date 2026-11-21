@@ -45,7 +45,7 @@ use matrix_sdk::{
     room::edit::EditedContent,
     room::{MessagesOptions, Receipts, RoomMemberRole},
     ruma::{
-        EventId, Int, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId,
+        DeviceId, EventId, Int, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId,
         OwnedRoomAliasId, OwnedRoomId, OwnedUserId, RoomId, RoomOrAliasId, ServerName, UInt,
         UserId,
         api::client::profile::DisplayName as DisplayNameField,
@@ -138,8 +138,9 @@ use crate::api::{
     SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
     SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
-    UnsupportedRoomMessageActivity, UserProfile, VerificationDecimals, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
+    UnsupportedRoomMessageActivity, UserProfile, VerificationDecimals, VerificationDirection,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent,
 };
 use crate::api::{TextStyleSpan, UserLinkSpan, check_text_styles, validate_highlight_word};
 use crate::mentions::body_mentions;
@@ -2025,20 +2026,77 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
 
     let verification_events = events.clone();
     client.add_event_handler(
-        move |event: ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent>| {
+        move |event: ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent>, client: Client| {
             let events = verification_events.clone();
             async move {
-                let flow = verification_flow_id_from_to_device(&event);
-                emit_event(
+                emit_incoming_verification_request(
+                    &client,
                     &events,
-                    Event::VerificationRequest(verification_request_from_to_device(&event)),
-                );
-                emit_event(
-                    &events,
-                    Event::VerificationState(verification_requested_state_event(flow.clone())),
-                );
+                    &event.sender,
+                    event.content.transaction_id.as_str(),
+                    &event.content.from_device,
+                )
+                .await;
             }
         },
+    );
+
+    // Another user verifying you (Element's "Verify user") asks in your DM,
+    // with a room message whose event ID is the flow ID.
+    let room_verification_events = events.clone();
+    client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, client: Client| {
+        let events = room_verification_events.clone();
+        async move {
+            let MessageType::VerificationRequest(content) = &event.content.msgtype else {
+                return;
+            };
+            let own_user_id = client.user_id().expect("sync runs signed in");
+            // Your own requests come back by sync too.
+            if content.to != own_user_id || event.sender == own_user_id {
+                return;
+            }
+            emit_incoming_verification_request(
+                &client,
+                &events,
+                &event.sender,
+                event.event_id.as_str(),
+                &content.from_device,
+            )
+            .await;
+        }
+    });
+}
+
+/// Announces a request another session sent this one, once the SDK holds
+/// it as pending. The SDK drops requests older than ten minutes, which a
+/// first sync replays; one done, cancelled or answered by another of your
+/// sessions (passive) needs no answer from this one.
+async fn emit_incoming_verification_request(
+    client: &Client,
+    events: &EventSender,
+    sender: &UserId,
+    flow_id: &str,
+    from_device: &DeviceId,
+) {
+    let Some(request) = client
+        .encryption()
+        .get_verification_request(sender, flow_id)
+        .await
+    else {
+        return;
+    };
+    if request.is_done() || request.is_cancelled() || request.is_passive() {
+        return;
+    }
+    emit_event(
+        events,
+        Event::VerificationRequest(VerificationRequest {
+            flow_id: flow_id.to_owned(),
+            user_id: sender.to_string(),
+            direction: VerificationDirection::Incoming {
+                from_device: from_device.to_string(),
+            },
+        }),
     );
 }
 
@@ -2796,28 +2854,6 @@ fn room_typing_from_sync_typing(room_id: &str, event: &SyncTypingEvent) -> RoomT
     }
 }
 
-fn verification_request_from_to_device(
-    event: &ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent>,
-) -> VerificationRequest {
-    VerificationRequest {
-        flow_id: event.content.transaction_id.to_string(),
-        user_id: event.sender.to_string(),
-    }
-}
-
-fn verification_flow_id_from_to_device(
-    event: &ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent>,
-) -> VerificationFlowId {
-    VerificationFlowId {
-        flow_id: event.content.transaction_id.to_string(),
-        user_id: event.sender.to_string(),
-    }
-}
-
-fn verification_requested_state_event(flow: VerificationFlowId) -> VerificationStateEvent {
-    verification_state_event(&flow, VerificationState::Requested)
-}
-
 fn verification_state_event(
     flow: &VerificationFlowId,
     state: VerificationState,
@@ -2952,8 +2988,12 @@ pub(crate) async fn watch_verification_request(
     flow: VerificationFlowId,
     events: EventSender,
 ) {
+    // `Event::VerificationRequest` announced the flow, as requested or sent.
     if let Some(event) = map_request_state(&flow, request.state())
-        && event.state != VerificationState::Requested
+        && !matches!(
+            event.state,
+            VerificationState::Requested | VerificationState::Sent
+        )
     {
         emit_event(&events, Event::VerificationState(event));
     }
@@ -3104,7 +3144,7 @@ fn map_request_state(
 ) -> Option<VerificationStateEvent> {
     match state {
         VerificationRequestState::Requested { .. } => {
-            Some(verification_requested_state_event(flow.clone()))
+            Some(verification_state_event(flow, VerificationState::Requested))
         }
         VerificationRequestState::Ready { .. } => {
             Some(verification_state_event(flow, VerificationState::Ready))
@@ -3115,8 +3155,10 @@ fn map_request_state(
         VerificationRequestState::Cancelled(cancel_info) => {
             Some(verification_state_event(flow, map_cancel_info(cancel_info)))
         }
-        VerificationRequestState::Created { .. }
-        | VerificationRequestState::Transitioned { .. } => None,
+        VerificationRequestState::Created { .. } => {
+            Some(verification_state_event(flow, VerificationState::Sent))
+        }
+        VerificationRequestState::Transitioned { .. } => None,
     }
 }
 
@@ -4689,8 +4731,7 @@ mod tests {
         room_unable_to_decrypt_reason_from_sdk, send_file, send_message, set_display_name,
         set_room_member_power_level, set_room_notification_mode,
         sorted_room_member_summaries_from_parts, summarize_rooms, sync_message_replacement,
-        unban_room_member, unignore_user, verification_flow_id_from_to_device,
-        verification_request_from_to_device, verification_requested_state_event,
+        unban_room_member, unignore_user,
     };
     use crate::api::{
         CreateRoomRequest, CreateRoomVisibility, HighlightWord, ListPublicRoomsRequest, PublicRoom,
@@ -5996,7 +6037,8 @@ mod tests {
         RoomVideoInfo, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
         SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, StoredSession,
         UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, VerificationDecimals,
-        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
+        VerificationDirection, VerificationEmoji, VerificationFlowId, VerificationRequest,
+        VerificationState,
     };
     use matrix_sdk::ruma::push::{
         Action, EventMatchConditionData, NewConditionalPushRule, NewPatternedPushRule, NewPushRule,
@@ -6017,9 +6059,8 @@ mod tests {
             api::client::media::get_content_thumbnail::v3::Method,
             events::{
                 AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent,
-                AnyTimelineEvent, ToDeviceEvent,
+                AnyTimelineEvent,
                 direct::DirectEventContent,
-                key::verification::request::ToDeviceKeyVerificationRequestEventContent,
                 reaction::OriginalSyncReactionEvent,
                 room::MediaSource,
                 room::power_levels::{
@@ -10455,55 +10496,6 @@ mod tests {
     }
 
     #[test]
-    fn to_device_verification_request_mapping_uses_transaction_id_and_sender() {
-        let event: ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent> =
-            serde_json::from_value(serde_json::json!({
-                "type": "m.key.verification.request",
-                "sender": "@alice:example.org",
-                "content": {
-                    "from_device": "ALICEDEVICE",
-                    "transaction_id": "txn-123",
-                    "methods": ["m.sas.v1"],
-                    "timestamp": 1700000000003u64
-                }
-            }))
-            .expect("deserialize to-device verification request");
-
-        assert_eq!(
-            verification_request_from_to_device(&event),
-            VerificationRequest {
-                flow_id: "txn-123".to_owned(),
-                user_id: "@alice:example.org".to_owned(),
-            }
-        );
-    }
-
-    #[test]
-    fn to_device_verification_request_mapping_derives_requested_state() {
-        let event: ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent> =
-            serde_json::from_value(serde_json::json!({
-                "type": "m.key.verification.request",
-                "sender": "@alice:example.org",
-                "content": {
-                    "from_device": "ALICEDEVICE",
-                    "transaction_id": "txn-123",
-                    "methods": ["m.sas.v1"],
-                    "timestamp": 1700000000003u64
-                }
-            }))
-            .expect("deserialize to-device verification request");
-
-        assert_eq!(
-            verification_requested_state_event(verification_flow_id_from_to_device(&event)),
-            VerificationStateEvent {
-                flow_id: "txn-123".to_owned(),
-                user_id: "@alice:example.org".to_owned(),
-                state: VerificationState::Requested,
-            }
-        );
-    }
-
-    #[test]
     fn decimal_mapping_preserves_each_value() {
         assert_eq!(
             map_decimals((1234, 5678, 9012)),
@@ -13521,5 +13513,189 @@ mod tests {
         assert!(text.get("m.relates_to").is_none());
         assert!(notice.get("m.relates_to").is_none());
         assert!(emote.get("m.relates_to").is_none());
+    }
+
+    /// Verification against the SDK's mock crypto server: real
+    /// `OlmMachine`s that know each other's keys, offline.
+    mod verification {
+        use super::super::lookup_verification_request;
+        use super::*;
+
+        fn block_on<F: std::future::Future>(future: F) -> F::Output {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio runtime")
+                .block_on(future)
+        }
+
+        fn now_ms() -> u64 {
+            MilliSecondsSinceUnixEpoch::now().get().into()
+        }
+
+        fn verification_requests(events: &[Event]) -> Vec<&VerificationRequest> {
+            events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::VerificationRequest(request) => Some(request),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn room_request_json(
+            event_id: &str,
+            sender: &str,
+            to: &str,
+            origin_server_ts: u64,
+        ) -> serde_json::Value {
+            serde_json::json!({
+                "type": "m.room.message",
+                "event_id": event_id,
+                "sender": sender,
+                "origin_server_ts": origin_server_ts,
+                "content": {
+                    "msgtype": "m.key.verification.request",
+                    "body": "Bob is requesting to verify your key",
+                    "from_device": "B0B0B0B0B",
+                    "methods": ["m.sas.v1"],
+                    "to": to,
+                }
+            })
+        }
+
+        #[test]
+        fn in_room_verification_request_emits_incoming_request() {
+            block_on(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                let (alice, _bob) = server.set_up_alice_and_bob_for_encryption().await;
+                let (events, event_rx) = mpsc::channel();
+                register_event_handlers(&alice, events);
+
+                server
+                    .sync_room(
+                        &alice,
+                        JoinedRoomBuilder::new(room_id().as_ref()).add_timeline_event(
+                            raw_sync_timeline_event(room_request_json(
+                                "$fresh:example.org",
+                                "@bob:example.org",
+                                "@alice:example.org",
+                                now_ms(),
+                            )),
+                        ),
+                    )
+                    .await;
+
+                let got = drain_events(&event_rx);
+                assert_eq!(
+                    verification_requests(&got),
+                    vec![&VerificationRequest {
+                        flow_id: "$fresh:example.org".to_owned(),
+                        user_id: "@bob:example.org".to_owned(),
+                        direction: VerificationDirection::Incoming {
+                            from_device: "B0B0B0B0B".to_owned(),
+                        },
+                    }],
+                    "{got:?}"
+                );
+                assert!(
+                    !got.iter()
+                        .any(|event| matches!(event, Event::VerificationState(_))),
+                    "the request alone announces the flow: {got:?}"
+                );
+                // The SDK holds the flow by the request's event ID, which
+                // Accept looks up.
+                let flow = VerificationFlowId {
+                    flow_id: "$fresh:example.org".to_owned(),
+                    user_id: "@bob:example.org".to_owned(),
+                };
+                assert!(lookup_verification_request(&alice, &flow).await.is_ok());
+            });
+        }
+
+        #[test]
+        fn in_room_verification_requests_to_others_or_stale_emit_nothing() {
+            block_on(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                let (alice, _bob) = server.set_up_alice_and_bob_for_encryption().await;
+                let (events, event_rx) = mpsc::channel();
+                register_event_handlers(&alice, events);
+
+                // The SDK drops a request older than ten minutes.
+                let eleven_minutes_ago = now_ms() - 11 * 60 * 1000;
+                server
+                    .sync_room(
+                        &alice,
+                        JoinedRoomBuilder::new(room_id().as_ref())
+                            .add_timeline_event(raw_sync_timeline_event(room_request_json(
+                                "$for-carol:example.org",
+                                "@bob:example.org",
+                                "@carol:example.org",
+                                now_ms(),
+                            )))
+                            .add_timeline_event(raw_sync_timeline_event(room_request_json(
+                                "$stale:example.org",
+                                "@bob:example.org",
+                                "@alice:example.org",
+                                eleven_minutes_ago,
+                            ))),
+                    )
+                    .await;
+
+                let got = drain_events(&event_rx);
+                assert_eq!(
+                    verification_requests(&got),
+                    Vec::<&VerificationRequest>::new()
+                );
+            });
+        }
+
+        #[test]
+        fn to_device_verification_request_emits_incoming_request_once_pending() {
+            block_on(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                let (alice, _bob) = server.set_up_alice_and_bob_for_encryption().await;
+                let (events, event_rx) = mpsc::channel();
+                register_event_handlers(&alice, events);
+
+                let request = |transaction_id: &str, timestamp: u64| {
+                    serde_json::from_value(serde_json::json!({
+                        "type": "m.key.verification.request",
+                        "sender": "@bob:example.org",
+                        "content": {
+                            "from_device": "B0B0B0B0B",
+                            "transaction_id": transaction_id,
+                            "methods": ["m.sas.v1"],
+                            "timestamp": timestamp,
+                        }
+                    }))
+                    .expect("to-device verification request")
+                };
+                server
+                    .mock_sync()
+                    .ok_and_run(&alice, |builder| {
+                        builder
+                            .add_to_device_event(request("txn-fresh", now_ms()))
+                            .add_to_device_event(request("txn-stale", 1_700_000_000_000));
+                    })
+                    .await;
+
+                let got = drain_events(&event_rx);
+                assert_eq!(
+                    verification_requests(&got),
+                    vec![&VerificationRequest {
+                        flow_id: "txn-fresh".to_owned(),
+                        user_id: "@bob:example.org".to_owned(),
+                        direction: VerificationDirection::Incoming {
+                            from_device: "B0B0B0B0B".to_owned(),
+                        },
+                    }],
+                    "{got:?}"
+                );
+            });
+        }
     }
 }

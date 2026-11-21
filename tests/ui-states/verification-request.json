@@ -3,7 +3,8 @@
   {
     "VerificationRequest": {
       "flow_id": "flow-verify-request",
-      "user_id": "@alice:example"
+      "user_id": "@alice:example",
+      "direction": { "type": "incoming", "from_device": "ALICEDEVICE" }
     }
   }
 ]
