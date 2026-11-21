@@ -1,5 +1,7 @@
 //! The per-room model and the facts derived from room activity.
 
+use std::borrow::Borrow;
+
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +48,121 @@ pub(super) struct RoomViewModel {
     pub(super) history: RoomHistoryBackfillState,
     pub(super) echo: EchoLog,
     pub(super) arrivals: RoomArrivals,
+}
+
+/// Every room's view model, by room ID, each with a revision: the gate
+/// that rebuilds a window's rows only when their inputs changed reads it.
+///
+/// The invariant that makes the gate safe: **every `&mut RoomViewModel`
+/// handed out moves that room's revision.** A revision comes from one
+/// counter for all rooms, so a room removed and created again never repeats
+/// one. A mutable access that changes nothing still moves it, so loops over
+/// every room must take mutable access only where they change something.
+#[derive(Default, Clone)]
+pub(super) struct RoomViews {
+    map: BTreeMap<String, RevisedRoomView>,
+    next_revision: u64,
+}
+
+#[derive(Clone)]
+struct RevisedRoomView {
+    view: RoomViewModel,
+    revision: u64,
+}
+
+impl RoomViews {
+    fn take_revision(&mut self) -> u64 {
+        let revision = self.next_revision;
+        self.next_revision += 1;
+        revision
+    }
+
+    pub(super) fn get<Q>(&self, room_id: &Q) -> Option<&RoomViewModel>
+    where
+        String: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.map.get(room_id).map(|entry| &entry.view)
+    }
+
+    /// The room's revision; `None` without a view model.
+    pub(super) fn revision(&self, room_id: &str) -> Option<u64> {
+        self.map.get(room_id).map(|entry| entry.revision)
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = (&String, &RoomViewModel)> {
+        self.map
+            .iter()
+            .map(|(room_id, entry)| (room_id, &entry.view))
+    }
+
+    pub(super) fn values(&self) -> impl Iterator<Item = &RoomViewModel> {
+        self.map.values().map(|entry| &entry.view)
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    pub(super) fn get_mut<Q>(&mut self, room_id: &Q) -> Option<&mut RoomViewModel>
+    where
+        String: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let revision = self.take_revision();
+        self.map.get_mut(room_id).map(|entry| {
+            entry.revision = revision;
+            &mut entry.view
+        })
+    }
+
+    /// The room's view model, created empty if it has none.
+    pub(super) fn entry_or_default(&mut self, room_id: impl Into<String>) -> &mut RoomViewModel {
+        let revision = self.take_revision();
+        let entry = self
+            .map
+            .entry(room_id.into())
+            .or_insert_with(|| RevisedRoomView {
+                view: RoomViewModel::default(),
+                revision,
+            });
+        entry.revision = revision;
+        &mut entry.view
+    }
+
+    pub(super) fn insert(&mut self, room_id: String, view: RoomViewModel) -> Option<RoomViewModel> {
+        let revision = self.take_revision();
+        self.map
+            .insert(room_id, RevisedRoomView { view, revision })
+            .map(|entry| entry.view)
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.map.clear();
+    }
+}
+
+impl<Q> std::ops::Index<&Q> for RoomViews
+where
+    String: Borrow<Q>,
+    Q: Ord + ?Sized,
+{
+    type Output = RoomViewModel;
+
+    fn index(&self, room_id: &Q) -> &RoomViewModel {
+        self.get(room_id).expect("the room has a view model")
+    }
+}
+
+impl FromIterator<(String, RoomViewModel)> for RoomViews {
+    fn from_iter<I: IntoIterator<Item = (String, RoomViewModel)>>(views: I) -> Self {
+        let mut room_views = Self::default();
+        for (room_id, view) in views {
+            room_views.insert(room_id, view);
+        }
+        room_views
+    }
 }
 
 /// The order in which a room's lines arrived live: its activities from
@@ -961,7 +1078,7 @@ impl RoomViewModel {
 }
 
 pub(super) fn validate_synthetic_room_activity_events(
-    room_views: &BTreeMap<String, RoomViewModel>,
+    room_views: &RoomViews,
     events: &[Event],
 ) -> Result<(), String> {
     let mut room_views = room_views.clone();
@@ -969,11 +1086,10 @@ pub(super) fn validate_synthetic_room_activity_events(
     for event in events {
         match event {
             Event::RoomActivity(activity) => room_views
-                .entry(activity.room_id.clone())
-                .or_default()
+                .entry_or_default(activity.room_id.clone())
                 .apply_activity(activity.as_ref().clone()),
             Event::RoomActivityUpdate(update) => {
-                let room_view = room_views.entry(update.room_id.clone()).or_default();
+                let room_view = room_views.entry_or_default(update.room_id.clone());
                 room_view.validate_update(update)?;
                 match (&update.target, &update.kind) {
                     (
@@ -1487,7 +1603,7 @@ pub(super) fn joined_room_notification_mode(room: &RoomSummary) -> RoomNotificat
 
 pub(super) fn view_id_is_valid_for_rooms(
     rooms: &[RoomSummary],
-    room_views: &BTreeMap<String, RoomViewModel>,
+    room_views: &RoomViews,
     view_id: &ViewId,
 ) -> bool {
     match view_id {
@@ -1537,10 +1653,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn room_views_bump_a_revision_only_on_mutable_access() {
+        let mut views = RoomViews::default();
+        views.insert("!a:example".to_owned(), RoomViewModel::default());
+        views.entry_or_default("!b:example");
+        let a = views.revision("!a:example").unwrap();
+        let b = views.revision("!b:example").unwrap();
+        assert_ne!(a, b);
+        assert_eq!(views.revision("!c:example"), None);
+
+        assert!(views.get("!a:example").is_some());
+        let _ = views.iter().count() + views.values().count();
+        assert_eq!(views.revision("!a:example"), Some(a));
+
+        views.get_mut("!a:example").unwrap();
+        let a2 = views.revision("!a:example").unwrap();
+        assert!(a2 > a);
+        views.entry_or_default("!a:example");
+        let a3 = views.revision("!a:example").unwrap();
+        assert!(a3 > a2);
+        views.insert("!a:example".to_owned(), RoomViewModel::default());
+        let a4 = views.revision("!a:example").unwrap();
+        assert!(a4 > a3);
+        assert_eq!(views.revision("!b:example"), Some(b));
+        // A missing room moves no revision of another.
+        assert!(views.get_mut("!c:example").is_none());
+        assert_eq!(views.revision("!a:example"), Some(a4));
+
+        // A room gone and back never repeats an earlier revision.
+        views.clear();
+        views.entry_or_default("!a:example");
+        assert!(views.revision("!a:example").unwrap() > a4);
+    }
+
+    #[test]
     fn synthetic_event_validation_rejects_invalid_message_sent_sequence() {
         assert_eq!(
             validate_synthetic_room_activity_events(
-                &BTreeMap::new(),
+                &RoomViews::default(),
                 &[outgoing_sent("!ops:example", "txn-1", "$event:example.org")]
             ),
             Err("outgoing sent requires an existing queued timeline row".to_owned())
@@ -1551,7 +1701,7 @@ mod tests {
     fn synthetic_event_validation_accepts_pending_then_sent_sequence() {
         assert_eq!(
             validate_synthetic_room_activity_events(
-                &BTreeMap::new(),
+                &RoomViews::default(),
                 &[
                     outgoing_queued("!ops:example", "txn-1", "hello"),
                     outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
@@ -1565,7 +1715,7 @@ mod tests {
     fn synthetic_event_validation_rejects_message_edit_with_transaction_target() {
         assert_eq!(
             validate_synthetic_room_activity_events(
-                &BTreeMap::new(),
+                &RoomViews::default(),
                 &[Event::RoomActivityUpdate(RoomActivityUpdate {
                     room_id: "!ops:example".to_owned(),
                     target: RoomActivityUpdateTarget::Transaction {
@@ -1590,7 +1740,7 @@ mod tests {
     fn synthetic_event_validation_rejects_message_edit_without_visible_target() {
         assert_eq!(
             validate_synthetic_room_activity_events(
-                &BTreeMap::new(),
+                &RoomViews::default(),
                 &[incoming_replaced(
                     "!ops:example",
                     "$missing:example.org",
@@ -1607,7 +1757,7 @@ mod tests {
     fn redaction_synthetic_event_validation_rejects_missing_event_target() {
         assert_eq!(
             validate_synthetic_room_activity_events(
-                &BTreeMap::new(),
+                &RoomViews::default(),
                 &[incoming_redacted(
                     "!ops:example",
                     "$missing:example.org",
@@ -1622,7 +1772,7 @@ mod tests {
     fn redaction_synthetic_event_validation_rejects_transaction_target() {
         assert_eq!(
             validate_synthetic_room_activity_events(
-                &BTreeMap::new(),
+                &RoomViews::default(),
                 &[Event::RoomActivityUpdate(RoomActivityUpdate {
                     room_id: "!ops:example".to_owned(),
                     target: RoomActivityUpdateTarget::Transaction {
@@ -1641,7 +1791,7 @@ mod tests {
     fn reaction_add_synthetic_event_validation_rejects_transaction_target() {
         assert_eq!(
             validate_synthetic_room_activity_events(
-                &BTreeMap::new(),
+                &RoomViews::default(),
                 &[Event::RoomActivityUpdate(RoomActivityUpdate {
                     room_id: "!ops:example".to_owned(),
                     target: RoomActivityUpdateTarget::Transaction {
@@ -1663,7 +1813,7 @@ mod tests {
     fn reaction_removed_synthetic_event_validation_rejects_transaction_target() {
         assert_eq!(
             validate_synthetic_room_activity_events(
-                &BTreeMap::new(),
+                &RoomViews::default(),
                 &[Event::RoomActivityUpdate(RoomActivityUpdate {
                     room_id: "!ops:example".to_owned(),
                     target: RoomActivityUpdateTarget::Transaction {

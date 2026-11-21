@@ -150,6 +150,16 @@ pub(super) fn register_room_content_class(instance: *mut c_void) -> Result<(), S
     Ok(())
 }
 
+/// Writes the frame's `mirx - [caption]` title again from the maximized
+/// `child`, now active. Wine's MDI writes it when a child maximizes, from
+/// the child active then: switching to a maximized window, or creating one
+/// maximized, titles the frame with the previous window, or none. A
+/// maximized child's `WM_SETTEXT` writes it from the active child.
+unsafe fn retitle_frame(child: HWND) {
+    let caption = wide_null(&read_window_text(child));
+    SendMessageW(child, WM_SETTEXT, 0, caption.as_ptr() as LPARAM);
+}
+
 unsafe extern "system" fn mdi_child_window_proc(
     hwnd: HWND,
     message: u32,
@@ -191,10 +201,13 @@ unsafe extern "system" fn mdi_child_window_proc(
             state.scheme_brushes.editbox as LRESULT
         }
         WM_MDIACTIVATE => {
-            if lparam as HWND == hwnd
-                && let Err(message) = handle_native_mdi_child_activation(hwnd)
-            {
-                eprintln!("{message}");
+            if lparam as HWND == hwnd {
+                if let Err(message) = handle_native_mdi_child_activation(hwnd) {
+                    eprintln!("{message}");
+                }
+                if IsZoomed(hwnd) != 0 {
+                    retitle_frame(hwnd);
+                }
             }
             DefMDIChildProcW(hwnd, message, wparam, lparam)
         }
@@ -1012,6 +1025,7 @@ pub(super) unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, St
             target: None,
         }),
         log: ViewLog::for_new_view(&view_id),
+        rows_key: None,
     };
 
     let state = state_mut(hwnd);
@@ -1067,140 +1081,194 @@ pub(super) unsafe fn destroy_stale_room_views(hwnd: HWND) {
     }
 }
 
-pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
-    let (child, content, title) = {
-        let state = state_ref(hwnd);
-        let view = state
-            .views
-            .get(view_id)
-            .ok_or_else(|| "view state was not tracked".to_owned())?;
-        let title = view_caption(&state.model, view_id);
-        (view.child, view.content, title)
-    };
+/// Everything a window's rows are built from. A window rebuilds its rows
+/// in `sync_view_content` only when this differs from the key it last built
+/// them from, so it must hold every input of the row builders
+/// (`build_room_timeline_rows`, `build_thread_timeline_rows`,
+/// `build_status_timeline_rows`, `armed_compose_target_row`) and of the
+/// refresh's fetches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ViewRowsKey {
+    /// A room or thread window's room, and its view model's revision.
+    room: Option<(RoomSummary, Option<u64>)>,
+    /// The Status window's log.
+    status_revision: Option<u64>,
+    timestamp: TimestampSetting,
+    own_user_id: Option<String>,
+    /// Whether the refresh may ask for preview media and reply targets: a
+    /// window whose requests were skipped asks once it may. The price is
+    /// one rebuild of every window when it flips, as on (re)connecting.
+    can_fetch_media: bool,
+    can_fetch_events: bool,
+    compose_target: Option<ComposeTarget>,
+}
 
-    let title = wide_null(&title);
-    SendMessageW(child, WM_SETTEXT, 0, title.as_ptr() as LPARAM);
+/// The inputs of `view_id`'s rows now; the Rooms List has none.
+pub(super) fn view_rows_key(state: &WindowState, view_id: &ViewId) -> ViewRowsKey {
+    let room = view_id.room_id().map(|room_id| {
+        (
+            room_by_id(&state.model.rooms, room_id)
+                .expect("a room or thread window's room exists")
+                .clone(),
+            state.model.room_views.revision(room_id),
+        )
+    });
+    ViewRowsKey {
+        room,
+        status_revision: match view_id {
+            ViewId::Status => Some(state.model.status_log.revision()),
+            ViewId::Room(_) | ViewId::Thread { .. } => None,
+            ViewId::RoomList => unreachable!("the Rooms List has no rows to gate"),
+        },
+        timestamp: state.settings.settings().timestamp.clone(),
+        own_user_id: state.model.own_user_id.clone(),
+        can_fetch_media: can_fetch_room_media(state),
+        can_fetch_events: can_fetch_room_events(state),
+        compose_target: state.views[view_id].compose().target.clone(),
+    }
+}
+
+/// Brings a window up to date with the model: its caption, and its rows
+/// if their inputs changed since they were built. Rebuilding is the costly
+/// part of a refresh, which runs after every core event batch.
+pub(super) unsafe fn sync_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
+    if *view_id == ViewId::RoomList {
+        // Owner data: a refresh only sets the item count and repaints.
+        return refresh_view_content(hwnd, view_id);
+    }
+    let state = state_ref(hwnd);
+    if state.views[view_id].rows_key.as_ref() == Some(&view_rows_key(state, view_id)) {
+        return Ok(());
+    }
+    refresh_view_content(hwnd, view_id)
+}
+
+/// Sets the window's caption, unless it already reads so: setting a
+/// maximized child's caption repaints the frame's.
+unsafe fn sync_view_caption(hwnd: HWND, view_id: &ViewId) {
+    let state = state_ref(hwnd);
+    let child = state.views[view_id].child;
+    let caption = view_caption(&state.model, view_id);
+    if read_window_text(child) != caption {
+        let caption = wide_null(&caption);
+        SendMessageW(child, WM_SETTEXT, 0, caption.as_ptr() as LPARAM);
+    }
+}
+
+/// Rebuilds the window's rows from the model, whatever changed.
+pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
+    let content = state_ref(hwnd)
+        .views
+        .get(view_id)
+        .ok_or_else(|| "view state was not tracked".to_owned())?
+        .content;
+    sync_view_caption(hwnd, view_id);
     if *view_id == ViewId::RoomList {
         // No text and no editbox: only the list's rows change.
         refresh_room_list_rows(state_ref(hwnd), content);
         return Ok(());
     }
     disarm_vanished_compose_target(state_mut(hwnd), view_id);
-    match view_id {
-        ViewId::RoomList => unreachable!("the Rooms List returned above"),
-        // Each branch logs first: a log that fails prints why in the
-        // window, which the rows built next then show.
-        ViewId::Status => {
-            write_view_log(state_mut(hwnd), view_id);
-            let rows = {
-                let state = state_ref(hwnd);
-                build_status_timeline_rows(&state.model.status_log, state.timestamps())
-            };
-            set_timeline_rows(content, &rows);
-            state_mut(hwnd).refresh_counters.count_row_build(view_id);
-            recompute_find_for_view(state_mut(hwnd), view_id, &rows);
-            apply_find_to_active_view(hwnd, view_id)?;
-            InvalidateRect(content, null(), 1);
-        }
-        ViewId::Room(room_id) => {
-            decide_auto_log(state_mut(hwnd), view_id);
-            write_view_log(state_mut(hwnd), view_id);
-            let (rows, member_rows, image_requests, reply_target_requests) = {
-                let state = state_ref(hwnd);
-                let room = room_by_id(&state.model.rooms, room_id)
-                    .expect("room view must target an existing room");
-                let room_view = state.model.room_views.get(room_id);
-                let timestamps = state.timestamps();
-                let mut rows = build_room_timeline_rows(&state.model, room_id, timestamps);
-                rows.extend(armed_compose_target_row(state, view_id));
-                let (image_requests, reply_target_requests) = match room_view {
-                    Some(room_view) if is_sendable_room(room) => (
-                        collect_lazy_room_preview_media_requests(
-                            room_view,
-                            room_view.activities.iter(),
-                        ),
-                        collect_reply_target_requests(room_view, room_view.activities.iter()),
-                    ),
-                    _ => (Vec::new(), BTreeSet::new()),
-                };
-                let member_rows = if is_sendable_room(room) {
-                    room_member_view_rows(
-                        room_view
-                            .map(|room_view| room_view.members.as_slice())
-                            .unwrap_or_default(),
-                    )
-                } else {
-                    Vec::new()
-                };
-                (rows, member_rows, image_requests, reply_target_requests)
-            };
-            dispatch_lazy_room_preview_media_requests(state_mut(hwnd), room_id, image_requests)?;
-            dispatch_reply_target_fetches(state_mut(hwnd), room_id, reply_target_requests)?;
-            validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
-            let timeline = room_content_timeline(content);
-            set_timeline_rows(timeline, &rows);
-            state_mut(hwnd).refresh_counters.count_row_build(view_id);
-            recompute_find_for_view(state_mut(hwnd), view_id, &rows);
-            if state_ref(hwnd).active_view == *view_id {
-                apply_find_to_active_view(hwnd, view_id)?;
-            } else {
-                clear_find_projection_for_timeline(timeline);
-            }
-            set_room_member_list(room_content_member_list(content), &member_rows);
-            InvalidateRect(content, null(), 1);
-            InvalidateRect(timeline, null(), 1);
-            InvalidateRect(room_content_member_list(content), null(), 1);
-        }
-        ViewId::Thread {
-            room_id,
-            thread_root_event_id,
-        } => {
-            let (rows, member_rows, image_requests, reply_target_requests) = {
-                let state = state_ref(hwnd);
-                let room_view = state
-                    .model
-                    .room_views
-                    .get(room_id)
-                    .expect("thread view must target an existing room view");
-                let timestamps = state.timestamps();
-                let mut rows = build_thread_timeline_rows(
-                    &state.model,
-                    room_id,
-                    thread_root_event_id,
-                    timestamps,
-                );
-                rows.extend(armed_compose_target_row(state, view_id));
-                let thread_activities = || {
-                    room_view.activities.iter().filter(|activity| {
-                        room_activity_belongs_to_thread(activity, thread_root_event_id)
-                    })
-                };
-                let image_requests =
-                    collect_lazy_room_preview_media_requests(room_view, thread_activities());
-                let reply_target_requests =
-                    collect_reply_target_requests(room_view, thread_activities());
-                let member_rows = room_member_view_rows(room_view.members.as_slice());
-                (rows, member_rows, image_requests, reply_target_requests)
-            };
-            dispatch_lazy_room_preview_media_requests(state_mut(hwnd), room_id, image_requests)?;
-            dispatch_reply_target_fetches(state_mut(hwnd), room_id, reply_target_requests)?;
-            validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
-            let timeline = room_content_timeline(content);
-            set_timeline_rows(timeline, &rows);
-            state_mut(hwnd).refresh_counters.count_row_build(view_id);
-            recompute_find_for_view(state_mut(hwnd), view_id, &rows);
-            if state_ref(hwnd).active_view == *view_id {
-                apply_find_to_active_view(hwnd, view_id)?;
-            } else {
-                clear_find_projection_for_timeline(timeline);
-            }
-            set_room_member_list(room_content_member_list(content), &member_rows);
-            InvalidateRect(content, null(), 1);
-            InvalidateRect(timeline, null(), 1);
-            InvalidateRect(room_content_member_list(content), null(), 1);
-        }
+    // Logging first: a log that fails prints why in the window, which the
+    // rows built next then show.
+    if let ViewId::Room(_) = view_id {
+        decide_auto_log(state_mut(hwnd), view_id);
     }
+    if let ViewId::Status | ViewId::Room(_) = view_id {
+        write_view_log(state_mut(hwnd), view_id);
+    }
+    // Fetching marks what it asks for as pending in the room's view model,
+    // so it goes before the key: the rows are built from that state.
+    if let Some(room_id) = view_id.room_id() {
+        dispatch_view_fetches(hwnd, view_id, room_id)?;
+    }
+    let key = view_rows_key(state_ref(hwnd), view_id);
+    let rows = {
+        let state = state_ref(hwnd);
+        let timestamps = state.timestamps();
+        let mut rows = match view_id {
+            ViewId::Status => build_status_timeline_rows(&state.model.status_log, timestamps),
+            ViewId::Room(room_id) => build_room_timeline_rows(&state.model, room_id, timestamps),
+            ViewId::Thread {
+                room_id,
+                thread_root_event_id,
+            } => {
+                build_thread_timeline_rows(&state.model, room_id, thread_root_event_id, timestamps)
+            }
+            ViewId::RoomList => unreachable!("the Rooms List returned above"),
+        };
+        rows.extend(armed_compose_target_row(state, view_id));
+        rows
+    };
+    validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
+    let timeline = view_timeline(view_id, content);
+    set_timeline_rows(timeline, &rows);
+    recompute_find_for_view(state_mut(hwnd), view_id, &rows);
+    apply_find_to_active_view(hwnd, view_id)?;
+    if let Some(room_id) = view_id.room_id() {
+        let member_rows = {
+            let state = state_ref(hwnd);
+            let room = room_by_id(&state.model.rooms, room_id)
+                .expect("a room or thread window's room exists");
+            let members = state
+                .model
+                .room_views
+                .get(room_id)
+                .map(|room_view| room_view.members.as_slice())
+                .unwrap_or_default();
+            // An invite's window lists nobody: its room is not joined yet.
+            if is_sendable_room(room) {
+                room_member_view_rows(members)
+            } else {
+                Vec::new()
+            }
+        };
+        set_room_member_list(room_content_member_list(content), &member_rows);
+        InvalidateRect(room_content_member_list(content), null(), 1);
+    }
+    InvalidateRect(content, null(), 1);
+    InvalidateRect(timeline, null(), 1);
+    let state = state_mut(hwnd);
+    state
+        .views
+        .get_mut(view_id)
+        .expect("a refreshed view has a window")
+        .rows_key = Some(key);
+    state.refresh_counters.count_row_build(view_id);
     Ok(())
+}
+
+/// Asks for the preview media and reply targets the window's messages need
+/// and its room does not have yet.
+unsafe fn dispatch_view_fetches(hwnd: HWND, view_id: &ViewId, room_id: &str) -> Result<(), String> {
+    let (image_requests, reply_target_requests) = {
+        let state = state_ref(hwnd);
+        let room =
+            room_by_id(&state.model.rooms, room_id).expect("a room or thread window's room exists");
+        match state.model.room_views.get(room_id) {
+            Some(room_view) if is_sendable_room(room) => {
+                let activities = || {
+                    room_view
+                        .activities
+                        .iter()
+                        .filter(|activity| match view_id {
+                            ViewId::Thread {
+                                thread_root_event_id,
+                                ..
+                            } => room_activity_belongs_to_thread(activity, thread_root_event_id),
+                            _ => true,
+                        })
+                };
+                (
+                    collect_lazy_room_preview_media_requests(room_view, activities()),
+                    collect_reply_target_requests(room_view, activities()),
+                )
+            }
+            _ => return Ok(()),
+        }
+    };
+    dispatch_lazy_room_preview_media_requests(state_mut(hwnd), room_id, image_requests)?;
+    dispatch_reply_target_fetches(state_mut(hwnd), room_id, reply_target_requests)
 }
 
 pub(super) unsafe fn refresh_every_view_content(hwnd: HWND) -> Result<(), String> {
@@ -1249,9 +1317,10 @@ unsafe fn apply_view_activation_state(
     };
     let cleared_view_activity = handle_view_activation(state_mut(hwnd), view_id)?;
 
+    let previous_active = state_ref(hwnd).active_view.clone();
     let newly_active = {
         let state = state_mut(hwnd);
-        let newly_active = state.active_view != *view_id;
+        let newly_active = previous_active != *view_id;
         if newly_active {
             state.selected_timeline_event = None;
             hide_color_index(state);
@@ -1261,7 +1330,19 @@ unsafe fn apply_view_activation_state(
     };
 
     refresh_tree_activity_colors(hwnd)?;
-    refresh_view_content(hwnd, view_id)?;
+    if newly_active {
+        // Find marks its match in the active window only. The Rooms List
+        // has no timeline, and the previous window is gone if its room went.
+        if previous_active != ViewId::RoomList
+            && state_ref(hwnd).views.contains_key(&previous_active)
+        {
+            apply_find_to_active_view(hwnd, &previous_active)?;
+        }
+        // Its find projection and selection are the active window's.
+        refresh_view_content(hwnd, view_id)?;
+    } else {
+        sync_view_content(hwnd, view_id)?;
+    }
     // A newly active window takes the treebar caret and unfolds its folder.
     // Re-applying the active one leaves a caret that the treebar keys put on
     // a space folder, which activates nothing.
@@ -1345,6 +1426,138 @@ unsafe fn handle_native_mdi_child_activation(child: HWND) -> Result<(), String> 
 mod tests {
     use super::super::test_fixtures::*;
     use super::*;
+
+    /// Ops with its room window and Status, stand-in windows only.
+    fn keyed_state() -> WindowState {
+        let mut state = compose_target_state();
+        state.views.insert(ViewId::Status, tracked_view(100));
+        state
+            .views
+            .insert(room_view_id("!ops:example"), tracked_view(200));
+        state
+    }
+
+    #[test]
+    fn view_rows_key_changes_with_each_input() {
+        let ops = room_view_id("!ops:example");
+        type Change = fn(&mut WindowState);
+        let changes: [(&str, Change, bool, bool); 8] = [
+            // (what, change, moves the room's key, moves Status's key)
+            (
+                "a rename",
+                |state| state.model.rooms[0].display_name = "Renamed".to_owned(),
+                true,
+                false,
+            ),
+            (
+                "a room view mutation",
+                |state| {
+                    state.model.room_views.get_mut("!ops:example").unwrap();
+                },
+                true,
+                false,
+            ),
+            (
+                "a Status line",
+                |state| log_status(state, StatusLineKind::Info, "* hello".to_owned()),
+                false,
+                true,
+            ),
+            (
+                "the own user",
+                |state| state.model.own_user_id = Some("@other:example".to_owned()),
+                true,
+                true,
+            ),
+            (
+                "fetching becomes possible",
+                |state| state.model.connection = ConnectionState::Syncing,
+                true,
+                true,
+            ),
+            (
+                "a synthetic load",
+                |state| state.synthetic_load_in_progress = true,
+                true,
+                true,
+            ),
+            (
+                "an armed editbox",
+                |state| {
+                    state
+                        .views
+                        .get_mut(&room_view_id("!ops:example"))
+                        .unwrap()
+                        .compose_mut()
+                        .target = Some(ComposeTarget::Reply {
+                        event_id: "$q".to_owned(),
+                    })
+                },
+                true,
+                false,
+            ),
+            (
+                "the timestamp format",
+                |state| {
+                    state
+                        .settings
+                        .update(|settings| settings.timestamp.show = false)
+                        .unwrap()
+                },
+                true,
+                true,
+            ),
+        ];
+        for (what, change, moves_room, moves_status) in changes {
+            let mut state = keyed_state();
+            let room_before = view_rows_key(&state, &ops);
+            let status_before = view_rows_key(&state, &ViewId::Status);
+            assert_eq!(view_rows_key(&state, &ops), room_before, "{what}");
+            change(&mut state);
+            assert_eq!(
+                view_rows_key(&state, &ops) != room_before,
+                moves_room,
+                "{what} (room)"
+            );
+            assert_eq!(
+                view_rows_key(&state, &ViewId::Status) != status_before,
+                moves_status,
+                "{what} (Status)"
+            );
+        }
+    }
+
+    #[test]
+    fn sync_views_rebuilds_only_the_changed_room() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                state_mut(hwnd).model.rooms = vec![
+                    room("!a:example", "A", false),
+                    room("!b:example", "B", false),
+                ];
+                sync_views_and_tree(hwnd).unwrap();
+                let builds = |room_id| state_ref(hwnd).refresh_counters.room_row_builds(room_id);
+                let (a, b) = (builds("!a:example"), builds("!b:example"));
+                assert!(a > 0 && b > 0, "every window is built once");
+                let total = state_ref(hwnd).refresh_counters.timeline_row_builds();
+
+                sync_views_and_tree(hwnd).unwrap();
+                assert_eq!(
+                    state_ref(hwnd).refresh_counters.timeline_row_builds(),
+                    total
+                );
+
+                apply_core_event(state_mut(hwnd), timeline("!b:example", "hello")).unwrap();
+                sync_views_and_tree(hwnd).unwrap();
+                assert_eq!(builds("!a:example"), a);
+                assert_eq!(builds("!b:example"), b + 1);
+                assert_eq!(
+                    state_ref(hwnd).refresh_counters.timeline_row_builds(),
+                    total + 1
+                );
+            });
+        }
+    }
 
     #[test]
     fn resolve_active_view_preserves_existing_active_room() {
@@ -1435,7 +1648,7 @@ mod tests {
         );
         let model = UiModel {
             rooms: vec![room("!alpha:example", "Alpha", false)],
-            room_views: BTreeMap::from([("!alpha:example".to_owned(), room_view)]),
+            room_views: RoomViews::from_iter([("!alpha:example".to_owned(), room_view)]),
             ..UiModel::default()
         };
 

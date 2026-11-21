@@ -235,7 +235,10 @@ pub(super) unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
         ensure_room_list_view(hwnd)?;
     }
 
-    refresh_every_view_content(hwnd)?;
+    let view_ids = state_ref(hwnd).views.keys().cloned().collect::<Vec<_>>();
+    for view_id in &view_ids {
+        sync_view_content(hwnd, view_id)?;
+    }
 
     // Activation makes it the active view: one that changes here (its room
     // went) unfolds its treebar folder and takes the focus, as any newly

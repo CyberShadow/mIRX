@@ -622,7 +622,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
         ParsedCommand::LoadSyntheticState { id, args } => {
-            validate_synthetic_room_activity_events(&BTreeMap::new(), &args.events).map_err(
+            validate_synthetic_room_activity_events(&RoomViews::default(), &args.events).map_err(
                 |message| failure_response(Some(id.clone()), "invalid_synthetic_state", message),
             )?;
             let (rooms, timeline_events) =

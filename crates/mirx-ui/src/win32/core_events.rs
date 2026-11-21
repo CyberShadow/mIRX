@@ -68,8 +68,7 @@ fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) ->
     state
         .model
         .room_views
-        .entry(room_id)
-        .or_default()
+        .entry_or_default(room_id)
         .apply_activity(activity);
     if let Some(last_activity) = last_activity {
         state.model.last_activity = Some(last_activity);
@@ -162,8 +161,7 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
         ) => state
             .model
             .room_views
-            .entry(room_id.clone())
-            .or_default()
+            .entry_or_default(room_id.clone())
             .mark_message_sent(update.clone()),
         (
             RoomActivityUpdateTarget::Transaction { .. },
@@ -171,8 +169,7 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
         ) => state
             .model
             .room_views
-            .entry(room_id.clone())
-            .or_default()
+            .entry_or_default(room_id.clone())
             .mark_message_failed(update.clone()),
         (
             RoomActivityUpdateTarget::Event { event_id },
@@ -187,8 +184,7 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
             let _ = state
                 .model
                 .room_views
-                .entry(room_id.clone())
-                .or_default()
+                .entry_or_default(room_id.clone())
                 .replace_message(
                     event_id,
                     MessageReplacementFields {
@@ -206,8 +202,7 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
             let redacted = state
                 .model
                 .room_views
-                .entry(room_id.clone())
-                .or_default()
+                .entry_or_default(room_id.clone())
                 .redact_activity(event_id);
             if redacted {
                 prune_decoded_images(state);
@@ -225,8 +220,7 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
             let _ = state
                 .model
                 .room_views
-                .entry(room_id.clone())
-                .or_default()
+                .entry_or_default(room_id.clone())
                 .add_reaction(event_id, reaction_event_id, sender, *timestamp_ms, key);
         }
         (
@@ -240,8 +234,7 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
             let _ = state
                 .model
                 .room_views
-                .entry(room_id.clone())
-                .or_default()
+                .entry_or_default(room_id.clone())
                 .remove_reaction(event_id, reaction_event_id, key);
         }
         (
@@ -289,7 +282,7 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
 fn apply_room_history_backfill_event(state: &mut WindowState, backfill: RoomHistoryBackfill) {
     let room_id = backfill.room_id.clone();
     let end = backfill.end.clone();
-    let room_view = state.model.room_views.entry(room_id.clone()).or_default();
+    let room_view = state.model.room_views.entry_or_default(room_id.clone());
     room_view.apply_history_backfill(&room_id, backfill);
     room_view.history.next_token = end.clone();
     room_view.history.status = match end {
@@ -374,8 +367,7 @@ fn apply_room_typing_event(state: &mut WindowState, typing: RoomTyping) {
     state
         .model
         .room_views
-        .entry(typing.room_id.clone())
-        .or_default()
+        .entry_or_default(typing.room_id.clone())
         .replace_typing(typing);
 }
 
@@ -383,8 +375,7 @@ fn apply_room_members_event(state: &mut WindowState, members: RoomMembers) {
     state
         .model
         .room_views
-        .entry(members.room_id.clone())
-        .or_default()
+        .entry_or_default(members.room_id.clone())
         .replace_members(members);
 }
 
@@ -508,11 +499,26 @@ pub(super) fn apply_core_event(
             state
                 .room_activity_read_targets
                 .retain(|view_id, _| tracked_room_activity.contains_key(view_id));
-            for (room_id, room_view) in &mut state.model.room_views {
-                if sendable_room_by_id(&rooms, room_id).is_none() {
-                    room_view.typing_user_ids.clear();
-                    room_view.members.clear();
-                }
+            // Mutable access moves a room's revision, which rebuilds its
+            // window: take it only for rooms that change.
+            let unsendable_with_people = state
+                .model
+                .room_views
+                .iter()
+                .filter(|(room_id, room_view)| {
+                    sendable_room_by_id(&rooms, room_id).is_none()
+                        && !(room_view.typing_user_ids.is_empty() && room_view.members.is_empty())
+                })
+                .map(|(room_id, _)| room_id.clone())
+                .collect::<Vec<_>>();
+            for room_id in unsendable_with_people {
+                let room_view = state
+                    .model
+                    .room_views
+                    .get_mut(&room_id)
+                    .expect("the room was just listed");
+                room_view.typing_user_ids.clear();
+                room_view.members.clear();
             }
             state
                 .model
@@ -522,12 +528,19 @@ pub(super) fn apply_core_event(
                 .iter()
                 .filter(|room| room.membership == RoomMembership::Join && !room.is_space)
             {
-                state
+                if state
                     .model
                     .room_views
-                    .entry(room.room_id.clone())
-                    .or_default()
-                    .topic = room.topic.clone();
+                    .get(&room.room_id)
+                    .map(|view| &view.topic)
+                    != Some(&room.topic)
+                {
+                    state
+                        .model
+                        .room_views
+                        .entry_or_default(room.room_id.clone())
+                        .topic = room.topic.clone();
+                }
             }
             state.model.rooms = rooms;
         }
@@ -1036,6 +1049,50 @@ mod tests {
     use super::super::connection::AfterSyncLost;
     use super::super::test_fixtures::*;
     use super::*;
+
+    #[test]
+    fn synced_rooms_with_the_same_rooms_touches_no_room_view() {
+        let mut state = test_state();
+        let mut rooms = vec![
+            room("!a:example", "A", false),
+            room("!b:example", "B", false),
+            invited_room("!i:example", "I"),
+        ];
+        rooms[0].topic = Some("alpha".to_owned());
+        apply_core_event(&mut state, Event::SyncedRooms(rooms.clone())).unwrap();
+        apply_core_event(&mut state, typing_event("!b:example", &["@bob:example"])).unwrap();
+        let revisions = |state: &WindowState| {
+            ["!a:example", "!b:example", "!i:example"].map(|id| state.model.room_views.revision(id))
+        };
+        let before = revisions(&state);
+
+        apply_core_event(&mut state, Event::SyncedRooms(rooms.clone())).unwrap();
+        assert_eq!(revisions(&state), before);
+
+        rooms[1].topic = Some("beta".to_owned());
+        apply_core_event(&mut state, Event::SyncedRooms(rooms.clone())).unwrap();
+        let after = revisions(&state);
+        assert_eq!(after[0], before[0]);
+        assert_ne!(after[1], before[1]);
+        assert_eq!(after[2], before[2]);
+        assert_eq!(
+            state.model.room_views["!b:example"].topic.as_deref(),
+            Some("beta")
+        );
+
+        // Leaving a room clears its typing once.
+        rooms.remove(1);
+        apply_core_event(&mut state, Event::SyncedRooms(rooms.clone())).unwrap();
+        let left = state.model.room_views.revision("!b:example");
+        assert_ne!(left, after[1]);
+        assert!(
+            state.model.room_views["!b:example"]
+                .typing_user_ids
+                .is_empty()
+        );
+        apply_core_event(&mut state, Event::SyncedRooms(rooms)).unwrap();
+        assert_eq!(state.model.room_views.revision("!b:example"), left);
+    }
 
     const SIGN_IN_URL: &str = "https://account.example/oauth2/authorize?state=x";
 
@@ -4698,8 +4755,7 @@ mod tests {
             state
                 .model
                 .room_views
-                .entry(room_id.to_owned())
-                .or_default()
+                .entry_or_default(room_id.to_owned())
                 .history
                 .next_token = Some("token-2".to_owned());
         }

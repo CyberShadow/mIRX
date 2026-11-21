@@ -317,10 +317,9 @@ use errors::{ErrorDestination, error_destination};
 use find::build_view_find_state;
 use find::{
     ViewFindState, active_view_find_feedback, apply_find_to_active_view, begin_find_dialog,
-    clear_find_projection_for_timeline, continue_timeline_find_history_search_after_refresh,
-    dump_active_find_state, execute_active_view_find, find_active_view_response,
-    pending_timeline_find_history_views, recompute_find_for_view,
-    scroll_timeline_to_source_row_index,
+    continue_timeline_find_history_search_after_refresh, dump_active_find_state,
+    execute_active_view_find, find_active_view_response, pending_timeline_find_history_views,
+    recompute_find_for_view, scroll_timeline_to_source_row_index,
 };
 use fonts::{
     OwnedFont, TextFont, apply_font_setting, font_line_height, run_font_dialog, set_timeline_font,
@@ -351,9 +350,10 @@ use frame_menus::{
 #[cfg(test)]
 use images::room_preview_media_storage_key;
 use images::{
-    GdiplusImage, GdiplusSession, apply_room_media_event, collect_lazy_room_preview_media_requests,
-    dispatch_lazy_room_preview_media_requests, initialize_gdiplus_state, prune_decoded_images,
-    timeline_thumbnail_format, timeline_video_preview_source,
+    GdiplusImage, GdiplusSession, apply_room_media_event, can_fetch_room_media,
+    collect_lazy_room_preview_media_requests, dispatch_lazy_room_preview_media_requests,
+    initialize_gdiplus_state, prune_decoded_images, timeline_thumbnail_format,
+    timeline_video_preview_source,
 };
 use logging::{
     ViewLog, decide_auto_log, log_view, logging_is_line, logging_item_checked, set_view_logging,
@@ -412,7 +412,7 @@ use room_list_window::{
 use room_model::{
     LastMessageActivity, MessageReplacementFields, ReplyTarget, ReplyTargetState,
     RoomHistoryBackfillState, RoomHistoryBackfillStatus, RoomPreviewMediaState, RoomViewModel,
-    RoomWindowKind, activity_level_for, failed_room_activity_update_view_id,
+    RoomViews, RoomWindowKind, activity_level_for, failed_room_activity_update_view_id,
     is_invite_command_target, is_invited_room, is_joined_message_room, is_navigable_room,
     is_sendable_room, joined_room_notification_mode, last_activity_from_room_activity,
     navigable_room_by_id, projected_thread_by_id, raise_view_activity,
@@ -435,8 +435,8 @@ use timeline_layout::{
 use timeline_rows::{
     TimelineImageState, TimelineMessageSendState, TimelineRow, TimelineRowIdentity,
     TimelineRowKind, TimelineRowLayout, build_room_timeline_rows, build_status_timeline_rows,
-    build_thread_timeline_rows, collect_reply_target_requests, compose_target_row,
-    dispatch_reply_target_fetches, project_timeline_rows,
+    build_thread_timeline_rows, can_fetch_room_events, collect_reply_target_requests,
+    compose_target_row, dispatch_reply_target_fetches, project_timeline_rows,
 };
 #[cfg(test)]
 use timeline_rows::{TimelineSyntheticRowLabel, render_room_lines};
@@ -472,12 +472,13 @@ use verification::{
     verification_state_event_from_request, verification_state_label,
 };
 use views::{
-    CloseAction, RefreshCounters, activate_view, cached_view_is_alive, check_window_menu_logging,
-    close_action, destroy_stale_room_views, ensure_room_view, ensure_status_view, ensure_view,
-    layout_mdi_child, mdi_child_content, mdi_child_edit, mdi_window_placement,
-    refresh_every_view_content, refresh_view_content, register_mdi_child_class,
-    register_room_content_class, resolve_active_view, room_content_member_list,
-    room_content_timeline, set_view_window_state, show_view, view_timeline,
+    CloseAction, RefreshCounters, ViewRowsKey, activate_view, cached_view_is_alive,
+    check_window_menu_logging, close_action, destroy_stale_room_views, ensure_room_view,
+    ensure_status_view, ensure_view, layout_mdi_child, mdi_child_content, mdi_child_edit,
+    mdi_window_placement, refresh_every_view_content, refresh_view_content,
+    register_mdi_child_class, register_room_content_class, resolve_active_view,
+    room_content_member_list, room_content_timeline, set_view_window_state, show_view,
+    sync_view_content, view_timeline,
 };
 #[cfg(test)]
 use views::{ROOM_CONTENT_CLASS_NAME, take_stale_room_views};
@@ -589,6 +590,9 @@ struct MdiViewState {
     compose: Option<ViewCompose>,
     /// The window's log; dropping the view closes it.
     log: ViewLog,
+    /// The inputs its rows were last built from; `None` before the first
+    /// build, and for the Rooms List, which has no rows to gate.
+    rows_key: Option<ViewRowsKey>,
 }
 
 /// A window's editbox and what it remembers.
@@ -630,7 +634,7 @@ struct UiModel {
     rooms: Vec<RoomSummary>,
     room_read_states: BTreeMap<String, RoomReadState>,
     selected_room: Option<String>,
-    room_views: BTreeMap<String, RoomViewModel>,
+    room_views: RoomViews,
     last_activity: Option<LastMessageActivity>,
     last_e2ee_status: Option<E2eeStatus>,
     last_e2ee_recovery_setup_result: bool,

@@ -33,6 +33,9 @@ pub(super) struct StatusLine {
 pub(super) struct StatusLog {
     lines: Vec<StatusLine>,
     next_sequence: u64,
+    /// Moves on every change: the Status window rebuilds its rows when it
+    /// differs from the one they were built from.
+    revision: u64,
 }
 
 impl StatusLog {
@@ -44,6 +47,11 @@ impl StatusLog {
             text,
         });
         self.next_sequence += 1;
+        self.revision += 1;
+    }
+
+    pub(super) fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub(super) fn lines(&self) -> &[StatusLine] {
@@ -59,6 +67,7 @@ impl StatusLog {
     /// identity.
     pub(super) fn clear(&mut self) {
         self.lines.clear();
+        self.revision += 1;
     }
 }
 
@@ -211,6 +220,18 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn status_log_revision_moves_on_push_and_clear() {
+        let mut log = StatusLog::default();
+        let start = log.revision();
+        log.push(1, StatusLineKind::Info, "* one".to_owned());
+        let pushed = log.revision();
+        assert_ne!(pushed, start);
+        assert_eq!(log.revision(), pushed);
+        log.clear();
+        assert_ne!(log.revision(), pushed);
+    }
 
     #[test]
     fn sequence_keeps_counting_across_clear() {

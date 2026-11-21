@@ -1039,9 +1039,7 @@ unsafe fn cancel_original_jump_for_timeline(timeline: HWND) {
     }
 }
 
-pub(super) fn loading_room_history_room_id(
-    room_views: &BTreeMap<String, RoomViewModel>,
-) -> Option<String> {
+pub(super) fn loading_room_history_room_id(room_views: &RoomViews) -> Option<String> {
     let mut loading_room_ids = room_views
         .iter()
         .filter(|(_, room_view)| {
@@ -1078,11 +1076,7 @@ pub(super) fn submit_backfill_room_history_for_room(
     };
 
     let command = {
-        let room_view = state
-            .model
-            .room_views
-            .entry(room_id.to_owned())
-            .or_default();
+        let room_view = state.model.room_views.entry_or_default(room_id.to_owned());
         if matches!(
             room_view.history.status,
             RoomHistoryBackfillStatus::Exhausted
@@ -1448,8 +1442,7 @@ mod tests {
         state
             .model
             .room_views
-            .entry("!room:example".to_owned())
-            .or_default()
+            .entry_or_default("!room:example".to_owned())
             .history
             .next_token = Some("token-2".to_owned());
 

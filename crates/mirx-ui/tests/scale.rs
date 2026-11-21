@@ -287,6 +287,7 @@ mod with_two_hundred_rooms {
         let before = app.dump_ui_state()?;
         let counts = delta(&before, &app.dump_ui_state()?);
         eprintln!("an idle dump: {counts:?}");
+        assert_eq!(counts.timeline_row_builds, 0);
         assert_eq!(counts.rows_wrapped, 0);
         Ok(())
     }
@@ -309,10 +310,16 @@ mod with_two_hundred_rooms {
         let after = app.dump_ui_state()?;
         let counts = delta(&before, &after);
         eprintln!("a message in a background room: {counts:?}");
+        assert_eq!(counts.timeline_row_builds, 1);
         assert_eq!(counts.rows_wrapped, 1);
-        assert!(
-            room_state(&after, 117).timeline_row_builds
-                > room_state(&before, 117).timeline_row_builds
+        assert_eq!(
+            room_state(&after, 117).timeline_row_builds,
+            room_state(&before, 117).timeline_row_builds + 1
+        );
+        assert_eq!(after.mdi.active, room_view(0));
+        assert_eq!(
+            room_state(&after, 0).timeline_row_builds,
+            room_state(&before, 0).timeline_row_builds
         );
         assert_eq!(
             find_navigation(&after.navigation, &room_view(117))
@@ -336,6 +343,7 @@ mod with_two_hundred_rooms {
         )?;
         let counts = delta(&before, &app.dump_ui_state()?);
         eprintln!("typing: {counts:?}");
+        assert_eq!(counts.timeline_row_builds, 1);
         // The typing line is not a log line: it is clipped, not wrapped.
         assert_eq!(counts.rows_wrapped, 0);
         Ok(())
@@ -349,7 +357,8 @@ mod with_two_hundred_rooms {
         let renamed = app.dump_ui_state()?;
         let counts = delta(&before, &renamed);
         eprintln!("a rename: {counts:?}");
-        // Its "Now talking in" line names it.
+        // Its caption and "Now talking in" line name it.
+        assert_eq!(counts.timeline_row_builds, 1);
         assert_eq!(counts.rows_wrapped, 1);
         assert!(
             find_navigation(&renamed.navigation, &room_view(42))
@@ -359,6 +368,7 @@ mod with_two_hundred_rooms {
         append(&app, &[synced_rooms(Some((42, "Renamed")))])?;
         let counts = delta(&renamed, &app.dump_ui_state()?);
         eprintln!("the same room list again: {counts:?}");
+        assert_eq!(counts.timeline_row_builds, 0);
         assert_eq!(counts.rows_wrapped, 0);
         Ok(())
     }
@@ -382,6 +392,7 @@ mod with_two_hundred_rooms {
         let after = app.dump_ui_state()?;
         let counts = delta(&before, &after);
         eprintln!("a message in the active window: {counts:?}");
+        assert_eq!(counts.timeline_row_builds, 1);
         assert_eq!(counts.rows_wrapped, 1);
         // The window followed its newest line.
         let last_line = after
@@ -406,6 +417,8 @@ mod with_two_hundred_rooms {
         let after = app.dump_ui_state()?;
         let counts = delta(&before, &after);
         eprintln!("restoring the active window: {counts:?}");
+        // A resize rewraps; it builds no rows.
+        assert_eq!(counts.timeline_row_builds, 0);
         // Every row of the window is a log row: each wraps once more.
         assert_eq!(
             counts.rows_wrapped,

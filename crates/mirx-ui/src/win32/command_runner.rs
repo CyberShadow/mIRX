@@ -588,8 +588,7 @@ pub(super) fn echo_lines_in_view(
             ViewId::Room(room_id) => state
                 .model
                 .room_views
-                .entry(room_id.clone())
-                .or_default()
+                .entry_or_default(room_id.clone())
                 .push_echo(now, None, text),
             ViewId::Thread {
                 room_id,

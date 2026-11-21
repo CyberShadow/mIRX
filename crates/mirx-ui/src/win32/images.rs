@@ -357,12 +357,18 @@ pub(super) fn collect_lazy_room_preview_media_requests<'a>(
         .collect()
 }
 
+/// Whether a refresh may ask the core for preview media: not while a
+/// synthetic load replays its events.
+pub(super) fn can_fetch_room_media(state: &WindowState) -> bool {
+    !state.synthetic_load_in_progress
+}
+
 pub(super) fn dispatch_lazy_room_preview_media_requests(
     state: &mut WindowState,
     room_id: &str,
     requests: Vec<RoomPreviewMediaDispatch>,
 ) -> Result<(), String> {
-    if state.synthetic_load_in_progress || requests.is_empty() {
+    if !can_fetch_room_media(state) || requests.is_empty() {
         return Ok(());
     }
 
@@ -1192,8 +1198,7 @@ mod tests {
         state
             .model
             .room_views
-            .entry("!ops:example".to_owned())
-            .or_default()
+            .entry_or_default("!ops:example".to_owned())
             .apply_activity(encrypted_image_activity(
                 "!ops:example",
                 "$image1:example.org",
@@ -1234,8 +1239,7 @@ mod tests {
         state
             .model
             .room_views
-            .entry("!ops:example".to_owned())
-            .or_default()
+            .entry_or_default("!ops:example".to_owned())
             .apply_activity(encrypted_image_activity(
                 "!ops:example",
                 "$image1:example.org",

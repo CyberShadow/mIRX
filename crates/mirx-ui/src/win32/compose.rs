@@ -1082,6 +1082,7 @@ mod tests {
                             target: None,
                         }),
                         log: ViewLog::Off,
+                        rows_key: None,
                     },
                 );
                 state_mut(hwnd).active_view = room_view.clone();

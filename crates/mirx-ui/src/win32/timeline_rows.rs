@@ -987,19 +987,24 @@ pub(super) fn collect_reply_target_requests<'a>(
 /// Asks the server for replied-to messages. Only a connected session can:
 /// events a synthetic load replays come from no server, and without a
 /// session there is nobody to ask.
-pub(super) fn dispatch_reply_target_fetches(
-    state: &mut WindowState,
-    room_id: &str,
-    event_ids: BTreeSet<String>,
-) -> Result<(), String> {
-    if state.synthetic_load_in_progress
-        || !matches!(
+/// Whether a refresh may ask the core for events (reply targets): only
+/// for a session, and not while a synthetic load replays its events.
+pub(super) fn can_fetch_room_events(state: &WindowState) -> bool {
+    !state.synthetic_load_in_progress
+        && matches!(
             state.model.connection,
             ConnectionState::SignedIn
                 | ConnectionState::WaitingToReconnect
                 | ConnectionState::Syncing
         )
-    {
+}
+
+pub(super) fn dispatch_reply_target_fetches(
+    state: &mut WindowState,
+    room_id: &str,
+    event_ids: BTreeSet<String>,
+) -> Result<(), String> {
+    if !can_fetch_room_events(state) {
         return Ok(());
     }
     for event_id in event_ids {

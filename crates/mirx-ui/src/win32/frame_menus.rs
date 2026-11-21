@@ -1492,8 +1492,7 @@ mod tests {
             state
                 .model
                 .room_views
-                .entry("!room:example".to_owned())
-                .or_default()
+                .entry_or_default("!room:example".to_owned())
                 .activities
                 .push(activity);
             state.selected_timeline_event = Some(SelectedTimelineEvent {

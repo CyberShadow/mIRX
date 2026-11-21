@@ -962,8 +962,7 @@ mod tests {
         state
             .model
             .room_views
-            .entry("!room:example".to_owned())
-            .or_default()
+            .entry_or_default("!room:example".to_owned())
             .history
             .status = RoomHistoryBackfillStatus::Loading { from: None };
 
@@ -1062,8 +1061,7 @@ mod tests {
         let room_view = state
             .model
             .room_views
-            .entry("!room:example".to_owned())
-            .or_default();
+            .entry_or_default("!room:example".to_owned());
         room_view.history.status = RoomHistoryBackfillStatus::Exhausted;
 
         assert!(
@@ -1293,8 +1291,7 @@ mod tests {
         state
             .model
             .room_views
-            .entry("!room:example".to_owned())
-            .or_default()
+            .entry_or_default("!room:example".to_owned())
             .history
             .status = RoomHistoryBackfillStatus::Exhausted;
 
