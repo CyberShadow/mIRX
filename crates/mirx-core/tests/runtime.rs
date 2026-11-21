@@ -167,6 +167,8 @@ fn error_room_id(command: &Command) -> Option<&str> {
         | Command::SetupE2eeRecovery(_)
         | Command::RecoverE2ee(_)
         | Command::ResetE2eeIdentity(_)
+        | Command::ExportRoomKeys(_)
+        | Command::ImportRoomKeys(_)
         | Command::CancelE2eeIdentityReset
         | Command::RequestVerification(_)
         | Command::AcceptVerification(_)

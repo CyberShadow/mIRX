@@ -709,6 +709,26 @@ pub(super) fn apply_core_event(
             state.model.last_e2ee_status = Some(status);
             state.model.status = "e2ee status updated".to_owned();
         }
+        Event::RoomKeysExported { path } => {
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::room_keys_exported(&path),
+            );
+            state.model.status = "room keys exported".to_owned();
+        }
+        Event::RoomKeysImported {
+            path,
+            imported,
+            total,
+        } => {
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::room_keys_imported(&path, imported, total),
+            );
+            state.model.status = "room keys imported".to_owned();
+        }
         Event::E2eeRecoverySucceeded(_) => {
             log_status(
                 state,
@@ -1203,6 +1223,8 @@ pub(super) fn operation_name(operation: Operation) -> &'static str {
         Operation::SetupE2eeRecovery => "e2ee recovery setup",
         Operation::ResetE2eeIdentity => "e2ee identity reset",
         Operation::RetryDecryption => "late decryption",
+        Operation::ExportRoomKeys => "room key export",
+        Operation::ImportRoomKeys => "room key import",
         Operation::Verification => "verification",
         Operation::RequestVerification => "verification request",
         Operation::Logout => "logout",
@@ -5913,6 +5935,56 @@ mod tests {
                 room_id: "!ops:example".to_owned(),
                 session_ids: vec!["SESSIONID".to_owned()],
             })]
+        );
+    }
+
+    #[test]
+    fn room_key_file_answers_are_status_lines() {
+        let mut state = test_state();
+        for event in [
+            Event::RoomKeysExported {
+                path: r"C:\keys.txt".to_owned(),
+            },
+            Event::RoomKeysImported {
+                path: r"C:\keys.txt".to_owned(),
+                imported: 3,
+                total: 3,
+            },
+            Event::RoomKeysImported {
+                path: r"C:\keys.txt".to_owned(),
+                imported: 1,
+                total: 3,
+            },
+            Event::Error(CoreErrorEvent {
+                operation: Operation::ImportRoomKeys,
+                room_id: None,
+                message: "wrong passphrase, or the file is damaged".to_owned(),
+            }),
+        ] {
+            apply_core_event(&mut state, event).unwrap();
+        }
+        assert_eq!(
+            status_lines_with_kinds(&state)[..],
+            [
+                (
+                    StatusLineKind::Info,
+                    r"* Room keys exported to C:\keys.txt. Keep the file and its passphrase safe."
+                        .to_owned()
+                ),
+                (
+                    StatusLineKind::Info,
+                    r"* Imported 3 of 3 room keys from C:\keys.txt".to_owned()
+                ),
+                (
+                    StatusLineKind::Info,
+                    r"* Imported 1 of 3 room keys from C:\keys.txt (2 already known)".to_owned()
+                ),
+                (
+                    StatusLineKind::Error,
+                    "* Error during room key import: wrong passphrase, or the file is damaged"
+                        .to_owned()
+                ),
+            ]
         );
     }
 }

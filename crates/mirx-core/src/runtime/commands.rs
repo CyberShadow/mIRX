@@ -18,10 +18,10 @@ use crate::api::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command,
     CreateDirectRoomRequest, CreateRoomRequest, E2eeIdentityResetOutcome, E2eeRecoveryOperation,
     E2eeRecoverySetupSucceeded, E2eeRecoverySucceeded, EditMessageRequest, Event,
-    FetchRoomEventRequest, FetchRoomMediaRequest, InviteRoomMemberRequest, JoinRoomRequest,
-    KickRoomMemberRequest, LeaveRoomRequest, ListPublicRoomsRequest, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
-    RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
+    ExportRoomKeysRequest, FetchRoomEventRequest, FetchRoomMediaRequest, ImportRoomKeysRequest,
+    InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
+    ListPublicRoomsRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
+    RedactEventRequest, RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
     ResetE2eeIdentityRequest, RestoreSessionRequest, RetryDecryptionRequest, RoomJoined,
     SendFileRequest, SendMessageRequest, SendReactionRequest, SetDisplayNameRequest,
     SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
@@ -345,6 +345,22 @@ pub(super) fn route(command: Command) -> Route {
                 }
             }),
         }),
+        Command::ExportRoomKeys(request) => lane(
+            Lane::E2ee,
+            Refusal::account(
+                Op::ExportRoomKeys,
+                "exporting room keys requires an authenticated session",
+            ),
+            |ctx| export_room_keys(ctx, request),
+        ),
+        Command::ImportRoomKeys(request) => lane(
+            Lane::E2ee,
+            Refusal::account(
+                Op::ImportRoomKeys,
+                "importing room keys requires an authenticated session",
+            ),
+            |ctx| import_room_keys(ctx, request),
+        ),
         Command::CancelE2eeIdentityReset => Route::Lane(LaneCommand {
             lane: Lane::E2ee,
             refusal: Refusal::account(Op::ResetE2eeIdentity, "no identity reset is under way"),
@@ -863,6 +879,33 @@ async fn recover_e2ee(ctx: JobCtx, request: RecoverE2eeRequest) -> Followup {
             emit_event(events, Event::E2eeStatus(status));
         }
         Err(err) => emit_matrix_error(events, Operation::RecoverE2ee, err),
+    }
+
+    Followup::Done
+}
+
+async fn export_room_keys(ctx: JobCtx, request: ExportRoomKeysRequest) -> Followup {
+    let JobCtx { client, events, .. } = &ctx;
+    match matrix::export_room_keys(client, &request).await {
+        Ok(()) => emit_event(events, Event::RoomKeysExported { path: request.path }),
+        Err(err) => emit_matrix_error(events, Operation::ExportRoomKeys, err),
+    }
+
+    Followup::Done
+}
+
+async fn import_room_keys(ctx: JobCtx, request: ImportRoomKeysRequest) -> Followup {
+    let JobCtx { client, events, .. } = &ctx;
+    match matrix::import_room_keys(client, &request).await {
+        Ok((imported, total)) => emit_event(
+            events,
+            Event::RoomKeysImported {
+                path: request.path,
+                imported,
+                total,
+            },
+        ),
+        Err(err) => emit_matrix_error(events, Operation::ImportRoomKeys, err),
     }
 
     Followup::Done

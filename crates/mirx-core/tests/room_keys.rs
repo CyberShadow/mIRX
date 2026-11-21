@@ -6,7 +6,13 @@
 mod common;
 
 use common::Harness;
-use mirx_core::{Command, CoreErrorEvent, Event, Operation, RetryDecryptionRequest};
+use std::fs;
+
+use mirx_core::{
+    Command, CoreErrorEvent, Event, ExportRoomKeysRequest, ImportRoomKeysRequest, Operation,
+    RetryDecryptionRequest,
+};
+use tempfile::TempDir;
 
 #[test]
 fn retrying_decryption_is_acked_at_once_and_refuses_a_bad_room() {
@@ -65,6 +71,179 @@ fn retrying_decryption_needs_a_session() {
             Event::CommandHandled,
         ]
     );
+
+    harness.shut_down();
+}
+
+impl Harness {
+    fn export(&self, path: &str, passphrase: &str) -> Vec<Event> {
+        self.send(Command::ExportRoomKeys(ExportRoomKeysRequest {
+            path: path.to_owned(),
+            passphrase: passphrase.to_owned(),
+        }));
+        self.answer("the export's ack")
+    }
+
+    fn import(&self, path: &str, passphrase: &str) -> Vec<Event> {
+        self.send(Command::ImportRoomKeys(ImportRoomKeysRequest {
+            path: path.to_owned(),
+            passphrase: passphrase.to_owned(),
+        }));
+        self.answer("the import's ack")
+    }
+
+    /// A command's events, without what the session's tasks report
+    /// meanwhile (E2EE status, retries).
+    fn answer(&self, what: &str) -> Vec<Event> {
+        self.events_until(what, |event| *event == Event::CommandHandled)
+            .into_iter()
+            .filter(|event| !matches!(event, Event::E2eeStatus(_) | Event::DecryptionRetryWanted))
+            .collect()
+    }
+}
+
+fn import_error(message: &str) -> Event {
+    Event::Error(CoreErrorEvent {
+        operation: Operation::ImportRoomKeys,
+        room_id: None,
+        message: message.to_owned(),
+    })
+}
+
+#[test]
+fn exported_room_keys_are_a_key_file_that_imports_back() {
+    let harness = Harness::restored();
+    let dir = TempDir::new().expect("a temporary directory");
+    let path = dir.path().join("mirx-keys.txt");
+    let path = path.to_str().expect("a UTF-8 path");
+
+    assert_eq!(
+        harness.export(path, "correct horse"),
+        [
+            Event::RoomKeysExported {
+                path: path.to_owned()
+            },
+            Event::CommandHandled
+        ]
+    );
+    let file = fs::read_to_string(path).expect("the key file");
+    assert!(
+        file.starts_with("-----BEGIN MEGOLM SESSION DATA-----"),
+        "{file}"
+    );
+    assert!(
+        matrix_sdk_crypto::decrypt_room_key_export(file.as_bytes(), "correct horse").is_ok(),
+        "the SDK reads it back"
+    );
+
+    // The session holds no room keys yet: none are new.
+    assert_eq!(
+        harness.import(path, "correct horse"),
+        [
+            Event::RoomKeysImported {
+                path: path.to_owned(),
+                imported: 0,
+                total: 0,
+            },
+            Event::CommandHandled
+        ]
+    );
+
+    harness.shut_down();
+}
+
+#[test]
+fn a_room_key_import_names_what_is_wrong_with_the_file() {
+    let harness = Harness::restored();
+    let dir = TempDir::new().expect("a temporary directory");
+    let keys = dir.path().join("keys.txt");
+    let keys = keys.to_str().expect("a UTF-8 path");
+    harness.export(keys, "correct horse");
+    let notes = dir.path().join("notes.txt");
+    fs::write(&notes, "not keys at all").expect("write a file");
+    let notes = notes.to_str().expect("a UTF-8 path");
+    let missing = dir.path().join("missing.txt");
+    let missing = missing.to_str().expect("a UTF-8 path");
+
+    assert_eq!(
+        harness.import(keys, "wrong horse"),
+        [
+            import_error("wrong passphrase, or the file is damaged"),
+            Event::CommandHandled
+        ]
+    );
+    assert_eq!(
+        harness.import(notes, "correct horse"),
+        [import_error("not a room key file"), Event::CommandHandled]
+    );
+    let answer = harness.import(missing, "correct horse");
+    let [Event::Error(error), Event::CommandHandled] = &answer[..] else {
+        panic!("not an error: {answer:#?}");
+    };
+    assert_eq!(error.operation, Operation::ImportRoomKeys);
+    assert_eq!(
+        error.message,
+        fs::File::open(missing)
+            .expect_err("the file is missing")
+            .to_string()
+    );
+    assert_eq!(
+        harness.import(keys, ""),
+        [
+            import_error("a room key file needs a passphrase"),
+            Event::CommandHandled
+        ]
+    );
+    assert_eq!(
+        harness.export(keys, ""),
+        [
+            Event::Error(CoreErrorEvent {
+                operation: Operation::ExportRoomKeys,
+                room_id: None,
+                message: "a room key file needs a passphrase".to_owned(),
+            }),
+            Event::CommandHandled
+        ]
+    );
+
+    harness.shut_down();
+}
+
+#[test]
+fn room_key_files_need_a_session() {
+    let harness = Harness::idle();
+
+    for (command, operation, message) in [
+        (
+            Command::ExportRoomKeys(ExportRoomKeysRequest {
+                path: "/keys.txt".to_owned(),
+                passphrase: "secret".to_owned(),
+            }),
+            Operation::ExportRoomKeys,
+            "exporting room keys requires an authenticated session",
+        ),
+        (
+            Command::ImportRoomKeys(ImportRoomKeysRequest {
+                path: "/keys.txt".to_owned(),
+                passphrase: "secret".to_owned(),
+            }),
+            Operation::ImportRoomKeys,
+            "importing room keys requires an authenticated session",
+        ),
+    ] {
+        harness.send(command);
+        assert_eq!(
+            harness.events_until("the ack", |event| *event == Event::CommandHandled),
+            [
+                Event::Error(CoreErrorEvent {
+                    operation,
+                    room_id: None,
+                    message: message.to_owned(),
+                }),
+                Event::CommandHandled,
+            ]
+        );
+    }
 
     harness.shut_down();
 }

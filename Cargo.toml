@@ -17,3 +17,14 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# Room key files derive their key with 500 000 rounds of PBKDF2-SHA512
+# (the SDK fixes the count; Element reads the format). Unoptimized, an
+# export or import takes ~10 s in test builds; optimized, ~0.3 s. The
+# generic PBKDF2/HMAC code is instantiated in matrix-sdk-crypto, the
+# compression function lives in sha2. Release builds optimize everything.
+[profile.dev.package.matrix-sdk-crypto]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3

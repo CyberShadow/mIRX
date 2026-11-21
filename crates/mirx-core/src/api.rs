@@ -83,6 +83,14 @@ pub enum Command {
     /// Resets your cross-signing identity, and with it key backup and
     /// recovery. See `ResetE2eeIdentityRequest`.
     ResetE2eeIdentity(ResetE2eeIdentityRequest),
+    /// Writes the session's room keys to a file, encrypted with the
+    /// passphrase, as Element's "Export E2E room keys" does. Answered by
+    /// `RoomKeysExported`, or an `ExportRoomKeys` error.
+    ExportRoomKeys(ExportRoomKeysRequest),
+    /// Reads room keys from such a file (Element's, or another session's).
+    /// Answered by `RoomKeysImported`, or an `ImportRoomKeys` error; the
+    /// lines the keys decrypt follow as `RoomEventsDecrypted`.
+    ImportRoomKeys(ImportRoomKeysRequest),
     /// Stops a reset that waits for approval in the browser; answered by
     /// `E2eeIdentityReset(Cancelled)`, or `Done` if the approval won.
     CancelE2eeIdentityReset,
@@ -519,6 +527,40 @@ impl fmt::Debug for RecoverE2eeRequest {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("RecoverE2eeRequest")
             .field("recovery_secret", &"<redacted>")
+            .finish()
+    }
+}
+
+/// `path` is the file's full path. The passphrase must not be empty.
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExportRoomKeysRequest {
+    pub path: String,
+    pub passphrase: String,
+}
+
+impl fmt::Debug for ExportRoomKeysRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExportRoomKeysRequest")
+            .field("path", &self.path)
+            .field("passphrase", &"<redacted>")
+            .finish()
+    }
+}
+
+/// `path` is the file's full path.
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportRoomKeysRequest {
+    pub path: String,
+    pub passphrase: String,
+}
+
+impl fmt::Debug for ImportRoomKeysRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ImportRoomKeysRequest")
+            .field("path", &self.path)
+            .field("passphrase", &"<redacted>")
             .finish()
     }
 }
@@ -1972,6 +2014,8 @@ pub enum Operation {
     SetupE2eeRecovery,
     RecoverE2ee,
     ResetE2eeIdentity,
+    ExportRoomKeys,
+    ImportRoomKeys,
     /// Decrypting events late, as their keys come.
     RetryDecryption,
     /// Answering a verification: accept, cancel, confirm or reject.
@@ -2088,6 +2132,17 @@ pub enum Event {
     },
     /// The answer to `ResetE2eeIdentity`; an `E2eeStatus` follows.
     E2eeIdentityReset(E2eeIdentityResetOutcome),
+    /// The answer to `ExportRoomKeys`: the file is written.
+    RoomKeysExported {
+        path: String,
+    },
+    /// The answer to `ImportRoomKeys`: `imported` of the file's `total`
+    /// keys were new to the session.
+    RoomKeysImported {
+        path: String,
+        imported: u64,
+        total: u64,
+    },
     VerificationRequest(VerificationRequest),
     VerificationState(VerificationStateEvent),
     LoggedOut,
@@ -2114,6 +2169,41 @@ mod tests {
 
     fn span(start: usize, end: usize, style: TextStyle) -> TextStyleSpan {
         TextStyleSpan { start, end, style }
+    }
+
+    #[test]
+    fn room_key_file_requests_redact_the_passphrase() {
+        let export = format!(
+            "{:?}",
+            Command::ExportRoomKeys(ExportRoomKeysRequest {
+                path: r"C:\keys.txt".to_owned(),
+                passphrase: "hunter2".to_owned(),
+            })
+        );
+        assert_eq!(
+            export,
+            r#"ExportRoomKeys(ExportRoomKeysRequest { path: "C:\\keys.txt", passphrase: "<redacted>" })"#
+        );
+        let import = format!(
+            "{:?}",
+            Command::ImportRoomKeys(ImportRoomKeysRequest {
+                path: r"C:\keys.txt".to_owned(),
+                passphrase: "hunter2".to_owned(),
+            })
+        );
+        assert!(!import.contains("hunter2"), "{import}");
+        assert!(import.contains("<redacted>"), "{import}");
+        let imported = Event::RoomKeysImported {
+            path: r"C:\keys.txt".to_owned(),
+            imported: 2,
+            total: 3,
+        };
+        let json = serde_json::to_string(&imported).unwrap();
+        assert_eq!(
+            json,
+            r#"{"RoomKeysImported":{"path":"C:\\keys.txt","imported":2,"total":3}}"#
+        );
+        assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), imported);
     }
 
     #[test]

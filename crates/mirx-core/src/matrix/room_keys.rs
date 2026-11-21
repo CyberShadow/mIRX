@@ -2,15 +2,18 @@
 //! their late decryption by the SDK's redecryptor, and room key files.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::pin::pin;
 
 use futures_util::StreamExt;
 use matrix_sdk::deserialized_responses::{TimelineEvent, TimelineEventKind};
+use matrix_sdk::encryption::RoomKeyImportError;
 use matrix_sdk::event_cache::{DecryptionRetryRequest, RedecryptorReport};
 use matrix_sdk::ruma::events::room::encrypted::OriginalSyncRoomEncryptedEvent;
 use matrix_sdk::ruma::serde::Raw;
 use matrix_sdk::ruma::{OwnedEventId, OwnedRoomId, RoomId};
 use matrix_sdk::{Client, Room};
+use matrix_sdk_crypto::KeyExportError;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use super::{
@@ -18,8 +21,8 @@ use super::{
     room_history_backfill_event_from_timeline_event,
 };
 use crate::api::{
-    CoreErrorEvent, Event, Operation, RetryDecryptionRequest, RoomEventsDecrypted,
-    RoomHistoryBackfillEvent,
+    CoreErrorEvent, Event, ExportRoomKeysRequest, ImportRoomKeysRequest, Operation,
+    RetryDecryptionRequest, RoomEventsDecrypted, RoomHistoryBackfillEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -185,6 +188,69 @@ pub(crate) fn retry_decryption(
     Ok(())
 }
 
+/// Writes every room key the session holds to `path`, encrypted with the
+/// passphrase (the SDK runs the key derivation off the runtime).
+pub(crate) async fn export_room_keys(
+    client: &Client,
+    request: &ExportRoomKeysRequest,
+) -> Result<(), MatrixCoreError> {
+    refuse_empty_passphrase(&request.passphrase)?;
+    client
+        .encryption()
+        .export_room_keys(PathBuf::from(&request.path), &request.passphrase, |_| true)
+        .await
+        .map_err(|err| MatrixCoreError::new(err.to_string()))
+}
+
+/// Reads the room keys of the file at `path`; returns how many were new
+/// and how many it held. The redecryptor decrypts what they unlock.
+pub(crate) async fn import_room_keys(
+    client: &Client,
+    request: &ImportRoomKeysRequest,
+) -> Result<(u64, u64), MatrixCoreError> {
+    refuse_empty_passphrase(&request.passphrase)?;
+    let result = client
+        .encryption()
+        .import_room_keys(PathBuf::from(&request.path), &request.passphrase)
+        .await
+        .map_err(|err| MatrixCoreError::new(room_key_import_error_text(err)))?;
+    Ok((
+        u64::try_from(result.imported_count).expect("a count fits in u64"),
+        u64::try_from(result.total_count).expect("a count fits in u64"),
+    ))
+}
+
+fn refuse_empty_passphrase(passphrase: &str) -> Result<(), MatrixCoreError> {
+    if passphrase.is_empty() {
+        return Err(MatrixCoreError::new("a room key file needs a passphrase"));
+    }
+    Ok(())
+}
+
+/// What went wrong, as the user can act on it: the file's MAC fails for a
+/// wrong passphrase as for a damaged file, and anything unreadable after
+/// decryption is no room key file.
+fn room_key_import_error_text(err: RoomKeyImportError) -> String {
+    match err {
+        RoomKeyImportError::Export(KeyExportError::InvalidMac) => {
+            "wrong passphrase, or the file is damaged".to_owned()
+        }
+        RoomKeyImportError::Export(
+            KeyExportError::InvalidHeaders
+            | KeyExportError::UnsupportedVersion
+            | KeyExportError::InvalidUtf8(_)
+            | KeyExportError::Json(_)
+            | KeyExportError::Decode(_),
+        ) => "not a room key file".to_owned(),
+        RoomKeyImportError::Export(KeyExportError::Io(err)) | RoomKeyImportError::Io(err) => {
+            err.to_string()
+        }
+        err @ (RoomKeyImportError::SerdeJson(_)
+        | RoomKeyImportError::StoreClosed
+        | RoomKeyImportError::CryptoStore(_)) => err.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;
@@ -200,11 +266,12 @@ mod tests {
     use matrix_sdk_test::event_factory::EventFactory;
 
     use super::super::{backfill_room_history, register_event_handlers};
-    use super::{retry_decryption, room_decryption_task};
+    use super::{import_room_keys, retry_decryption, room_decryption_task};
     use crate::api::{
-        BackfillRoomHistoryRequest, Event, HistoryFrom, RetryDecryptionRequest, RoomActivity,
-        RoomActivityKind, RoomActivityRelation, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-        RoomEventsDecrypted, RoomHistoryBackfillEvent, RoomUnableToDecryptReason,
+        BackfillRoomHistoryRequest, Event, HistoryFrom, ImportRoomKeysRequest,
+        RetryDecryptionRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
+        RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomEventsDecrypted,
+        RoomHistoryBackfillEvent, RoomUnableToDecryptReason,
     };
     use crate::runtime::RoomSnapshots;
 
@@ -384,13 +451,22 @@ mod tests {
         }
 
         /// Waits for the next `RoomEventsDecrypted`, and returns it with the
-        /// events before it.
-        fn decrypted(&self) -> (RoomEventsDecrypted, Vec<Event>) {
+        /// events before it. It comes from the decryption task, which runs
+        /// while this waits.
+        async fn decrypted(&self) -> (RoomEventsDecrypted, Vec<Event>) {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
             let mut before = Vec::new();
             loop {
-                match self.events.recv_timeout(Duration::from_secs(10)) {
+                match self.events.try_recv() {
                     Ok(Event::RoomEventsDecrypted(decrypted)) => return (decrypted, before),
                     Ok(event) => before.push(event),
+                    Err(mpsc::TryRecvError::Empty) => {
+                        assert!(
+                            tokio::time::Instant::now() < deadline,
+                            "no RoomEventsDecrypted after {before:#?}"
+                        );
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
                     Err(err) => panic!("no RoomEventsDecrypted ({err}) after {before:#?}"),
                 }
             }
@@ -588,7 +664,7 @@ mod tests {
 
             room.bob_syncs(&[&sent.room_key], &[]).await;
 
-            let (decrypted, before) = room.decrypted();
+            let (decrypted, before) = room.decrypted().await;
             assert!(activities(&before).is_empty(), "{before:#?}");
             assert_eq!(decrypted.room_id, "!secret:example.org");
             assert_eq!(decrypted.events.len(), 1, "{decrypted:#?}");
@@ -639,7 +715,7 @@ mod tests {
 
             room.bob_syncs(&[&sent.room_key], &[]).await;
 
-            let (decrypted, _) = room.decrypted();
+            let (decrypted, _) = room.decrypted().await;
             assert_eq!(decrypted.events.len(), 1, "{decrypted:#?}");
             let (activity, body) = decrypted_message(&decrypted.events[0]);
             assert_eq!(body, "old");
@@ -681,7 +757,7 @@ mod tests {
 
             room.bob_syncs(&[&edit.room_key], &[]).await;
 
-            let (decrypted, _) = room.decrypted();
+            let (decrypted, _) = room.decrypted().await;
             let kinds = decrypted
                 .events
                 .iter()
@@ -747,6 +823,39 @@ mod tests {
                 no_session.to_string(),
                 "retrying decryption needs at least one session"
             );
+        });
+    }
+
+    #[test]
+    fn an_imported_key_file_decrypts_the_lines_of_its_keys() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+            let sent = room
+                .alice_sends_first("$filed", "m.room.message", text("filed"))
+                .await;
+            room.bob_syncs(&[], &[&sent.event]).await;
+            room.drain();
+            let dir = tempfile::tempdir().expect("a temporary directory");
+            let path = dir.path().join("alice-keys.txt");
+            room.alice
+                .encryption()
+                .export_room_keys(path.clone(), "correct horse", |_| true)
+                .await
+                .expect("alice exports her keys");
+
+            let counts = import_room_keys(
+                &room.bob,
+                &ImportRoomKeysRequest {
+                    path: path.to_str().expect("a UTF-8 path").to_owned(),
+                    passphrase: "correct horse".to_owned(),
+                },
+            )
+            .await
+            .expect("bob imports them");
+
+            assert_eq!(counts, (1, 1));
+            let (decrypted, _) = room.decrypted().await;
+            assert_eq!(decrypted_message(&decrypted.events[0]).1, "filed");
         });
     }
 }

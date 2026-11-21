@@ -332,6 +332,22 @@ pub(super) fn verification(event: &VerificationStateEvent) -> Vec<String> {
     lines
 }
 
+pub(super) fn room_keys_exported(path: &str) -> String {
+    format!("Room keys exported to {path}. Keep the file and its passphrase safe.")
+}
+
+pub(super) fn room_keys_imported(path: &str, imported: u64, total: u64) -> String {
+    let known = total
+        .checked_sub(imported)
+        .expect("an import cannot add more keys than its file holds");
+    match known {
+        0 => format!("Imported {imported} of {total} room keys from {path}"),
+        known => {
+            format!("Imported {imported} of {total} room keys from {path} ({known} already known)")
+        }
+    }
+}
+
 pub(super) fn error(operation_name: &str, message: &str) -> String {
     format!("Error during {operation_name}: {message}")
 }

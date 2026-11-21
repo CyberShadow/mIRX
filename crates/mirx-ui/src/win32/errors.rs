@@ -80,6 +80,8 @@ pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> 
         | Operation::SetupE2eeRecovery
         | Operation::RecoverE2ee
         | Operation::ResetE2eeIdentity
+        | Operation::ExportRoomKeys
+        | Operation::ImportRoomKeys
         | Operation::Verification
         | Operation::Logout
         | Operation::Shutdown => ErrorDestination::Status,
@@ -154,6 +156,8 @@ mod tests {
             Operation::SetupE2eeRecovery,
             Operation::RecoverE2ee,
             Operation::ResetE2eeIdentity,
+            Operation::ExportRoomKeys,
+            Operation::ImportRoomKeys,
             Operation::Verification,
             Operation::Logout,
             Operation::Shutdown,
