@@ -2669,6 +2669,7 @@ mod tests {
         let profile = |user_id: &str, display_name: Option<&str>| UserProfile {
             user_id: user_id.to_owned(),
             display_name: display_name.map(str::to_owned),
+            presence: None,
         };
         assert_eq!(
             whois_lines(

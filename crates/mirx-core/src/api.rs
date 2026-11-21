@@ -1980,6 +1980,22 @@ pub struct UserProfile {
     pub user_id: String,
     /// `None` when the profile has no display name, or an empty one.
     pub display_name: Option<String>,
+    /// `None` when the server does not let you see it (you share no room
+    /// with the user) or has no presence endpoint.
+    pub presence: Option<UserPresence>,
+}
+
+/// A user's presence, as their homeserver gives it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserPresence {
+    pub kind: PresenceKind,
+    /// `None` without a status message, or with an empty one.
+    pub status_msg: Option<String>,
+    /// How long ago the user was last active, in milliseconds.
+    pub last_active_ago_ms: Option<u64>,
+    /// Whether the server counts the user as active right now.
+    pub currently_active: Option<bool>,
 }
 
 impl<'de> serde::Deserialize<'de> for UserProfile {
@@ -1992,6 +2008,7 @@ impl<'de> serde::Deserialize<'de> for UserProfile {
         struct WireUserProfile {
             user_id: String,
             display_name: serde_json::Value,
+            presence: Option<UserPresence>,
         }
 
         let profile = WireUserProfile::deserialize(deserializer)?;
@@ -2008,6 +2025,7 @@ impl<'de> serde::Deserialize<'de> for UserProfile {
         Ok(Self {
             user_id: profile.user_id,
             display_name,
+            presence: profile.presence,
         })
     }
 }

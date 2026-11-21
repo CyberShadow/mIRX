@@ -1410,10 +1410,12 @@ mod tests {
                     UserProfile {
                         user_id: "@alice:example".to_owned(),
                         display_name: Some("Alice Liddell".to_owned()),
+                        presence: None,
                     },
                     UserProfile {
                         user_id: "@stranger:remote".to_owned(),
                         display_name: None,
+                        presence: None,
                     },
                 ] {
                     apply_core_event(state_mut(hwnd), Event::UserProfile(profile)).unwrap();

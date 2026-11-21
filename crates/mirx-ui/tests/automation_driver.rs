@@ -7481,6 +7481,7 @@ fn automation_driver_irc_info_commands_echo_in_active_window()
         UserProfile {
             user_id: "@alice:example".to_owned(),
             display_name: Some("Alice Liddell".to_owned()),
+            presence: None,
         },
     )])?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -20113,6 +20114,7 @@ fn slash_whois_prints_server_profile() -> Result<(), Box<dyn std::error::Error>>
         Event::UserProfile(UserProfile {
             user_id: "@stranger:remote".to_owned(),
             display_name: Some("Stranger".to_owned()),
+            presence: None,
         }),
         Event::Error(mirx_core::CoreErrorEvent {
             operation: mirx_core::Operation::FetchUserProfile,

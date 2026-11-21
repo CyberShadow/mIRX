@@ -155,7 +155,7 @@ use crate::api::{
     SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
     SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
-    UnsupportedRoomMessageActivity, UserDevices, UserIdentityState, UserProfile,
+    UnsupportedRoomMessageActivity, UserDevices, UserIdentityState, UserPresence, UserProfile,
     VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
     VerificationRequest, VerificationState, VerificationStateEvent,
 };
@@ -1153,9 +1153,47 @@ pub(crate) async fn fetch_user_profile(
             "invalid display name in the profile of {user_id}: {err}"
         ))
     })?;
+    // Presence after the profile: an unknown user is `no such user`.
+    let presence = match client
+        .send(get_presence::v3::Request::new(user_id.clone()))
+        .await
+    {
+        Ok(response) => Some(user_presence_from_response(&response)?),
+        // You share no room with them, or the server has no presence.
+        Err(err)
+            if matches!(
+                err.client_api_error_kind(),
+                Some(ErrorKind::Forbidden | ErrorKind::NotFound | ErrorKind::Unrecognized)
+            ) =>
+        {
+            None
+        }
+        Err(err) => {
+            return Err(MatrixCoreError::new(format!(
+                "failed to fetch the presence of {user_id}: {err}"
+            )));
+        }
+    };
     Ok(UserProfile {
         user_id: user_id.to_string(),
         display_name: display_name.filter(|name| !name.is_empty()),
+        presence,
+    })
+}
+
+fn user_presence_from_response(
+    response: &get_presence::v3::Response,
+) -> Result<UserPresence, MatrixCoreError> {
+    Ok(UserPresence {
+        kind: presence_kind(&response.presence)?,
+        status_msg: response
+            .status_msg
+            .clone()
+            .filter(|message| !message.is_empty()),
+        last_active_ago_ms: response.last_active_ago.map(|ago| {
+            u64::try_from(ago.as_millis()).expect("a server's idle time fits in u64 milliseconds")
+        }),
+        currently_active: response.currently_active,
     })
 }
 
@@ -5773,18 +5811,21 @@ mod tests {
         room_unable_to_decrypt_reason_from_sdk, send_file, send_message, set_display_name,
         set_room_member_power_level, set_room_notification_mode,
         sorted_room_member_summaries_from_parts, summarize_rooms, sync_message_replacement,
-        unban_room_member, unignore_user,
+        unban_room_member, unignore_user, user_presence_from_response,
     };
     use super::{MarkRoomReadRequest, SetReadMarkerRequest, mark_room_read, set_read_marker};
+    use crate::api::PresenceKind;
     use crate::api::{
         CreateRoomRequest, CreateRoomVisibility, HighlightWord, ListPublicRoomsRequest, PublicRoom,
         PublicRoomsPage, PublicRoomsResult, RoomNotificationMode, RoomSummary, SendFileRequest,
-        SetRoomNotificationModeRequest, UserProfile,
+        SetRoomNotificationModeRequest, UserPresence, UserProfile,
     };
     use crate::api::{
         EditMessageRequest, SessionAuth, TextColor, TextStyle, TextStyleSpan, UserLinkSpan,
     };
     use crate::rich_text::StyledText;
+    use matrix_sdk::ruma::api::client::presence::get_presence;
+    use matrix_sdk::ruma::presence::PresenceState;
 
     #[test]
     fn joined_member_snapshots_use_sdk_members_and_default_power_levels() {
@@ -13124,6 +13165,52 @@ mod tests {
                     .mount(mock_server.server())
                     .await;
             }
+            // Alice is away; Bob's server refuses (no shared room); Carol's
+            // answers what no presence lookup should.
+            for (user_id, status, body) in [
+                (
+                    "@alice:remote.org",
+                    200,
+                    serde_json::json!({
+                        "presence": "unavailable",
+                        "status_msg": "lunch",
+                        "last_active_ago": 303_000,
+                    }),
+                ),
+                (
+                    "@bare:remote.org",
+                    403,
+                    serde_json::json!({ "errcode": "M_FORBIDDEN", "error": "no shared room" }),
+                ),
+                (
+                    "@empty:remote.org",
+                    404,
+                    serde_json::json!({ "errcode": "M_UNRECOGNIZED", "error": "no presence" }),
+                ),
+                (
+                    "@carol:remote.org",
+                    400,
+                    serde_json::json!({ "errcode": "M_UNKNOWN", "error": "presence broke" }),
+                ),
+            ] {
+                wiremock::Mock::given(wiremock::matchers::method("GET"))
+                    .and(wiremock::matchers::path(format!(
+                        "/_matrix/client/v3/presence/{user_id}/status"
+                    )))
+                    .respond_with(wiremock::ResponseTemplate::new(status).set_body_json(body))
+                    .mount(mock_server.server())
+                    .await;
+            }
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path(
+                    "/_matrix/client/v3/profile/@carol:remote.org",
+                ))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "displayname": "Carol" })),
+                )
+                .mount(mock_server.server())
+                .await;
             wiremock::Mock::given(wiremock::matchers::method("GET"))
                 .and(wiremock::matchers::path(
                     "/_matrix/client/v3/profile/@ghost:remote.org",
@@ -13141,6 +13228,12 @@ mod tests {
                 UserProfile {
                     user_id: "@alice:remote.org".to_owned(),
                     display_name: Some("Alice Liddell".to_owned()),
+                    presence: Some(UserPresence {
+                        kind: PresenceKind::Unavailable,
+                        status_msg: Some("lunch".to_owned()),
+                        last_active_ago_ms: Some(303_000),
+                        currently_active: None,
+                    }),
                 }
             );
             for user_id in ["@bare:remote.org", "@empty:remote.org"] {
@@ -13149,9 +13242,19 @@ mod tests {
                     UserProfile {
                         user_id: user_id.to_owned(),
                         display_name: None,
+                        presence: None,
                     }
                 );
             }
+            let err = fetch_user_profile(&client, "@carol:remote.org")
+                .await
+                .expect_err("a broken presence lookup")
+                .to_string();
+            assert!(
+                err.starts_with("failed to fetch the presence of @carol:remote.org: "),
+                "{err}"
+            );
+            assert!(err.contains("presence broke"), "{err}");
             assert_eq!(
                 fetch_user_profile(&client, "@ghost:remote.org")
                     .await
@@ -13167,6 +13270,59 @@ mod tests {
                 r#"invalid user ID "ghost": leading sigil is incorrect or missing"#
             );
         });
+    }
+
+    #[test]
+    fn user_presence_reads_the_servers_answer() {
+        let response = |presence: PresenceState, status_msg: Option<&str>| {
+            let mut response = get_presence::v3::Response::new(presence);
+            response.status_msg = status_msg.map(str::to_owned);
+            response
+        };
+        let mut online = response(PresenceState::Online, None);
+        online.currently_active = Some(true);
+        online.last_active_ago = Some(Duration::from_millis(1_500));
+        for (response, expected) in [
+            (
+                response(PresenceState::Unavailable, Some("lunch")),
+                UserPresence {
+                    kind: PresenceKind::Unavailable,
+                    status_msg: Some("lunch".to_owned()),
+                    last_active_ago_ms: None,
+                    currently_active: None,
+                },
+            ),
+            (
+                online,
+                UserPresence {
+                    kind: PresenceKind::Online,
+                    status_msg: None,
+                    last_active_ago_ms: Some(1_500),
+                    currently_active: Some(true),
+                },
+            ),
+            (
+                // An empty status is none.
+                response(PresenceState::Offline, Some("")),
+                UserPresence {
+                    kind: PresenceKind::Offline,
+                    status_msg: None,
+                    last_active_ago_ms: None,
+                    currently_active: None,
+                },
+            ),
+        ] {
+            assert_eq!(
+                user_presence_from_response(&response).expect("a known presence"),
+                expected
+            );
+        }
+        assert_eq!(
+            user_presence_from_response(&response(PresenceState::from("busy"), None))
+                .expect_err("an unknown presence")
+                .to_string(),
+            r#"unknown presence "busy""#
+        );
     }
 
     async fn sync_push_rules(mock_server: &MatrixMockServer, client: &Client, ruleset: &Ruleset) {

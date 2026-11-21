@@ -9,7 +9,7 @@ use mirx_core::{
     E2eeStatus, EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
     HighlightWord, HistoryFrom, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
     LeaveRoomRequest, ListPublicRoomsRequest, LoginMethod, LoginRequest, MarkRoomReadRequest,
-    MemberPowerRole, Operation, PublicRoom, PublicRoomsPage, PublicRoomsResult,
+    MemberPowerRole, Operation, PresenceKind, PublicRoom, PublicRoomsPage, PublicRoomsResult,
     ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest,
     RedactEventRequest, RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
     RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
@@ -24,7 +24,7 @@ use mirx_core::{
     SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
     SignOutDeviceRequest, SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
-    UnsupportedRoomMessageActivity, UserDevices, UserIdentityState, UserProfile,
+    UnsupportedRoomMessageActivity, UserDevices, UserIdentityState, UserPresence, UserProfile,
     VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
     VerificationRequest, VerificationState, VerificationStateEvent, start, validate_highlight_word,
 };
@@ -696,15 +696,43 @@ fn fetch_user_profile_before_login_emits_its_error() {
 }
 
 #[test]
+fn presence_kinds_are_lowercase_on_the_wire() {
+    for (kind, json) in [
+        (PresenceKind::Online, r#""online""#),
+        (PresenceKind::Unavailable, r#""unavailable""#),
+        (PresenceKind::Offline, r#""offline""#),
+    ] {
+        assert_eq!(serde_json::to_string(&kind).expect("serialize kind"), json);
+        assert_eq!(
+            serde_json::from_str::<PresenceKind>(json).expect("deserialize kind"),
+            kind
+        );
+    }
+    assert!(serde_json::from_str::<PresenceKind>(r#""busy""#).is_err());
+}
+
+#[test]
 fn user_profile_round_trips_and_requires_display_name() {
     for profile in [
         UserProfile {
             user_id: "@bob:example.org".to_owned(),
             display_name: Some("Bob Builder".to_owned()),
+            presence: None,
         },
         UserProfile {
             user_id: "@bob:example.org".to_owned(),
             display_name: None,
+            presence: None,
+        },
+        UserProfile {
+            user_id: "@bob:example.org".to_owned(),
+            display_name: None,
+            presence: Some(UserPresence {
+                kind: PresenceKind::Unavailable,
+                status_msg: Some("lunch".to_owned()),
+                last_active_ago_ms: Some(303_000),
+                currently_active: Some(false),
+            }),
         },
     ] {
         let json = serde_json::to_string(&Event::UserProfile(profile.clone())).unwrap();

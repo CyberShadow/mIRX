@@ -124,10 +124,8 @@ fn send_paths(harness: &Harness) -> Vec<(String, serde_json::Value)> {
         .collect()
 }
 
-#[test]
-fn a_hung_backfill_holds_up_nothing_else() {
-    let harness = Harness::restored_in_rooms(&[ROOM], &[]);
-    harness.hang("GET", r"^/_matrix/client/v3/rooms/.*/messages");
+/// Bob's profile, and his presence, which `/whois` asks for after it.
+fn mount_bob_profile(harness: &Harness) {
     harness.mount(
         Mock::given(method("GET"))
             .and(path_regex(r"^/_matrix/client/v3/profile/@bob:example.org$"))
@@ -135,6 +133,22 @@ fn a_hung_backfill_holds_up_nothing_else() {
                 ResponseTemplate::new(200).set_body_json(json!({ "displayname": "Bob" })),
             ),
     );
+    harness.mount(
+        Mock::given(method("GET"))
+            .and(path_regex(
+                r"^/_matrix/client/v3/presence/@bob:example.org/status$",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "presence": "offline" })),
+            ),
+    );
+}
+
+#[test]
+fn a_hung_backfill_holds_up_nothing_else() {
+    let harness = Harness::restored_in_rooms(&[ROOM], &[]);
+    harness.hang("GET", r"^/_matrix/client/v3/rooms/.*/messages");
+    mount_bob_profile(&harness);
     harness.mount(
         Mock::given(method("POST"))
             .and(path_regex(r"^/_matrix/client/v3/publicRooms"))
@@ -454,13 +468,7 @@ fn a_failed_logout_keeps_the_session_whole() {
                 "error": "not today",
             }))),
     );
-    harness.mount(
-        Mock::given(method("GET"))
-            .and(path_regex(r"^/_matrix/client/v3/profile/@bob:example.org$"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({ "displayname": "Bob" })),
-            ),
-    );
+    mount_bob_profile(&harness);
     mount_sends(&harness);
     let mut seen = Seen::new(&harness);
     harness.send(Command::StartSync);
@@ -617,13 +625,7 @@ fn commands_sent_during_a_restore_run_after_it() {
             )
             .with_priority(1),
     );
-    harness.mount(
-        Mock::given(method("GET"))
-            .and(path_regex(r"^/_matrix/client/v3/profile/@bob:example.org$"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({ "displayname": "Bob" })),
-            ),
-    );
+    mount_bob_profile(&harness);
     let mut seen = Seen::new(&harness);
 
     harness.send(Command::RestoreSession(RestoreSessionRequest {

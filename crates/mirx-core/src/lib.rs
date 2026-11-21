@@ -40,10 +40,10 @@ pub use api::{
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
     SignOutDeviceRequest, SpaceChildSummary, StoredSession, SyncStopReason, TextColor, TextStyle,
     TextStyleSpan, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserDevices,
-    UserIdentityState, UserLinkSpan, UserProfile, VerificationDecimals, VerificationDirection,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, check_text_styles, check_user_links, login_method, login_server,
-    validate_highlight_word,
+    UserIdentityState, UserLinkSpan, UserPresence, UserProfile, VerificationDecimals,
+    VerificationDirection, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, check_text_styles, check_user_links, login_method,
+    login_server, validate_highlight_word,
 };
 pub use matrix_link::{MatrixLink, matrix_link};
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
