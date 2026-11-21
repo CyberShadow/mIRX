@@ -941,6 +941,7 @@ fn data_models_round_trip_through_json() {
                 next: HistoryFrom::Latest,
             },
             timeline_row_builds: 4,
+            buffer_lines: 2,
         }],
         text_font: UiTextFont {
             face: "Fixedsys".to_owned(),
@@ -1416,6 +1417,7 @@ fn data_models_round_trip_through_json() {
                         "next": { "type": "latest" },
                     },
                     "timeline_row_builds": 4u64,
+                    "buffer_lines": 2u64,
                 }
             ],
             "text_font": {

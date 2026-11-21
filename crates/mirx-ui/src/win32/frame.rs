@@ -175,6 +175,12 @@ unsafe extern "system" fn window_proc(
             }
             0
         }
+        WM_SYNC_VIEWS => {
+            if let Err(message) = sync_views_and_tree(hwnd) {
+                show_error_message(hwnd, "Scroll", &message);
+            }
+            0
+        }
         WM_CONNECT_AT_STARTUP => {
             if let Err(message) = connect(hwnd, None) {
                 show_error_message(hwnd, "Connect", &message);

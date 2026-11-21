@@ -73,6 +73,19 @@ impl StatusLog {
         self.lines.clear();
         self.revision += 1;
     }
+
+    /// mIRC's window buffer: drops the oldest lines until at most `cap`
+    /// remain. Returns whether it dropped any; only then does the revision
+    /// move.
+    pub(super) fn trim_to(&mut self, cap: usize) -> bool {
+        let excess = self.lines.len().saturating_sub(cap);
+        if excess == 0 {
+            return false;
+        }
+        self.lines.drain(..excess);
+        self.revision += 1;
+        true
+    }
 }
 
 /// The shell refused the tray icon: no tray, so no hiding in it.
@@ -342,6 +355,29 @@ mod tests {
         assert_eq!(log.revision(), pushed);
         log.clear();
         assert_ne!(log.revision(), pushed);
+    }
+
+    #[test]
+    fn trimming_drops_the_oldest_lines_and_moves_the_revision_only_then() {
+        let mut log = StatusLog::default();
+        for (timestamp, text) in [(1, "one"), (2, "two"), (3, "three")] {
+            log.push(timestamp, StatusLineKind::Info, text.to_owned());
+        }
+        let revision = log.revision();
+        assert!(!log.trim_to(3));
+        assert_eq!(log.revision(), revision);
+
+        assert!(log.trim_to(2));
+        assert_ne!(log.revision(), revision);
+        assert_eq!(
+            log.lines()
+                .iter()
+                .map(|line| (line.sequence, line.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(1, "two"), (2, "three")]
+        );
+        log.push(4, StatusLineKind::Info, "four".to_owned());
+        assert_eq!(log.lines()[2].sequence, 3);
     }
 
     #[test]

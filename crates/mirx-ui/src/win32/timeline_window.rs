@@ -5,7 +5,7 @@ use super::*;
 use windows_sys::Win32::System::SystemServices::MK_CONTROL;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetSystemMetrics, HTCLIENT, IDC_HAND, SM_CXDRAG, SM_CYDRAG,
+    GetCursorPos, GetSystemMetrics, HTCLIENT, IDC_HAND, PostMessageW, SM_CXDRAG, SM_CYDRAG,
     SPI_GETWHEELSCROLLLINES, SetCursor, SystemParametersInfoW, WHEEL_DELTA, WM_CAPTURECHANGED,
     WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_SETCURSOR,
 };
@@ -573,6 +573,17 @@ pub(super) fn clamped_timeline_top_line(
     top_line.min(timeline_max_top_line(line_count, visible_rows))
 }
 
+/// Whether the window shows its newest line; an empty window does.
+pub(super) unsafe fn timeline_shows_end(hwnd: HWND) -> bool {
+    let state = timeline_state_ref(hwnd);
+    timeline_is_tail_pinned(
+        state.source_rows.len(),
+        state.top_line,
+        state.paint_lines.len(),
+        timeline_visible_rows(hwnd),
+    )
+}
+
 fn timeline_is_tail_pinned(
     source_row_count: usize,
     top_line: usize,
@@ -871,12 +882,21 @@ pub(super) unsafe fn scroll_timeline_by(hwnd: HWND, gesture: ScrollGesture) {
         update_timeline_scrollbar(hwnd);
         InvalidateRect(hwnd, null(), 1);
     }
-
-    if gesture.heads_up()
+    // Back at its end, the window drops what its buffer kept while it was
+    // scrolled back.
+    let back_at_end = current < max_top_line && next == max_top_line;
+    let asked_for_history = gesture.heads_up()
         && next == 0
-        && let Err(message) = submit_backfill_room_history(hwnd)
-    {
-        eprintln!("{message}");
+        && submit_backfill_room_history(hwnd).unwrap_or_else(|message| {
+            eprintln!("{message}");
+            false
+        });
+    if back_at_end || asked_for_history {
+        assert_ne!(
+            PostMessageW(frame_window_for(hwnd), WM_SYNC_VIEWS, 0, 0),
+            0,
+            "the frame's queue takes a message"
+        );
     }
 }
 
@@ -1100,19 +1120,19 @@ pub(super) fn submit_backfill_room_history_for_room(
 /// Asks for older history of the room whose window `hwnd` is the timeline
 /// of, if it is the active window: the backfill anchor keeps the active
 /// window's reading position.
-unsafe fn submit_backfill_room_history(hwnd: HWND) -> Result<(), String> {
+/// Returns whether it asked.
+unsafe fn submit_backfill_room_history(hwnd: HWND) -> Result<bool, String> {
     let state = state_mut(frame_window_for(hwnd));
     let room_id = match &state.active_view {
         ViewId::Room(room_id) | ViewId::Thread { room_id, .. } => room_id.clone(),
-        ViewId::Status | ViewId::RoomList => return Ok(()),
+        ViewId::Status | ViewId::RoomList => return Ok(false),
     };
     let active_view = &state.views[&state.active_view];
     if view_timeline(&state.active_view, active_view.content) != hwnd {
-        return Ok(());
+        return Ok(false);
     }
 
-    submit_backfill_room_history_for_room(state, &room_id)?;
-    Ok(())
+    submit_backfill_room_history_for_room(state, &room_id)
 }
 
 #[cfg(test)]

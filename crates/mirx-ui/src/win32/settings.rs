@@ -416,6 +416,10 @@ impl WindowBuffer {
             Err(WINDOW_BUFFER_ERROR.to_owned())
         }
     }
+
+    pub(super) fn lines(self) -> usize {
+        usize::from(self.0)
+    }
 }
 
 impl std::fmt::Display for WindowBuffer {
@@ -942,6 +946,7 @@ mod tests {
             parse_ini("[Other]\nBuffer=50000").map(|settings| settings.other.window_buffer),
             WindowBuffer::new(50000)
         );
+        assert_eq!(WindowBuffer::new(100).map(WindowBuffer::lines), Ok(100));
         for (text, error) in [
             ("[other]\nbuffer=99", "line 2: buffer must be 100-50000"),
             ("[other]\nbuffer=50001", "line 2: buffer must be 100-50000"),

@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 65;
+pub(crate) const PROTOCOL_VERSION: u32 = 66;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1519,6 +1519,8 @@ pub(crate) struct UiRoomState {
     pub(crate) history_backfill: UiRoomHistoryBackfillState,
     /// Rows built for the room's window; 0 without one.
     pub(crate) timeline_row_builds: u64,
+    /// Lines the room's windows keep: its loaded messages and echo lines.
+    pub(crate) buffer_lines: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3765,8 +3767,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_65() {
-        assert_eq!(PROTOCOL_VERSION, 65);
+    fn protocol_version_is_66() {
+        assert_eq!(PROTOCOL_VERSION, 66);
     }
 
     #[test]
@@ -5792,7 +5794,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":65,
+                    "protocol_version":66,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6390,6 +6392,7 @@ mod tests {
                             next: HistoryFrom::Latest,
                         },
                         timeline_row_builds: 4,
+                        buffer_lines: 2,
                     }],
                     text_font: super::UiTextFont {
                         face: "Fixedsys".to_owned(),
@@ -6672,7 +6675,8 @@ mod tests {
                                 "num_mentions":1
                             },
                             "history_backfill":{"state":"idle","next":{"type":"latest"}},
-                            "timeline_row_builds":4
+                            "timeline_row_builds":4,
+                            "buffer_lines":2
                         }
                     ],
                     "text_font":{

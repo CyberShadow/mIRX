@@ -1791,6 +1791,8 @@ pub struct UiRoomState {
     pub history_backfill: UiRoomHistoryBackfillState,
     /// Rows built for the room's window; 0 without one.
     pub timeline_row_builds: u64,
+    /// Lines the room's windows keep: its loaded messages and echo lines.
+    pub buffer_lines: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

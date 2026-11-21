@@ -128,6 +128,10 @@ fn session_ident(model: &UiModel, view_id: &ViewId) -> String {
 struct LogDiff {
     /// The first arrival the log covers.
     from: u64,
+    /// The lines written that the window still shows. A line the window
+    /// dropped (its buffer, `/clear`) comes back, if ever, only as history,
+    /// which did not arrive and is not written, so it is forgotten: the set
+    /// stays as large as the window.
     written: BTreeSet<TimelineRowIdentity>,
 }
 
@@ -170,6 +174,11 @@ impl LogDiff {
                     .map(|line| line.strip_suffix('\r').unwrap_or(line).to_owned()),
             );
         }
+        let shown = rows
+            .iter()
+            .map(|row| &row.identity)
+            .collect::<BTreeSet<_>>();
+        self.written.retain(|identity| shown.contains(identity));
         lines
     }
 }
@@ -600,6 +609,19 @@ mod tests {
         // The same line again, restamped: still logged once.
         rows[2].logical_text = "[10:00] at the start".to_owned();
         assert_eq!(diff.lines(&rows, false), ["two", "lines"]);
+    }
+
+    #[test]
+    fn a_dropped_line_is_forgotten_and_its_history_copy_not_written() {
+        let mut diff = LogDiff::new(FROM);
+        let rows = vec![line(FROM, "old"), line(FROM + 1, "new")];
+        assert_eq!(diff.lines(&rows, false), ["old", "new"]);
+        // The window buffer drops the old line.
+        assert!(diff.lines(&rows[1..], false).is_empty());
+        assert_eq!(diff.written.len(), 1);
+        // Scrolling back loads it again, as history: not written again.
+        let history = rows[0].clone().arrived(None);
+        assert!(diff.lines(&[history, rows[1].clone()], false).is_empty());
     }
 
     #[test]

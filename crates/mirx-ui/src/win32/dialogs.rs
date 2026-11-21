@@ -1275,6 +1275,10 @@ pub(super) unsafe fn run_options_dialog(hwnd: HWND) -> Result<(), String> {
         // `always` may have changed whether the icon shows.
         sync_tray_icon(hwnd)?;
     }
+    if new.other.window_buffer != old.other.window_buffer {
+        // A lower buffer shortens the windows at their end at once.
+        sync_views_and_tree(hwnd)?;
+    }
     let commands = highlight_changes
         .add
         .into_iter()

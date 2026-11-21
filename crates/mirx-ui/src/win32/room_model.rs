@@ -229,6 +229,15 @@ impl RoomArrivals {
     }
 }
 
+/// The oldest lines the window buffer drops from a room: its first
+/// `activities` and first `echo_lines`. Only `RoomViewModel::buffer_trim`
+/// makes one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct BufferTrim {
+    activities: usize,
+    echo_lines: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ThreadViewModel {
     pub(super) label: String,
@@ -298,26 +307,133 @@ pub(super) struct RoomReactionEntry {
 }
 
 impl RoomViewModel {
+    /// `/clear` in the room window: every line goes but the messages
+    /// still queued to send. Thread windows keep their echo lines.
     pub(super) fn clear_visible_entries(&mut self) {
-        self.activities.retain(|activity| {
-            matches!(
-                &activity.kind,
-                RoomActivityKind::Message(RoomMessageActivity { send_state, .. })
-                    if is_queued(send_state)
-            )
-        });
-        self.reactions_by_target.clear();
-        // Only queued messages stay, and they have no event to be edited.
-        self.edited_event_ids.clear();
-        let kept = self
+        let (queued, cleared) = std::mem::take(&mut self.activities)
+            .into_iter()
+            .partition(room_activity_is_queued);
+        self.activities = queued;
+        self.echo.clear_room_window();
+        self.forget_activities(cleared);
+    }
+
+    /// The lines the window buffer counts: every activity, and every echo
+    /// line of the room's windows. A message's quote and reaction lines
+    /// belong to it, and the lines about the room ("Now talking in", its
+    /// topic, who is typing) are not lines of the buffer.
+    pub(super) fn buffer_lines(&self) -> usize {
+        self.activities.len() + self.echo.lines().len()
+    }
+
+    /// mIRC's window buffer: which of the oldest lines, in the order the
+    /// room window shows them, to drop so that at most `cap` remain; `None`
+    /// when nothing goes. What stays is always the newest part of the room,
+    /// without a gap, so older history loads back from just before it. A
+    /// line that must stay ends the trim there: a message still queued to
+    /// send, and a line of a thread whose window is open (`open_threads`,
+    /// by root), which that window shows.
+    pub(super) fn buffer_trim(
+        &self,
+        cap: usize,
+        open_threads: &BTreeSet<String>,
+    ) -> Option<BufferTrim> {
+        let excess = self.buffer_lines().saturating_sub(cap);
+        let in_open_thread =
+            |root: Option<&str>| root.is_some_and(|root| open_threads.contains(root));
+        let echo = self.echo.lines();
+        let mut trim = BufferTrim {
+            activities: 0,
+            echo_lines: 0,
+        };
+        while trim.activities + trim.echo_lines < excess {
+            // The room window's merge order (`push_activity_rows_with_echo`):
+            // an echo line goes before the first activity newer than it.
+            let echo_next = match (
+                self.activities.get(trim.activities),
+                echo.get(trim.echo_lines),
+            ) {
+                (Some(activity), Some(line)) => line.timestamp_ms < activity.timestamp_ms,
+                (None, Some(_)) => true,
+                (Some(_), None) => false,
+                (None, None) => unreachable!("the excess lines are lines"),
+            };
+            if echo_next {
+                if in_open_thread(echo[trim.echo_lines].thread_root.as_deref()) {
+                    break;
+                }
+                trim.echo_lines += 1;
+            } else {
+                let activity = &self.activities[trim.activities];
+                if room_activity_is_queued(activity)
+                    || in_open_thread(room_activity_event_id(activity))
+                    || in_open_thread(room_activity_thread_root_event_id(activity))
+                {
+                    break;
+                }
+                trim.activities += 1;
+            }
+        }
+        (trim.activities + trim.echo_lines > 0).then_some(trim)
+    }
+
+    /// Drops the lines `buffer_trim` chose. Dropping activities gives the
+    /// window older history again: from just before its oldest line, or,
+    /// if no line it kept came from the server, the newest page, which goes
+    /// above them. Not while a page is loading, which would go above a gap.
+    pub(super) fn trim_buffer(&mut self, trim: BufferTrim) {
+        assert!(
+            !matches!(self.history, RoomHistoryBackfillState::Loading { .. }),
+            "a room trims only between history pages: a page in flight would go above a gap"
+        );
+        self.echo.drop_oldest(trim.echo_lines);
+        if trim.activities == 0 {
+            return;
+        }
+        let dropped = self.activities.drain(..trim.activities).collect();
+        self.forget_activities(dropped);
+        self.history = RoomHistoryBackfillState::Idle {
+            next: self
+                .activities
+                .iter()
+                .find_map(room_activity_event_id)
+                .map_or(HistoryFrom::Latest, |event_id| HistoryFrom::BeforeEvent {
+                    event_id: event_id.to_owned(),
+                }),
+        };
+    }
+
+    /// Forgets what the model holds for activities that left it. One that
+    /// a remaining reply quotes stays as that reply's target, so the quote
+    /// keeps its text without asking the server; targets nothing quotes
+    /// any more go.
+    fn forget_activities(&mut self, dropped: Vec<RoomActivity>) {
+        for activity in &dropped {
+            self.arrivals.forget(&activity.activity_id);
+            if let Some(event_id) = room_activity_event_id(activity) {
+                self.reactions_by_target.remove(event_id);
+                self.edited_event_ids.remove(event_id);
+            }
+        }
+        let quoted = self
             .activities
             .iter()
-            .map(|activity| activity.activity_id.as_str())
+            .filter_map(|activity| activity.relation.as_ref())
+            .filter_map(replies::reply_quote_target)
+            .map(str::to_owned)
             .collect::<BTreeSet<_>>();
-        self.arrivals
-            .by_activity
-            .retain(|activity_id, _| kept.contains(activity_id.as_str()));
-        self.echo.clear_room_window();
+        for activity in dropped {
+            if let Some(event_id) =
+                room_activity_event_id(&activity).filter(|event_id| quoted.contains(*event_id))
+            {
+                self.reply_targets.insert(
+                    event_id.to_owned(),
+                    ReplyTargetState::Loaded(Box::new(activity)),
+                );
+            }
+        }
+        self.reply_targets
+            .retain(|event_id, _| quoted.contains(event_id));
         self.retain_preview_media_for_visible_activities();
         self.rebuild_threads();
     }
@@ -952,6 +1068,8 @@ impl RoomViewModel {
             })
             .collect::<BTreeMap<_, _>>();
 
+        // A thread whose root is no longer loaded (cleared, or dropped by
+        // the window buffer) keeps the name it had.
         self.threads = self
             .activities
             .iter()
@@ -960,6 +1078,11 @@ impl RoomViewModel {
                 let label = root_labels
                     .get(thread_root_event_id)
                     .cloned()
+                    .or_else(|| {
+                        self.threads
+                            .get(thread_root_event_id)
+                            .map(|thread| thread.label.clone())
+                    })
                     .unwrap_or_else(|| thread_root_event_id.to_owned());
                 (thread_root_event_id.to_owned(), ThreadViewModel { label })
             })
@@ -1455,6 +1578,13 @@ pub(super) fn room_activity_update_marks_inactive_room(update: &RoomActivityUpda
 
 /// Whether the message is still in the core's send queue: on its way, or
 /// waiting for the connection to come back after a recoverable failure.
+fn room_activity_is_queued(activity: &RoomActivity) -> bool {
+    matches!(
+        &activity.kind,
+        RoomActivityKind::Message(RoomMessageActivity { send_state, .. }) if is_queued(send_state)
+    )
+}
+
 pub(super) fn is_queued(send_state: &RoomMessageSendState) -> bool {
     matches!(
         send_state,
@@ -2338,6 +2468,234 @@ mod tests {
             [3]
         );
         assert_eq!(room_view.arrivals.next(), 4);
+    }
+
+    /// Message `n`, sent at minute `n`.
+    fn line(n: u64) -> RoomActivity {
+        sent_message_activity(
+            "!ops:example",
+            &format!("$m{n}"),
+            None,
+            &format!("line {n}"),
+            1_700_000_000_000 + n * 60_000,
+        )
+    }
+
+    fn lines_of(room_view: &RoomViewModel) -> Vec<String> {
+        room_view.assert_arrivals_consistent();
+        let mut lines = room_view
+            .activities
+            .iter()
+            .map(|activity| (activity.timestamp_ms, activity.activity_id.clone()))
+            .chain(
+                room_view
+                    .echo
+                    .lines()
+                    .iter()
+                    .map(|line| (line.timestamp_ms, line.text.clone())),
+            )
+            .collect::<Vec<_>>();
+        lines.sort();
+        lines.into_iter().map(|(_, line)| line).collect()
+    }
+
+    fn room_with_lines(count: u64) -> RoomViewModel {
+        let mut room_view = RoomViewModel::default();
+        for n in 0..count {
+            room_view.apply_activity(line(n));
+        }
+        room_view
+    }
+
+    /// Trims as the window buffer does: whether anything went.
+    fn trim(room_view: &mut RoomViewModel, cap: usize, open_threads: &BTreeSet<String>) -> bool {
+        let trim = room_view.buffer_trim(cap, open_threads);
+        if let Some(trim) = trim {
+            room_view.trim_buffer(trim);
+        }
+        trim.is_some()
+    }
+
+    fn before_event(event_id: &str) -> RoomHistoryBackfillState {
+        RoomHistoryBackfillState::Idle {
+            next: HistoryFrom::BeforeEvent {
+                event_id: event_id.to_owned(),
+            },
+        }
+    }
+
+    #[test]
+    fn the_buffer_drops_the_oldest_lines_with_echo_lines_in_window_order() {
+        let mut room_view = room_with_lines(4);
+        // Between lines 1 and 2, and after 3.
+        room_view.push_echo(
+            1_700_000_000_000 + 90_000,
+            None,
+            StatusLineKind::Info,
+            "* echo a".to_owned(),
+        );
+        room_view.push_echo(
+            1_700_000_000_000 + 200_000,
+            None,
+            StatusLineKind::Info,
+            "* echo b".to_owned(),
+        );
+        assert_eq!(room_view.buffer_lines(), 6);
+
+        assert!(!trim(&mut room_view, 6, &BTreeSet::new()));
+        assert_eq!(room_view.history, RoomHistoryBackfillState::default());
+
+        assert!(trim(&mut room_view, 3, &BTreeSet::new()));
+        assert_eq!(room_view.buffer_lines(), 3);
+        assert_eq!(lines_of(&room_view), ["event:$m2", "event:$m3", "* echo b"]);
+        assert_eq!(room_view.history, before_event("$m2"));
+        assert_eq!(room_view.arrivals.of("event:$m1"), None);
+        assert_eq!(room_view.arrivals.of("event:$m2"), Some(2));
+
+        // Only echo lines go: history stays where it was.
+        let mut room_view = RoomViewModel {
+            history: RoomHistoryBackfillState::Exhausted,
+            ..RoomViewModel::default()
+        };
+        room_view.push_echo(1, None, StatusLineKind::Info, "* echo".to_owned());
+        assert!(trim(&mut room_view, 0, &BTreeSet::new()));
+        assert_eq!(room_view.buffer_lines(), 0);
+        assert_eq!(room_view.history, RoomHistoryBackfillState::Exhausted);
+    }
+
+    #[test]
+    fn a_queued_message_or_an_open_threads_line_ends_the_trim() {
+        let mut room_view = room_with_lines(2);
+        room_view.apply_activity(pending_message_activity("!ops:example", "t1", "queued"));
+        for n in 2..5 {
+            room_view.apply_activity(line(n));
+        }
+        assert!(trim(&mut room_view, 1, &BTreeSet::new()));
+        assert_eq!(
+            lines_of(&room_view)[..2],
+            ["txn:t1".to_owned(), "event:$m2".to_owned()]
+        );
+        assert_eq!(room_view.buffer_lines(), 4);
+
+        let mut room_view = room_with_lines(2);
+        let mut reply = line(2);
+        reply.relation = Some(thread_relation("$m1"));
+        room_view.apply_activity(reply);
+        room_view.push_echo(
+            1_700_000_000_000 + 30_000,
+            Some("$m1".to_owned()),
+            StatusLineKind::Info,
+            "* thread echo".to_owned(),
+        );
+        for n in 3..6 {
+            room_view.apply_activity(line(n));
+        }
+        let open = BTreeSet::from(["$m1".to_owned()]);
+        // The thread's echo line comes right after line 0.
+        assert!(trim(&mut room_view, 2, &open));
+        assert_eq!(lines_of(&room_view)[0], "* thread echo");
+        assert_eq!(room_view.history, before_event("$m1"));
+        room_view.echo.drop_oldest(1);
+        // Its root stays, and its reply.
+        assert!(!trim(&mut room_view, 2, &open));
+        assert_eq!(lines_of(&room_view)[..2], ["event:$m1", "event:$m2"]);
+        // Closed, the thread's lines go too.
+        assert!(trim(&mut room_view, 2, &BTreeSet::new()));
+        assert_eq!(lines_of(&room_view), ["event:$m4", "event:$m5"]);
+        assert!(room_view.threads.is_empty());
+    }
+
+    #[test]
+    fn a_trimmed_line_takes_its_reactions_edits_and_media_along() {
+        let mut room_view = room_with_lines(3);
+        assert!(room_view.add_reaction("$m0", "$r0", "@bob:example", 1, "+1"));
+        assert!(room_view.add_reaction("$m2", "$r2", "@bob:example", 1, "+1"));
+        assert!(room_view.replace_message(
+            "$m0",
+            MessageReplacementFields {
+                presentation: RoomMessagePresentationKind::Text,
+                body: "edited".to_owned(),
+                styles: Vec::new(),
+                user_links: Vec::new(),
+            },
+        ));
+        for activity_id in ["event:$m0", "event:$m2"] {
+            room_view.insert_preview_media(
+                activity_id.to_owned(),
+                RoomPreviewMediaState::Failed {
+                    event_id: "$x".to_owned(),
+                    format: RoomMediaFormat::File,
+                    message: "gone".to_owned(),
+                },
+            );
+        }
+        assert!(trim(&mut room_view, 2, &BTreeSet::new()));
+        assert_eq!(
+            room_view.reactions_by_target.keys().collect::<Vec<_>>(),
+            ["$m2"]
+        );
+        assert!(room_view.edited_event_ids.is_empty());
+        assert_eq!(
+            room_view.preview_media.keys().collect::<Vec<_>>(),
+            ["event:$m2"]
+        );
+    }
+
+    #[test]
+    fn a_kept_reply_keeps_quoting_its_trimmed_target_until_it_goes_too() {
+        let mut room_view = room_with_lines(2);
+        let mut reply = line(2);
+        reply.relation = Some(reply_relation("$m0"));
+        room_view.apply_activity(reply);
+        room_view.apply_activity(line(3));
+        room_view
+            .reply_targets
+            .insert("$elsewhere".to_owned(), ReplyTargetState::Failed);
+
+        assert!(trim(&mut room_view, 2, &BTreeSet::new()));
+        assert!(matches!(
+            room_view.reply_target("$m0"),
+            ReplyTarget::Known(activity) if *activity == line(0)
+        ));
+        // Nothing quotes the other target, nor line 1.
+        assert_eq!(room_view.reply_targets.keys().collect::<Vec<_>>(), ["$m0"]);
+
+        assert!(trim(&mut room_view, 1, &BTreeSet::new()));
+        assert!(room_view.reply_targets.is_empty());
+    }
+
+    #[test]
+    fn a_thread_whose_root_was_trimmed_keeps_its_name() {
+        let mut room_view = room_with_lines(1);
+        let mut reply = line(1);
+        reply.relation = Some(thread_relation("$m0"));
+        room_view.apply_activity(reply);
+        assert_eq!(room_view.threads["$m0"].label, "line 0");
+
+        assert!(trim(&mut room_view, 1, &BTreeSet::new()));
+        assert_eq!(room_view.threads["$m0"].label, "line 0");
+        // And so it does after /clear.
+        room_view.clear_visible_entries();
+        assert!(room_view.threads.is_empty());
+    }
+
+    #[test]
+    fn a_window_left_with_no_server_line_loads_the_newest_page() {
+        let mut room_view = room_with_lines(2);
+        room_view.apply_activity(pending_message_activity("!ops:example", "t1", "queued"));
+        assert!(trim(&mut room_view, 1, &BTreeSet::new()));
+        assert_eq!(lines_of(&room_view), ["txn:t1"]);
+        assert_eq!(room_view.history, RoomHistoryBackfillState::default());
+    }
+
+    #[test]
+    #[should_panic(expected = "a room trims only between history pages")]
+    fn a_room_loading_history_is_not_trimmed() {
+        let mut room_view = room_with_lines(3);
+        room_view.history = RoomHistoryBackfillState::Loading {
+            from: HistoryFrom::Latest,
+        };
+        room_view.trim_buffer(room_view.buffer_trim(1, &BTreeSet::new()).unwrap());
     }
 
     #[test]

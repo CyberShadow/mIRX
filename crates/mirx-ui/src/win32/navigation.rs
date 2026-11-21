@@ -236,6 +236,13 @@ pub(super) unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
     for view_id in &view_ids {
         sync_view_content(hwnd, view_id)?;
     }
+    // The window buffer trims only lines the pass above showed and logged;
+    // the trimmed windows' rows are built again.
+    if trim_window_buffers(hwnd) {
+        for view_id in &view_ids {
+            sync_view_content(hwnd, view_id)?;
+        }
+    }
 
     // Activation makes it the active view: one that changes here (its room
     // went) unfolds its treebar folder and takes the focus, as any newly

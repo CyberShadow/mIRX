@@ -61,6 +61,16 @@ impl EchoLog {
     pub(super) fn clear_room_window(&mut self) {
         self.lines.retain(|line| line.thread_root.is_some());
     }
+
+    /// Every window's lines, oldest first.
+    pub(super) fn lines(&self) -> &[EchoLine] {
+        &self.lines
+    }
+
+    /// Drops the `count` oldest lines (the window buffer).
+    pub(super) fn drop_oldest(&mut self, count: usize) {
+        self.lines.drain(..count);
+    }
 }
 
 #[cfg(test)]

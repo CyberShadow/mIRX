@@ -618,6 +618,11 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             .iter()
             .map(|room| UiRoomState {
                 timeline_row_builds: state.refresh_counters.room_row_builds(&room.room_id),
+                buffer_lines: state
+                    .model
+                    .room_views
+                    .get(&room.room_id)
+                    .map_or(0, RoomViewModel::buffer_lines),
                 history_backfill: state.model.room_views.get(&room.room_id).map_or_else(
                     || dump_ui_room_history_backfill_state(&RoomHistoryBackfillState::default()),
                     |room_view| dump_ui_room_history_backfill_state(&room_view.history),

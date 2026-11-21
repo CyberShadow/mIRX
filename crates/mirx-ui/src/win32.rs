@@ -246,6 +246,7 @@ mod timestamp;
 mod tray;
 mod verification;
 mod views;
+mod window_buffer;
 mod window_data;
 
 use account::{
@@ -421,7 +422,7 @@ use room_list_window::{
     handle_room_list_notify, refresh_room_list_rows, start_room_list,
 };
 use room_model::{
-    LastMessageActivity, MessageReplacementFields, ReplyTarget, ReplyTargetState,
+    BufferTrim, LastMessageActivity, MessageReplacementFields, ReplyTarget, ReplyTargetState,
     RoomHistoryBackfillState, RoomPreviewMediaState, RoomViewModel, RoomViews, RoomWindowKind,
     activity_level_for, failed_room_activity_update_view_id, is_invite_command_target,
     is_invited_room, is_joined_message_room, is_navigable_room, is_sendable_room,
@@ -463,7 +464,7 @@ use timeline_window::{
     continue_original_jump, go_to_original_of_selected_message, loading_room_history_room_id,
     register_timeline_class, relayout_timeline, restore_room_history_backfill_anchor,
     scroll_timeline_by, select_timeline_event_at_client_y, set_timeline_rows, split_rendered_lines,
-    submit_backfill_room_history_for_room, timeline_max_top_line,
+    submit_backfill_room_history_for_room, timeline_max_top_line, timeline_shows_end,
     timeline_source_row_index_for_top_line, timeline_state_mut, timeline_state_ref,
     timeline_top_line_for_source_row_index, timeline_visible_rows, update_timeline_scrollbar,
     validate_selected_timeline_event,
@@ -494,6 +495,7 @@ use views::{
 };
 #[cfg(test)]
 use views::{ROOM_CONTENT_CLASS_NAME, take_stale_room_views};
+use window_buffer::trim_window_buffers;
 
 const TIMELINE_CLASS_NAME: &str = "mirxWin32Timeline";
 const FRAME_TITLE: &str = "mirx";
@@ -517,6 +519,11 @@ const WM_SELF_TEST: u32 = WM_APP + 2;
 const WM_CONNECT_AT_STARTUP: u32 = WM_APP + 3;
 /// The tray icon's callback message (`NOTIFYICONDATAW.uCallbackMessage`).
 const WM_TRAY_ICON: u32 = WM_APP + 4;
+/// A scroll changed what the windows show: the window asked for older
+/// history (its loading line), or came back to its end (where it drops what
+/// its buffer kept while it was scrolled back, `window_buffer`). Posted: the
+/// sync must not run inside the scrolled window's message.
+const WM_SYNC_VIEWS: u32 = WM_APP + 5;
 const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
 /// A connect retry is due (`reconnect`).

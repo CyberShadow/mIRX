@@ -3103,7 +3103,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 65);
+    assert_eq!(version.protocol_version, 66);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -9417,9 +9417,17 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
 fn launch_long_beta_room(
     rows: u64,
 ) -> Result<(GuiTestApp, MockBackfillHomeserver, PathBuf), Box<dyn std::error::Error>> {
+    launch_long_beta_room_in(unique_local_app_data_path(), rows)
+}
+
+/// `launch_long_beta_room` with the profile at `local_app_data`, which the
+/// test may have seeded.
+fn launch_long_beta_room_in(
+    local_app_data: PathBuf,
+    rows: u64,
+) -> Result<(GuiTestApp, MockBackfillHomeserver, PathBuf), Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
-    let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
     let options = launch_options(Some(local_app_data.clone()));
     let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
@@ -9427,23 +9435,31 @@ fn launch_long_beta_room(
     app.restore_session(&server.base_url, stored_session())?;
     app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
     let mut events = base_events();
-    for index in 0..rows {
-        events.push(text_event(
-            "!beta:example",
-            "@bob:example",
-            1_700_001_000_000 + index * 60_000,
-            &format!("history row {index:03}"),
-        ));
-    }
+    events.extend((0..rows).map(history_row));
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!beta:example")?;
-    app.wait_for_room_activity_contains(
-        Some("!beta:example"),
-        &format!("history row {:03}", rows - 1),
-        Duration::from_secs(5),
-    )?;
+    // Beta's newest line: its last row, or its second base line.
+    let newest = rows.checked_sub(1).map_or_else(
+        || "beta second".to_owned(),
+        |last| format!("history row {last:03}"),
+    );
+    app.wait_for_room_activity_contains(Some("!beta:example"), &newest, Duration::from_secs(5))?;
     Ok((app, server, local_app_data))
+}
+
+/// Beta's `index`th long-room row, a minute after the one before.
+fn history_row(index: u64) -> Event {
+    text_event(
+        "!beta:example",
+        "@bob:example",
+        1_700_001_000_000 + index * 60_000,
+        &format!("history row {index:03}"),
+    )
+}
+
+fn history_row_event_id(index: u64) -> String {
+    generated_event_id("!beta:example", &format!("history row {index:03}"))
 }
 
 /// The lines one wheel notch scrolls, as the system is set.
@@ -9490,7 +9506,9 @@ fn send_wheel(hwnd: HWND, delta: i16) {
 
 /// Waits until `timeline`'s top line is `expected`: typed keys are queued
 /// input, which the app reads after any sent automation request.
+#[track_caller]
 fn wait_for_top_line(timeline: HWND, expected: i32) -> Result<(), Box<dyn std::error::Error>> {
+    let caller = std::panic::Location::caller();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let top_line = unsafe { timeline_top_line(timeline) };
@@ -9498,7 +9516,7 @@ fn wait_for_top_line(timeline: HWND, expected: i32) -> Result<(), Box<dyn std::e
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(format!("top line is {top_line}, expected {expected}").into());
+            return Err(format!("{caller}: top line is {top_line}, expected {expected}").into());
         }
         std::thread::sleep(POLL_INTERVAL);
     }
@@ -9547,6 +9565,13 @@ fn wheel_to_the_top_asks_for_older_history() -> Result<(), Box<dyn std::error::E
             limit: 50,
         }]
     );
+    // The window says so at once.
+    app.wait_for_ui_state("the loading line", Duration::from_secs(5), |ui_state| {
+        view_contains(
+            find_view(ui_state, &room_identity("!beta:example")),
+            "* Loading older history...",
+        )
+    })?;
     // The request is loading: more turns at the top ask for nothing more.
     send_wheel(timeline, 120);
     send_wheel(unsafe { compose_edit_hwnd(&app) }, 120);
@@ -9609,8 +9634,10 @@ fn page_keys_in_the_editbox_scroll_the_timeline() -> Result<(), Box<dyn std::err
     press_keys(&[VK_CONTROL, VK_HOME]);
     wait_for_top_line(timeline, 0)?;
     assert_eq!(app.dump_model()?.submitted_history_commands.len(), 1);
+    // The window shows its `* Loading older history...` line above the
+    // rest, so its end is a line further down.
     press_keys(&[VK_CONTROL, VK_END]);
-    wait_for_top_line(timeline, bottom)?;
+    wait_for_top_line(timeline, bottom + 1)?;
 
     // The Status window's editbox pages its own timeline.
     click_switchbar_item(&app, &ViewIdentity::Status)?;
@@ -11183,6 +11210,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
             // Refresh work is not what this test is about.
             timeline_row_builds: find_ui_room(&initial_state, "!direct:example")
                 .timeline_row_builds,
+            buffer_lines: 0,
         }
     );
     assert_eq!(
@@ -13741,6 +13769,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
             },
             // Refresh work is not what this test is about.
             timeline_row_builds: find_ui_room(&initial_state, "!beta:example").timeline_row_builds,
+            buffer_lines: 0,
         }
     );
     assert_eq!(
@@ -13770,6 +13799,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
             },
             // Refresh work is not what this test is about.
             timeline_row_builds: find_ui_room(&initial_state, "!alpha:example").timeline_row_builds,
+            buffer_lines: 0,
         }
     );
 
@@ -13815,6 +13845,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
             // Refresh work is not what this test is about.
             timeline_row_builds: find_ui_room(&activated_state, "!alpha:example")
                 .timeline_row_builds,
+            buffer_lines: 0,
         }
     );
 
@@ -22740,6 +22771,315 @@ fn crash_writes_crash_log_and_ends_the_process() -> Result<(), Box<dyn std::erro
         assert!(log.contains(&expected), "{expected:?} in {log}");
     }
 
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+// The window buffer (Options > Other).
+
+/// `launch_long_beta_room` with a window buffer of `buffer` lines.
+fn launch_buffered_beta_room(
+    buffer: u16,
+    rows: u64,
+) -> Result<(GuiTestApp, MockBackfillHomeserver, PathBuf), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    write_settings(&local_app_data, &format!("[other]\r\nbuffer={buffer}\r\n"))?;
+    launch_long_beta_room_in(local_app_data, rows)
+}
+
+fn beta_buffer_lines(ui_state: &UiState) -> usize {
+    find_ui_room(ui_state, "!beta:example").buffer_lines
+}
+
+/// The long-room rows Beta's window shows, by number.
+fn beta_history_rows(ui_state: &UiState) -> Vec<u64> {
+    find_view(ui_state, &room_identity("!beta:example"))
+        .lines
+        .iter()
+        .filter_map(|line| {
+            let (_, number) = line.split_once("history row ")?;
+            Some(number.parse().expect("a row number"))
+        })
+        .collect()
+}
+
+#[test]
+fn a_window_at_its_end_keeps_the_buffer_and_loads_back_from_its_oldest_line()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, _server, local_app_data) = launch_buffered_beta_room(100, 130)?;
+    let ui_state = app.dump_ui_state()?;
+    // Beta's two first lines and rows 0-29 went.
+    assert_eq!(beta_buffer_lines(&ui_state), 100);
+    assert_eq!(beta_history_rows(&ui_state), (30..130).collect::<Vec<_>>());
+    let lines = &find_view(&ui_state, &room_identity("!beta:example")).lines;
+    assert!(
+        !lines.iter().any(|line| line.contains("beta first")),
+        "{lines:?}"
+    );
+    assert_eq!(
+        find_ui_room(&ui_state, "!beta:example").history_backfill,
+        UiRoomHistoryBackfillState::Idle {
+            next: HistoryFrom::BeforeEvent {
+                event_id: history_row_event_id(30),
+            },
+        }
+    );
+
+    // At the top, the window asks for what it dropped.
+    let timeline = app.active_timeline_hwnd()? as HWND;
+    send_wheel(timeline, i16::MAX);
+    assert_eq!(
+        app.dump_model()?.submitted_history_commands,
+        vec![SubmittedHistoryCommand {
+            room_id: "!beta:example".to_owned(),
+            from: HistoryFrom::BeforeEvent {
+                event_id: history_row_event_id(30),
+            },
+            limit: 50,
+        }]
+    );
+    // The mock never answers /messages, so the core stays busy with this
+    // backfill and is never idle again: no `wait_idle` from here on.
+    app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
+        "!beta:example",
+        Some("token-older"),
+        (10..30)
+            .map(|index| history_backfill_event_from_event(history_row(index)))
+            .collect(),
+    )])?)?;
+    // Scrolled back, the window keeps the page above its buffer.
+    let ui_state = app.wait_for_ui_state("the older page", Duration::from_secs(5), |ui_state| {
+        beta_buffer_lines(ui_state) == 120
+    })?;
+    assert_eq!(beta_history_rows(&ui_state), (10..130).collect::<Vec<_>>());
+
+    // Back at its end, it drops them again.
+    unsafe { SendMessageW(timeline, WM_VSCROLL, SB_BOTTOM as WPARAM, 0) };
+    let ui_state = app.wait_for_ui_state("the end", Duration::from_secs(5), |ui_state| {
+        beta_buffer_lines(ui_state) == 100
+    })?;
+    assert_eq!(beta_history_rows(&ui_state), (30..130).collect::<Vec<_>>());
+    assert_eq!(
+        find_ui_room(&ui_state, "!beta:example").history_backfill,
+        UiRoomHistoryBackfillState::Idle {
+            next: HistoryFrom::BeforeEvent {
+                event_id: history_row_event_id(30),
+            },
+        }
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn a_log_writes_every_line_of_a_batch_that_overflows_the_buffer()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, _server, local_app_data) = launch_buffered_beta_room(100, 0)?;
+    type_commands(&app, &["/log on"])?;
+    app.append_synthetic_events(&serde_json::to_string(
+        &(0..150).map(history_row).collect::<Vec<_>>(),
+    )?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    // The window keeps its `* Logging on` line and the last 99 rows.
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(beta_buffer_lines(&ui_state), 100);
+    assert_eq!(beta_history_rows(&ui_state), (51..150).collect::<Vec<_>>());
+
+    let log = read_log(&log_file_path(&local_app_data, "!beta.example"))?;
+    let logged = log
+        .iter()
+        .filter_map(|line| line.split_once("history row ").map(|(_, number)| number))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        logged,
+        (0..150)
+            .map(|index| format!("{index:03}"))
+            .collect::<Vec<_>>()
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn a_window_scrolled_back_keeps_its_lines_until_it_returns_to_its_end()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, _server, local_app_data) = launch_buffered_beta_room(100, 100)?;
+    assert_eq!(
+        beta_history_rows(&app.dump_ui_state()?),
+        (0..100).collect::<Vec<_>>()
+    );
+    let timeline = app.active_timeline_hwnd()? as HWND;
+    unsafe { SendMessageW(timeline, WM_VSCROLL, SB_PAGEUP as WPARAM, 0) };
+    app.append_synthetic_events(&serde_json::to_string(
+        &(100..120).map(history_row).collect::<Vec<_>>(),
+    )?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(beta_buffer_lines(&ui_state), 120);
+    assert_eq!(beta_history_rows(&ui_state), (0..120).collect::<Vec<_>>());
+
+    unsafe { SendMessageW(timeline, WM_VSCROLL, SB_BOTTOM as WPARAM, 0) };
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(beta_buffer_lines(&ui_state), 100);
+    assert_eq!(beta_history_rows(&ui_state), (20..120).collect::<Vec<_>>());
+    // It still shows its newest line.
+    let last_line = &ui_state
+        .active_timeline
+        .as_ref()
+        .expect("Beta's window has a timeline")
+        .visible_lines
+        .last()
+        .expect("the window shows lines")
+        .text;
+    assert!(last_line.ends_with("history row 119"), "{last_line}");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn lowering_the_window_buffer_in_options_shortens_the_windows_at_their_end()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, _server, local_app_data) = launch_buffered_beta_room(5000, 150)?;
+    assert_eq!(beta_buffer_lines(&app.dump_ui_state()?), 152);
+    app.open_dialog(AutomationDialog::Options)?;
+    let dialog = wait_for_options_dialog(&app)?;
+    app.select_options_page("Other")?;
+    unsafe { set_options_text(dialog, OPTIONS_WINDOW_BUFFER_ID, "100") };
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(beta_buffer_lines(&ui_state), 100);
+    assert_eq!(beta_history_rows(&ui_state), (50..150).collect::<Vec<_>>());
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    assert!(ini.contains("[other]\r\nbuffer=100\r\n"), "{ini:?}");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn an_open_thread_window_keeps_its_lines_in_the_room_window()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, _server, local_app_data) = launch_buffered_beta_room(100, 0)?;
+    // Rows 0-9, the thread's root, rows 10-89 with a reply after row 11.
+    let root_at = 1_700_001_000_000 + 9 * 60_000 + 30_000;
+    let mut events = (0..10).map(history_row).collect::<Vec<_>>();
+    events.push(message_event_with_event_id(
+        "!beta:example",
+        "$buffer-root",
+        "@bob:example",
+        root_at,
+        CoreRoomMessagePresentationKind::Text,
+        "buffer thread root",
+    ));
+    events.extend((10..12).map(history_row));
+    events.push(message_event_with_event_id_and_relation(
+        "!beta:example",
+        "$buffer-reply",
+        "@bob:example",
+        1_700_001_000_000 + 11 * 60_000 + 30_000,
+        Some(CoreRoomActivityRelation::Thread {
+            thread_root_event_id: "$buffer-root".to_owned(),
+            in_reply_to_event_id: Some("$buffer-root".to_owned()),
+            is_falling_back: false,
+        }),
+        CoreRoomMessagePresentationKind::Text,
+        "buffer thread reply",
+    ));
+    events.extend((12..90).map(history_row));
+    app.append_synthetic_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(beta_buffer_lines(&app.dump_ui_state()?), 94);
+
+    let thread = thread_identity("!beta:example", "$buffer-root");
+    app.select_view(thread.clone())?;
+    let thread_lines = find_view(&app.dump_ui_state()?, &thread).lines.clone();
+    app.append_synthetic_events(&serde_json::to_string(
+        &(90..130).map(history_row).collect::<Vec<_>>(),
+    )?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    // The room window drops its lines above the root only: its first two
+    // and rows 0-9.
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(beta_buffer_lines(&ui_state), 122);
+    assert_eq!(beta_history_rows(&ui_state), (10..130).collect::<Vec<_>>());
+    assert_eq!(find_view(&ui_state, &thread).lines, thread_lines);
+    assert!(!ui_state.navigation.find_view(&thread).is_empty());
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn the_status_window_keeps_the_buffer() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, _server, local_app_data) = launch_buffered_beta_room(100, 0)?;
+    app.select_view(ViewIdentity::Status)?;
+    let status_lines = |app: &MirxApp| -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        Ok(find_view(&app.dump_ui_state()?, &ViewIdentity::Status)
+            .lines
+            .clone())
+    };
+    let before = status_lines(&app)?;
+    type_commands(&app, &["/help"])?;
+    let help = status_lines(&app)?[before.len()..].to_vec();
+    assert!(!help.is_empty());
+    while status_lines(&app)?.len() + help.len() <= 100 {
+        type_commands(&app, &["/help"])?;
+    }
+    type_commands(&app, &["/help"])?;
+    let lines = status_lines(&app)?;
+    assert_eq!(lines.len(), 100);
+    assert_eq!(lines[100 - help.len()..], help[..]);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn a_message_into_a_full_window_builds_it_twice_and_wraps_one_row()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, _server, local_app_data) = launch_buffered_beta_room(100, 100)?;
+    let before = app.dump_ui_state()?;
+    app.append_synthetic_events(&serde_json::to_string(&vec![history_row(100)])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let after = app.dump_ui_state()?;
+    assert_eq!(beta_history_rows(&after), (1..101).collect::<Vec<_>>());
+    // Built with the new line, then again without the oldest; only the new
+    // row is wrapped, and no other window is built.
+    let counters = |state: &UiState| state.refresh_counters;
+    assert_eq!(
+        (
+            counters(&after).timeline_row_builds - counters(&before).timeline_row_builds,
+            counters(&after).rows_wrapped - counters(&before).rows_wrapped,
+            counters(&after).treebar_rebuilds - counters(&before).treebar_rebuilds,
+            counters(&after).switchbar_rebuilds - counters(&before).switchbar_rebuilds,
+        ),
+        (2, 1, 0, 0)
+    );
+    assert_eq!(
+        find_ui_room(&after, "!beta:example").timeline_row_builds
+            - find_ui_room(&before, "!beta:example").timeline_row_builds,
+        2
+    );
+    assert_eq!(
+        app.dump_ui_state()?.refresh_counters,
+        after.refresh_counters
+    );
+
+    drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
