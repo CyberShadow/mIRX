@@ -20,6 +20,7 @@ pub(super) unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenu
     let state = active_member_action_state(hwnd);
     Ok(DumpMemberMenuState {
         whois_enabled: state.enabled(MENU_ID_MEMBER_WHOIS),
+        devices_enabled: state.enabled(MENU_ID_MEMBER_DEVICES),
         verify_enabled: state.enabled(MENU_ID_MEMBER_VERIFY),
         query_enabled: state.enabled(MENU_ID_MEMBER_QUERY),
         mention_enabled: state.enabled(MENU_ID_MEMBER_MENTION),
@@ -780,6 +781,7 @@ fn submitted_user_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedU
                 Command::FetchUserProfile(user_id) => {
                     (DumpUserCommandAction::FetchProfile, user_id)
                 }
+                Command::ListUserDevices(user_id) => (DumpUserCommandAction::ListDevices, user_id),
                 _ => return None,
             };
             Some(DumpSubmittedUserCommand {

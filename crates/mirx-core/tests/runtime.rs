@@ -3,26 +3,27 @@ use std::time::Duration;
 
 use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CoreConfig,
-    CreateDirectRoomRequest, CreateRoomRequest, CreateRoomVisibility, E2eeBackupState,
-    E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoverySetupSucceeded,
-    E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus, EditMessageRequest, Event,
-    FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, InviteRoomMemberRequest,
-    JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, ListPublicRoomsRequest, LoginMethod,
-    LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoom, PublicRoomsPage,
-    PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX,
-    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RequestVerificationRequest,
-    RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
-    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
-    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat,
-    RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank, RoomMemberSummary,
-    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomNotificationMode, RoomReadState, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    RoomUserProfile, SendFileRequest, SendMessageRequest, SendReactionRequest, SessionAuth,
-    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
-    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession,
-    SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserProfile,
+    CreateDirectRoomRequest, CreateRoomRequest, CreateRoomVisibility, DeviceSummary,
+    E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation,
+    E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus,
+    EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord,
+    InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
+    ListPublicRoomsRequest, LoginMethod, LoginRequest, MarkRoomReadRequest, MemberPowerRole,
+    Operation, PublicRoom, PublicRoomsPage, PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
+    RejectRoomInviteRequest, RequestVerificationRequest, RoomActivity, RoomActivityKind,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
+    RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
+    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
+    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomReadState,
+    RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary,
+    RoomTagSummary, RoomTyping, RoomUserProfile, SendFileRequest, SendMessageRequest,
+    SendReactionRequest, SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
+    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
+    SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
+    UnsupportedRoomMessageActivity, UserDevices, UserIdentityState, UserProfile,
     VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
     VerificationRequest, VerificationState, VerificationStateEvent, start, validate_highlight_word,
 };
@@ -154,6 +155,7 @@ fn error_room_id(command: &Command) -> Option<&str> {
         | Command::IgnoreUser(_)
         | Command::UnignoreUser(_)
         | Command::FetchUserProfile(_)
+        | Command::ListUserDevices(_)
         | Command::ListPublicRooms(_)
         | Command::RefreshE2eeStatus
         | Command::SetupE2eeRecovery(_)
@@ -791,6 +793,15 @@ fn request_verification_before_login_emits_request_error() {
         }),
         Operation::RequestVerification,
         "verification requires an authenticated session",
+    );
+}
+
+#[test]
+fn list_user_devices_before_login_emits_list_error() {
+    assert_invalid_authenticated_command(
+        Command::ListUserDevices("@alice:example.org".to_owned()),
+        Operation::ListUserDevices,
+        "listing devices requires an authenticated session",
     );
 }
 
@@ -3194,6 +3205,45 @@ fn request_verification_request_round_trips_and_rejects_unknown_fields() {
         VerificationState::Sent
     );
     assert!(serde_json::from_str::<VerificationState>(r#"{"state":"sent","x":1}"#).is_err());
+}
+
+#[test]
+fn user_devices_event_round_trips_and_rejects_unknown_fields() {
+    let event = Event::UserDevices(UserDevices {
+        user_id: "@bob:example.org".to_owned(),
+        identity: UserIdentityState::VerificationViolation,
+        devices: vec![DeviceSummary {
+            device_id: "B0B".to_owned(),
+            display_name: Some("Bob's phone".to_owned()),
+            verified: false,
+            this_session: false,
+            last_seen_ms: None,
+        }],
+    });
+    let json = serde_json::to_string(&event).expect("serialize");
+    assert_eq!(
+        json,
+        r#"{"UserDevices":{"user_id":"@bob:example.org","identity":"verification_violation","devices":[{"device_id":"B0B","display_name":"Bob's phone","verified":false,"this_session":false,"last_seen_ms":null}]}}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<Event>(&json).expect("deserialize"),
+        event
+    );
+    for identity in ["no_cross_signing", "verified", "unverified"] {
+        serde_json::from_str::<UserIdentityState>(&format!("\"{identity}\"")).expect(identity);
+    }
+    assert!(
+        serde_json::from_str::<UserDevices>(
+            r#"{"user_id":"@bob:example.org","identity":"verified","devices":[],"x":1}"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<DeviceSummary>(
+            r#"{"device_id":"B0B","display_name":null,"verified":true,"this_session":false,"last_seen_ms":1,"x":1}"#
+        )
+        .is_err()
+    );
 }
 
 #[test]

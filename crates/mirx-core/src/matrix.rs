@@ -29,6 +29,7 @@ use matrix_sdk::{
     },
     encryption::{
         BackupDownloadStrategy, EncryptionSettings,
+        VerificationState as EncryptionVerificationState,
         backups::BackupState,
         recovery::RecoveryState,
         verification::{
@@ -118,7 +119,7 @@ use url::Url;
 
 use crate::api::{
     BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent,
-    CreateRoomRequest, CreateRoomVisibility, E2eeBackupState, E2eeBackupStatus,
+    CreateRoomRequest, CreateRoomVisibility, DeviceSummary, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event,
     FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, InviteRoomMemberRequest,
     JoinRoomRequest, KickRoomMemberRequest, ListPublicRoomsRequest, MarkRoomReadRequest,
@@ -139,9 +140,9 @@ use crate::api::{
     SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
     SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
-    UnsupportedRoomMessageActivity, UserProfile, VerificationDecimals, VerificationDirection,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent,
+    UnsupportedRoomMessageActivity, UserDevices, UserIdentityState, UserProfile,
+    VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::api::{TextStyleSpan, UserLinkSpan, check_text_styles, validate_highlight_word};
 use crate::mentions::body_mentions;
@@ -1108,6 +1109,105 @@ pub(crate) async fn fetch_user_profile(
         user_id: user_id.to_string(),
         display_name: display_name.filter(|name| !name.is_empty()),
     })
+}
+
+/// The user's identity and sessions, after a `/keys/query` so the store
+/// knows them as their server does now. Trust is the crypto store's: this
+/// session's from the SDK's verification state (its own device is always
+/// trusted locally), every other device's from `Device::is_verified`. For
+/// the own user the server's `/devices` list says which sessions exist,
+/// with their names and last seen times; one without E2EE keys is
+/// unverified.
+pub(crate) async fn list_user_devices(
+    client: &Client,
+    user_id: &str,
+) -> Result<UserDevices, MatrixCoreError> {
+    let user_id = parse_user_id(user_id)?;
+    let encryption = client.encryption();
+    let failed = |err: &dyn Display| {
+        MatrixCoreError::new(format!("failed to list the devices of {user_id}: {err}"))
+    };
+    let identity = encryption
+        .request_user_identity(&user_id)
+        .await
+        .map_err(|err| failed(&err))?;
+    let store_devices = encryption
+        .get_user_devices(&user_id)
+        .await
+        .map_err(|err| failed(&err))?;
+    let this_device = client.device_id().expect("listing devices runs signed in");
+    let this_session_verified =
+        encryption.verification_state().get() == EncryptionVerificationState::Verified;
+    let verified = |device_id: &DeviceId| {
+        if device_id == this_device {
+            this_session_verified
+        } else {
+            store_devices
+                .get(device_id)
+                .is_some_and(|device| device.is_verified())
+        }
+    };
+
+    let devices = if client.user_id() == Some(&*user_id) {
+        client
+            .devices()
+            .await
+            .map_err(|err| failed(&err))?
+            .devices
+            .into_iter()
+            .map(|device| DeviceSummary {
+                verified: verified(&device.device_id),
+                this_session: device.device_id == this_device,
+                display_name: device.display_name,
+                last_seen_ms: device.last_seen_ts.map(|ts| ts.get().into()),
+                device_id: device.device_id.to_string(),
+            })
+            .collect()
+    } else {
+        store_devices
+            .devices()
+            .filter(|device| !device.is_deleted())
+            .map(|device| DeviceSummary {
+                device_id: device.device_id().to_string(),
+                display_name: device.display_name().map(str::to_owned),
+                verified: device.is_verified(),
+                this_session: false,
+                last_seen_ms: None,
+            })
+            .collect()
+    };
+    Ok(UserDevices {
+        identity: identity.map_or(UserIdentityState::NoCrossSigning, |identity| {
+            user_identity_state(
+                identity.has_verification_violation(),
+                identity.is_verified(),
+            )
+        }),
+        devices: sorted_devices(devices),
+        user_id: user_id.to_string(),
+    })
+}
+
+fn user_identity_state(has_verification_violation: bool, is_verified: bool) -> UserIdentityState {
+    if has_verification_violation {
+        UserIdentityState::VerificationViolation
+    } else if is_verified {
+        UserIdentityState::Verified
+    } else {
+        UserIdentityState::Unverified
+    }
+}
+
+/// This session first, then the most recently seen (never seen last),
+/// then by device ID.
+fn sorted_devices(mut devices: Vec<DeviceSummary>) -> Vec<DeviceSummary> {
+    devices.sort_by(|a, b| {
+        b.this_session
+            .cmp(&a.this_session)
+            .then_with(|| b.last_seen_ms.cmp(&a.last_seen_ms))
+            .then_with(|| a.device_id.cmp(&b.device_id))
+    });
+    devices
 }
 
 /// What a highlight word's rule does: notify with a sound and highlight,
@@ -14316,6 +14416,235 @@ mod tests {
                 }
             }
             panic!("the clients never stopped talking");
+        }
+    }
+
+    mod devices {
+        use matrix_sdk::ruma::{owned_device_id, owned_user_id};
+
+        use super::super::{list_user_devices, sorted_devices, user_identity_state};
+        use super::*;
+        use crate::api::{DeviceSummary, UserDevices, UserIdentityState};
+
+        fn block_on<F: std::future::Future>(future: F) -> F::Output {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio runtime")
+                .block_on(future)
+        }
+
+        fn summary(
+            device_id: &str,
+            display_name: Option<&str>,
+            verified: bool,
+            this_session: bool,
+            last_seen_ms: Option<u64>,
+        ) -> DeviceSummary {
+            DeviceSummary {
+                device_id: device_id.to_owned(),
+                display_name: display_name.map(str::to_owned),
+                verified,
+                this_session,
+                last_seen_ms,
+            }
+        }
+
+        async fn bootstrap_cross_signing(client: &Client) {
+            client
+                .encryption()
+                .bootstrap_cross_signing(None)
+                .await
+                .expect("bootstrap cross-signing");
+        }
+
+        #[test]
+        fn own_devices_are_the_servers_list_with_the_stores_trust() {
+            block_on(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                server
+                    .mock_devices()
+                    .expect_any_access_token()
+                    .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                        serde_json::json!({ "devices": [
+                            { "device_id": "PH0NE", "display_name": "Phone", "last_seen_ts": 3000 },
+                            { "device_id": "K3YL3SS", "display_name": "Old web" },
+                            { "device_id": "TABL3T", "last_seen_ts": 5000 },
+                            { "device_id": "L4PT0P", "display_name": "Laptop", "last_seen_ts": 1000 },
+                        ] }),
+                    ))
+                    .mount()
+                    .await;
+                let alice_id = owned_user_id!("@alice:example.org");
+                let laptop = server
+                    .client_builder_for_crypto_end_to_end(&alice_id, &owned_device_id!("L4PT0P"))
+                    .build()
+                    .await;
+                bootstrap_cross_signing(&laptop).await;
+                let phone = server
+                    .set_up_new_device_for_encryption(
+                        &laptop,
+                        &owned_device_id!("PH0NE"),
+                        Vec::new(),
+                    )
+                    .await;
+                let _tablet = server
+                    .set_up_new_device_for_encryption(
+                        &laptop,
+                        &owned_device_id!("TABL3T"),
+                        Vec::new(),
+                    )
+                    .await;
+                // The laptop, which holds the cross-signing keys, signs the
+                // tablet; the phone stays unsigned.
+                laptop
+                    .encryption()
+                    .request_user_identity(&alice_id)
+                    .await
+                    .expect("query own keys");
+                laptop
+                    .encryption()
+                    .get_device(&alice_id, &owned_device_id!("TABL3T"))
+                    .await
+                    .expect("read the store")
+                    .expect("the tablet is known")
+                    .verify()
+                    .await
+                    .expect("sign the tablet");
+
+                let devices = list_user_devices(&laptop, "@alice:example.org")
+                    .await
+                    .expect("list own devices");
+                assert_eq!(devices.user_id, "@alice:example.org");
+                assert_eq!(devices.identity, UserIdentityState::Verified);
+                assert_eq!(
+                    devices.devices,
+                    vec![
+                        summary("L4PT0P", Some("Laptop"), true, true, Some(1000)),
+                        summary("TABL3T", None, true, false, Some(5000)),
+                        summary("PH0NE", Some("Phone"), false, false, Some(3000)),
+                        // Listed by the server, without E2EE keys.
+                        summary("K3YL3SS", Some("Old web"), false, false, None),
+                    ]
+                );
+
+                // The phone does not hold the keys: its identity, and so
+                // every session, is unverified to it, itself included.
+                let devices = list_user_devices(&phone, "@alice:example.org")
+                    .await
+                    .expect("list own devices from the phone");
+                assert_eq!(devices.identity, UserIdentityState::Unverified);
+                assert_eq!(
+                    devices
+                        .devices
+                        .iter()
+                        .map(|device| (
+                            device.device_id.as_str(),
+                            device.verified,
+                            device.this_session
+                        ))
+                        .collect::<Vec<_>>(),
+                    vec![
+                        ("PH0NE", false, true),
+                        ("TABL3T", false, false),
+                        ("L4PT0P", false, false),
+                        ("K3YL3SS", false, false),
+                    ]
+                );
+            });
+        }
+
+        #[test]
+        fn another_users_devices_follow_their_identitys_trust() {
+            block_on(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                let (alice, bob) = server.set_up_alice_and_bob_for_encryption().await;
+                let bob_devices = |identity| UserDevices {
+                    user_id: "@bob:example.org".to_owned(),
+                    identity,
+                    devices: vec![summary(
+                        "B0B0B0B0B",
+                        None,
+                        identity == UserIdentityState::Verified,
+                        false,
+                        None,
+                    )],
+                };
+
+                let list = || list_user_devices(&alice, "@bob:example.org");
+                assert_eq!(
+                    list().await.expect("list bob"),
+                    bob_devices(UserIdentityState::NoCrossSigning)
+                );
+
+                bootstrap_cross_signing(&bob).await;
+                assert_eq!(
+                    list().await.expect("list bob"),
+                    bob_devices(UserIdentityState::Unverified)
+                );
+
+                bootstrap_cross_signing(&alice).await;
+                alice
+                    .encryption()
+                    .get_user_identity(bob.user_id().expect("bob is signed in"))
+                    .await
+                    .expect("read the store")
+                    .expect("bob has an identity")
+                    .verify()
+                    .await
+                    .expect("verify bob");
+                assert_eq!(
+                    list().await.expect("list bob"),
+                    bob_devices(UserIdentityState::Verified)
+                );
+
+                assert_eq!(
+                    list_user_devices(&alice, "not a user")
+                        .await
+                        .expect_err("an invalid user id fails")
+                        .to_string(),
+                    fetch_user_profile(&alice, "not a user")
+                        .await
+                        .expect_err("an invalid user id fails")
+                        .to_string()
+                );
+            });
+        }
+
+        #[test]
+        fn identity_state_maps_violation_before_trust() {
+            assert_eq!(
+                user_identity_state(true, false),
+                UserIdentityState::VerificationViolation
+            );
+            assert_eq!(
+                user_identity_state(false, true),
+                UserIdentityState::Verified
+            );
+            assert_eq!(
+                user_identity_state(false, false),
+                UserIdentityState::Unverified
+            );
+        }
+
+        #[test]
+        fn devices_sort_this_session_then_last_seen_then_id() {
+            let sorted = sorted_devices(vec![
+                summary("B", None, false, false, None),
+                summary("A", None, false, false, None),
+                summary("OLD", None, false, false, Some(1)),
+                summary("ME", None, true, true, None),
+                summary("NEW", None, false, false, Some(9)),
+            ]);
+            assert_eq!(
+                sorted
+                    .iter()
+                    .map(|device| device.device_id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["ME", "NEW", "OLD", "A", "B"]
+            );
         }
     }
 }

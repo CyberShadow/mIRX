@@ -121,6 +121,17 @@ pub(super) unsafe fn run_slash_command(
             enqueue_command(state, Command::FetchUserProfile(user_id.clone()))?;
             Ok(Some(format!("whois requested: {user_id}")))
         }
+        SlashCommand::Devices { target } => {
+            let state = state_mut(hwnd);
+            let user_id = match target {
+                Some(target) => {
+                    commands::resolve_user(all_room_members(&state.model), &target)?.user_id
+                }
+                None => own_user_id(&state.model)?.to_owned(),
+            };
+            enqueue_command(state, Command::ListUserDevices(user_id.clone()))?;
+            Ok(Some(format!("devices requested: {user_id}")))
+        }
         SlashCommand::Ignore { target: None } => {
             let lines = {
                 let model = &state_ref(hwnd).model;
@@ -753,6 +764,17 @@ pub(super) fn whois_lines(model: &UiModel, profile: &UserProfile) -> Vec<String>
     commands::whois_lines(profile, room_nick.as_deref(), &shared_rooms)
 }
 
+/// `/devices`' answer, with the nick a room knows the user by.
+pub(super) fn devices_lines(
+    model: &UiModel,
+    devices: &UserDevices,
+    local_time: LocalTimeFn,
+) -> Vec<String> {
+    let nick = known_nick(model, &devices.user_id).unwrap_or_else(|| devices.user_id.clone());
+    let own_user = model.own_user_id.as_deref() == Some(devices.user_id.as_str());
+    commands::devices_lines(devices, &nick, own_user, local_time)
+}
+
 pub(super) fn resolve_joined_room_target(
     state: &WindowState,
     target: Option<&str>,
@@ -1166,7 +1188,7 @@ fn submit_topic_slash_command(
 
 #[cfg(test)]
 mod tests {
-    use mirx_core::RoomMemberRank;
+    use mirx_core::{DeviceSummary, RoomMemberRank, UserIdentityState};
 
     use super::super::test_fixtures::*;
     use super::*;
@@ -1336,6 +1358,70 @@ mod tests {
                         "[22:12] * @stranger:remote is @stranger:remote",
                         "[22:12] * @stranger:remote using remote",
                         "[22:12] * @stranger:remote End of /WHOIS list",
+                    ]
+                );
+            });
+        }
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn devices_asks_the_server_and_prints_whois_style() {
+        let (state, handle) = irc_command_state();
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                // Signed out, there are no own sessions to list.
+                type_compose_line(hwnd, "/devices");
+                state_mut(hwnd).model.connection = ConnectionState::Syncing;
+                state_mut(hwnd).model.own_user_id = Some("@me:example".to_owned());
+                type_compose_line(hwnd, "/devices");
+                type_compose_line(hwnd, "/devices Nobody");
+                type_compose_line(hwnd, "/devices Bob");
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![
+                        Command::ListUserDevices("@me:example".to_owned()),
+                        Command::ListUserDevices("@bob:example".to_owned()),
+                    ]
+                );
+                assert_eq!(
+                    state_ref(hwnd).model.status,
+                    "devices requested: @bob:example"
+                );
+                let device = |device_id: &str, verified, this_session| DeviceSummary {
+                    device_id: device_id.to_owned(),
+                    display_name: None,
+                    verified,
+                    this_session,
+                    last_seen_ms: None,
+                };
+                for devices in [
+                    UserDevices {
+                        user_id: "@me:example".to_owned(),
+                        identity: UserIdentityState::Verified,
+                        devices: vec![device("MINE", true, true)],
+                    },
+                    UserDevices {
+                        user_id: "@bob:example".to_owned(),
+                        identity: UserIdentityState::Unverified,
+                        devices: vec![device("B0B", false, false)],
+                    },
+                ] {
+                    apply_core_event(state_mut(hwnd), Event::UserDevices(devices)).unwrap();
+                }
+                let lines = render_room_lines(state_ref(hwnd), "!ops:example");
+                assert_eq!(
+                    &lines[lines.len() - 8..],
+                    [
+                        "[22:12] * /devices: not connected to server",
+                        "[22:12] * /devices: no such nick: Nobody",
+                        "[22:12] * @me:example sessions:",
+                        "[22:12] * @me:example MINE verified (this session)",
+                        "[22:12] * @me:example End of /DEVICES list",
+                        "[22:12] * Bob is not verified; /verify @bob:example",
+                        "[22:12] * Bob B0B unverified",
+                        "[22:12] * Bob End of /DEVICES list",
                     ]
                 );
             });

@@ -569,6 +569,10 @@ pub(super) fn apply_core_event(
             let lines = whois_lines(&state.model, &profile);
             echo_lines_in_active_view(state, lines);
         }
+        Event::UserDevices(devices) => {
+            let lines = devices_lines(&state.model, &devices, state.local_time);
+            echo_lines_in_active_view(state, lines);
+        }
         Event::E2eeStatus(status) => {
             for line in status_log::e2ee_status(&status) {
                 log_status(state, StatusLineKind::Info, line);
@@ -1017,6 +1021,7 @@ pub(super) fn operation_name(operation: Operation) -> &'static str {
         Operation::IgnoreUser => "ignore user",
         Operation::UnignoreUser => "unignore user",
         Operation::FetchUserProfile => "fetch user profile",
+        Operation::ListUserDevices => "list devices",
         Operation::SendMessage => "send text",
         Operation::SendFile => "send file",
         Operation::EditMessage => "edit message",

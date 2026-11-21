@@ -175,6 +175,7 @@ pub enum ContextMenuCommand {
     RedactMessage,
     SaveAttachment,
     WhoisMember,
+    DevicesMember,
     VerifyMember,
     QueryMember,
     MentionMember,
@@ -192,6 +193,7 @@ pub enum ContextMenuCommand {
 #[serde(deny_unknown_fields)]
 pub struct MemberMenuState {
     pub whois_enabled: bool,
+    pub devices_enabled: bool,
     pub verify_enabled: bool,
     pub query_enabled: bool,
     pub mention_enabled: bool,
@@ -502,7 +504,8 @@ pub struct SubmittedProfileCommand {
     pub display_name: String,
 }
 
-/// A request about another user (`/ignore`, `/unignore`, `/whois`).
+/// A request about another user (`/ignore`, `/unignore`, `/whois`,
+/// `/devices`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubmittedUserCommand {
@@ -516,6 +519,7 @@ pub enum UserCommandAction {
     Ignore,
     Unignore,
     FetchProfile,
+    ListDevices,
 }
 
 /// A room directory page asked for (`/list`).

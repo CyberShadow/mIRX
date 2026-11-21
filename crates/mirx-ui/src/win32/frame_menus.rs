@@ -758,6 +758,7 @@ unsafe fn menu_command_result(
         MENU_ID_MEMBER_QUERY => ("Member", query_selected_member(hwnd).map(|_| Some(()))),
         MENU_ID_MEMBER_MENTION => ("Member", mention_selected_member(hwnd).map(|_| Some(()))),
         MENU_ID_MEMBER_WHOIS
+        | MENU_ID_MEMBER_DEVICES
         | MENU_ID_MEMBER_VERIFY
         | MENU_ID_MEMBER_IGNORE
         | MENU_ID_MEMBER_UNIGNORE
@@ -820,6 +821,10 @@ unsafe fn menu_command_result(
                 },
             )
             .map(|_| Some(())),
+        ),
+        MENU_ID_TOOLS_SESSIONS => (
+            "Tools",
+            run_local_command(hwnd, SlashCommand::Devices { target: None }).map(|_| Some(())),
         ),
         MENU_ID_VERIFY_ACCEPT => (
             "Tools",
@@ -972,6 +977,7 @@ pub(super) fn context_menu_command_id(command: &ContextMenuCommand) -> Option<us
         ContextMenuCommand::RedactMessage => MENU_ID_MESSAGE_REDACT,
         ContextMenuCommand::SaveAttachment => MENU_ID_MESSAGE_SAVE_ATTACHMENT,
         ContextMenuCommand::WhoisMember => MENU_ID_MEMBER_WHOIS,
+        ContextMenuCommand::DevicesMember => MENU_ID_MEMBER_DEVICES,
         ContextMenuCommand::VerifyMember => MENU_ID_MEMBER_VERIFY,
         ContextMenuCommand::QueryMember => MENU_ID_MEMBER_QUERY,
         ContextMenuCommand::MentionMember => MENU_ID_MEMBER_MENTION,

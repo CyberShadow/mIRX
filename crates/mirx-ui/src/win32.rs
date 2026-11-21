@@ -34,9 +34,10 @@ use mirx_core::{
     RoomUserProfile, RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
     SendMessageThreadTarget, SendReactionRequest, SessionAuth, SetDisplayNameRequest,
     SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
-    SetupE2eeRecoveryRequest, StoredSession, TextStyleSpan, UnbanRoomMemberRequest, UserLinkSpan,
-    UserProfile, VerificationDirection, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, login_method, login_server, start,
+    SetupE2eeRecoveryRequest, StoredSession, TextStyleSpan, UnbanRoomMemberRequest, UserDevices,
+    UserLinkSpan, UserProfile, VerificationDirection, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, login_method, login_server,
+    start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -270,12 +271,13 @@ use colors::{ColorItem, ColorScheme, EventItem, SchemeBrushes};
 #[cfg(test)]
 use command_runner::run_slash_command;
 use command_runner::{
-    echo_in_active_view, echo_lines_in_active_view, echo_lines_in_view, enqueue_command,
-    known_nick, open_room_link, own_server, report_command_error, report_error_line,
-    resolve_invite_command_room_id, resolve_joined_room_target, run_local_command, send_edit,
-    send_reply, set_local_command_status, submit_accept_slash_command, submit_join_room,
-    submit_part_slash_command, submit_query_slash_command, submit_redact_slash_command,
-    submit_reject_slash_command, submit_room_notification_mode, whois_lines,
+    devices_lines, echo_in_active_view, echo_lines_in_active_view, echo_lines_in_view,
+    enqueue_command, known_nick, open_room_link, own_server, report_command_error,
+    report_error_line, resolve_invite_command_room_id, resolve_joined_room_target,
+    run_local_command, send_edit, send_reply, set_local_command_status,
+    submit_accept_slash_command, submit_join_room, submit_part_slash_command,
+    submit_query_slash_command, submit_redact_slash_command, submit_reject_slash_command,
+    submit_room_notification_mode, whois_lines,
 };
 use commands::{
     BarCommand, CommandError, ComposeSubmission, CreateRoomArgs, E2eeSlashCommand, FontCommand,
@@ -366,23 +368,23 @@ use menus::{
     MENU_ID_COMMANDS_FIRST, MENU_ID_COMMANDS_LIST, MENU_ID_FILE_CONNECT, MENU_ID_FILE_DISCONNECT,
     MENU_ID_FILE_EXIT, MENU_ID_FILE_SELECT_SERVER, MENU_ID_FIND, MENU_ID_HELP_ABOUT,
     MENU_ID_HELP_TOPICS, MENU_ID_LOGOUT, MENU_ID_MEMBER_BAN, MENU_ID_MEMBER_DEOP,
-    MENU_ID_MEMBER_DEVOICE, MENU_ID_MEMBER_IGNORE, MENU_ID_MEMBER_KICK, MENU_ID_MEMBER_MENTION,
-    MENU_ID_MEMBER_OP, MENU_ID_MEMBER_QUERY, MENU_ID_MEMBER_UNIGNORE, MENU_ID_MEMBER_VERIFY,
-    MENU_ID_MEMBER_VOICE, MENU_ID_MEMBER_WHOIS, MENU_ID_MESSAGE_EDIT,
+    MENU_ID_MEMBER_DEVICES, MENU_ID_MEMBER_DEVOICE, MENU_ID_MEMBER_IGNORE, MENU_ID_MEMBER_KICK,
+    MENU_ID_MEMBER_MENTION, MENU_ID_MEMBER_OP, MENU_ID_MEMBER_QUERY, MENU_ID_MEMBER_UNIGNORE,
+    MENU_ID_MEMBER_VERIFY, MENU_ID_MEMBER_VOICE, MENU_ID_MEMBER_WHOIS, MENU_ID_MESSAGE_EDIT,
     MENU_ID_MESSAGE_GO_TO_ORIGINAL, MENU_ID_MESSAGE_REACT, MENU_ID_MESSAGE_REDACT,
     MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_SAVE_ATTACHMENT, MENU_ID_RECOVER_E2EE,
     MENU_ID_ROOM_ACCEPT_INVITE, MENU_ID_ROOM_NOTIFY_ALL, MENU_ID_ROOM_NOTIFY_MENTIONS,
     MENU_ID_ROOM_NOTIFY_MUTE, MENU_ID_ROOM_PART, MENU_ID_ROOM_REJECT_INVITE,
     MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_TOOLS_COLORS, MENU_ID_TOOLS_OPTIONS,
-    MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL, MENU_ID_VERIFY_CONFIRM_SAS,
-    MENU_ID_VERIFY_REJECT_SAS, MENU_ID_VERIFY_THIS_SESSION, MENU_ID_VIEW_SWITCHBAR,
-    MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE,
-    MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry,
-    ROOM_NOTIFICATIONS_MENU, TOOLS_MENU, VIEW_MENU, WINDOW_MENU, WindowKey, commands_menu_item,
-    commands_menu_line, commands_menu_title, file_menu_state, member_menu_command,
-    member_menu_item_enabled, member_menu_item_ids, notification_menu_id, notification_menu_mode,
-    notification_mode_label, verification_menu_action_enabled, view_menu_bar, view_menu_checks,
-    window_key,
+    MENU_ID_TOOLS_SESSIONS, MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL,
+    MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS, MENU_ID_VERIFY_THIS_SESSION,
+    MENU_ID_VIEW_SWITCHBAR, MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS,
+    MENU_ID_WINDOW_CASCADE, MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL,
+    MenuEntry, ROOM_NOTIFICATIONS_MENU, TOOLS_MENU, VIEW_MENU, WINDOW_MENU, WindowKey,
+    commands_menu_item, commands_menu_line, commands_menu_title, file_menu_state,
+    member_menu_command, member_menu_item_enabled, member_menu_item_ids, notification_menu_id,
+    notification_menu_mode, notification_mode_label, verification_menu_action_enabled,
+    view_menu_bar, view_menu_checks, window_key,
 };
 #[cfg(test)]
 use navigation::navigation_layout;

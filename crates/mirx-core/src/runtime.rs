@@ -287,6 +287,9 @@ async fn handle_command(
         Command::FetchUserProfile(user_id) => {
             handle_fetch_user_profile(event_tx, state, user_id).await
         }
+        Command::ListUserDevices(user_id) => {
+            handle_list_user_devices(event_tx, state, user_id).await
+        }
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
         Command::SendFile(request) => handle_send_file(event_tx, state, request).await,
         Command::EditMessage(request) => handle_edit_message(event_tx, state, request).await,
@@ -1507,6 +1510,28 @@ async fn handle_setup_e2ee_recovery(
             emit_event(event_tx, Event::E2eeStatus(status));
         }
         Err(err) => emit_matrix_error(event_tx, Operation::SetupE2eeRecovery, err),
+    }
+
+    false
+}
+
+async fn handle_list_user_devices(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    user_id: String,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::ListUserDevices,
+            "listing devices requires an authenticated session",
+        );
+        return false;
+    };
+
+    match matrix::list_user_devices(client, &user_id).await {
+        Ok(devices) => emit_event(event_tx, Event::UserDevices(devices)),
+        Err(err) => emit_matrix_error(event_tx, Operation::ListUserDevices, err),
     }
 
     false

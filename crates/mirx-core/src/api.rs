@@ -50,6 +50,10 @@ pub enum Command {
     /// Asks the user's homeserver for their global profile; answered by
     /// `UserProfile`.
     FetchUserProfile(String),
+    /// Fetches the user's cross-signing identity and devices fresh from
+    /// their server (`/keys/query`; for the own user also `/devices`);
+    /// answered by `UserDevices`.
+    ListUserDevices(String),
     SendMessage(SendMessageRequest),
     SendFile(SendFileRequest),
     EditMessage(EditMessageRequest),
@@ -1517,6 +1521,43 @@ pub enum VerificationDirection {
     Outgoing { to_device: Option<String> },
 }
 
+/// A user's sessions and how far this session trusts them, as the crypto
+/// store says after a fresh `/keys/query`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserDevices {
+    pub user_id: String,
+    pub identity: UserIdentityState,
+    /// This session first, then the most recently seen, then by device ID.
+    pub devices: Vec<DeviceSummary>,
+}
+
+/// The user's cross-signing identity, as this session trusts it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserIdentityState {
+    /// The user has not set up cross-signing.
+    NoCrossSigning,
+    Verified,
+    Unverified,
+    /// The user was verified, and their identity has changed since.
+    VerificationViolation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceSummary {
+    pub device_id: String,
+    pub display_name: Option<String>,
+    /// Whether the crypto store trusts the device: verified directly, or
+    /// cross-signed by a verified identity. For this session: whether its
+    /// own cross-signing identity signs it.
+    pub verified: bool,
+    pub this_session: bool,
+    /// When the server last saw the session; your own sessions only.
+    pub last_seen_ms: Option<u64>,
+}
+
 /// Whom a verification asks. A device: that device, to-device. No device
 /// and the own user: your other cross-signed sessions, to-device. No device
 /// and another user: their cross-signing identity, in your DM with them,
@@ -1737,6 +1778,7 @@ pub enum Operation {
     IgnoreUser,
     UnignoreUser,
     FetchUserProfile,
+    ListUserDevices,
     SendMessage,
     SendFile,
     EditMessage,
@@ -1825,6 +1867,8 @@ pub enum Event {
     IgnoredUsers(Vec<String>),
     /// The answer to `FetchUserProfile`.
     UserProfile(UserProfile),
+    /// The answer to `ListUserDevices`.
+    UserDevices(UserDevices),
     E2eeStatus(E2eeStatus),
     E2eeRecoverySetupSucceeded(E2eeRecoverySetupSucceeded),
     E2eeRecoverySucceeded(E2eeRecoverySucceeded),

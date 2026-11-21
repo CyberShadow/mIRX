@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mirx_core::{
-    E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
-    Event, HighlightWord, RoomActivity as CoreRoomActivity,
+    DeviceSummary, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState,
+    E2eeStatus, Event, HighlightWord, RoomActivity as CoreRoomActivity,
     RoomActivityKind as CoreRoomActivityKind, RoomActivityRelation as CoreRoomActivityRelation,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomHistoryBackfill,
     RoomHistoryBackfillEvent, RoomMedia as CoreRoomMedia, RoomMediaFormat as CoreRoomMediaFormat,
@@ -23,7 +23,7 @@ use mirx_core::{
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomNotificationMode, RoomSummary,
     RoomTyping, SessionAuth as CoreSessionAuth, SpaceChildSummary,
-    StoredSession as CoreStoredSession, UserProfile,
+    StoredSession as CoreStoredSession, UserDevices, UserIdentityState, UserProfile,
     VerificationDecimals as CoreVerificationDecimals, VerificationDirection,
     VerificationEmoji as CoreVerificationEmoji, VerificationState as CoreVerificationState,
     VerificationStateEvent as CoreVerificationStateEvent,
@@ -113,6 +113,7 @@ const MENU_ID_VERIFY_REJECT_SAS: usize = 40010;
 const MENU_ID_RECOVER_E2EE: usize = 40005;
 const MENU_ID_SETUP_E2EE_RECOVERY: usize = 40017;
 const MENU_ID_VERIFY_THIS_SESSION: usize = 40050;
+const MENU_ID_TOOLS_SESSIONS: usize = 40051;
 const RECOVER_E2EE_DIALOG_SECRET_ID: i32 = 5007;
 const RECOVER_E2EE_DIALOG_OK_ID: usize = 5008;
 const SETUP_E2EE_DIALOG_PASSPHRASE_ID: i32 = 5013;
@@ -4729,6 +4730,87 @@ fn automation_driver_member_menu_verify_requests_the_member()
             device_id: None,
         }]
     );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_devices_lists_sessions_whois_style() -> Result<(), Box<dyn std::error::Error>>
+{
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_signed_in_member_app(&local_app_data)?;
+
+    type_commands(&app, &["/devices", "/devices Bob", "/devices Nobody"])?;
+    invoke_account_menu_command(&app, MENU_ID_TOOLS_SESSIONS)?;
+    app.select_member("@bob:example")?;
+    assert!(app.dump_member_menu_state()?.devices_enabled);
+    app.open_member_context_menu("@bob:example", ContextMenuCommand::DevicesMember)?;
+
+    let list = |user_id: &str| SubmittedUserCommand {
+        action: UserCommandAction::ListDevices,
+        user_id: user_id.to_owned(),
+    };
+    assert_eq!(
+        app.dump_model()?.submitted_user_commands,
+        vec![
+            list("@alice:example"),
+            list("@bob:example"),
+            list("@alice:example"),
+            list("@bob:example"),
+        ]
+    );
+
+    let device =
+        |device_id: &str, display_name: Option<&str>, verified, this_session, last_seen_ms| {
+            DeviceSummary {
+                device_id: device_id.to_owned(),
+                display_name: display_name.map(str::to_owned),
+                verified,
+                this_session,
+                last_seen_ms,
+            }
+        };
+    let events = [
+        Event::UserDevices(UserDevices {
+            user_id: "@alice:example".to_owned(),
+            identity: UserIdentityState::Verified,
+            devices: vec![
+                device(
+                    "L4PT0P",
+                    Some("Laptop"),
+                    true,
+                    true,
+                    Some(1_795_183_331_000),
+                ),
+                device("PH0NE", None, false, false, None),
+            ],
+        }),
+        Event::UserDevices(UserDevices {
+            user_id: "@bob:example".to_owned(),
+            identity: UserIdentityState::VerificationViolation,
+            devices: vec![device("B0B", Some("Bob's phone"), true, false, None)],
+        }),
+    ];
+    app.append_synthetic_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
+    for line in [
+        "* /devices: no such nick: Nobody",
+        "* /devices: listing devices requires an authenticated session",
+        "* Alice sessions:",
+        "* Alice L4PT0P \"Laptop\" verified, last seen Fri Nov 20 14:02:11 2026 (this session)",
+        "* Alice PH0NE unverified",
+        "* Alice End of /DEVICES list",
+        "* Bob changed identity since you verified them; /verify @bob:example",
+        "* Bob B0B \"Bob's phone\" verified",
+        "* Bob End of /DEVICES list",
+    ] {
+        assert!(view_contains(beta, line), "{line}");
+    }
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -14721,6 +14803,8 @@ fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
             &[
                 ("Set Up E2EE &Recovery...", true),
                 ("Recover &E2EE...", true),
+                ("&Verify This Session", true),
+                ("Sess&ions", true),
                 ("&Accept Verification", false),
                 ("Confirm &SAS", false),
                 ("Re&ject SAS", false),

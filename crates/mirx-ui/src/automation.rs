@@ -620,6 +620,7 @@ pub(crate) enum ContextMenuCommand {
     RedactMessage,
     SaveAttachment,
     WhoisMember,
+    DevicesMember,
     VerifyMember,
     QueryMember,
     MentionMember,
@@ -999,6 +1000,7 @@ pub(crate) struct DumpMessageMenuState {
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpMemberMenuState {
     pub(crate) whois_enabled: bool,
+    pub(crate) devices_enabled: bool,
     pub(crate) verify_enabled: bool,
     pub(crate) query_enabled: bool,
     pub(crate) mention_enabled: bool,
@@ -1912,7 +1914,8 @@ pub(crate) struct DumpSubmittedProfileCommand {
     pub(crate) display_name: String,
 }
 
-/// A request about another user (`/ignore`, `/unignore`, `/whois`).
+/// A request about another user (`/ignore`, `/unignore`, `/whois`,
+/// `/devices`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpSubmittedUserCommand {
@@ -1926,6 +1929,7 @@ pub(crate) enum DumpUserCommandAction {
     Ignore,
     Unignore,
     FetchProfile,
+    ListDevices,
 }
 
 /// A room directory page asked for (`/list`).
@@ -2427,6 +2431,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::IgnoreUser => "ignore_user",
         Operation::UnignoreUser => "unignore_user",
         Operation::FetchUserProfile => "fetch_user_profile",
+        Operation::ListUserDevices => "list_user_devices",
         Operation::SendMessage => "send_text",
         Operation::SendFile => "send_file",
         Operation::EditMessage => "edit_message",

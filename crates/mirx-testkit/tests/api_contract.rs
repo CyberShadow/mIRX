@@ -76,6 +76,7 @@ fn context_menu_command_serializes_to_strict_shape() {
     );
     for (command, wire) in [
         (ContextMenuCommand::WhoisMember, "\"whois_member\""),
+        (ContextMenuCommand::DevicesMember, "\"devices_member\""),
         (ContextMenuCommand::VerifyMember, "\"verify_member\""),
         (ContextMenuCommand::IgnoreMember, "\"ignore_member\""),
         (ContextMenuCommand::UnignoreMember, "\"unignore_member\""),
@@ -536,6 +537,7 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
     );
     let member = MemberMenuState {
         whois_enabled: true,
+        devices_enabled: true,
         verify_enabled: true,
         query_enabled: true,
         mention_enabled: true,
@@ -575,8 +577,8 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
         }))
         .is_err()
     );
-    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"whois_enabled": true, "verify_enabled": true, "query_enabled": true, "mention_enabled": true, "ignore_enabled": true, "unignore_enabled": false, "op_enabled": true, "deop_enabled": false, "voice_enabled": true, "devoice_enabled": false, "kick_enabled": true, "ban_enabled": false, "selected_user_id": null, "selected_label": null, "unexpected": true})).is_err());
-    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"whois_enabled": true, "verify_enabled": true, "query_enabled": true, "mention_enabled": true, "ignore_enabled": true, "unignore_enabled": false, "op_enabled": true, "deop_enabled": false, "voice_enabled": true, "devoice_enabled": false, "ban_enabled": false, "selected_user_id": null, "selected_label": null})).is_err());
+    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"whois_enabled": true, "devices_enabled": true, "verify_enabled": true, "query_enabled": true, "mention_enabled": true, "ignore_enabled": true, "unignore_enabled": false, "op_enabled": true, "deop_enabled": false, "voice_enabled": true, "devoice_enabled": false, "kick_enabled": true, "ban_enabled": false, "selected_user_id": null, "selected_label": null, "unexpected": true})).is_err());
+    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"whois_enabled": true, "devices_enabled": true, "verify_enabled": true, "query_enabled": true, "mention_enabled": true, "ignore_enabled": true, "unignore_enabled": false, "op_enabled": true, "deop_enabled": false, "voice_enabled": true, "devoice_enabled": false, "ban_enabled": false, "selected_user_id": null, "selected_label": null})).is_err());
 }
 
 #[test]
@@ -4636,7 +4638,7 @@ fn submitted_power_level_and_profile_commands_have_strict_json_contracts() {
             user_id: "@bob:example.org".to_owned(),
         }
     );
-    for action in ["ignore", "unignore"] {
+    for action in ["ignore", "unignore", "list_devices"] {
         assert!(
             serde_json::from_value::<SubmittedUserCommand>(serde_json::json!({
                 "action": action, "user_id": "@bob:example.org"

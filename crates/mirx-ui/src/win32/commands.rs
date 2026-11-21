@@ -9,13 +9,14 @@ use std::borrow::Cow;
 use std::fmt;
 
 use mirx_core::{
-    MemberPowerRole, RoomMemberRank, RoomMemberSummary, RoomMessagePresentationKind, UserProfile,
+    MemberPowerRole, RoomMemberRank, RoomMemberSummary, RoomMessagePresentationKind, UserDevices,
+    UserIdentityState, UserProfile,
 };
 
 use super::nick_completion::member_mention_text;
 use super::settings::{Bar, FontSetting, parse_points};
 use super::timeline_text::{context_line, rank_prefix, topic_is_text};
-use super::timestamp::TimestampFormat;
+use super::timestamp::{LocalTimeFn, TimestampFormat};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ComposeSubmission<'a> {
@@ -61,6 +62,10 @@ pub(super) enum SlashCommand {
     },
     Whois {
         nick: String,
+    },
+    /// `/devices [nick]`: without a nick, your own sessions.
+    Devices {
+        target: Option<String>,
     },
     /// `/ignore [nick]`: without a nick, lists the ignore list.
     Ignore {
@@ -246,6 +251,7 @@ impl SlashCommand {
             Self::Msg { .. } => "msg",
             Self::Names { .. } => "names",
             Self::Whois { .. } => "whois",
+            Self::Devices { .. } => "devices",
             Self::Ignore { .. } => "ignore",
             Self::Unignore { .. } => "unignore",
             Self::Close => "close",
@@ -354,6 +360,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "deop",
         usage: "<nick>",
         summary: "take a member's operator status",
+    },
+    CommandSpec {
+        name: "devices",
+        usage: "[nick]",
+        summary: "list a user's sessions and whether they are verified",
     },
     CommandSpec {
         name: "devoice",
@@ -674,6 +685,10 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         }),
         "whois" => Ok(SlashCommand::Whois {
             nick: single_word(&name, argument)?,
+        }),
+        "devices" if argument.is_empty() => Ok(SlashCommand::Devices { target: None }),
+        "devices" => Ok(SlashCommand::Devices {
+            target: Some(single_word(&name, argument)?),
         }),
         "ignore" if argument.is_empty() => Ok(SlashCommand::Ignore { target: None }),
         "ignore" => Ok(SlashCommand::Ignore {
@@ -1196,6 +1211,59 @@ pub(super) fn whois_lines(
     });
     lines.push(format!("* {nick} using {server}"));
     lines.push(format!("* {nick} End of /WHOIS list"));
+    lines
+}
+
+/// `/devices`: the user's sessions, `/whois`-style. Another user's list
+/// opens with how far you trust their identity and how to verify them;
+/// your own list leaves that to the Status window's E2EE lines, which
+/// say whether this session is verified. Each session line gives its ID,
+/// name, trust and, for yours, when the server last saw it.
+pub(super) fn devices_lines(
+    devices: &UserDevices,
+    nick: &str,
+    own_user: bool,
+    local_time: LocalTimeFn,
+) -> Vec<String> {
+    let user_id = &devices.user_id;
+    let mut lines = vec![if own_user {
+        format!("* {nick} sessions:")
+    } else {
+        match devices.identity {
+            UserIdentityState::Verified => format!("* {nick} is verified"),
+            UserIdentityState::Unverified => {
+                format!("* {nick} is not verified; /verify {user_id}")
+            }
+            UserIdentityState::NoCrossSigning => format!(
+                "* {nick} has no cross-signing; verify a device: /verify {user_id} <device>"
+            ),
+            UserIdentityState::VerificationViolation => {
+                format!("* {nick} changed identity since you verified them; /verify {user_id}")
+            }
+        }
+    }];
+    lines.extend(devices.devices.iter().map(|device| {
+        let mut line = format!("* {nick} {}", device.device_id);
+        if let Some(display_name) = &device.display_name {
+            line.push_str(&format!(" \"{display_name}\""));
+        }
+        line.push_str(if device.verified {
+            " verified"
+        } else {
+            " unverified"
+        });
+        if let Some(last_seen_ms) = device.last_seen_ms {
+            line.push_str(&format!(
+                ", last seen {}",
+                local_time(last_seen_ms).asctime()
+            ));
+        }
+        if device.this_session {
+            line.push_str(" (this session)");
+        }
+        line
+    }));
+    lines.push(format!("* {nick} End of /DEVICES list"));
     lines
 }
 
@@ -1953,10 +2021,9 @@ mod tests {
     fn help_lists_every_command_or_shows_one() {
         let lines = help_lines(None).unwrap();
         assert_eq!(lines.len(), 2);
-        assert!(
-            lines[0]
-                .starts_with("* Commands: /accept /ban /clear /close /create /deop /devoice /e2ee")
-        );
+        assert!(lines[0].starts_with(
+            "* Commands: /accept /ban /clear /close /create /deop /devices /devoice /e2ee"
+        ));
         assert!(lines[0].contains(" /help "));
         assert_eq!(lines[1], "* /help <command> for usage");
         assert_eq!(
@@ -2055,6 +2122,20 @@ mod tests {
         assert_eq!(
             parse("/whois Alice Smith"),
             error("whois", "too many parameters")
+        );
+        assert_eq!(
+            parse("/devices"),
+            Ok(SlashCommand::Devices { target: None })
+        );
+        assert_eq!(
+            parse("/DEVICES  Bob "),
+            Ok(SlashCommand::Devices {
+                target: Some("Bob".to_owned()),
+            })
+        );
+        assert_eq!(
+            parse("/devices Bob DEV1"),
+            error("devices", "too many parameters")
         );
         assert_eq!(parse("/ignore"), Ok(SlashCommand::Ignore { target: None }));
         assert_eq!(
@@ -2159,6 +2240,90 @@ mod tests {
         assert_eq!(
             resolve_user(&members, "@"),
             Err("no such nick: @".to_owned())
+        );
+    }
+
+    #[test]
+    fn devices_lines_read_like_whois() {
+        use mirx_core::DeviceSummary;
+
+        let device =
+            |device_id: &str, display_name: Option<&str>, verified, this_session, last_seen_ms| {
+                DeviceSummary {
+                    device_id: device_id.to_owned(),
+                    display_name: display_name.map(str::to_owned),
+                    verified,
+                    this_session,
+                    last_seen_ms,
+                }
+            };
+        let own = UserDevices {
+            user_id: "@me:example".to_owned(),
+            identity: UserIdentityState::Verified,
+            devices: vec![
+                device(
+                    "L4PT0P",
+                    Some("Element Desktop"),
+                    true,
+                    true,
+                    Some(1_795_183_331_000),
+                ),
+                device("PH0NE", None, false, false, Some(0)),
+                device("K3YL3SS", Some("Old \"web\""), false, false, None),
+            ],
+        };
+        assert_eq!(
+            devices_lines(&own, "me", true, super::super::timestamp::utc_local_time),
+            vec![
+                "* me sessions:",
+                "* me L4PT0P \"Element Desktop\" verified, last seen Fri Nov 20 14:02:11 2026 (this session)",
+                "* me PH0NE unverified, last seen Thu Jan 01 00:00:00 1970",
+                "* me K3YL3SS \"Old \"web\"\" unverified",
+                "* me End of /DEVICES list",
+            ]
+        );
+
+        let other = |identity| UserDevices {
+            user_id: "@bob:example".to_owned(),
+            identity,
+            devices: vec![device("B0B", None, false, false, None)],
+        };
+        for (identity, line) in [
+            (UserIdentityState::Verified, "* Bob is verified"),
+            (
+                UserIdentityState::Unverified,
+                "* Bob is not verified; /verify @bob:example",
+            ),
+            (
+                UserIdentityState::NoCrossSigning,
+                "* Bob has no cross-signing; verify a device: /verify @bob:example <device>",
+            ),
+            (
+                UserIdentityState::VerificationViolation,
+                "* Bob changed identity since you verified them; /verify @bob:example",
+            ),
+        ] {
+            assert_eq!(
+                devices_lines(
+                    &other(identity),
+                    "Bob",
+                    false,
+                    super::super::timestamp::utc_local_time
+                ),
+                vec![line, "* Bob B0B unverified", "* Bob End of /DEVICES list"],
+                "{identity:?}"
+            );
+        }
+        let none = UserDevices {
+            devices: Vec::new(),
+            ..other(UserIdentityState::Unverified)
+        };
+        assert_eq!(
+            devices_lines(&none, "Bob", false, super::super::timestamp::utc_local_time),
+            vec![
+                "* Bob is not verified; /verify @bob:example",
+                "* Bob End of /DEVICES list"
+            ]
         );
     }
 
