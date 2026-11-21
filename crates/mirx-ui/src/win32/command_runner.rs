@@ -444,6 +444,32 @@ pub(super) unsafe fn run_slash_command(
             let view_id = state_ref(hwnd).active_view.clone();
             clear_window(hwnd, &view_id).map(Some)
         }
+        SlashCommand::ClearAll(switches) => {
+            let views = clearall_views(&state_ref(hwnd).model, switches);
+            for view_id in &views {
+                clear_window(hwnd, view_id)?;
+            }
+            Ok(Some(match views.len() {
+                1 => "cleared 1 window".to_owned(),
+                count => format!("cleared {count} windows"),
+            }))
+        }
+        SlashCommand::AllChannels { presentation, body } => {
+            let state = state_mut(hwnd);
+            // Checked before the first send: a refusal sends nowhere.
+            message_text_from_input(&body)?;
+            let room_ids = channel_room_ids(&state.model);
+            if room_ids.is_empty() {
+                return Err("not in any channel".to_owned());
+            }
+            for room_id in &room_ids {
+                send_room_message(state, room_id.clone(), presentation, &body)?;
+            }
+            Ok(Some(match room_ids.len() {
+                1 => "sent to 1 channel".to_owned(),
+                count => format!("sent to {count} channels"),
+            }))
+        }
         SlashCommand::SaveBuf { path } => {
             let view_id = state_ref(hwnd).active_view.clone();
             match path {
@@ -809,6 +835,31 @@ fn ignore_target(model: &UiModel, target: &str) -> Result<String, String> {
 /// Where `/msg` sends: a room by ID, alias or display name, else the query
 /// with a user named by ID or nick. Like mIRC's `/msg`, it does not open a
 /// query.
+/// The channel windows' rooms, in window order (`Ctrl+N`'s): `/amsg`'s
+/// and `/ame`'s targets.
+fn channel_room_ids(model: &UiModel) -> Vec<String> {
+    rooms_in_window_order(&model.rooms)
+        .into_iter()
+        .filter(|room| room_window_kind(room) == RoomWindowKind::Channel)
+        .map(|room| room.room_id.clone())
+        .collect()
+}
+
+/// The windows `/clearall` clears: Status first, then the rooms' in
+/// window order. Thread windows have no buffer of their own.
+fn clearall_views(model: &UiModel, switches: commands::ClearAll) -> Vec<ViewId> {
+    let status = switches.status.then_some(ViewId::Status);
+    let rooms = rooms_in_window_order(&model.rooms)
+        .into_iter()
+        .filter(move |room| match room_window_kind(room) {
+            RoomWindowKind::Channel => switches.channels,
+            RoomWindowKind::Query => switches.queries,
+            RoomWindowKind::Invite => switches.invites,
+        })
+        .map(|room| ViewId::Room(room.room_id.clone()));
+    status.into_iter().chain(rooms).collect()
+}
+
 fn msg_target_room_id(model: &UiModel, target: &str) -> Result<String, String> {
     match resolve_room(&model.rooms, is_navigable_room, target) {
         Ok(room) => return Ok(room.room_id.clone()),
@@ -1354,6 +1405,122 @@ mod tests {
         stop_test_core(handle);
     }
 
+    /// Rooms of every kind, out of window order.
+    fn mixed_rooms_model() -> UiModel {
+        UiModel {
+            rooms: vec![
+                query("!dm:example", "Alice", "@alice:example"),
+                room("!ops:example", "Ops", false),
+                invited_room("!invite:example", "Invite"),
+                space("!space:example", "Space"),
+                room("!dev:example", "Dev", true),
+            ],
+            ..UiModel::default()
+        }
+    }
+
+    #[test]
+    fn every_channel_is_the_joined_rooms_that_are_not_queries_in_window_order() {
+        assert_eq!(
+            channel_room_ids(&mixed_rooms_model()),
+            ["!ops:example", "!dev:example"]
+        );
+    }
+
+    #[test]
+    fn clearall_clears_the_windows_its_switches_name() {
+        let model = mixed_rooms_model();
+        let switches = |line: &str| match commands::parse(line) {
+            Ok(SlashCommand::ClearAll(switches)) => switches,
+            other => panic!("{line}: {other:?}"),
+        };
+        let room = |room_id: &str| ViewId::Room(room_id.to_owned());
+        assert_eq!(
+            clearall_views(&model, switches("/clearall")),
+            [
+                ViewId::Status,
+                room("!ops:example"),
+                room("!dev:example"),
+                room("!dm:example"),
+                room("!invite:example"),
+            ]
+        );
+        assert_eq!(
+            clearall_views(&model, switches("/clearall -s")),
+            [ViewId::Status]
+        );
+        assert_eq!(
+            clearall_views(&model, switches("/clearall -n")),
+            [room("!ops:example"), room("!dev:example")]
+        );
+        assert_eq!(
+            clearall_views(&model, switches("/clearall -q")),
+            [room("!dm:example")]
+        );
+        assert_eq!(
+            clearall_views(&model, switches("/clearall -s -q")),
+            [ViewId::Status, room("!dm:example")]
+        );
+        assert_eq!(
+            clearall_views(&model, switches("/clearall -sn")),
+            [ViewId::Status, room("!ops:example"), room("!dev:example")]
+        );
+    }
+
+    #[test]
+    fn amsg_and_ame_send_to_every_channel_and_describe_to_one() {
+        let (mut state, handle) = irc_command_state();
+        state.model.rooms.push(room("!dev:example", "Dev", false));
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                type_compose_line(hwnd, "/amsg hi all");
+                type_compose_line(hwnd, "/ame waves");
+                // Refused before the first send.
+                type_compose_line(hwnd, "/amsg \x02\x02");
+                type_compose_line(hwnd, "/describe alice nods");
+                type_compose_line(hwnd, "/describe #Dev");
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![
+                        sent_message("!ops:example", RoomMessagePresentationKind::Text, "hi all"),
+                        sent_message("!dev:example", RoomMessagePresentationKind::Text, "hi all"),
+                        sent_message("!ops:example", RoomMessagePresentationKind::Emote, "waves"),
+                        sent_message("!dev:example", RoomMessagePresentationKind::Emote, "waves"),
+                        sent_message("!dm:example", RoomMessagePresentationKind::Emote, "nods"),
+                    ]
+                );
+                let lines = render_room_lines(state_ref(hwnd), "!ops:example");
+                assert_eq!(
+                    &lines[lines.len() - 3..],
+                    [
+                        "[22:12] * /amsg: message body must not be empty",
+                        "[22:12] -> alice * nods",
+                        "[22:12] * /describe: insufficient parameters",
+                    ]
+                );
+            });
+        }
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn amsg_without_a_channel_says_so() {
+        let (mut state, handle) = irc_command_state();
+        state.model.rooms.retain(|room| room.is_direct);
+        state.active_view = room_view_id("!dm:example");
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                type_compose_line(hwnd, "/amsg hi");
+                assert!(state_ref(hwnd).recorded_commands.is_empty());
+                let lines = render_room_lines(state_ref(hwnd), "!dm:example");
+                assert_eq!(lines.last().unwrap(), "[22:12] * /amsg: not in any channel");
+            });
+        }
+        stop_test_core(handle);
+    }
+
     #[test]
     fn msg_sends_formatting_codes_as_styles_and_echoes_the_text() {
         let (state, handle) = irc_command_state();
@@ -1833,7 +2000,7 @@ mod tests {
                 type_compose_line(hwnd, "/help nope");
                 let lines = render_room_lines(state_ref(hwnd), "!room:example");
                 let echo = &lines[lines.len() - 4..];
-                assert!(echo[0].starts_with("[22:12] * Commands: /accept /ban /clear /close "));
+                assert!(echo[0].starts_with("[22:12] * Commands: /accept /ame /amsg /away /back /ban /clear /clearall /close "));
                 assert_eq!(echo[1], "[22:12] * /help <command> for usage");
                 assert_eq!(echo[2], "[22:12] * /clear - clear this window");
                 assert_eq!(echo[3], "[22:12] * /help: no such command: nope");

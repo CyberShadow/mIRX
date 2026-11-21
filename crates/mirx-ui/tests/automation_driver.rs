@@ -18145,7 +18145,10 @@ fn help_topics_echoes_command_list() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let app = launch_automation_app(&local_app_data)?;
     invoke_account_menu_command(&app, MENU_ID_HELP_TOPICS)?;
-    assert!(status_view_contains(&app, "* Commands: /accept /ban")?);
+    assert!(status_view_contains(
+        &app,
+        "* Commands: /accept /ame /amsg /away /back /ban"
+    )?);
     assert!(status_view_contains(&app, " /join ")?);
 
     drop(app);
@@ -20393,6 +20396,116 @@ fn slash_away_marks_away_and_back() -> Result<(), Box<dyn std::error::Error>> {
         Some("back"),
         "{}",
         ui_state.status_bar.text
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// `base_events` with a query with Alice.
+fn base_events_with_a_query() -> Vec<Event> {
+    let mut events = base_events();
+    events.insert(
+        2,
+        Event::SyncedRooms(vec![
+            room_summary("!beta:example", "Beta", true),
+            room_summary("!alpha:example", "Alpha", false),
+            RoomSummary {
+                is_direct: true,
+                direct_user_ids: vec!["@alice:example".to_owned()],
+                ..room_summary("!dm:example", "Alice", false)
+            },
+        ]),
+    );
+    events.push(text_event(
+        "!dm:example",
+        "@alice:example",
+        1_700_000_180_000,
+        "dm first",
+    ));
+    events
+}
+
+#[test]
+fn amsg_ame_and_describe_send_to_channels_and_one_target() -> Result<(), Box<dyn std::error::Error>>
+{
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events_with_a_query())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let alpha = room_identity("!alpha:example");
+    app.select_view(alpha.clone())?;
+
+    type_commands(&app, &["/amsg hi", "/ame waves", "/describe Beta nods"])?;
+    let sent: Vec<_> = app
+        .dump_model()?
+        .submitted_message_commands
+        .into_iter()
+        .map(|command| (command.room_id, command.presentation, command.body))
+        .collect();
+    let text = RoomMessagePresentationKind::Text;
+    let emote = RoomMessagePresentationKind::Emote;
+    // The channels in window order (Beta first, as the switchbar shows
+    // them), never the query.
+    let channels = |presentation, body: &str| {
+        ["!beta:example", "!alpha:example"]
+            .map(|room_id| (room_id.to_owned(), presentation, body.to_owned()))
+    };
+    let mut expected = channels(text, "hi").to_vec();
+    expected.extend(channels(emote, "waves"));
+    expected.push(("!beta:example".to_owned(), emote, "nods".to_owned()));
+    assert_eq!(sent, expected);
+    // The unauthenticated core refuses the sends, in their rooms.
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    assert!(
+        only_view_line_containing(find_view(&ui_state, &alpha), "-> Beta")
+            .ends_with("-> Beta * nods")
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn clearall_clears_the_windows_its_switches_name() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events_with_a_query())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let alpha = room_identity("!alpha:example");
+    let beta = room_identity("!beta:example");
+    let dm = room_identity("!dm:example");
+    app.select_view(alpha.clone())?;
+    let has = |ui_state: &UiState, view: &ViewIdentity, text: &str| {
+        view_contains(find_view(ui_state, view), text)
+    };
+
+    type_commands(&app, &["/clearall -q"])?;
+    let ui_state = app.dump_ui_state()?;
+    assert!(!has(&ui_state, &dm, "dm first"));
+    assert!(has(&ui_state, &alpha, "alpha first"));
+    assert!(has(&ui_state, &beta, "beta first"));
+    assert!(!find_view(&ui_state, &ViewIdentity::Status).lines.is_empty());
+
+    type_commands(&app, &["/clearall"])?;
+    let ui_state = app.dump_ui_state()?;
+    assert!(!has(&ui_state, &alpha, "alpha first"));
+    assert!(!has(&ui_state, &beta, "beta first"));
+    assert!(
+        find_view(&ui_state, &ViewIdentity::Status).lines.is_empty(),
+        "{:?}",
+        find_view(&ui_state, &ViewIdentity::Status).lines
     );
 
     drop(app);

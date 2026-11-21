@@ -51,7 +51,7 @@ pub(super) enum SlashCommand {
         target: String,
         message: Option<String>,
     },
-    /// `/msg` (Text) and `/notice` (Notice).
+    /// `/msg` (Text), `/notice` (Notice) and `/describe` (Emote).
     Msg {
         target: String,
         body: String,
@@ -169,7 +169,14 @@ pub(super) enum SlashCommand {
         room: Option<String>,
         topic: Option<String>,
     },
+    /// `/amsg` (Text) and `/ame` (Emote): to every channel window.
+    AllChannels {
+        presentation: RoomMessagePresentationKind,
+        body: String,
+    },
     Clear,
+    /// `/clearall [-snq]`.
+    ClearAll(ClearAll),
     E2ee(E2eeSlashCommand),
     /// `/verify accept|cancel|confirm|reject`: answers the current flow.
     Verify {
@@ -192,6 +199,17 @@ pub(super) enum SlashCommand {
         bar: Bar,
         command: BarCommand,
     },
+}
+
+/// Which windows `/clearall` clears, as mIRC's switches choose: `-s`
+/// Status, `-n` the channels, `-q` the queries. Without switches, every
+/// window with a buffer, invites too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ClearAll {
+    pub(super) status: bool,
+    pub(super) channels: bool,
+    pub(super) queries: bool,
+    pub(super) invites: bool,
 }
 
 /// `/switchbar [on|off]`, `/treebar [on|off]`: show the setting, or show or
@@ -285,11 +303,18 @@ impl SlashCommand {
             Self::Create(_) => "create",
             Self::List { .. } => "list",
             Self::Query { .. } => "query",
-            Self::Msg {
-                presentation: RoomMessagePresentationKind::Notice,
-                ..
-            } => "notice",
-            Self::Msg { .. } => "msg",
+            Self::Msg { presentation, .. } => match presentation {
+                RoomMessagePresentationKind::Text => "msg",
+                RoomMessagePresentationKind::Notice => "notice",
+                RoomMessagePresentationKind::Emote => "describe",
+            },
+            Self::AllChannels { presentation, .. } => match presentation {
+                RoomMessagePresentationKind::Text => "amsg",
+                RoomMessagePresentationKind::Emote => "ame",
+                RoomMessagePresentationKind::Notice => {
+                    unreachable!("there is no notice to every channel")
+                }
+            },
             Self::Names { .. } => "names",
             Self::Whois { .. } => "whois",
             Self::Away { .. } => "away",
@@ -326,6 +351,7 @@ impl SlashCommand {
             Self::Unreact { .. } => "unreact",
             Self::Topic { .. } => "topic",
             Self::Clear => "clear",
+            Self::ClearAll(_) => "clearall",
             Self::E2ee(_) => "e2ee",
             Self::Verify { .. } | Self::VerifyStart { .. } => "verify",
             Self::Help { .. } => "help",
@@ -383,6 +409,16 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         summary: "accept a room invite",
     },
     CommandSpec {
+        name: "ame",
+        usage: "<action>",
+        summary: "send an action to every channel",
+    },
+    CommandSpec {
+        name: "amsg",
+        usage: "<text>",
+        summary: "send a message to every channel",
+    },
+    CommandSpec {
         name: "away",
         usage: "[message]",
         summary: "mark yourself away, or back without a message",
@@ -403,6 +439,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         summary: "clear this window",
     },
     CommandSpec {
+        name: "clearall",
+        usage: "[-snq]",
+        summary: "clear every window, or Status (-s), the channels (-n), the queries (-q)",
+    },
+    CommandSpec {
         name: "close",
         usage: "",
         summary: "close this window",
@@ -416,6 +457,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "deop",
         usage: "<nick>",
         summary: "take a member's operator status",
+    },
+    CommandSpec {
+        name: "describe",
+        usage: "<nick|#room> <action>",
+        summary: "send an action to a user or room",
     },
     CommandSpec {
         name: "devices",
@@ -735,15 +781,15 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
                 message: optional(message),
             })
         }
-        "msg" | "notice" => {
+        "msg" | "notice" | "describe" => {
             let (target, body) = split_word(argument);
             if body.is_empty() {
                 return Err(CommandError::insufficient_parameters(name.as_str()));
             }
-            let presentation = if name == "msg" {
-                RoomMessagePresentationKind::Text
-            } else {
-                RoomMessagePresentationKind::Notice
+            let presentation = match name.as_str() {
+                "msg" => RoomMessagePresentationKind::Text,
+                "notice" => RoomMessagePresentationKind::Notice,
+                _ => RoomMessagePresentationKind::Emote,
             };
             Ok(SlashCommand::Msg {
                 target: target.to_owned(),
@@ -863,7 +909,16 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
                 topic: optional(topic),
             })
         }
+        "amsg" => Ok(SlashCommand::AllChannels {
+            presentation: RoomMessagePresentationKind::Text,
+            body: required(argument)?,
+        }),
+        "ame" => Ok(SlashCommand::AllChannels {
+            presentation: RoomMessagePresentationKind::Emote,
+            body: required(argument)?,
+        }),
         "clear" => no_parameters(SlashCommand::Clear),
+        "clearall" => clearall_switches(argument).map(SlashCommand::ClearAll),
         "e2ee" => parse_e2ee(argument).map(SlashCommand::E2ee),
         "verify" => parse_verify(argument),
         "help" => Ok(SlashCommand::Help {
@@ -877,6 +932,45 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         "treebar" => parse_bar(Bar::Treebar, argument),
         _ => Err(CommandError::unknown(name)),
     }
+}
+
+/// `/clearall`'s switches, combined (`-sn`) or apart (`-s -n`). mIRC's
+/// others name windows mirx does not have.
+fn clearall_switches(argument: &str) -> Result<ClearAll, CommandError> {
+    if argument.is_empty() {
+        return Ok(ClearAll {
+            status: true,
+            channels: true,
+            queries: true,
+            invites: true,
+        });
+    }
+    let mut switches = ClearAll {
+        status: false,
+        channels: false,
+        queries: false,
+        invites: false,
+    };
+    for word in argument.split_ascii_whitespace() {
+        let letters = word
+            .strip_prefix('-')
+            .filter(|letters| !letters.is_empty())
+            .ok_or_else(|| CommandError::new("clearall", format!("unknown parameter {word}")))?;
+        for letter in letters.chars() {
+            match letter.to_ascii_lowercase() {
+                's' => switches.status = true,
+                'n' => switches.channels = true,
+                'q' => switches.queries = true,
+                _ => {
+                    return Err(CommandError::new(
+                        "clearall",
+                        format!("unknown switch -{letter}"),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(switches)
 }
 
 /// What `/create` asks for. The alias's server is checked against the
@@ -1544,7 +1638,8 @@ pub(super) fn topic_line(topic: Option<&str>) -> String {
     }
 }
 
-/// The echo of `/msg` (`-> *nick* text`) and `/notice` (`-> -nick- text`).
+/// The echo of `/msg` (`-> *nick* text`), `/notice` (`-> -nick- text`)
+/// and `/describe` (`-> nick * action`).
 pub(super) fn msg_echo(
     presentation: RoomMessagePresentationKind,
     target: &str,
@@ -1553,7 +1648,7 @@ pub(super) fn msg_echo(
     match presentation {
         RoomMessagePresentationKind::Text => format!("-> *{target}* {body}"),
         RoomMessagePresentationKind::Notice => format!("-> -{target}- {body}"),
-        RoomMessagePresentationKind::Emote => unreachable!("/msg and /notice never send emotes"),
+        RoomMessagePresentationKind::Emote => format!("-> {target} * {body}"),
     }
 }
 
@@ -2175,6 +2270,10 @@ mod tests {
             "/whois x",
             "/away x",
             "/back",
+            "/amsg x",
+            "/ame x",
+            "/describe x y",
+            "/clearall",
             "/close",
             "/exit",
             "/kick x",
@@ -2328,7 +2427,7 @@ mod tests {
         let lines = help_lines(None).unwrap();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with(
-            "* Commands: /accept /away /back /ban /clear /close /create /deop /devices /devoice /e2ee"
+            "* Commands: /accept /ame /amsg /away /back /ban /clear /clearall /close /create /deop /describe /devices /devoice /e2ee"
         ));
         assert!(lines[0].contains(" /help /identity /ignore "));
         assert!(lines[0].contains(" /reply /savebuf /sendfile "));
@@ -2933,6 +3032,80 @@ mod tests {
             assert_eq!(parse(&format!("/{name}")), insufficient(name), "{name}");
         }
         assert_eq!(parse("/op Bob Carol"), error("op", "too many parameters"));
+    }
+
+    #[test]
+    fn parse_accepts_amsg_ame_describe_and_clearall() {
+        assert_eq!(
+            parse("/amsg  hi all "),
+            Ok(SlashCommand::AllChannels {
+                presentation: RoomMessagePresentationKind::Text,
+                body: "hi all".to_owned(),
+            })
+        );
+        assert_eq!(
+            parse("/AME waves"),
+            Ok(SlashCommand::AllChannels {
+                presentation: RoomMessagePresentationKind::Emote,
+                body: "waves".to_owned(),
+            })
+        );
+        assert_eq!(parse("/amsg"), insufficient("amsg"));
+        assert_eq!(parse("/ame"), insufficient("ame"));
+        let describe = parse("/describe #ops waves hello").unwrap();
+        assert_eq!(
+            describe,
+            SlashCommand::Msg {
+                target: "#ops".to_owned(),
+                body: "waves hello".to_owned(),
+                presentation: RoomMessagePresentationKind::Emote,
+            }
+        );
+        assert_eq!(describe.name(), "describe");
+        assert_eq!(parse("/describe #ops"), insufficient("describe"));
+        // Only /describe sends an emote to one target.
+        for line in ["/msg x y", "/notice x y"] {
+            assert!(
+                matches!(
+                    parse(line),
+                    Ok(SlashCommand::Msg { presentation, .. })
+                        if presentation != RoomMessagePresentationKind::Emote
+                ),
+                "{line}"
+            );
+        }
+        let switches = |status, channels, queries, invites| {
+            Ok(SlashCommand::ClearAll(ClearAll {
+                status,
+                channels,
+                queries,
+                invites,
+            }))
+        };
+        assert_eq!(parse("/clearall"), switches(true, true, true, true));
+        assert_eq!(parse("/clearall -sn"), switches(true, true, false, false));
+        assert_eq!(parse("/clearall -s -q"), switches(true, false, true, false));
+        assert_eq!(parse("/clearall -Q"), switches(false, false, true, false));
+        assert_eq!(
+            parse("/clearall -x"),
+            error("clearall", "unknown switch -x")
+        );
+        assert_eq!(
+            parse("/clearall -sm"),
+            error("clearall", "unknown switch -m")
+        );
+        assert_eq!(
+            parse("/clearall -"),
+            error("clearall", "unknown parameter -")
+        );
+        assert_eq!(
+            parse("/clearall foo"),
+            error("clearall", "unknown parameter foo")
+        );
+        assert_eq!(
+            msg_echo(RoomMessagePresentationKind::Emote, "#ops", "waves"),
+            "-> #ops * waves"
+        );
     }
 
     #[test]
