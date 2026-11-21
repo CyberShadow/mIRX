@@ -365,11 +365,24 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         preview_width + 2 * edge_x,
         preview_height + 2 * edge_y,
     );
-    let dialog_width = preview_width + 2 * edge_x;
+    let label = "Item:";
+    let (label_width, label_height) = dialog_text_size(label, i32::MAX);
+    let combo_width = dpi.px(ITEM_COMBO_WIDTH);
+    let cell = dpi.px(PALETTE_CELL);
+    let (palette_width, palette_height) = palette_size(cell, cell, dpi.px(PALETTE_GAP));
+    // As wide as its widest row: the preview is as wide as the text font
+    // makes it, which may be narrower than the rest.
+    let dialog_width = [
+        preview_width + 2 * edge_x,
+        label_width + gap + combo_width,
+        palette_width,
+        3 * button_width + 2 * gap,
+    ]
+    .into_iter()
+    .max()
+    .expect("the dialog has rows");
 
     let item_y = margin + preview_height + 2 * edge_y + gap;
-    let label = "Item:";
-    let (label_width, label_height) = dialog_text_size(label, dialog_width);
     place(
         control(STATIC_CLASS_NAME, label, 0, 0, 0)?,
         margin,
@@ -389,7 +402,7 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         )?,
         margin + label_width + gap,
         item_y,
-        dpi.px(ITEM_COMBO_WIDTH),
+        combo_width,
         dpi.px(ITEM_COMBO_DROPPED_HEIGHT),
     );
     for item in ColorItem::ALL {
@@ -398,8 +411,6 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     }
 
     let palette_y = item_y + edit_height + gap;
-    let cell = dpi.px(PALETTE_CELL);
-    let (palette_width, palette_height) = palette_size(cell, cell, dpi.px(PALETTE_GAP));
     state.palette = place(
         control(PALETTE_CLASS_NAME, "", WS_TABSTOP, 0, COLORS_PALETTE_ID)?,
         margin,

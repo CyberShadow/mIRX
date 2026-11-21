@@ -109,9 +109,9 @@ const NUMBER_FIELD_WIDTH: i32 = 40;
 /// The window buffer's field: up to five digits.
 const WINDOW_BUFFER_FIELD_WIDTH: i32 = 48;
 const HIGHLIGHT_LIST_HEIGHT: i32 = 130;
-/// A colour drop-down's item: a numbered palette box, as tall as the
-/// closed drop-down is with an edit field's height.
-const ACTIVITY_COLOR_ITEM_HEIGHT: i32 = 15;
+/// A closed drop-down's height around its item: its edges, in pixels at
+/// every DPI.
+const DROP_DOWN_EDGES: i32 = 6;
 const ACTIVITY_COLOR_WIDTH: i32 = 60;
 /// The open list shows half the palette.
 const ACTIVITY_COLOR_DROPPED_ITEMS: i32 = 8;
@@ -588,7 +588,9 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             row_y,
             dpi.px(ACTIVITY_COLOR_WIDTH),
             // A drop-down's height includes its open list.
-            edit_height + ACTIVITY_COLOR_DROPPED_ITEMS * dpi.px(ACTIVITY_COLOR_ITEM_HEIGHT) + 2,
+            edit_height
+                + ACTIVITY_COLOR_DROPPED_ITEMS * activity_color_item_height(edit_height)
+                + 2,
         );
         // Without CBS_HASSTRINGS an item is its data: the palette index.
         for index in 0..PALETTE_COLORS {
@@ -977,6 +979,12 @@ unsafe fn handle_selection(hwnd: HWND) {
     }
 }
 
+/// A colour drop-down's item: a numbered palette box, as tall as the
+/// closed drop-down is with an edit field's `edit_height`.
+fn activity_color_item_height(edit_height: i32) -> i32 {
+    edit_height - DROP_DOWN_EDGES
+}
+
 fn palette_index(index: usize) -> PaletteIndex {
     PaletteIndex::new(u8::try_from(index).expect("a colour drop-down holds the palette"))
         .expect("a colour drop-down holds the palette")
@@ -1157,7 +1165,8 @@ pub(super) unsafe extern "system" fn window_proc(
                 item.CtlType, ODT_COMBOBOX,
                 "only the colour drop-downs are owner-drawn"
             );
-            item.itemHeight = Dpi::of_window(hwnd).px(ACTIVITY_COLOR_ITEM_HEIGHT) as u32;
+            let edit_height = DialogMetrics::of(hwnd).edit_height;
+            item.itemHeight = activity_color_item_height(edit_height) as u32;
             1
         }
         WM_DRAWITEM => {
