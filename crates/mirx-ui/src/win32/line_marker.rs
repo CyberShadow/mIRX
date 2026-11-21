@@ -10,6 +10,54 @@
 
 use super::*;
 
+/// Where a room window shows its read marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MarkerPlace<'a> {
+    /// Below this line.
+    Line(&'a str),
+    /// Before the loaded history: older lines may hold it.
+    Older,
+}
+
+/// Where `room_view`'s window places the room's read marker, if it has
+/// one: below the line it names, or, on an event no line shows (a
+/// reaction, an edit, a hidden state event), below the last line at or
+/// before its time (`fully_read_timestamp_ms`). Before every loaded line,
+/// or of unknown time and on no line, it is in older history.
+pub(super) fn marker_place<'a>(
+    room_view: &'a RoomViewModel,
+    read_state: &RoomReadState,
+) -> Option<MarkerPlace<'a>> {
+    let marker = read_state.fully_read_event_id.as_deref()?;
+    let event_backed = || {
+        room_view
+            .activities
+            .iter()
+            .filter_map(|activity| Some((room_activity_event_id(activity)?, activity)))
+    };
+    if let Some((line, _)) = event_backed().find(|(event_id, _)| *event_id == marker) {
+        return Some(MarkerPlace::Line(line));
+    }
+    let place = read_state
+        .fully_read_timestamp_ms
+        .and_then(|marker_time| {
+            event_backed().rfind(|(_, activity)| activity.timestamp_ms <= marker_time)
+        })
+        .map_or(MarkerPlace::Older, |(line, _)| MarkerPlace::Line(line));
+    Some(place)
+}
+
+/// The line `room_id`'s window shows its read marker below, if any.
+pub(super) fn marker_line<'a>(model: &'a UiModel, room_id: &str) -> Option<&'a str> {
+    match marker_place(
+        model.room_views.get(room_id)?,
+        model.room_read_states.get(room_id)?,
+    )? {
+        MarkerPlace::Line(line) => Some(line),
+        MarkerPlace::Older => None,
+    }
+}
+
 /// Where the user is with a room window's line marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MarkerSight {
@@ -74,11 +122,15 @@ pub(super) unsafe fn leave_window(hwnd: HWND, view_id: &ViewId) -> Result<(), St
         .source_rows
         .iter()
         .any(|row| row.kind == TimelineRowKind::LineMarker);
-    let server_marker = state
-        .model
-        .room_read_states
-        .get(room_id)
-        .and_then(|read_state| read_state.fully_read_event_id.as_deref());
+    // On a line the window shows, or on one before it: a marker on an
+    // unshown event after the last line is there already.
+    let server_marker = marker_line(&state.model, room_id).or_else(|| {
+        state
+            .model
+            .room_read_states
+            .get(room_id)
+            .and_then(|read_state| read_state.fully_read_event_id.as_deref())
+    });
     let Some(event_id) = read_marker_move(
         server_marker,
         read_receipts::window_read_line(room_view, view_id),
@@ -126,24 +178,23 @@ const NO_LINE_MARKER_STATUS: &str = "* this window has no line marker";
 pub(super) unsafe fn go_to_line_marker(hwnd: HWND) -> Result<(), String> {
     let state = state_ref(hwnd);
     let view_id = state.active_view.clone();
-    let target_event_id = match &view_id {
+    let has_marker = match &view_id {
         ViewId::Room(room_id) => state
             .model
             .room_read_states
             .get(room_id)
-            .and_then(|read_state| read_state.fully_read_event_id.clone()),
+            .is_some_and(|read_state| read_state.fully_read_event_id.is_some()),
         // Matrix keeps one read marker per room, for its room window.
-        ViewId::Status | ViewId::Thread { .. } | ViewId::RoomList => None,
+        ViewId::Status | ViewId::Thread { .. } | ViewId::RoomList => false,
     };
-    let Some(target_event_id) = target_event_id else {
+    if !has_marker {
         return set_local_command_status(hwnd, NO_LINE_MARKER_STATUS.to_owned());
-    };
+    }
     start_event_jump(
         hwnd,
         replies::EventJump {
             view_id,
-            target_event_id,
-            purpose: replies::JumpPurpose::LineMarker,
+            target: replies::JumpTarget::LineMarker,
         },
     )
 }
@@ -488,6 +539,103 @@ mod tests {
                 state_mut(hwnd).active_view = ops;
                 activate_view(hwnd, &ViewId::Status, None).unwrap();
                 assert_eq!(read_marker_moves(state_ref(hwnd)), Vec::new());
+            });
+        }
+    }
+
+    #[test]
+    fn the_marker_goes_below_the_last_line_at_or_before_its_time() {
+        let mut room_view = RoomViewModel::default();
+        for (event_id, timestamp_ms) in [("$a", 1_000), ("$b", 2_000), ("$c", 3_000)] {
+            room_view.apply_activity(sent_message_activity(
+                "!ops:example",
+                event_id,
+                None,
+                "hi",
+                timestamp_ms,
+            ));
+        }
+        room_view.apply_activity(pending_message_activity("!ops:example", "txn1", "sending"));
+        let place = |fully_read: Option<&str>, time: Option<u64>| {
+            let Event::RoomReadState(mut read_state) =
+                room_read_state("!ops:example", None, fully_read, false, 0, 0, 0)
+            else {
+                unreachable!("a read state event");
+            };
+            read_state.fully_read_timestamp_ms = time;
+            marker_place(&room_view, &read_state)
+        };
+        assert_eq!(place(None, None), None);
+        // On a line: that line, whatever its time.
+        assert_eq!(
+            place(Some("$b"), Some(9_000)),
+            Some(MarkerPlace::Line("$b"))
+        );
+        assert_eq!(place(Some("$b"), None), Some(MarkerPlace::Line("$b")));
+        // On an event no line shows.
+        assert_eq!(
+            place(Some("$reaction"), Some(2_500)),
+            Some(MarkerPlace::Line("$b"))
+        );
+        assert_eq!(
+            place(Some("$reaction"), Some(2_000)),
+            Some(MarkerPlace::Line("$b"))
+        );
+        assert_eq!(
+            place(Some("$reaction"), Some(9_000)),
+            Some(MarkerPlace::Line("$c"))
+        );
+        assert_eq!(
+            place(Some("$reaction"), Some(500)),
+            Some(MarkerPlace::Older)
+        );
+        assert_eq!(place(Some("$reaction"), None), Some(MarkerPlace::Older));
+    }
+
+    #[test]
+    fn a_marker_on_an_unshown_event_after_the_last_line_is_there_already() {
+        unsafe {
+            with_marker_frame(Some("$reaction"), |hwnd| {
+                let mut read_state = state_ref(hwnd).model.room_read_states["!ops:example"].clone();
+                read_state.fully_read_timestamp_ms = Some(1_700_000_039_500);
+                apply_events_and_refresh(hwnd, vec![Event::RoomReadState(read_state)]).unwrap();
+                activate_view(hwnd, &ViewId::Status, None).unwrap();
+                assert_eq!(read_marker_moves(state_ref(hwnd)), Vec::new());
+            });
+        }
+    }
+
+    #[test]
+    fn ctrl_l_pages_history_until_a_line_at_or_before_the_marker_time() {
+        unsafe {
+            with_marker_frame(Some("$reaction"), |hwnd| {
+                let mut read_state = state_ref(hwnd).model.room_read_states["!ops:example"].clone();
+                read_state.fully_read_timestamp_ms = Some(1_699_999_000_500);
+                apply_events_and_refresh(hwnd, vec![Event::RoomReadState(read_state)]).unwrap();
+                go_to_line_marker(hwnd).unwrap();
+                assert_eq!(backfill_requests(state_ref(hwnd)), 1);
+                assert_eq!(state_ref(hwnd).model.status, "finding the line marker...");
+                let old = match timeline_with_transaction_id(
+                    "!ops:example",
+                    "$old",
+                    None,
+                    "the old line",
+                    1_699_999_000_000,
+                ) {
+                    Event::RoomActivity(activity) => RoomHistoryBackfillEvent::Activity(activity),
+                    _ => unreachable!("a timeline event is an activity"),
+                };
+                // The page has more behind it, but the marker is placed.
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![room_history_backfill("!ops:example", Some("t1"), vec![old])],
+                )
+                .unwrap();
+                assert_eq!(backfill_requests(state_ref(hwnd)), 1);
+                let timeline = ops_timeline(hwnd);
+                assert_eq!(top_line(timeline), (TimelineRowKind::LineMarker, None));
+                assert_eq!(state_ref(hwnd).model.status, "line marker found");
+                assert_eq!(state_ref(hwnd).pending_jump, None);
             });
         }
     }

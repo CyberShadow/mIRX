@@ -129,45 +129,45 @@ pub(super) fn compose_text_for_edit(message: &RoomMessageActivity) -> String {
     }
 }
 
-/// What an event jump is for: Go to Original, or Ctrl+L's scroll back to
-/// the line marker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum JumpPurpose {
-    Original,
+/// What an event jump looks for: Go to Original's message, or Ctrl+L's
+/// line marker, which the room's read marker places on a line only once
+/// the loaded history reaches it (`line_marker::marker_place`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum JumpTarget {
+    Original(String),
     LineMarker,
 }
 
-impl JumpPurpose {
+impl JumpTarget {
     /// The status bar while the jump pages older history.
-    pub(super) fn finding_status(self) -> &'static str {
+    pub(super) fn finding_status(&self) -> &'static str {
         match self {
-            Self::Original => "finding the original message...",
+            Self::Original(_) => "finding the original message...",
             Self::LineMarker => "finding the line marker...",
         }
     }
 
-    pub(super) fn found_status(self) -> &'static str {
+    pub(super) fn found_status(&self) -> &'static str {
         match self {
-            Self::Original => "original message found",
+            Self::Original(_) => "original message found",
             Self::LineMarker => "line marker found",
         }
     }
 
-    pub(super) fn not_found_status(self) -> &'static str {
+    pub(super) fn not_found_status(&self) -> &'static str {
         match self {
-            Self::Original => "* the original message is not in this room's history",
+            Self::Original(_) => "* the original message is not in this room's history",
             Self::LineMarker => "* the line marker is not in this room's history",
         }
     }
 }
 
-/// An event jump waiting for older history: the window it started in, the
-/// event it looks for and what for.
+/// An event jump waiting for older history: the window it started in, and
+/// what it looks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct EventJump {
     pub(super) view_id: ViewId,
-    pub(super) target_event_id: String,
-    pub(super) purpose: JumpPurpose,
+    pub(super) target: JumpTarget,
 }
 
 /// The room's history paging, as an event jump sees it.

@@ -889,19 +889,15 @@ pub(super) fn render_room_lines(state: &WindowState, room_id: &str) -> Vec<Strin
     ))
 }
 
-/// The event a room window's line marker follows: the room's read marker
-/// (`m.fully_read`), as the server last said, while Options > Display >
-/// Line marker is on.
+/// The line a room window's line marker follows: where it shows the room's
+/// read marker (`m.fully_read`) as the server last said
+/// (`line_marker::marker_line`), while Options > Display > Line marker is
+/// on.
 pub(super) fn room_line_marker<'a>(state: &'a WindowState, room_id: &str) -> Option<&'a str> {
     if !state.settings.settings().marker.show {
         return None;
     }
-    state
-        .model
-        .room_read_states
-        .get(room_id)?
-        .fully_read_event_id
-        .as_deref()
+    line_marker::marker_line(&state.model, room_id)
 }
 
 fn format_room_image_metadata_suffix(info: Option<&RoomImageInfo>) -> String {
@@ -3810,6 +3806,39 @@ mod tests {
             .unwrap();
         assert_eq!(room_line_marker(&state, "!ops:example"), None);
         assert_eq!(room_line_marker(&state, "!other:example"), None);
+    }
+
+    #[test]
+    fn a_line_marker_on_an_unshown_event_goes_below_the_line_before_it() {
+        let mut state = line_marker_state();
+        // Bob's reaction to `$b`, which shows on `$b`'s reactions line.
+        state.model.room_read_states.insert(
+            "!ops:example".to_owned(),
+            mirx_core::RoomReadState {
+                room_id: "!ops:example".to_owned(),
+                latest_active_event_id: None,
+                fully_read_event_id: Some("$reaction".to_owned()),
+                fully_read_timestamp_ms: Some(1_700_000_121_000),
+                marked_unread: false,
+                num_unread: 2,
+                num_notifications: 0,
+                num_mentions: 0,
+            },
+        );
+        assert_eq!(room_line_marker(&state, "!ops:example"), Some("$b"));
+        assert_eq!(
+            marked_texts(&rows_marked_at(
+                &state,
+                room_line_marker(&state, "!ops:example")
+            ))[3..],
+            [
+                "    reactions: heart @bob:example.org",
+                "[22:15] * between",
+                "----",
+                "[22:16] <@alice:example> in thread",
+                "[22:16] <@alice:example> third",
+            ]
+        );
     }
 
     #[test]

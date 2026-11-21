@@ -949,8 +949,7 @@ pub(super) unsafe fn go_to_original_of_selected_message(hwnd: HWND) -> Result<()
         hwnd,
         replies::EventJump {
             view_id,
-            target_event_id,
-            purpose: replies::JumpPurpose::Original,
+            target: replies::JumpTarget::Original(target_event_id),
         },
     )
 }
@@ -982,16 +981,16 @@ pub(super) unsafe fn continue_event_jump(
             .views
             .get(&jump.view_id)
             .expect("closing a window drops its jump");
-        let in_view_rows = timeline_source_row_index_of_event(
-            view_timeline(&jump.view_id, view.content),
-            &jump.target_event_id,
-        )
-        .is_some();
         let room_view = state
             .model
             .room_views
             .get(&room_id)
             .expect("a jump's room has its timeline");
+        let target_event_id = jump_target_event_id(state, &room_id, &jump.target);
+        let in_view_rows = target_event_id.is_some_and(|event_id| {
+            timeline_source_row_index_of_event(view_timeline(&jump.view_id, view.content), event_id)
+                .is_some()
+        });
         let history = match &room_view.history {
             RoomHistoryBackfillState::Idle { .. } => replies::JumpHistory::Idle,
             RoomHistoryBackfillState::Loading { .. } => replies::JumpHistory::Loading,
@@ -1006,9 +1005,11 @@ pub(super) unsafe fn continue_event_jump(
         replies::event_jump_step(
             &jump.view_id,
             in_view_rows,
-            room_view
-                .find_activity_index_by_event_id(&jump.target_event_id)
-                .is_some(),
+            target_event_id.is_some_and(|event_id| {
+                room_view
+                    .find_activity_index_by_event_id(event_id)
+                    .is_some()
+            }),
             history,
             another_backfill_loading,
         )
@@ -1017,7 +1018,7 @@ pub(super) unsafe fn continue_event_jump(
         replies::EventJumpStep::Show(view_id) => {
             state_mut(hwnd).pending_jump = None;
             show_jump_target(hwnd, &view_id, &jump)?;
-            jump.purpose.found_status().to_owned()
+            jump.target.found_status().to_owned()
         }
         replies::EventJumpStep::LoadOlder => {
             let submitted = submit_backfill_room_history_for_room(state_mut(hwnd), &room_id)?;
@@ -1025,12 +1026,12 @@ pub(super) unsafe fn continue_event_jump(
                 submitted,
                 "a joined room with history left and none loading takes a request"
             );
-            jump.purpose.finding_status().to_owned()
+            jump.target.finding_status().to_owned()
         }
-        replies::EventJumpStep::Wait => jump.purpose.finding_status().to_owned(),
+        replies::EventJumpStep::Wait => jump.target.finding_status().to_owned(),
         replies::EventJumpStep::NotFound => {
             state_mut(hwnd).pending_jump = None;
-            jump.purpose.not_found_status().to_owned()
+            jump.target.not_found_status().to_owned()
         }
         replies::EventJumpStep::Failed(message) => {
             state_mut(hwnd).pending_jump = None;
@@ -1054,18 +1055,23 @@ unsafe fn show_jump_target(
         activate_view(hwnd, view_id, None)?;
     }
     let timeline = view_timeline(view_id, state_ref(hwnd).views[view_id].content);
-    let event_id = jump.target_event_id.as_str();
-    let source_row_index = timeline_source_row_index_of_event(timeline, event_id)
+    let room_id = view_id
+        .room_id()
+        .expect("only room and thread windows jump to events");
+    let event_id = jump_target_event_id(state_ref(hwnd), room_id, &jump.target)
+        .expect("the jump shows an event its window holds")
+        .to_owned();
+    let source_row_index = timeline_source_row_index_of_event(timeline, &event_id)
         .expect("the jump shows an event its window holds");
-    match jump.purpose {
-        replies::JumpPurpose::Original => {
+    match jump.target {
+        replies::JumpTarget::Original(_) => {
             scroll_timeline_to_source_row_index(timeline, source_row_index);
             state_mut(hwnd).selected_timeline_event = Some(SelectedTimelineEvent {
                 view_id: view_id.clone(),
-                event_id: event_id.to_owned(),
+                event_id,
             });
         }
-        replies::JumpPurpose::LineMarker => {
+        replies::JumpTarget::LineMarker => {
             let marker_row_index = timeline_state_ref(timeline)
                 .source_rows
                 .iter()
@@ -1078,6 +1084,19 @@ unsafe fn show_jump_target(
     }
     InvalidateRect(timeline, null(), 1);
     Ok(())
+}
+
+/// The event `target` is in `room_id`'s timeline, if it is loaded: Go to
+/// Original's message, or the line the line marker goes below.
+fn jump_target_event_id<'a>(
+    state: &'a WindowState,
+    room_id: &str,
+    target: &'a replies::JumpTarget,
+) -> Option<&'a str> {
+    match target {
+        replies::JumpTarget::Original(event_id) => Some(event_id),
+        replies::JumpTarget::LineMarker => line_marker::marker_line(&state.model, room_id),
+    }
 }
 
 pub(super) fn cancel_jump_for_view(state: &mut WindowState, view_id: &ViewId) {
@@ -1644,8 +1663,7 @@ mod tests {
                     state_ref(hwnd).pending_jump,
                     Some(replies::EventJump {
                         view_id: room_view_id("!ops:example"),
-                        target_event_id: "$old".to_owned(),
-                        purpose: replies::JumpPurpose::Original,
+                        target: replies::JumpTarget::Original("$old".to_owned()),
                     })
                 );
                 assert_eq!(backfill_requests(state_ref(hwnd)), 1);
