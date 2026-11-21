@@ -2268,6 +2268,85 @@ fn room_activity_image_round_trips_through_json() {
 }
 
 #[test]
+fn room_activity_sticker_round_trips_through_json() {
+    let sticker = RoomImageActivity {
+        body: "a waving cat".to_owned(),
+        filename: None,
+        ..sample_room_image_activity(None)
+    };
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$image1:example.org".to_owned(),
+        timestamp_ms: 1_710_000_000_000,
+        highlight: false,
+        relation: None,
+        reactions: Vec::new(),
+        kind: RoomActivityKind::Sticker(Box::new(sticker)),
+    };
+    let kind = serde_json::json!({
+        "type": "sticker",
+        "event_id": "$image1:example.org",
+        "sender": "@alice:example.org",
+        "body": "a waving cat",
+        "filename": null,
+        "source": { "type": "plain", "url": "mxc://example.org/diagram" },
+        "info": {
+            "mimetype": "image/png",
+            "size": 12345u64,
+            "width": 640u64,
+            "height": 480u64,
+            "is_animated": false,
+            "thumbnail_source": null
+        }
+    });
+    let mut dump_kind = kind.clone();
+    dump_kind["media_state"] = serde_json::Value::Null;
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$image1:example.org",
+        "timestamp_ms": 1710000000000u64,
+        "highlight": false,
+        "relation": null,
+        "reactions": [],
+        "kind": dump_kind
+    });
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize sticker activity"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json).expect("deserialize sticker activity"),
+        activity
+    );
+
+    // The core's: its sender is a profile.
+    let mut core_kind = kind;
+    core_kind["sender"] = serde_json::json!({
+        "user_id": "@alice:example.org",
+        "display_name": null,
+        "display_name_ambiguous": false
+    });
+    let core_json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$image1:example.org",
+        "timestamp_ms": 1710000000000u64,
+        "highlight": false,
+        "relation": null,
+        "kind": core_kind
+    });
+    let core = serde_json::from_value::<CoreRoomActivity>(core_json.clone())
+        .expect("deserialize core sticker activity");
+    assert!(
+        matches!(&core.kind, CoreRoomActivityKind::Sticker(sticker) if sticker.body == "a waving cat"),
+        "{core:?}"
+    );
+    assert_eq!(
+        serde_json::to_value(&core).expect("serialize core sticker activity"),
+        core_json
+    );
+}
+
+#[test]
 fn room_activity_file_round_trips_through_json() {
     let activity = RoomActivity {
         room_id: "!room:example".to_owned(),

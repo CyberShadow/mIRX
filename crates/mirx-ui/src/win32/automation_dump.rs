@@ -1313,7 +1313,8 @@ pub(super) fn dump_room_activity_entry_from_room_entry(
         dump.reactions = room_view.reaction_summaries_for_event(event_id);
     }
     match (&activity.kind, &mut dump.kind) {
-        (RoomActivityKind::Image(image), DumpRoomActivityKind::Image(dump_image)) => {
+        (RoomActivityKind::Image(image), DumpRoomActivityKind::Image(dump_image))
+        | (RoomActivityKind::Sticker(image), DumpRoomActivityKind::Sticker(dump_image)) => {
             dump_image.media_state = dump_room_preview_media_state(
                 room_view,
                 &activity.activity_id,

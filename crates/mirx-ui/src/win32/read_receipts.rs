@@ -275,6 +275,16 @@ mod tests {
             named("$video")
         );
         assert_eq!(
+            room_line(sticker_activity(
+                "!room:example",
+                "$sticker",
+                "@bob:example",
+                2,
+                "a waving cat"
+            )),
+            named("$sticker")
+        );
+        assert_eq!(
             room_line(unsupported_message_activity(
                 "!room:example",
                 "$custom",

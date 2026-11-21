@@ -189,7 +189,8 @@ fn room_preview_activity_matches(
         activity.activity_id == activity_id
             && (matches!(
                 &activity.kind,
-                RoomActivityKind::Image(message) if message.event_id == event_id
+                RoomActivityKind::Image(message) | RoomActivityKind::Sticker(message)
+                    if message.event_id == event_id
             ) || matches!(
                 &activity.kind,
                 RoomActivityKind::Video(message) if message.event_id == event_id
@@ -341,7 +342,7 @@ pub(super) fn collect_lazy_room_preview_media_requests<'a>(
         .into_iter()
         .filter_map(|activity| {
             let (event_id, source) = match &activity.kind {
-                RoomActivityKind::Image(message) => {
+                RoomActivityKind::Image(message) | RoomActivityKind::Sticker(message) => {
                     (&message.event_id, timeline_image_preview_source(message))
                 }
                 RoomActivityKind::Video(message) => {
@@ -692,6 +693,69 @@ mod tests {
         .unwrap();
         let view = state.model.room_views.get("!ops:example").unwrap();
         assert!(collect_lazy_room_preview_media_requests(view, view.activities.iter()).is_empty());
+    }
+
+    #[test]
+    fn a_sticker_previews_as_an_image_does() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            Event::RoomActivity(Box::new(sticker_activity(
+                "!ops:example",
+                "$sticker",
+                "@bob:example",
+                1,
+                "a waving cat",
+            ))),
+        )
+        .unwrap();
+        let requests = {
+            let view = state.model.room_views.get("!ops:example").unwrap();
+            collect_lazy_room_preview_media_requests(view, view.activities.iter())
+        };
+        assert_eq!(
+            requests,
+            vec![RoomPreviewMediaDispatch {
+                activity_id: "event:$sticker".to_owned(),
+                event_id: "$sticker".to_owned(),
+                source: RoomMediaSource::Plain {
+                    url: "mxc://example.org/sticker".to_owned()
+                },
+                format: timeline_thumbnail_format(),
+            }]
+        );
+        dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
+        apply_core_event(
+            &mut state,
+            room_preview_media_event(
+                "!ops:example",
+                "event:$sticker",
+                "$sticker",
+                RoomMediaKind::Loaded {
+                    format: timeline_thumbnail_format(),
+                    bytes: tiny_png_bytes(),
+                },
+            ),
+        )
+        .unwrap();
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let sticker = rows.last().expect("the sticker's row");
+        assert_eq!(sticker.kind, TimelineRowKind::Image { highlight: false });
+        assert!(
+            sticker
+                .logical_text
+                .ends_with("* @bob:example sent sticker: a waving cat")
+        );
+        assert!(matches!(
+            sticker.image_state,
+            Some(TimelineImageState::Loaded {
+                width: 1,
+                height: 1,
+                ..
+            })
+        ));
+        stop_test_core(handle);
     }
 
     #[test]

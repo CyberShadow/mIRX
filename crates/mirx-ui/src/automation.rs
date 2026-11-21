@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 72;
+pub(crate) const PROTOCOL_VERSION: u32 = 73;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -2326,6 +2326,7 @@ pub(crate) enum DumpRoomActivityKind {
     File(Box<DumpRoomFileActivity>),
     Audio(Box<DumpRoomAudioActivity>),
     Video(Box<DumpRoomVideoActivity>),
+    Sticker(Box<DumpRoomImageActivity>),
     UnsupportedMessage(DumpUnsupportedRoomMessageActivity),
     UnableToDecrypt(DumpRoomUnableToDecryptActivity),
     StateNotice(DumpRoomStateNoticeActivity),
@@ -2726,6 +2727,9 @@ pub(crate) fn dump_room_activity_kind_from_core(kind: &RoomActivityKind) -> Dump
         }
         RoomActivityKind::Video(video) => {
             DumpRoomActivityKind::Video(Box::new(dump_room_video_activity_from_core(video)))
+        }
+        RoomActivityKind::Sticker(sticker) => {
+            DumpRoomActivityKind::Sticker(Box::new(dump_room_image_activity_from_core(sticker)))
         }
         RoomActivityKind::UnsupportedMessage(message) => DumpRoomActivityKind::UnsupportedMessage(
             dump_unsupported_room_message_activity_from_core(message),
@@ -3854,9 +3858,51 @@ mod tests {
         }
     }
 
+    /// The lines of events without text dump as their kind.
     #[test]
-    fn protocol_version_is_72() {
-        assert_eq!(PROTOCOL_VERSION, 72);
+    fn counted_lines_dump_as_their_kind() {
+        let activity = |kind| RoomActivity {
+            room_id: "!room:example".to_owned(),
+            activity_id: "event:$e".to_owned(),
+            timestamp_ms: 1,
+            highlight: false,
+            relation: None,
+            kind,
+        };
+        let sticker = RoomImageActivity {
+            event_id: "$e".to_owned(),
+            sender: user_profile("@bob:example"),
+            body: "a waving cat".to_owned(),
+            filename: None,
+            source: mirx_core::RoomMediaSource::Plain {
+                url: "mxc://example/sticker".to_owned(),
+            },
+            info: None,
+        };
+        assert_eq!(
+            serde_json::to_value(
+                super::dump_room_activity_from_activity(&activity(RoomActivityKind::Sticker(
+                    Box::new(sticker)
+                )))
+                .kind
+            )
+            .expect("serialize a sticker's dump"),
+            json!({
+                "type":"sticker",
+                "event_id":"$e",
+                "sender":"@bob:example",
+                "body":"a waving cat",
+                "filename":null,
+                "source":{"type":"plain","url":"mxc://example/sticker"},
+                "info":null,
+                "media_state":null
+            })
+        );
+    }
+
+    #[test]
+    fn protocol_version_is_73() {
+        assert_eq!(PROTOCOL_VERSION, 73);
     }
 
     #[test]
@@ -5891,7 +5937,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":72,
+                    "protocol_version":73,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })

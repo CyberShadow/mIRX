@@ -483,6 +483,7 @@ impl RoomViewModel {
             | RoomActivityKind::File(_)
             | RoomActivityKind::Audio(_)
             | RoomActivityKind::Video(_)
+            | RoomActivityKind::Sticker(_)
             | RoomActivityKind::UnsupportedMessage(_)
             | RoomActivityKind::UnableToDecrypt(_) => self.push_live(activity),
             RoomActivityKind::StateNotice(notice) => {
@@ -800,7 +801,15 @@ impl RoomViewModel {
         let line_sender = match &self.activities[index].kind {
             RoomActivityKind::Message(message) => &message.sender.user_id,
             RoomActivityKind::UnableToDecrypt(utd) => &utd.sender.user_id,
-            _ => return false,
+            // An edit replaces a text line's text; no other line has any.
+            RoomActivityKind::Image(_)
+            | RoomActivityKind::File(_)
+            | RoomActivityKind::Audio(_)
+            | RoomActivityKind::Video(_)
+            | RoomActivityKind::Sticker(_)
+            | RoomActivityKind::UnsupportedMessage(_)
+            | RoomActivityKind::StateNotice(_)
+            | RoomActivityKind::Redacted(_) => return false,
         };
         if *line_sender != edit.sender || !self.line_edits.is_newer(target_event_id, &edit.order) {
             return false;
@@ -1399,6 +1408,16 @@ pub(super) fn last_activity_from_room_activity(
             ),
             send_state: RoomMessageSendState::Sent,
         }),
+        RoomActivityKind::Sticker(message) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: Some(message.event_id.clone()),
+            transaction_id: None,
+            sender: message.sender.user_id.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
+            body: format!("[sticker] {}", message.body),
+            send_state: RoomMessageSendState::Sent,
+        }),
         RoomActivityKind::StateNotice(_) => None,
         RoomActivityKind::Redacted(_) => None,
     }
@@ -1413,6 +1432,7 @@ pub(super) fn room_activity_sender_user_id(activity: &RoomActivity) -> Option<&s
         RoomActivityKind::File(message) => Some(&message.sender.user_id),
         RoomActivityKind::Audio(message) => Some(&message.sender.user_id),
         RoomActivityKind::Video(message) => Some(&message.sender.user_id),
+        RoomActivityKind::Sticker(message) => Some(&message.sender.user_id),
         RoomActivityKind::UnsupportedMessage(message) => Some(&message.sender.user_id),
         RoomActivityKind::UnableToDecrypt(message) => Some(&message.sender.user_id),
         RoomActivityKind::StateNotice(notice) => Some(&notice.sender.user_id),
@@ -1439,6 +1459,7 @@ pub(super) fn activity_level_for(
         | RoomActivityKind::File(_)
         | RoomActivityKind::Audio(_)
         | RoomActivityKind::Video(_)
+        | RoomActivityKind::Sticker(_)
         | RoomActivityKind::UnsupportedMessage(_)
         | RoomActivityKind::UnableToDecrypt(_) => ViewActivityLevel::Message,
         RoomActivityKind::StateNotice(_) | RoomActivityKind::Redacted(_) => {
@@ -1473,11 +1494,13 @@ pub(super) fn room_activity_event_id(activity: &RoomActivity) -> Option<&str> {
         RoomActivityKind::File(message) => Some(message.event_id.as_str()),
         RoomActivityKind::Audio(message) => Some(message.event_id.as_str()),
         RoomActivityKind::Video(message) => Some(message.event_id.as_str()),
+        RoomActivityKind::Sticker(message) => Some(message.event_id.as_str()),
         RoomActivityKind::UnsupportedMessage(message) => Some(message.event_id.as_str()),
         RoomActivityKind::UnableToDecrypt(message) => Some(message.event_id.as_str()),
         RoomActivityKind::StateNotice(notice) => Some(notice.event_id.as_str()),
         RoomActivityKind::Redacted(activity) => Some(activity.event_id.as_str()),
-        _ => None,
+        // A pending send has no event yet.
+        RoomActivityKind::Message(RoomMessageActivity { event_id: None, .. }) => None,
     }
 }
 
@@ -1522,6 +1545,7 @@ fn room_activity_thread_root_label(activity: &RoomActivity) -> Option<String> {
                 .unwrap_or(message.body.as_str())
                 .to_owned(),
         ),
+        RoomActivityKind::Sticker(message) => Some(message.body.clone()),
         RoomActivityKind::UnsupportedMessage(message) => Some(message.body.clone()),
         RoomActivityKind::UnableToDecrypt(_) => Some("Unable to decrypt message".to_owned()),
         RoomActivityKind::StateNotice(_) => None,
@@ -1622,15 +1646,16 @@ pub(super) fn read_target_for_room_activity(activity: &RoomActivity) -> Option<&
         {
             room_activity_event_id(activity)
         }
+        RoomActivityKind::Message(_) => None,
         RoomActivityKind::Image(_)
         | RoomActivityKind::File(_)
         | RoomActivityKind::Audio(_)
         | RoomActivityKind::Video(_)
+        | RoomActivityKind::Sticker(_)
         | RoomActivityKind::UnsupportedMessage(_)
         | RoomActivityKind::UnableToDecrypt(_)
         | RoomActivityKind::StateNotice(_)
         | RoomActivityKind::Redacted(_) => room_activity_event_id(activity),
-        _ => None,
     }
 }
 
@@ -2050,6 +2075,7 @@ mod tests {
         let file = file_activity("!room:example", "$f", "@bob:example", 1, "f", None, None);
         let audio = audio_activity("!room:example", "$a", "@bob:example", 1, "a", None, None);
         let video = event_room_activity(video_message("!room:example", "$v"));
+        let sticker = sticker_activity("!room:example", "$s", "@bob:example", 1, "s");
         let unsupported = unsupported_message_activity(
             "!room:example",
             "$u",
@@ -2078,6 +2104,7 @@ mod tests {
             &file,
             &audio,
             &video,
+            &sticker,
             &unsupported,
             &undecryptable,
         ] {
@@ -2094,12 +2121,31 @@ mod tests {
                 "{activity:?}"
             );
         }
-        for activity in [message, image, state_notice, redacted] {
+        for activity in [message, image, sticker, state_notice, redacted] {
             assert_eq!(
                 activity_level_for(&highlighted(activity), None),
                 Some(ViewActivityLevel::Highlight)
             );
         }
+    }
+
+    #[test]
+    fn the_last_activity_names_what_a_line_without_text_is() {
+        let body = |activity: RoomActivity| {
+            last_activity_from_room_activity(&activity)
+                .expect("a line from someone")
+                .body
+        };
+        assert_eq!(
+            body(sticker_activity(
+                "!room:example",
+                "$s",
+                "@bob:example",
+                1,
+                "a waving cat"
+            )),
+            "[sticker] a waving cat"
+        );
     }
 
     #[test]

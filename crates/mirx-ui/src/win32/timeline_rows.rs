@@ -641,6 +641,26 @@ fn activity_line_text(
                 image_state,
             )
         }
+        // Shown as an image is; its body describes it.
+        RoomActivityKind::Sticker(message) => {
+            let format = timeline_thumbnail_format();
+            let image_state = Some(room_view.projected_preview_state(
+                &activity.activity_id,
+                &message.event_id,
+                &format,
+            ));
+            (
+                TimelineRowKind::Image {
+                    highlight: activity.highlight,
+                },
+                action_line_with_link(
+                    timestamp,
+                    &message.sender,
+                    &format!("sent sticker: {}", message.body),
+                ),
+                image_state,
+            )
+        }
         RoomActivityKind::File(message) => {
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
             let metadata_suffix = format_room_file_metadata_suffix(message.info.as_ref());

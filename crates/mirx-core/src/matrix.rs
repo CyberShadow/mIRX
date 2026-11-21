@@ -70,8 +70,9 @@ use matrix_sdk::{
         api::error::ErrorKind,
         directory::Filter,
         events::{
-            AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent, InitialStateEvent,
-            Mentions, SyncStateEvent, TimelineEventType, ToDeviceEvent,
+            AnyMessageLikeEventContent, AnySyncMessageLikeEvent, AnySyncStateEvent,
+            AnySyncTimelineEvent, InitialStateEvent, Mentions, SyncMessageLikeEvent,
+            SyncStateEvent, TimelineEventType, ToDeviceEvent,
             direct::{DirectEvent, DirectEventContent},
             ignored_user_list::{IgnoredUserListEvent, IgnoredUserListEventContent},
             key::verification::{
@@ -2519,6 +2520,32 @@ pub(crate) fn register_event_handlers(
         },
     );
 
+    let message_like_events = events.clone();
+    client.add_event_handler(
+        move |event: AnySyncMessageLikeEvent, room: Room, actions: Vec<Action>| {
+            let events = message_like_events.clone();
+            async move {
+                if !MESSAGE_LIKE_LINE_TYPES.contains(&event.event_type().to_string().as_str()) {
+                    return;
+                }
+                let highlight = activity_highlight(room.own_user_id(), event.sender(), &actions);
+                match room_user_profile(&room, event.sender()).await {
+                    Ok(sender) => {
+                        if let Some(activity) = room_activity_from_sync_message_like(
+                            room.room_id().as_str(),
+                            &event,
+                            sender,
+                            highlight,
+                        ) {
+                            emit_event(&events, Event::RoomActivity(Box::new(activity)));
+                        }
+                    }
+                    Err(err) => emit_sync_error(&events, err),
+                }
+            }
+        },
+    );
+
     // The SDK dispatches an event it could not decrypt by its encrypted
     // type; one it decrypted reaches the handlers of what it decrypted to.
     let encrypted_events = events.clone();
@@ -2698,7 +2725,7 @@ fn room_activity_from_sync_message(
     sender: RoomUserProfile,
     highlight: bool,
 ) -> Option<RoomActivity> {
-    let relation = room_activity_relation_from_message(event);
+    let relation = room_activity_relation_from_content(event.content.relates_to.as_ref());
 
     if let Some((presentation, text)) = room_message_presentation_and_text_from_message_type(
         &event.content.msgtype,
@@ -2816,6 +2843,56 @@ fn room_activity_from_sync_message(
     })
 }
 
+/// The types of message-like events other than `m.room.message` that are
+/// lines: the ones the SDK counts unread (`marks_as_unread`). Every other
+/// type has a handler of its own (reactions, redactions) or no line.
+const MESSAGE_LIKE_LINE_TYPES: [&str; 1] = ["m.sticker"];
+
+/// The line of a message-like event of one of `MESSAGE_LIKE_LINE_TYPES`;
+/// `None` for an edit of one (`m.replace`: not counted unread, and no line)
+/// or a redacted one.
+fn room_activity_from_sync_message_like(
+    room_id: &str,
+    event: &AnySyncMessageLikeEvent,
+    sender: RoomUserProfile,
+    highlight: bool,
+) -> Option<RoomActivity> {
+    let (relation, kind) = match event {
+        AnySyncMessageLikeEvent::Sticker(SyncMessageLikeEvent::Original(sticker)) => {
+            let relates_to = sticker.content.relates_to.as_ref();
+            if let Some(MessageRelation::Replacement(_)) = relates_to {
+                return None;
+            }
+            (
+                room_activity_relation_from_content(relates_to),
+                RoomActivityKind::Sticker(Box::new(RoomImageActivity {
+                    event_id: sticker.event_id.to_string(),
+                    sender,
+                    body: sticker.content.body.clone(),
+                    filename: None,
+                    source: room_media_source_from_matrix(&MediaSource::from(
+                        sticker.content.source.clone(),
+                    )),
+                    info: Some(room_image_info_from_matrix(&sticker.content.info)),
+                })),
+            )
+        }
+        AnySyncMessageLikeEvent::Sticker(SyncMessageLikeEvent::Redacted(_)) => return None,
+        _ => unreachable!(
+            "{} is none of the message-like line types",
+            event.event_type()
+        ),
+    };
+    Some(RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("event:{}", event.event_id()),
+        timestamp_ms: event.origin_server_ts().get().into(),
+        highlight,
+        relation,
+        kind,
+    })
+}
+
 fn room_activity_update_from_sync_message_replacement(
     room_id: &str,
     event: &OriginalSyncRoomMessageEvent,
@@ -2880,10 +2957,12 @@ fn room_activity_update_from_sync_redaction(
     }
 }
 
-fn room_activity_relation_from_message(
-    event: &OriginalSyncRoomMessageEvent,
+/// The thread or reply a line belongs to, from its content's relation. An
+/// edit is no line, so its callers handle it first.
+fn room_activity_relation_from_content<C>(
+    relation: Option<&MessageRelation<C>>,
 ) -> Option<RoomActivityRelation> {
-    match event.content.relates_to.as_ref()? {
+    match relation? {
         MessageRelation::Reply(reply) => Some(room_activity_reply_relation(reply)),
         MessageRelation::Thread(thread) => Some(room_activity_thread_relation(thread)),
         _ => None,
@@ -5219,6 +5298,31 @@ async fn room_history_backfill_event_from_timeline_event(
     }
 
     let raw = event.raw();
+
+    // Unchecked decoding ignores the type, and a sticker would decode as a
+    // message without its `msgtype`: match the type first, and decode
+    // checked.
+    if event
+        .kind
+        .event_type()
+        .is_some_and(|event_type| MESSAGE_LIKE_LINE_TYPES.contains(&event_type.as_str()))
+    {
+        // As live, where the SDK calls no handler for an event that does
+        // not decode, a malformed one is no line.
+        let Ok(AnySyncTimelineEvent::MessageLike(event)) = raw.deserialize() else {
+            return Ok(Vec::new());
+        };
+        let sender = senders.get(event.sender()).await?;
+        return Ok(room_activity_from_sync_message_like(
+            room_id,
+            &event,
+            sender,
+            highlight(event.sender()),
+        )
+        .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity)))
+        .into_iter()
+        .collect());
+    }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomMessageEvent>() {
         if let Some(replacement) = sync_message_replacement(&event) {
@@ -10110,6 +10214,170 @@ mod tests {
             assert_eq!(snapshots[0].room_id, room_id().as_str());
             assert_eq!(snapshots[0].members.len(), 3);
         });
+    }
+
+    /// Bob's events the SDK counts unread that are no `m.room.message`,
+    /// and ones it does not count, a second apart from `$1`.
+    fn counted_message_like_events() -> Vec<serde_json::Value> {
+        let event = |event_id: &str, event_type: &str, content: serde_json::Value| {
+            serde_json::json!({
+                "type": event_type,
+                "content": content,
+                "event_id": event_id,
+                "sender": "@bob:example.org",
+                "origin_server_ts": 1700000000000u64
+            })
+        };
+        vec![
+            event(
+                "$sticker",
+                "m.sticker",
+                serde_json::json!({
+                    "body": "a waving cat",
+                    "info": { "mimetype": "image/png", "w": 64, "h": 48, "size": 1000 },
+                    "url": "mxc://example.org/sticker"
+                }),
+            ),
+            event(
+                "$thread-sticker",
+                "m.sticker",
+                serde_json::json!({
+                    "body": "thumbs up",
+                    "info": {},
+                    "url": "mxc://example.org/thumbs",
+                    "m.relates_to": {
+                        "rel_type": "m.thread",
+                        "event_id": "$root",
+                        "is_falling_back": true,
+                        "m.in_reply_to": { "event_id": "$root" }
+                    }
+                }),
+            ),
+            // Not counted: no lines.
+            event(
+                "$sticker-edit",
+                "m.sticker",
+                serde_json::json!({
+                    "body": "a waving dog",
+                    "info": {},
+                    "url": "mxc://example.org/dog",
+                    "m.relates_to": { "rel_type": "m.replace", "event_id": "$sticker" }
+                }),
+            ),
+        ]
+    }
+
+    /// The lines of `counted_message_like_events` in `room_id`.
+    fn counted_message_like_lines(room_id: &str) -> Vec<RoomActivity> {
+        let activity = |event_id: &str, relation, kind| RoomActivity {
+            room_id: room_id.to_owned(),
+            activity_id: format!("event:{event_id}"),
+            timestamp_ms: 1_700_000_000_000,
+            highlight: false,
+            relation,
+            kind,
+        };
+        let sticker = |event_id: &str, body: &str, url: &str, info| {
+            RoomActivityKind::Sticker(Box::new(RoomImageActivity {
+                event_id: event_id.to_owned(),
+                sender: profile("@bob:example.org"),
+                body: body.to_owned(),
+                filename: None,
+                source: RoomMediaSource::Plain {
+                    url: url.to_owned(),
+                },
+                info: Some(info),
+            }))
+        };
+        vec![
+            activity(
+                "$sticker",
+                None,
+                sticker(
+                    "$sticker",
+                    "a waving cat",
+                    "mxc://example.org/sticker",
+                    RoomImageInfo {
+                        mimetype: Some("image/png".to_owned()),
+                        size: Some(1000),
+                        width: Some(64),
+                        height: Some(48),
+                        is_animated: None,
+                        thumbnail_source: None,
+                    },
+                ),
+            ),
+            activity(
+                "$thread-sticker",
+                Some(RoomActivityRelation::Thread {
+                    thread_root_event_id: "$root".to_owned(),
+                    in_reply_to_event_id: Some("$root".to_owned()),
+                    is_falling_back: true,
+                }),
+                sticker(
+                    "$thread-sticker",
+                    "thumbs up",
+                    "mxc://example.org/thumbs",
+                    RoomImageInfo {
+                        mimetype: None,
+                        size: None,
+                        width: None,
+                        height: None,
+                        is_animated: None,
+                        thumbnail_source: None,
+                    },
+                ),
+            ),
+        ]
+    }
+
+    #[test]
+    fn synced_stickers_and_polls_are_lines() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let (events, event_rx) = mpsc::channel();
+            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
+            let mut room = JoinedRoomBuilder::new(room_id().as_ref());
+            for event in counted_message_like_events() {
+                room = room.add_timeline_event(raw_sync_timeline_event(event));
+            }
+            sync_and_refresh_members(&mock_server, &client, room, &events).await;
+
+            let lines = drain_events(&event_rx)
+                .into_iter()
+                .filter_map(|event| match event {
+                    Event::RoomActivity(activity) => Some(*activity),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(lines, counted_message_like_lines(room_id().as_str()));
+        });
+    }
+
+    #[test]
+    fn backfilled_stickers_and_polls_are_lines() {
+        let chunk = counted_message_like_events()
+            .into_iter()
+            .rev()
+            .map(timeline_event)
+            .collect();
+
+        let lines = backfill_events(chunk, RedactionRules::V1)
+            .into_iter()
+            .map(|event| match event {
+                RoomHistoryBackfillEvent::Activity(activity) => *activity,
+                RoomHistoryBackfillEvent::ActivityUpdate(update) => {
+                    panic!("no update expected: {update:?}")
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(lines, counted_message_like_lines("!room:example.org"));
     }
 
     #[test]

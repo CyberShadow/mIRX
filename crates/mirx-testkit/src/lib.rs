@@ -840,6 +840,8 @@ pub enum RoomActivityKind {
     File(Box<RoomFileActivity>),
     Audio(Box<RoomAudioActivity>),
     Video(Box<RoomVideoActivity>),
+    /// An `m.sticker`, as an image; `filename` is always `None`.
+    Sticker(Box<RoomImageActivity>),
     UnsupportedMessage(UnsupportedRoomMessageActivity),
     UnableToDecrypt(RoomUnableToDecryptActivity),
     StateNotice(RoomStateNoticeActivity),

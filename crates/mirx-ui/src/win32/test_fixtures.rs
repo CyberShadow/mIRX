@@ -646,6 +646,33 @@ pub(super) fn image_activity(
     }
 }
 
+/// A sticker with a plain source and no thumbnail.
+pub(super) fn sticker_activity(
+    room_id: &str,
+    event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    body: &str,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("event:{event_id}"),
+        timestamp_ms,
+        highlight: false,
+        relation: None,
+        kind: RoomActivityKind::Sticker(Box::new(mirx_core::RoomImageActivity {
+            event_id: event_id.to_owned(),
+            sender: user_profile(sender),
+            body: body.to_owned(),
+            filename: None,
+            source: mirx_core::RoomMediaSource::Plain {
+                url: "mxc://example.org/sticker".to_owned(),
+            },
+            info: None,
+        })),
+    }
+}
+
 pub(super) fn file_activity(
     room_id: &str,
     event_id: &str,
