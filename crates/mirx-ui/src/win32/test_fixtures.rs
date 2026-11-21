@@ -583,7 +583,7 @@ pub(super) fn unable_to_decrypt_activity(
 ) -> Event {
     Event::RoomActivity(Box::new(RoomActivity {
         room_id: room_id.to_owned(),
-        activity_id: event_id.to_owned(),
+        activity_id: format!("event:{event_id}"),
         timestamp_ms,
         highlight: false,
         relation: None,

@@ -159,6 +159,8 @@ use crate::runtime::{EventSender, InitialSnapshot, RoomSnapshots, emit_event};
 
 mod room_keys;
 
+pub(crate) use room_keys::{retry_decryption, room_decryption_task};
+
 #[derive(Debug)]
 pub(crate) struct MatrixCoreError {
     message: String,

@@ -232,6 +232,16 @@ async fn read_session(
         .event_cache()
         .subscribe()
         .expect("the session's client is alive");
+    // Its redecryptor starts with the subscription. The task subscribes to
+    // its reports when first polled (the stream borrows the client the
+    // task owns): poll it once now, so what the redecryptor decrypts
+    // during the first sync (keys from the backup, say) is reported too.
+    let mut decryption = Box::pin(matrix::room_decryption_task(client.clone(), events.clone()));
+    assert!(
+        futures_util::poll!(decryption.as_mut()).is_pending(),
+        "the decryption task runs for the session"
+    );
+    tasks.push(decryption);
     tasks.push(Box::pin(matrix::room_read_state_update_task(
         client.clone(),
         events.clone(),

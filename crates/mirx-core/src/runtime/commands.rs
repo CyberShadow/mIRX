@@ -22,10 +22,10 @@ use crate::api::{
     KickRoomMemberRequest, LeaveRoomRequest, ListPublicRoomsRequest, LoginRequest,
     MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
-    ResetE2eeIdentityRequest, RestoreSessionRequest, RoomJoined, SendFileRequest,
-    SendMessageRequest, SendReactionRequest, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
-    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    SignOutDeviceRequest, UnbanRoomMemberRequest, VerificationFlowId,
+    ResetE2eeIdentityRequest, RestoreSessionRequest, RetryDecryptionRequest, RoomJoined,
+    SendFileRequest, SendMessageRequest, SendReactionRequest, SetDisplayNameRequest,
+    SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
+    SetupE2eeRecoveryRequest, SignOutDeviceRequest, UnbanRoomMemberRequest, VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode};
 
@@ -451,6 +451,15 @@ pub(super) fn route(command: Command) -> Route {
             ),
             |ctx| fetch_room_event(ctx, request),
         ),
+        Command::RetryDecryption(request) => lane(
+            Lane::Unordered,
+            Refusal::room(
+                Op::RetryDecryption,
+                &request.room_id,
+                "retrying decryption requires an authenticated session",
+            ),
+            |ctx| retry_decryption(ctx, request),
+        ),
         Command::ListPublicRooms(request) => lane(
             Lane::Unordered,
             Refusal::account(
@@ -809,6 +818,16 @@ async fn fetch_room_event(ctx: JobCtx, request: FetchRoomEventRequest) -> Follow
     let JobCtx { client, events, .. } = &ctx;
     let fetch = matrix::fetch_room_event(client, request).await;
     emit_event(events, Event::RoomEvent(fetch));
+
+    Followup::Done
+}
+
+async fn retry_decryption(ctx: JobCtx, request: RetryDecryptionRequest) -> Followup {
+    let JobCtx { client, events, .. } = &ctx;
+    let room_id = request.room_id.clone();
+    if let Err(err) = matrix::retry_decryption(client, request) {
+        emit_room_matrix_error(events, Operation::RetryDecryption, &room_id, err);
+    }
 
     Followup::Done
 }

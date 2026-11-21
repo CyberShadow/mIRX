@@ -1027,6 +1027,68 @@ impl RoomViewModel {
         }
     }
 
+    /// Whether the window shows the event as one that could not be
+    /// decrypted: as a line, or as the message a reply quotes.
+    pub(super) fn shows_undecrypted(&self, event_id: &str) -> bool {
+        let undecrypted =
+            |activity: &RoomActivity| matches!(activity.kind, RoomActivityKind::UnableToDecrypt(_));
+        match self.find_activity_index_by_event_id(event_id) {
+            Some(index) => undecrypted(&self.activities[index]),
+            None => matches!(
+                self.reply_targets.get(event_id),
+                Some(ReplyTargetState::Loaded(target)) if undecrypted(target)
+            ),
+        }
+    }
+
+    /// An event that could not be decrypted, decrypted
+    /// (`shows_undecrypted`): its line becomes the message in place, with
+    /// the same arrival, and a reply's quote of it quotes the message.
+    pub(super) fn apply_decrypted(&mut self, activity: RoomActivity) {
+        let event_id = room_activity_event_id(&activity)
+            .expect("a decrypted activity is an event's")
+            .to_owned();
+        assert!(
+            self.shows_undecrypted(&event_id),
+            "{event_id} is not shown as undecrypted"
+        );
+        let shown = match self.find_activity_index_by_event_id(&event_id) {
+            Some(index) => &mut self.activities[index],
+            None => match self.reply_targets.get_mut(&event_id) {
+                Some(ReplyTargetState::Loaded(target)) => &mut **target,
+                _ => unreachable!("shows_undecrypted found it"),
+            },
+        };
+        // The core names both after the event: the arrival stays valid.
+        assert_eq!(
+            shown.activity_id, activity.activity_id,
+            "a decrypted line keeps its activity"
+        );
+        *shown = activity;
+        // It may be a thread's message, or a thread's root.
+        self.rebuild_threads();
+    }
+
+    /// The Megolm sessions of what the window shows that could not be
+    /// decrypted (`shows_undecrypted`): the keys a retry asks for.
+    pub(super) fn undecrypted_session_ids(&self) -> BTreeSet<String> {
+        let reply_targets = self
+            .reply_targets
+            .values()
+            .filter_map(|target| match target {
+                ReplyTargetState::Loaded(activity) => Some(&**activity),
+                ReplyTargetState::Pending | ReplyTargetState::Failed => None,
+            });
+        self.activities
+            .iter()
+            .chain(reply_targets)
+            .filter_map(|activity| match &activity.kind {
+                RoomActivityKind::UnableToDecrypt(utd) => utd.session_id.clone(),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(super) fn find_activity_index_by_event_id(&self, event_id: &str) -> Option<usize> {
         self.activities
             .iter()
@@ -1180,7 +1242,7 @@ impl RoomViewModel {
 
     /// Every arrival is of an activity the room has, and was handed out.
     #[cfg(test)]
-    fn assert_arrivals_consistent(&self) {
+    pub(super) fn assert_arrivals_consistent(&self) {
         for (activity_id, arrival) in &self.arrivals.by_activity {
             assert!(
                 self.activities

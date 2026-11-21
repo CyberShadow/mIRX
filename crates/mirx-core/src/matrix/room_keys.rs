@@ -1,17 +1,26 @@
 //! Messages that could not be decrypted when they arrived: their lines,
 //! their late decryption by the SDK's redecryptor, and room key files.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::pin::pin;
 
-use matrix_sdk::Room;
+use futures_util::StreamExt;
+use matrix_sdk::deserialized_responses::{TimelineEvent, TimelineEventKind};
+use matrix_sdk::event_cache::{DecryptionRetryRequest, RedecryptorReport};
 use matrix_sdk::ruma::events::room::encrypted::OriginalSyncRoomEncryptedEvent;
 use matrix_sdk::ruma::serde::Raw;
+use matrix_sdk::ruma::{OwnedEventId, OwnedRoomId, RoomId};
+use matrix_sdk::{Client, Room};
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use super::{
     MatrixCoreError, SenderProfileCache, emit_sync_error,
     room_history_backfill_event_from_timeline_event,
 };
-use crate::api::{Event, RoomHistoryBackfillEvent};
+use crate::api::{
+    CoreErrorEvent, Event, Operation, RetryDecryptionRequest, RoomEventsDecrypted,
+    RoomHistoryBackfillEvent,
+};
 use crate::runtime::{EventSender, emit_event};
 
 /// A synced event the SDK could not decrypt, as the event backfill would
@@ -66,23 +75,136 @@ async fn undecrypted_sync_event(
     .await
 }
 
+/// Forwards what the SDK's redecryptor reports: the events it decrypted
+/// once their keys came (to-device, the key backup, a key file), as
+/// `RoomEventsDecrypted`; and, when it may have missed keys or the backup
+/// became available, `DecryptionRetryWanted`, since only the UI knows which
+/// lines it shows. It subscribes when first polled, and then waits.
+pub(crate) async fn room_decryption_task(client: Client, events: EventSender) {
+    let mut reports = pin!(client.event_cache().subscribe_to_decryption_reports());
+    while let Some(report) = reports.next().await {
+        let event = match report {
+            Ok(RedecryptorReport::ResolvedUtds { room_id, events }) => {
+                match room_events_decrypted(&client, &room_id, events).await {
+                    Ok(Some(decrypted)) => Event::RoomEventsDecrypted(decrypted),
+                    Ok(None) => continue,
+                    Err(err) => Event::Error(CoreErrorEvent {
+                        operation: Operation::RetryDecryption,
+                        room_id: Some(room_id.to_string()),
+                        message: err.to_string(),
+                    }),
+                }
+            }
+            Ok(RedecryptorReport::BackupAvailable | RedecryptorReport::Lagging)
+            | Err(BroadcastStreamRecvError::Lagged(_)) => Event::DecryptionRetryWanted,
+        };
+        if events.send(event).is_err() {
+            return;
+        }
+    }
+}
+
+/// The reported events of a room, as backfill would map them, oldest
+/// first; `None` when none is left to report.
+async fn room_events_decrypted(
+    client: &Client,
+    room_id: &RoomId,
+    event_ids: BTreeSet<OwnedEventId>,
+) -> Result<Option<RoomEventsDecrypted>, MatrixCoreError> {
+    // The UI shows no room the client does not know.
+    let Some(room) = client.get_room(room_id) else {
+        return Ok(None);
+    };
+    let (cache, _handles) = room.event_cache().await.map_err(|err| {
+        MatrixCoreError::new(format!(
+            "failed to open the event cache of {room_id}: {err}"
+        ))
+    })?;
+    let mut decrypted: Vec<TimelineEvent> = Vec::with_capacity(event_ids.len());
+    for event_id in &event_ids {
+        let event = cache.find_event(event_id).await.map_err(|err| {
+            MatrixCoreError::new(format!("failed to read {event_id} in {room_id}: {err}"))
+        })?;
+        // The redecryptor reports every event it decrypted, also one it
+        // then found in neither the room's events nor the store, which it
+        // therefore did not replace (`on_resolved_utds` in matrix-sdk's
+        // `event_cache/redecryptor.rs`). Such an event is still the one
+        // that could not be decrypted, or missing: nothing to report.
+        if let Some(event) =
+            event.filter(|event| !matches!(event.kind, TimelineEventKind::UnableToDecrypt { .. }))
+        {
+            decrypted.push(event);
+        }
+    }
+    decrypted.sort_by_key(|event| event.timestamp());
+
+    let redaction_rules = room.clone_info().room_version_rules_or_default().redaction;
+    let mut reaction_index = BTreeMap::new();
+    let mut senders = SenderProfileCache::new(&room);
+    let mut events = Vec::with_capacity(decrypted.len());
+    for event in &decrypted {
+        events.extend(
+            room_history_backfill_event_from_timeline_event(
+                &room,
+                event,
+                &redaction_rules,
+                &mut reaction_index,
+                &mut senders,
+            )
+            .await?,
+        );
+    }
+    Ok((!events.is_empty()).then(|| RoomEventsDecrypted {
+        room_id: room_id.to_string(),
+        events,
+    }))
+}
+
+/// Hands the sessions to the SDK's redecryptor, which tries the room's
+/// events of them again (and asks the key backup for their keys); what it
+/// decrypts `room_decryption_task` reports.
+pub(crate) fn retry_decryption(
+    client: &Client,
+    request: RetryDecryptionRequest,
+) -> Result<(), MatrixCoreError> {
+    let room_id = OwnedRoomId::try_from(request.room_id.as_str()).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix room ID {}: {err}", request.room_id))
+    })?;
+    if request.session_ids.is_empty() {
+        return Err(MatrixCoreError::new(
+            "retrying decryption needs at least one session",
+        ));
+    }
+    client
+        .event_cache()
+        .request_decryption(DecryptionRetryRequest {
+            room_id,
+            utd_session_ids: request.session_ids.into_iter().collect(),
+            refresh_info_session_ids: BTreeSet::new(),
+        });
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
     use matrix_sdk::Client;
-    use matrix_sdk::ruma::events::AnySyncTimelineEvent;
+    use matrix_sdk::ruma::events::{AnySyncTimelineEvent, AnyTimelineEvent};
     use matrix_sdk::ruma::serde::Raw;
     use matrix_sdk::ruma::{OwnedRoomId, RoomVersionId, owned_room_id};
-    use matrix_sdk::test_utils::mocks::MatrixMockServer;
+    use matrix_sdk::test_utils::mocks::{MatrixMockServer, RoomMessagesResponseTemplate};
     use matrix_sdk_base::crypto::types::events::room::encrypted::EncryptedToDeviceEvent;
     use matrix_sdk_test::JoinedRoomBuilder;
     use matrix_sdk_test::event_factory::EventFactory;
 
-    use super::super::register_event_handlers;
+    use super::super::{backfill_room_history, register_event_handlers};
+    use super::{retry_decryption, room_decryption_task};
     use crate::api::{
-        Event, RoomActivity, RoomActivityKind, RoomActivityRelation, RoomUnableToDecryptReason,
+        BackfillRoomHistoryRequest, Event, HistoryFrom, RetryDecryptionRequest, RoomActivity,
+        RoomActivityKind, RoomActivityRelation, RoomActivityUpdateKind, RoomActivityUpdateTarget,
+        RoomEventsDecrypted, RoomHistoryBackfillEvent, RoomUnableToDecryptReason,
     };
     use crate::runtime::RoomSnapshots;
 
@@ -119,7 +241,11 @@ mod tests {
             // As the session does before its first sync.
             bob.event_cache().subscribe().expect("the client is alive");
             let (events_tx, events) = mpsc::channel();
-            register_event_handlers(&bob, events_tx, &RoomSnapshots::default());
+            register_event_handlers(&bob, events_tx.clone(), &RoomSnapshots::default());
+            // As the session does: subscribed before the room's first sync.
+            let mut decryption = Box::pin(room_decryption_task(bob.clone(), events_tx));
+            assert!(futures_util::poll!(decryption.as_mut()).is_pending());
+            tokio::spawn(decryption);
 
             let room_id = owned_room_id!("!secret:example.org");
             let alice_id = alice.user_id().expect("alice is signed in").to_owned();
@@ -226,7 +352,7 @@ mod tests {
                 "type": "m.room.encrypted",
                 "event_id": event_id,
                 "sender": self.alice.user_id().expect("alice is signed in"),
-                "origin_server_ts": 1_700_000_000_000u64,
+                "origin_server_ts": matrix_sdk::ruma::MilliSecondsSinceUnixEpoch::now(),
                 "content": encrypted.content,
             }))
             .expect("an encrypted event")
@@ -255,6 +381,19 @@ mod tests {
                     builder.add_joined_room(room);
                 })
                 .await;
+        }
+
+        /// Waits for the next `RoomEventsDecrypted`, and returns it with the
+        /// events before it.
+        fn decrypted(&self) -> (RoomEventsDecrypted, Vec<Event>) {
+            let mut before = Vec::new();
+            loop {
+                match self.events.recv_timeout(Duration::from_secs(10)) {
+                    Ok(Event::RoomEventsDecrypted(decrypted)) => return (decrypted, before),
+                    Ok(event) => before.push(event),
+                    Err(err) => panic!("no RoomEventsDecrypted ({err}) after {before:#?}"),
+                }
+            }
         }
 
         fn drain(&self) -> Vec<Event> {
@@ -413,6 +552,200 @@ mod tests {
                     Event::RoomActivity(_) | Event::RoomActivityUpdate(_)
                 )),
                 "{events:#?}"
+            );
+        });
+    }
+
+    fn decrypted_message(event: &RoomHistoryBackfillEvent) -> (&RoomActivity, &str) {
+        let RoomHistoryBackfillEvent::Activity(activity) = event else {
+            panic!("not a line: {event:#?}");
+        };
+        let RoomActivityKind::Message(message) = &activity.kind else {
+            panic!("not a message: {activity:#?}");
+        };
+        (activity, message.body.as_str())
+    }
+
+    #[test]
+    fn a_line_that_could_not_be_decrypted_decrypts_when_its_key_comes() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+            let sent = room
+                .alice_sends_first("$late", "m.room.message", text("late"))
+                .await;
+            room.bob_syncs(&[], &[&sent.event]).await;
+            let utd = room.drain();
+            assert!(
+                matches!(
+                    activities(&utd)[..],
+                    [RoomActivity {
+                        kind: RoomActivityKind::UnableToDecrypt(_),
+                        ..
+                    }]
+                ),
+                "{utd:#?}"
+            );
+
+            room.bob_syncs(&[&sent.room_key], &[]).await;
+
+            let (decrypted, before) = room.decrypted();
+            assert!(activities(&before).is_empty(), "{before:#?}");
+            assert_eq!(decrypted.room_id, "!secret:example.org");
+            assert_eq!(decrypted.events.len(), 1, "{decrypted:#?}");
+            let (activity, body) = decrypted_message(&decrypted.events[0]);
+            assert_eq!(body, "late");
+            assert_eq!(activity.activity_id, "event:$late");
+            assert_eq!(activity.activity_id, activities(&utd)[0].activity_id);
+        });
+    }
+
+    #[test]
+    fn a_backfilled_line_that_could_not_be_decrypted_decrypts_when_its_key_comes() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+            let sent = room
+                .alice_sends_first("$old", "m.room.message", text("old"))
+                .await;
+            let mut history: serde_json::Value = sent.event.deserialize_as().expect("json");
+            history["room_id"] = serde_json::json!(room.room_id.as_str());
+            room.server
+                .mock_room_messages()
+                .expect_any_access_token()
+                .ok(RoomMessagesResponseTemplate::default().events(vec![
+                    Raw::<AnyTimelineEvent>::from_json_string(history.to_string())
+                        .expect("a room event"),
+                ]))
+                .mock_once()
+                .mount()
+                .await;
+            let backfill = backfill_room_history(
+                &room.bob,
+                BackfillRoomHistoryRequest {
+                    room_id: room.room_id.to_string(),
+                    from: HistoryFrom::Latest,
+                    limit: 10,
+                },
+            )
+            .await
+            .expect("backfill");
+            assert!(
+                matches!(
+                    &backfill.events[..],
+                    [RoomHistoryBackfillEvent::Activity(activity)]
+                        if matches!(activity.kind, RoomActivityKind::UnableToDecrypt(_))
+                ),
+                "{backfill:#?}"
+            );
+
+            room.bob_syncs(&[&sent.room_key], &[]).await;
+
+            let (decrypted, _) = room.decrypted();
+            assert_eq!(decrypted.events.len(), 1, "{decrypted:#?}");
+            let (activity, body) = decrypted_message(&decrypted.events[0]);
+            assert_eq!(body, "old");
+            assert_eq!(activity.activity_id, "event:$old");
+        });
+    }
+
+    #[test]
+    fn an_edit_that_could_not_be_decrypted_applies_when_its_key_comes() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+            let edit = room
+                .alice_sends_first(
+                    "$edit",
+                    "m.room.message",
+                    serde_json::json!({
+                        "msgtype": "m.text",
+                        "body": "* fixed",
+                        "m.new_content": { "msgtype": "m.text", "body": "fixed" },
+                        "m.relates_to": { "rel_type": "m.replace", "event_id": "$typo" },
+                    }),
+                )
+                .await;
+            let reaction = room
+                .alice_encrypts(
+                    "$reaction",
+                    "m.reaction",
+                    serde_json::json!({
+                        "m.relates_to": {
+                            "rel_type": "m.annotation",
+                            "event_id": "$typo",
+                            "key": "+1",
+                        },
+                    }),
+                )
+                .await;
+            room.bob_syncs(&[], &[&edit.event, &reaction]).await;
+            room.drain();
+
+            room.bob_syncs(&[&edit.room_key], &[]).await;
+
+            let (decrypted, _) = room.decrypted();
+            let kinds = decrypted
+                .events
+                .iter()
+                .map(|event| match event {
+                    RoomHistoryBackfillEvent::ActivityUpdate(update) => {
+                        assert_eq!(
+                            update.target,
+                            RoomActivityUpdateTarget::Event {
+                                event_id: "$typo".to_owned()
+                            }
+                        );
+                        &update.kind
+                    }
+                    RoomHistoryBackfillEvent::Activity(activity) => {
+                        panic!("an edit or a reaction is no line: {activity:#?}")
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                matches!(
+                    kinds[..],
+                    [
+                        RoomActivityUpdateKind::MessageReplaced { .. },
+                        RoomActivityUpdateKind::ReactionAdded { .. }
+                    ]
+                ),
+                "{kinds:#?}"
+            );
+            let RoomActivityUpdateKind::MessageReplaced { body, .. } = kinds[0] else {
+                unreachable!();
+            };
+            assert_eq!(body, "fixed");
+        });
+    }
+
+    #[test]
+    fn retrying_decryption_checks_the_request() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+            let bad_room = retry_decryption(
+                &room.bob,
+                RetryDecryptionRequest {
+                    room_id: "secret".to_owned(),
+                    session_ids: vec!["SESSION".to_owned()],
+                },
+            )
+            .expect_err("not a room ID");
+            assert!(
+                bad_room
+                    .to_string()
+                    .starts_with("invalid Matrix room ID secret"),
+                "{bad_room}"
+            );
+            let no_session = retry_decryption(
+                &room.bob,
+                RetryDecryptionRequest {
+                    room_id: room.room_id.to_string(),
+                    session_ids: Vec::new(),
+                },
+            )
+            .expect_err("no session");
+            assert_eq!(
+                no_session.to_string(),
+                "retrying decryption needs at least one session"
             );
         });
     }

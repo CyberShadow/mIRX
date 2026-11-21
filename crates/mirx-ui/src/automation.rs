@@ -2547,6 +2547,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::RecoverE2ee => "recover_e2ee",
         Operation::SetupE2eeRecovery => "setup_e2ee_recovery",
         Operation::ResetE2eeIdentity => "reset_e2ee_identity",
+        Operation::RetryDecryption => "retry_decryption",
         Operation::Verification => "verification",
         Operation::RequestVerification => "request_verification",
         Operation::Logout => "logout",

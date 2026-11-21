@@ -293,6 +293,98 @@ fn apply_room_history_backfill_event(state: &mut WindowState, backfill: RoomHist
     prune_decoded_images(state);
 }
 
+/// Lines that could not be decrypted become their messages, in place;
+/// decrypted edits and reactions apply. A line that now names you raises
+/// its window to a highlight, but it is not news: no flash, no tip. Each
+/// room view that changes is taken mutably (which redraws it) only then:
+/// a big key import reports many events nothing shows.
+fn apply_room_events_decrypted(state: &mut WindowState, decrypted: RoomEventsDecrypted) {
+    let room_id = decrypted.room_id;
+    if state.model.room_views.get(&room_id).is_none() {
+        return;
+    }
+    for event in decrypted.events {
+        match event {
+            RoomHistoryBackfillEvent::Activity(activity) => {
+                assert_eq!(
+                    activity.room_id, room_id,
+                    "a decrypted line of another room"
+                );
+                let event_id = room_activity_event_id(&activity)
+                    .expect("a decrypted activity is an event's")
+                    .to_owned();
+                // Shown as a message already (the live handler decrypted
+                // it), or not shown at all.
+                if !state.model.room_views[&room_id].shows_undecrypted(&event_id) {
+                    continue;
+                }
+                if activity.highlight {
+                    raise_decrypted_highlight(state, &activity);
+                }
+                if state.model.last_activity.as_ref().is_some_and(|last| {
+                    last.room_id == room_id && last.event_id.as_deref() == Some(&event_id)
+                }) {
+                    state.model.last_activity = last_activity_from_room_activity(&activity);
+                }
+                state
+                    .model
+                    .room_views
+                    .get_mut(&room_id)
+                    .expect("the room view was there")
+                    .apply_decrypted(*activity);
+            }
+            RoomHistoryBackfillEvent::ActivityUpdate(update) => {
+                assert_eq!(
+                    update.room_id, room_id,
+                    "a decrypted update of another room"
+                );
+                apply_room_activity_update_event(state, update);
+            }
+        }
+    }
+}
+
+fn raise_decrypted_highlight(state: &mut WindowState, activity: &RoomActivity) {
+    let target_view_id = room_activity_target_view_id(activity);
+    if state.active_view == target_view_id {
+        return;
+    }
+    let Some(mode) = sendable_room_by_id(&state.model.rooms, &activity.room_id)
+        .map(joined_room_notification_mode)
+    else {
+        return;
+    };
+    raise_view_activity(
+        state,
+        target_view_id,
+        notifications::room_activity_level(ViewActivityLevel::Highlight, mode),
+    );
+}
+
+/// Asks the core to try again to decrypt what every room shows that could
+/// not be decrypted. Only a session can.
+fn retry_decryption_of_shown_lines(state: &mut WindowState) -> Result<(), String> {
+    if !can_fetch_room_events(state) {
+        return Ok(());
+    }
+    let requests = state
+        .model
+        .room_views
+        .iter()
+        .filter_map(|(room_id, view)| {
+            let session_ids = view.undecrypted_session_ids();
+            (!session_ids.is_empty()).then(|| RetryDecryptionRequest {
+                room_id: room_id.clone(),
+                session_ids: session_ids.into_iter().collect(),
+            })
+        })
+        .collect::<Vec<_>>();
+    for request in requests {
+        enqueue_command(state, Command::RetryDecryption(request))?;
+    }
+    Ok(())
+}
+
 /// The room's history load failed. An error for a room that is not loading
 /// (it was left, or the user cleared it meanwhile) changes nothing.
 fn apply_backfill_room_history_error(state: &mut WindowState, room_id: &str, message: String) {
@@ -551,6 +643,8 @@ pub(super) fn apply_core_event(
         Event::RoomActivity(activity) => return Ok(apply_room_activity_event(state, *activity)),
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
         Event::RoomHistoryBackfill(backfill) => apply_room_history_backfill_event(state, backfill),
+        Event::RoomEventsDecrypted(decrypted) => apply_room_events_decrypted(state, decrypted),
+        Event::DecryptionRetryWanted => retry_decryption_of_shown_lines(state)?,
         Event::RoomMedia(media) => apply_room_media_event(state, media),
         Event::RoomEvent(fetch) => apply_room_event_fetch(state, fetch),
         Event::PublicRooms(page) => apply_public_rooms_page(state, page)?,
@@ -1108,6 +1202,7 @@ pub(super) fn operation_name(operation: Operation) -> &'static str {
         Operation::RecoverE2ee => "e2ee recovery",
         Operation::SetupE2eeRecovery => "e2ee recovery setup",
         Operation::ResetE2eeIdentity => "e2ee identity reset",
+        Operation::RetryDecryption => "late decryption",
         Operation::Verification => "verification",
         Operation::RequestVerification => "verification request",
         Operation::Logout => "logout",
@@ -5503,5 +5598,321 @@ mod tests {
             assert_eq!(state.model.status, "restoring saved session");
             assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
         });
+    }
+
+    fn decrypted(room_id: &str, events: Vec<RoomHistoryBackfillEvent>) -> Event {
+        Event::RoomEventsDecrypted(RoomEventsDecrypted {
+            room_id: room_id.to_owned(),
+            events,
+        })
+    }
+
+    fn decrypted_line(activity: RoomActivity) -> RoomHistoryBackfillEvent {
+        RoomHistoryBackfillEvent::Activity(Box::new(activity))
+    }
+
+    fn ops_lines(state: &WindowState) -> Vec<String> {
+        project_timeline_rows(&build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+        ))
+    }
+
+    /// Ops, with alice's `$secret` that could not be decrypted between two
+    /// messages.
+    fn undecrypted_state() -> WindowState {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", true)];
+        for event in [
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$before",
+                None,
+                "before",
+                1_700_000_000_000,
+            ),
+            unable_to_decrypt_activity(
+                "!ops:example",
+                "$secret",
+                "@alice:example",
+                1_700_000_060_000,
+            ),
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$after",
+                None,
+                "after",
+                1_700_000_120_000,
+            ),
+        ] {
+            apply_core_event(&mut state, event).unwrap();
+        }
+        state
+    }
+
+    fn alices_secret(body: &str) -> RoomActivity {
+        let mut activity =
+            sent_message_activity("!ops:example", "$secret", None, body, 1_700_000_060_000);
+        let RoomActivityKind::Message(message) = &mut activity.kind else {
+            unreachable!()
+        };
+        message.sender = user_profile("@alice:example");
+        activity
+    }
+
+    #[test]
+    fn a_decrypted_line_takes_the_place_of_the_one_that_could_not_be_decrypted() {
+        let mut state = undecrypted_state();
+        let before = ops_lines(&state);
+        let line = before
+            .iter()
+            .position(|line| line.contains("sent an encrypted message that could not be decrypted"))
+            .expect("the line that could not be decrypted");
+        let arrival = state.model.room_views["!ops:example"]
+            .arrivals
+            .of("event:$secret")
+            .expect("the line arrived");
+        let revision = state.model.room_views.revision("!ops:example");
+
+        apply_core_event(
+            &mut state,
+            decrypted(
+                "!ops:example",
+                vec![decrypted_line(alices_secret("the plan"))],
+            ),
+        )
+        .unwrap();
+
+        let after = ops_lines(&state);
+        assert_eq!(after.len(), before.len(), "{after:#?}");
+        for (index, (after, before)) in after.iter().zip(&before).enumerate() {
+            if index == line {
+                assert!(after.ends_with("<@alice:example> the plan"), "{after}");
+            } else {
+                assert_eq!(after, before);
+            }
+        }
+        let view = &state.model.room_views["!ops:example"];
+        assert_eq!(view.arrivals.of("event:$secret"), Some(arrival));
+        view.assert_arrivals_consistent();
+        assert_ne!(state.model.room_views.revision("!ops:example"), revision);
+
+        // Reported again (the SDK refreshed its encryption info): the
+        // message stays, and the window is not redrawn.
+        let revision = state.model.room_views.revision("!ops:example");
+        apply_core_event(
+            &mut state,
+            decrypted(
+                "!ops:example",
+                vec![decrypted_line(alices_secret("the plan"))],
+            ),
+        )
+        .unwrap();
+        assert_eq!(ops_lines(&state), after);
+        assert_eq!(state.model.room_views.revision("!ops:example"), revision);
+    }
+
+    #[test]
+    fn a_decrypted_thread_message_moves_into_its_thread() {
+        let mut state = undecrypted_state();
+        assert!(state.model.room_views["!ops:example"].threads.is_empty());
+        let mut in_thread = alices_secret("in the thread");
+        in_thread.relation = Some(thread_relation("$before"));
+
+        apply_core_event(
+            &mut state,
+            decrypted("!ops:example", vec![decrypted_line(in_thread)]),
+        )
+        .unwrap();
+
+        let view = &state.model.room_views["!ops:example"];
+        assert!(view.threads.contains_key("$before"), "{:#?}", view.threads);
+        view.assert_arrivals_consistent();
+    }
+
+    #[test]
+    fn a_quoted_message_that_could_not_be_decrypted_is_quoted_once_decrypted() {
+        let mut state = reply_quote_state("$secret");
+        let Event::RoomActivity(utd) = unable_to_decrypt_activity(
+            "!ops:example",
+            "$secret",
+            "@alice:example",
+            1_600_000_000_000,
+        ) else {
+            unreachable!()
+        };
+        state
+            .model
+            .room_views
+            .get_mut("!ops:example")
+            .unwrap()
+            .reply_targets
+            .insert("$secret".to_owned(), ReplyTargetState::Loaded(utd));
+        assert_eq!(
+            state.model.room_views["!ops:example"].undecrypted_session_ids(),
+            BTreeSet::from(["SESSIONID".to_owned()])
+        );
+
+        let mut target = alices_secret("from long ago");
+        target.timestamp_ms = 1_600_000_000_000;
+        apply_core_event(
+            &mut state,
+            decrypted("!ops:example", vec![decrypted_line(target)]),
+        )
+        .unwrap();
+
+        let lines = ops_lines(&state);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("> <@alice:example> from long ago")),
+            "{lines:#?}"
+        );
+        assert!(
+            state.model.room_views["!ops:example"]
+                .undecrypted_session_ids()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn decrypted_events_of_lines_not_shown_change_nothing() {
+        let mut state = undecrypted_state();
+        let revision = state.model.room_views.revision("!ops:example");
+        let lines = ops_lines(&state);
+
+        let mut elsewhere = alices_secret("trimmed long ago");
+        let RoomActivityKind::Message(message) = &mut elsewhere.kind else {
+            unreachable!()
+        };
+        message.event_id = Some("$gone".to_owned());
+        elsewhere.activity_id = "event:$gone".to_owned();
+        apply_core_event(
+            &mut state,
+            decrypted("!ops:example", vec![decrypted_line(elsewhere)]),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            decrypted("!unknown:example", vec![decrypted_line(alices_secret("x"))]),
+        )
+        .unwrap();
+
+        assert_eq!(ops_lines(&state), lines);
+        assert_eq!(state.model.room_views.revision("!ops:example"), revision);
+        assert!(state.model.room_views.get("!unknown:example").is_none());
+    }
+
+    #[test]
+    fn a_decrypted_highlight_raises_its_inactive_window() {
+        let mut state = undecrypted_state();
+        state.active_view = ViewId::Status;
+        state.room_activity.clear();
+
+        apply_core_event(
+            &mut state,
+            decrypted(
+                "!ops:example",
+                vec![decrypted_line(highlighted(alices_secret("you there?")))],
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state.room_activity.get(&room_view_id("!ops:example")),
+            Some(&ViewActivityLevel::Highlight)
+        );
+    }
+
+    #[test]
+    fn decrypted_reactions_and_edits_apply_once() {
+        let mut state = undecrypted_state();
+        apply_core_event(
+            &mut state,
+            decrypted("!ops:example", vec![decrypted_line(alices_secret("tpyo"))]),
+        )
+        .unwrap();
+        let Event::RoomActivityUpdate(reaction) = incoming_reaction_added(
+            "!ops:example",
+            "$secret",
+            "$reaction",
+            "@bob:example",
+            "+1",
+            1_700_000_300_000,
+        ) else {
+            unreachable!()
+        };
+        let Event::RoomActivityUpdate(edit) = incoming_replaced(
+            "!ops:example",
+            "$secret",
+            "$edit",
+            RoomMessagePresentationKind::Text,
+            "typo",
+        ) else {
+            unreachable!()
+        };
+        let updates = vec![
+            RoomHistoryBackfillEvent::ActivityUpdate(edit),
+            RoomHistoryBackfillEvent::ActivityUpdate(reaction),
+        ];
+
+        apply_core_event(&mut state, decrypted("!ops:example", updates.clone())).unwrap();
+        let once = ops_lines(&state);
+        apply_core_event(&mut state, decrypted("!ops:example", updates)).unwrap();
+
+        assert_eq!(ops_lines(&state), once);
+        assert!(
+            once.contains(&"[22:14] <@alice:example> typo (edited)".to_owned()),
+            "{once:#?}"
+        );
+        let view = &state.model.room_views["!ops:example"];
+        assert_eq!(view.reactions_by_target["$secret"].len(), 1);
+    }
+
+    #[test]
+    fn a_retry_asks_for_the_sessions_each_room_shows_undecrypted() {
+        let mut state = undecrypted_state();
+        let (sender, _commands) = inert_command_sender();
+        state.command_sender = Some(sender);
+        state
+            .model
+            .rooms
+            .push(room("!quiet:example", "Quiet", true));
+        apply_core_event(&mut state, timeline("!quiet:example", "plain")).unwrap();
+        // A second line of the same session, and one with none.
+        apply_core_event(
+            &mut state,
+            unable_to_decrypt_activity(
+                "!ops:example",
+                "$again",
+                "@alice:example",
+                1_700_000_180_000,
+            ),
+        )
+        .unwrap();
+        let Event::RoomActivity(mut no_session) =
+            unable_to_decrypt_activity("!ops:example", "$olm", "@alice:example", 1_700_000_240_000)
+        else {
+            unreachable!()
+        };
+        let RoomActivityKind::UnableToDecrypt(utd) = &mut no_session.kind else {
+            unreachable!()
+        };
+        utd.session_id = None;
+        apply_core_event(&mut state, Event::RoomActivity(no_session)).unwrap();
+
+        apply_core_event(&mut state, Event::DecryptionRetryWanted).unwrap();
+        assert!(state.recorded_commands.is_empty(), "no session to ask");
+
+        state.model.connection = ConnectionState::Syncing;
+        apply_core_event(&mut state, Event::DecryptionRetryWanted).unwrap();
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::RetryDecryption(RetryDecryptionRequest {
+                room_id: "!ops:example".to_owned(),
+                session_ids: vec!["SESSIONID".to_owned()],
+            })]
+        );
     }
 }

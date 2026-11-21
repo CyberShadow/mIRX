@@ -143,6 +143,7 @@ fn error_room_id(command: &Command) -> Option<&str> {
         Command::BackfillRoomHistory(request) => Some(&request.room_id),
         Command::FetchRoomMedia(request) => Some(&request.room_id),
         Command::FetchRoomEvent(request) => Some(&request.room_id),
+        Command::RetryDecryption(request) => Some(&request.room_id),
         Command::Login(_)
         | Command::CancelLogin
         | Command::RestoreSession(_)

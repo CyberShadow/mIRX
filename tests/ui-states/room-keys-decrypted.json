@@ -1,0 +1,131 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!encrypted:example.org",
+        "display_name": "Encrypted",
+        "topic": null,
+        "encrypted": true,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!alpha:example.org",
+        "display_name": "Alpha",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!encrypted:example.org",
+      "members": [
+        {
+          "user_id": "@alice:example.org",
+          "display_name": "Alice",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@bob:example.org",
+          "display_name": "Bob",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        }
+      ]
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!encrypted:example.org",
+      "activity_id": "event:$question:example.org",
+      "timestamp_ms": 1710000000000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$question:example.org",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example.org",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "when do we ship?",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!encrypted:example.org",
+      "activity_id": "event:$answer:example.org",
+      "timestamp_ms": 1710000060000,
+      "highlight": false,
+      "relation": {
+        "type": "reply",
+        "in_reply_to_event_id": "$question:example.org"
+      },
+      "kind": {
+        "type": "unable_to_decrypt",
+        "event_id": "$answer:example.org",
+        "sender": {
+          "user_id": "@bob:example.org",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "session_id": "SESSION-B",
+        "reason": "missing_megolm_session"
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!encrypted:example.org",
+      "activity_id": "event:$later:example.org",
+      "timestamp_ms": 1710000120000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "unable_to_decrypt",
+        "event_id": "$later:example.org",
+        "sender": {
+          "user_id": "@bob:example.org",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "session_id": "SESSION-C",
+        "reason": "missing_megolm_session"
+      }
+    }
+  }
+]

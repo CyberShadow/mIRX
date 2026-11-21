@@ -94,6 +94,11 @@ pub enum Command {
     CancelVerification(VerificationFlowId),
     ConfirmVerificationSas(VerificationFlowId),
     RejectVerificationSas(VerificationFlowId),
+    /// Asks the SDK to try again to decrypt the room's events of these
+    /// sessions: the answer to `DecryptionRetryWanted` for the lines that
+    /// could not be decrypted. Acked at once; what decrypts arrives later
+    /// as `RoomEventsDecrypted`.
+    RetryDecryption(RetryDecryptionRequest),
     Logout,
     Shutdown,
 }
@@ -1328,6 +1333,29 @@ pub struct RoomHistoryBackfill {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetryDecryptionRequest {
+    pub room_id: String,
+    /// The Megolm sessions of the room's lines that could not be decrypted
+    /// (`RoomUnableToDecryptActivity::session_id`); at least one.
+    pub session_ids: Vec<String>,
+}
+
+/// Events of a room the core could not decrypt when they arrived and now
+/// could, because their keys came: each as backfill would map it, oldest
+/// first. An `Activity` is the line of the same event that could not be
+/// decrypted, which it replaces; an `ActivityUpdate` is a decrypted edit or
+/// reaction. An event can be reported again, decrypted all along, when the
+/// SDK refreshes its encryption info: replacing only lines that could not
+/// be decrypted and applying updates idempotently makes that a no-op.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomEventsDecrypted {
+    pub room_id: String,
+    pub events: Vec<RoomHistoryBackfillEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoomActivityUpdateTarget {
     Transaction { transaction_id: String },
@@ -1944,6 +1972,8 @@ pub enum Operation {
     SetupE2eeRecovery,
     RecoverE2ee,
     ResetE2eeIdentity,
+    /// Decrypting events late, as their keys come.
+    RetryDecryption,
     /// Answering a verification: accept, cancel, confirm or reject.
     Verification,
     RequestVerification,
@@ -2003,6 +2033,12 @@ pub enum Event {
     RoomActivity(Box<RoomActivity>),
     RoomActivityUpdate(RoomActivityUpdate),
     RoomHistoryBackfill(RoomHistoryBackfill),
+    RoomEventsDecrypted(RoomEventsDecrypted),
+    /// Keys may have come that the core cannot match to events: the key
+    /// backup became available (after `RecoverE2ee`, or on another
+    /// session), or the core missed key notices. Answer with
+    /// `RetryDecryption` for the lines shown that could not be decrypted.
+    DecryptionRetryWanted,
     RoomMedia(RoomMedia),
     RoomEvent(RoomEventFetch),
     PublicRooms(PublicRoomsPage),
@@ -2078,6 +2114,34 @@ mod tests {
 
     fn span(start: usize, end: usize, style: TextStyle) -> TextStyleSpan {
         TextStyleSpan { start, end, style }
+    }
+
+    #[test]
+    fn late_decryption_events_round_trip() {
+        let decrypted = Event::RoomEventsDecrypted(RoomEventsDecrypted {
+            room_id: "!room:example.org".to_owned(),
+            events: Vec::new(),
+        });
+        let json = serde_json::to_string(&decrypted).unwrap();
+        assert_eq!(
+            json,
+            r#"{"RoomEventsDecrypted":{"room_id":"!room:example.org","events":[]}}"#
+        );
+        assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), decrypted);
+        let json = serde_json::to_string(&Event::DecryptionRetryWanted).unwrap();
+        assert_eq!(json, r#""DecryptionRetryWanted""#);
+        assert_eq!(
+            serde_json::from_str::<Event>(&json).unwrap(),
+            Event::DecryptionRetryWanted
+        );
+        assert!(
+            serde_json::from_value::<RetryDecryptionRequest>(serde_json::json!({
+                "room_id": "!room:example.org",
+                "session_ids": [],
+                "extra": true,
+            }))
+            .is_err()
+        );
     }
 
     #[test]

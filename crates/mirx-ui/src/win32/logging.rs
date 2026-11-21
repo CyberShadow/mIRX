@@ -661,6 +661,27 @@ mod tests {
     }
 
     #[test]
+    fn a_line_that_decrypts_late_is_not_written_again() {
+        let mut diff = LogDiff::new(FROM);
+        let undecrypted = message_row(
+            "event:$secret",
+            TimelineMessageSendState::Sent,
+            "* alice sent an encrypted message that could not be decrypted",
+            Vec::new(),
+        );
+        assert_eq!(diff.lines(&[undecrypted], false).len(), 1);
+        // The same activity, decrypted in place: the log keeps what the
+        // window showed when the line arrived.
+        let decrypted = message_row(
+            "event:$secret",
+            TimelineMessageSendState::Sent,
+            "<alice> the plan",
+            Vec::new(),
+        );
+        assert!(diff.lines(&[decrypted], false).is_empty());
+    }
+
+    #[test]
     fn a_message_is_logged_once_it_is_sent() {
         let mut diff = LogDiff::new(FROM);
         let pending = message_row(
