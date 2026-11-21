@@ -414,11 +414,47 @@ struct MockFaults {
     drop_syncs: AtomicUsize,
     /// Every `/send/` request fails while this is set.
     send_down: AtomicBool,
+    /// Every `/login` request is held while this is set.
+    hold_login: AtomicBool,
+    /// The requests held unanswered, their connections open, while the
+    /// mock goes on answering the others.
+    held: Mutex<Vec<std::net::TcpStream>>,
+}
+
+impl MockBackfillHomeserver {
+    fn held(&self) -> usize {
+        self.faults.held.lock().expect("the held requests").len()
+    }
+
+    fn wait_for_held(&self, count: usize) -> Result<(), Box<dyn std::error::Error>> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while self.held() < count {
+            if Instant::now() >= deadline {
+                return Err(format!("the mock holds {} requests, not {count}", self.held()).into());
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
+        Ok(())
+    }
+
+    /// Answers every held request with `body`: the held `/messages`.
+    fn answer_held_messages(&self, body: &serde_json::Value) {
+        for mut stream in self
+            .faults
+            .held
+            .lock()
+            .expect("the held requests")
+            .drain(..)
+        {
+            respond_json(&mut stream, 200, body);
+        }
+    }
 }
 
 /// How the mock homeserver answers `/messages` history requests.
 enum MockMessages {
-    /// Never answer, so the request stays in flight for the whole test.
+    /// Hold every request unanswered (see `MockFaults::held`) until the
+    /// test answers it.
     Hang,
     /// Answer every request with this response body.
     Respond(serde_json::Value),
@@ -583,6 +619,14 @@ fn spawn_mock_homeserver_with_auth(
             }
 
             if path == "/_matrix/client/v3/login" {
+                if mock_faults.hold_login.load(Ordering::SeqCst) {
+                    mock_faults
+                        .held
+                        .lock()
+                        .expect("the held requests")
+                        .push(stream);
+                    continue;
+                }
                 respond_json(
                     &mut stream,
                     200,
@@ -873,7 +917,13 @@ fn spawn_mock_homeserver_with_auth(
                 || path.contains("/rooms/!beta:example/messages")
             {
                 match &messages {
-                    MockMessages::Hang => std::thread::sleep(Duration::from_secs(60)),
+                    MockMessages::Hang => {
+                        mock_faults
+                            .held
+                            .lock()
+                            .expect("the held requests")
+                            .push(stream);
+                    }
                     MockMessages::Respond(body) => respond_json(&mut stream, 200, body),
                 }
                 continue;
@@ -3536,6 +3586,122 @@ fn file_disconnect_and_connect_toggle_sync() -> Result<(), Box<dyn std::error::E
         &app,
         "* /quit: Matrix has no quit message"
     )?);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// mirx restored and syncing against a mock homeserver that holds every
+/// history request, with Beta's history asked for and held.
+fn app_with_a_held_history_request()
+-> Result<(PathBuf, MockBackfillHomeserver, GuiTestApp), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_homeserver(MockMessages::Hang, vec![])?;
+    let app = launch_automation_app(&local_app_data)?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    app.select_room("!beta:example")?;
+    app.trigger_active_timeline_history_backfill()?;
+    server.wait_for_held(1)?;
+    Ok((local_app_data, server, app))
+}
+
+/// A history request the server does not answer holds up no other room:
+/// a join and a line go meanwhile.
+#[test]
+fn a_hung_history_request_holds_up_no_join_or_send() -> Result<(), Box<dyn std::error::Error>> {
+    let (local_app_data, server, app) = app_with_a_held_history_request()?;
+    let plain = room_identity("!plain:example");
+
+    // No `wait_idle` while the request is held: idle means every answer
+    // came.
+    app.set_compose_text("/join #plain:example")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_for_ui_state(
+        "the joined room active",
+        Duration::from_secs(10),
+        |ui_state| ui_state.mdi.active == plain,
+    )?;
+    app.set_compose_text("hello")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_for_ui_state("the line sent", Duration::from_secs(10), |ui_state| {
+        view_lines_containing(find_view(ui_state, &plain), "hello")
+            .iter()
+            .any(|line| line.ends_with("> hello"))
+    })?;
+    let ui_state = app.dump_ui_state()?;
+    let (room, _) = find_room_state_and_view(&ui_state, "!beta:example");
+    assert_eq!(
+        room.history_backfill,
+        UiRoomHistoryBackfillState::Loading { from: None }
+    );
+
+    let older = |event_id: &str, body: &str, ts: u64| {
+        serde_json::json!({
+            "content": { "msgtype": "m.text", "body": body },
+            "event_id": event_id,
+            "origin_server_ts": ts,
+            "sender": "@bob:example",
+            "type": "m.room.message"
+        })
+    };
+    server.answer_held_messages(&serde_json::json!({
+        "start": "s-current",
+        "chunk": [
+            older("$older-two", "older two", 1_699_999_060_000),
+            older("$older-one", "older one", 1_699_999_000_000),
+        ]
+    }));
+    app.wait_idle(Duration::from_secs(10))?;
+    let ui_state = app.dump_ui_state()?;
+    let view = find_view(&ui_state, &room_identity("!beta:example"));
+    assert_eq!(view_lines_containing(view, "older one").len(), 1);
+    assert_eq!(view_lines_containing(view, "older two").len(), 1);
+    assert_eq!(app.dump_model()?.last_error, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Exiting never waits for the server: mirx is gone, and no hidden
+/// process stays behind waiting for an answer.
+#[test]
+fn exit_with_a_hung_request_does_not_leave_mirx_running() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (local_app_data, _server, app) = app_with_a_held_history_request()?;
+    let status = app.close(Duration::from_secs(10))?;
+    assert!(status.success(), "mirx exited with {status}");
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// File > Disconnect cancels a sign-in the server does not answer, as
+/// mIRC's cancels a connect in progress.
+#[test]
+fn file_disconnect_cancels_a_hung_sign_in() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    server.faults.hold_login.store(true, Ordering::SeqCst);
+    let app = launch_automation_app(&local_app_data)?;
+
+    let (dialog, menu_thread) = open_select_server(&app, [&server.base_url, "alice", "secret"])?;
+    submit_select_server(dialog, menu_thread)?;
+    server.wait_for_held(1)?;
+    assert_eq!(app.dump_model()?.connection, "signing_in");
+    invoke_account_menu_command(&app, MENU_ID_FILE_DISCONNECT)?;
+    app.wait_for_connection("signed_out", Duration::from_secs(10))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(status_view_contains(&app, "* Sign-in cancelled")?);
+    assert_eq!(app.dump_model()?.last_error, None);
+
+    server.faults.hold_login.store(false, Ordering::SeqCst);
+    let (dialog, menu_thread) = open_select_server(&app, [&server.base_url, "alice", "secret"])?;
+    submit_select_server(dialog, menu_thread)?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
