@@ -16,6 +16,15 @@ generated_dir=
 diff_dir=
 keep_tmpdir=0
 updated_cases=()
+# The prefix of the 144-dpi cases, set up when one runs.
+dpi144_prefix=
+
+# Cases re-run at 144 dpi (150% display scaling) in a prefix of their own,
+# as <case>-dpi144 with their own baselines: the base case's state and
+# expectations, the default frame size (scaled, clamped to the screen) and
+# --expect-dpi 144.
+dpi144_cases=(multi-room image-message-loaded room-list-listing compose-color-index
+  dialog-options-display dialog-colors dialog-sign-out-session)
 
 die() {
   echo "ui-snapshot: $*" >&2
@@ -134,6 +143,9 @@ cleanup_app() {
 
 cleanup() {
   cleanup_app
+  if [[ -n "${dpi144_prefix:-}" ]]; then
+    WINEPREFIX=$dpi144_prefix wineserver -k >/dev/null 2>&1 || true
+  fi
   if [[ "${started_xvfb:-0}" -eq 1 ]] && [[ -n "${xvfb_pid:-}" ]]; then
     kill "$xvfb_pid" >/dev/null 2>&1 || true
     wait "$xvfb_pid" 2>/dev/null || true
@@ -157,6 +169,31 @@ configure_snapshot_prefix() {
     || die "failed to set Wine's Decorated=N"
   wine reg add 'HKCU\Control Panel\Desktop' /v CursorBlinkRate /d -1 /f >/dev/null 2>&1 \
     || die "failed to set CursorBlinkRate=-1"
+}
+
+# A snapshot prefix whose screen is 144 dpi. Wine reads LogPixels when its
+# server starts, so the server set up with it is stopped.
+configure_dpi144_prefix() {
+  dpi144_prefix=$tmpdir/wineprefix-dpi144
+  (
+    export WINEPREFIX=$dpi144_prefix
+    ensure_wineprefix "$WINEPREFIX"
+    configure_snapshot_prefix
+    wine reg add 'HKCU\Control Panel\Desktop' /v LogPixels /t REG_DWORD /d 144 /f >/dev/null 2>&1 \
+      || die "failed to set LogPixels=144"
+    wineserver -k
+    wineserver -w
+  )
+}
+
+is_dpi144_case() {
+  local base=${1%-dpi144}
+  [[ $1 == "$base-dpi144" ]] || return 1
+  local listed=
+  for listed in "${dpi144_cases[@]}"; do
+    [[ $listed == "$base" ]] && return 0
+  done
+  return 1
 }
 
 # Cargo builds are incremental, so this rebuilds exactly the stale binaries.
@@ -3151,10 +3188,17 @@ configure_case_expectations() {
 }
 
 run_case() {
-  local state_path=$1
+  local case_name=$1
+  local base_case=$case_name
+  local prefix=$WINEPREFIX
+  local dpi_expect_args=()
+  if is_dpi144_case "$case_name"; then
+    base_case=${case_name%-dpi144}
+    prefix=$dpi144_prefix
+    dpi_expect_args=(--expect-dpi 144)
+  fi
+  local state_path="$states_dir/$base_case.json"
   local state_path_win
-  local case_name=${state_path##*/}
-  case_name=${case_name%.json}
   local baseline_png="$baseline_dir/$case_name.png"
   local generated_png="$generated_dir/$case_name.png"
   local diff_png="$diff_dir/$case_name.diff.png"
@@ -3167,7 +3211,10 @@ run_case() {
   local action=
   local action_path_win=
 
-  configure_case_expectations "$case_name"
+  configure_case_expectations "$base_case"
+  if [[ $case_name != "$base_case" ]] && [[ -n "${case_frame_size:-}" ]]; then
+    die "$case_name: a 144-dpi case lays out at the default frame size, but $base_case sets one"
+  fi
   cleanup_app
   state_path_win=$(unix_to_wine_path "$state_path")
   driver_args=(
@@ -3256,17 +3303,19 @@ run_case() {
     driver_args+=(--expect-dialog-title "$expect_dialog_title")
   fi
   driver_args+=("${frame_bar_hidden_expect_args[@]}")
+  driver_args+=("${dpi_expect_args[@]}")
 
   ui_args=(--render-state "$state_path_win" --automation)
   if [[ -n "${case_frame_size:-}" ]]; then
     ui_args+=(--frame-size "$case_frame_size")
   fi
 
-  wine "$ui_exe" "${ui_args[@]}" >/dev/null 2>&1 &
+  # The driver talks to the app through the prefix's wineserver.
+  WINEPREFIX=$prefix wine "$ui_exe" "${ui_args[@]}" >/dev/null 2>&1 &
   app_pid=$!
 
   set +e
-  wine "$driver_exe" "${driver_args[@]}" >"$driver_stdout" 2>"$driver_stderr"
+  WINEPREFIX=$prefix wine "$driver_exe" "${driver_args[@]}" >"$driver_stdout" 2>"$driver_stderr"
   driver_status=$?
   set -e
 
@@ -3373,35 +3422,40 @@ main() {
   shopt -u nullglob
   [[ ${#state_files[@]} -gt 0 ]] || die "no state files found in $states_dir"
 
+  local cases=()
+  local case_name=
   if [[ $# -gt 0 ]]; then
-    local requested=()
-    local case_name=
     for case_name in "$@"; do
-      local state_path="$states_dir/$case_name.json"
-      [[ -f "$state_path" ]] || die "unknown snapshot case: $case_name"
-      requested+=("$state_path")
+      is_dpi144_case "$case_name" || [[ -f "$states_dir/$case_name.json" ]] \
+        || die "unknown snapshot case: $case_name"
+      cases+=("$case_name")
     done
-    state_files=("${requested[@]}")
   else
-    local discovered=()
     local state_path=
     for state_path in "${state_files[@]}"; do
-      local case_name=${state_path##*/}
+      case_name=${state_path##*/}
       case_name=${case_name%.json}
       if is_default_snapshot_case "$case_name"; then
-        discovered+=("$state_path")
+        cases+=("$case_name")
       fi
     done
-    state_files=("${discovered[@]}")
+    for case_name in "${dpi144_cases[@]}"; do
+      cases+=("$case_name-dpi144")
+    done
   fi
+  for case_name in "${cases[@]}"; do
+    if is_dpi144_case "$case_name"; then
+      configure_dpi144_prefix
+      break
+    fi
+  done
 
   # Every case runs; failures are collected and reported together.
   local failed_cases=()
   updated_cases=()
-  for state_path in "${state_files[@]}"; do
-    local case_name=${state_path##*/}
-    if ! run_case "$state_path"; then
-      failed_cases+=("${case_name%.json}")
+  for case_name in "${cases[@]}"; do
+    if ! run_case "$case_name"; then
+      failed_cases+=("$case_name")
     fi
   done
 
@@ -3413,7 +3467,7 @@ main() {
     return 1
   fi
   if [[ ${#updated_cases[@]} -eq 0 ]]; then
-    echo "all ${#state_files[@]} UI snapshot cases passed"
+    echo "all ${#cases[@]} UI snapshot cases passed"
   fi
 }
 
