@@ -3164,6 +3164,38 @@ configure_case_expectations() {
         --expect-no-navigation-text 'diagram.png'
       )
       ;;
+    stickers-and-polls)
+      expect_selected='!fun:example.org'
+      expect_active_view='room:!fun:example.org'
+      room_expect_args=(
+        --expect-room '!fun:example.org'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!fun:example.org::"type":"sticker"'
+        --expect-room-activity '!fun:example.org::"media_state":{"type":"loaded","width":64,"height":48}'
+        --expect-room-activity '!fun:example.org::"type":"poll"'
+        --expect-room-activity '!fun:example.org::"type":"verification_request"'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!fun:example.org::[16:00] * Bob sent sticker: a waving cat'
+        --expect-room-view '!fun:example.org::[16:01] * Bob started a poll: Lunch? 1) Pizza 2) Sushi 3) Salad'
+        --expect-room-view '!fun:example.org::[16:02] * Bob ended the poll "Lunch?": The poll has ended. Top answer: Pizza'
+        --expect-room-view '!fun:example.org::[16:03] * Bob sent unsupported m.location: Big Ben, London'
+        --expect-room-view '!fun:example.org::[16:04] * Bob wants to verify @alice:example.org'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'synced 1 room(s)'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!fun:example.org::Fun'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!fun:example.org'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!fun:example.org'
+      ;;
     image-message-failed)
       expect_selected='!images:example.org'
       expect_active_view='room:!images:example.org'

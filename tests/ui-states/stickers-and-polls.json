@@ -1,0 +1,248 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!fun:example.org",
+        "display_name": "Fun",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!fun:example.org",
+      "activity_id": "event:$sticker:example.org",
+      "timestamp_ms": 1710000000000,
+      "highlight": false,
+      "kind": {
+        "type": "sticker",
+        "event_id": "$sticker:example.org",
+        "sender": {
+          "user_id": "@bob:example.org",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "body": "a waving cat",
+        "filename": null,
+        "source": {
+          "type": "plain",
+          "url": "mxc://example.org/sticker"
+        },
+        "info": {
+          "mimetype": "image/png",
+          "size": 4321,
+          "width": 64,
+          "height": 48,
+          "is_animated": false,
+          "thumbnail_source": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomMedia": {
+      "room_id": "!fun:example.org",
+      "activity_id": "event:$sticker:example.org",
+      "event_id": "$sticker:example.org",
+      "kind": {
+        "type": "loaded",
+        "format": {
+          "type": "thumbnail",
+          "width": 160,
+          "height": 120
+        },
+        "bytes": [
+          137,
+          80,
+          78,
+          71,
+          13,
+          10,
+          26,
+          10,
+          0,
+          0,
+          0,
+          13,
+          73,
+          72,
+          68,
+          82,
+          0,
+          0,
+          0,
+          64,
+          0,
+          0,
+          0,
+          48,
+          1,
+          3,
+          0,
+          0,
+          0,
+          155,
+          133,
+          238,
+          92,
+          0,
+          0,
+          0,
+          3,
+          80,
+          76,
+          84,
+          69,
+          47,
+          127,
+          95,
+          199,
+          24,
+          21,
+          91,
+          0,
+          0,
+          0,
+          14,
+          73,
+          68,
+          65,
+          84,
+          24,
+          211,
+          99,
+          96,
+          24,
+          5,
+          67,
+          9,
+          0,
+          0,
+          1,
+          176,
+          0,
+          1,
+          135,
+          112,
+          218,
+          158,
+          0,
+          0,
+          0,
+          0,
+          73,
+          69,
+          78,
+          68,
+          174,
+          66,
+          96,
+          130
+        ]
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!fun:example.org",
+      "activity_id": "event:$poll:example.org",
+      "timestamp_ms": 1710000060000,
+      "highlight": false,
+      "kind": {
+        "type": "poll",
+        "event_id": "$poll:example.org",
+        "sender": {
+          "user_id": "@bob:example.org",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "start",
+          "question": "Lunch?",
+          "answers": [
+            "Pizza",
+            "Sushi",
+            "Salad"
+          ],
+          "max_selections": 1,
+          "results_hidden": false
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!fun:example.org",
+      "activity_id": "event:$poll-end:example.org",
+      "timestamp_ms": 1710000120000,
+      "highlight": false,
+      "kind": {
+        "type": "poll",
+        "event_id": "$poll-end:example.org",
+        "sender": {
+          "user_id": "@bob:example.org",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "end",
+          "poll_start_event_id": "$poll:example.org",
+          "text": "The poll has ended. Top answer: Pizza"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!fun:example.org",
+      "activity_id": "event:$location:example.org",
+      "timestamp_ms": 1710000180000,
+      "highlight": false,
+      "kind": {
+        "type": "unsupported_message",
+        "event_id": "$location:example.org",
+        "sender": {
+          "user_id": "@bob:example.org",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "msgtype": "m.location",
+        "body": "Big Ben, London"
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!fun:example.org",
+      "activity_id": "event:$verify:example.org",
+      "timestamp_ms": 1710000240000,
+      "highlight": false,
+      "kind": {
+        "type": "verification_request",
+        "event_id": "$verify:example.org",
+        "sender": {
+          "user_id": "@bob:example.org",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "to": "@alice:example.org"
+      },
+      "relation": null
+    }
+  }
+]
