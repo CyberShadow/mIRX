@@ -63,9 +63,7 @@ pub(super) fn marker_line<'a>(model: &'a UiModel, room_id: &str) -> Option<&'a s
 pub(super) enum MarkerSight {
     /// The window is not the one the user is in: never entered, left, or
     /// mirx minimized. Leaving it moves nothing. The active window is away
-    /// only while mirx is minimized, since activation enters it, or when
-    /// it became active without MDI activating it (`unregister_view_by_child`
-    /// guessing the next window).
+    /// only while mirx is minimized, since activation enters it.
     Away,
     /// Entered, its rule not on screen yet.
     Unseen,

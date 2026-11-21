@@ -995,13 +995,16 @@ pub(super) fn submit_set_read_marker(
 /// newest line goes to the server as the read receipt (`MarkRoomRead`,
 /// `read_receipts::activation_receipt`), which clears the room's unread
 /// counts. The read marker stays: it moves when the user leaves the window
-/// (`line_marker::leave_window`). Returns whether the window had activity.
+/// (`line_marker::leave_window`). Only while connected, as the marker's
+/// move: offline the receipt could only fail, with an error about something
+/// the user did not ask for. Returns whether the window had activity.
 pub(super) fn handle_view_activation(
     state: &mut WindowState,
     view_id: &ViewId,
 ) -> Result<bool, String> {
     let had_activity = state.room_activity.remove(view_id).is_some();
     if let ViewId::Room(_) | ViewId::Thread { .. } = view_id
+        && state.model.connection == ConnectionState::Syncing
         && let Some(event_id) = read_receipts::view_activation_receipt(state, view_id, had_activity)
     {
         let event_id = event_id.to_owned();
@@ -4384,6 +4387,7 @@ mod tests {
     #[test]
     fn activation_of_a_room_unread_from_the_server_sends_its_newest_line() {
         let mut state = test_state();
+        state.model.connection = ConnectionState::Syncing;
         let (sender, _commands) = inert_command_sender();
         state.command_sender = Some(sender);
         // The initial sync's lines come before the rooms are known, so
@@ -4431,6 +4435,33 @@ mod tests {
                 event_id: "$b".to_owned(),
             })]
         );
+    }
+
+    #[test]
+    fn activation_while_not_syncing_sends_no_receipt() {
+        let mut state = test_state();
+        let (sender, _commands) = inert_command_sender();
+        state.command_sender = Some(sender);
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        apply_core_event(
+            &mut state,
+            thread_timeline("!room:example", "$thread-1", "$thread-root", "thread reply"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            room_read_state("!room:example", None, None, false, 2, 0, 0),
+        )
+        .unwrap();
+        assert_ne!(state.model.connection, ConnectionState::Syncing);
+
+        for view_id in [
+            room_view_id("!room:example"),
+            thread_view_id("!room:example", "$thread-root"),
+        ] {
+            assert_eq!(handle_view_activation(&mut state, &view_id), Ok(true));
+        }
+        assert!(state.recorded_commands.is_empty());
     }
 
     #[test]
@@ -4489,6 +4520,7 @@ mod tests {
     #[test]
     fn thread_activation_after_activity_clears_only_thread_activity_and_enqueues_mark_room_read() {
         let mut state = test_state();
+        state.model.connection = ConnectionState::Syncing;
         let (sender, _commands) = inert_command_sender();
         state.command_sender = Some(sender);
         state.model.rooms = vec![room("!room:example", "Room", false)];
