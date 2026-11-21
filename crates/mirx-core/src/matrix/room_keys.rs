@@ -37,13 +37,21 @@ pub(super) async fn emit_undecrypted_sync_event(
     events: &EventSender,
 ) {
     match undecrypted_sync_event(room, &event).await {
-        Ok(Some(RoomHistoryBackfillEvent::Activity(activity))) => {
-            emit_event(events, Event::RoomActivity(activity));
+        Ok(mapped) => {
+            for event in mapped {
+                emit_event(
+                    events,
+                    match event {
+                        RoomHistoryBackfillEvent::Activity(activity) => {
+                            Event::RoomActivity(activity)
+                        }
+                        RoomHistoryBackfillEvent::ActivityUpdate(update) => {
+                            Event::RoomActivityUpdate(update)
+                        }
+                    },
+                );
+            }
         }
-        Ok(Some(RoomHistoryBackfillEvent::ActivityUpdate(update))) => {
-            emit_event(events, Event::RoomActivityUpdate(update));
-        }
-        Ok(None) => {}
         Err(err) => emit_sync_error(events, err),
     }
 }
@@ -51,7 +59,7 @@ pub(super) async fn emit_undecrypted_sync_event(
 async fn undecrypted_sync_event(
     room: &Room,
     event: &Raw<OriginalSyncRoomEncryptedEvent>,
-) -> Result<Option<RoomHistoryBackfillEvent>, MatrixCoreError> {
+) -> Result<Vec<RoomHistoryBackfillEvent>, MatrixCoreError> {
     let push_context = room.push_context().await.map_err(|err| {
         MatrixCoreError::new(format!(
             "failed to read the push rules of {}: {err}",
@@ -717,6 +725,88 @@ mod tests {
             let (activity, body) = decrypted_message(&decrypted.events[0]);
             assert_eq!(body, "old");
             assert_eq!(activity.activity_id, "event:$old");
+        });
+    }
+
+    /// The server bundles a message's latest edit with it, encrypted as
+    /// sent; the SDK decrypts the bundled edit with the message.
+    #[test]
+    fn a_backfilled_message_brings_its_decrypted_bundled_edit() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+            let typo = room
+                .alice_sends_first("$typo", "m.room.message", text("tpyo"))
+                .await;
+            let fix = room
+                .alice_sends(
+                    "$fix",
+                    "m.room.message",
+                    serde_json::json!({
+                        "msgtype": "m.text",
+                        "body": "* typo",
+                        "m.new_content": { "msgtype": "m.text", "body": "typo" },
+                        "m.relates_to": { "rel_type": "m.replace", "event_id": "$typo" },
+                    }),
+                )
+                .await;
+            room.bob_syncs(&[&typo.room_key], &[]).await;
+            room.drain();
+            let room_id = serde_json::json!(room.room_id.as_str());
+            let mut bundled: serde_json::Value = fix.deserialize_as().expect("json");
+            bundled["room_id"] = room_id.clone();
+            let mut history: serde_json::Value = typo.event.deserialize_as().expect("json");
+            history["room_id"] = room_id;
+            history["unsigned"] = serde_json::json!({ "m.relations": { "m.replace": bundled } });
+            room.server
+                .mock_room_messages()
+                .expect_any_access_token()
+                .ok(RoomMessagesResponseTemplate::default().events(vec![
+                    Raw::<AnyTimelineEvent>::from_json_string(history.to_string())
+                        .expect("a room event"),
+                ]))
+                .mock_once()
+                .mount()
+                .await;
+
+            let backfill = backfill_room_history(
+                &room.bob,
+                BackfillRoomHistoryRequest {
+                    room_id: room.room_id.to_string(),
+                    from: HistoryFrom::Latest,
+                    limit: 10,
+                },
+            )
+            .await
+            .expect("backfill");
+
+            let [line, RoomHistoryBackfillEvent::ActivityUpdate(edit)] = &backfill.events[..]
+            else {
+                panic!("not a line and its edit: {backfill:#?}");
+            };
+            assert_eq!(decrypted_message(line).1, "tpyo");
+            assert_eq!(
+                edit.target,
+                RoomActivityUpdateTarget::Event {
+                    event_id: "$typo".to_owned()
+                }
+            );
+            let RoomActivityUpdateKind::MessageReplaced {
+                replacement_event_id,
+                sender,
+                body,
+                ..
+            } = &edit.kind
+            else {
+                panic!("not an edit: {edit:#?}");
+            };
+            assert_eq!(
+                (
+                    replacement_event_id.as_str(),
+                    sender.as_str(),
+                    body.as_str()
+                ),
+                ("$fix", "@alice:example.org", "typo")
+            );
         });
     }
 

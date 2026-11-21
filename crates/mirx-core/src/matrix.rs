@@ -5166,12 +5166,16 @@ fn room_unable_to_decrypt_reason_from_sdk(
     }
 }
 
+/// What an event of a page (or one decrypted late) shows: its line, or its
+/// update of another; a message's line is followed by its latest edit,
+/// which the server bundles with it (`m.relations` in its `unsigned`), as
+/// the edit itself may be on a newer page.
 async fn room_history_backfill_event_from_timeline_event(
     room: &Room,
     event: &TimelineEvent,
     redaction_rules: &matrix_sdk::ruma::room_version_rules::RedactionRules,
     senders: &mut SenderProfileCache<'_>,
-) -> Result<Option<RoomHistoryBackfillEvent>, MatrixCoreError> {
+) -> Result<Vec<RoomHistoryBackfillEvent>, MatrixCoreError> {
     let room_id = room.room_id().as_str();
     // The SDK has no push actions for an event it could not evaluate the
     // rules for: an undecryptable one, or any when the room lacks the state
@@ -5181,14 +5185,16 @@ async fn room_history_backfill_event_from_timeline_event(
 
     if let TimelineEventKind::UnableToDecrypt { utd_info, .. } = &event.kind {
         let Some(sender) = event.sender() else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
         let highlight = highlight(&sender);
         let sender = senders.get(&sender).await?;
         return Ok(room_activity_from_unable_to_decrypt_timeline_event(
             room_id, event, utd_info, sender, highlight,
         )
-        .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
+        .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity)))
+        .into_iter()
+        .collect());
     }
 
     let raw = event.raw();
@@ -5200,36 +5206,55 @@ async fn room_history_backfill_event_from_timeline_event(
                 &event,
                 replacement,
             )
-            .map(RoomHistoryBackfillEvent::ActivityUpdate));
+            .map(RoomHistoryBackfillEvent::ActivityUpdate)
+            .into_iter()
+            .collect());
         }
         let sender = senders.get(&event.sender).await?;
-        return Ok(room_activity_from_sync_message(
-            room_id,
-            &event,
-            sender,
-            highlight(&event.sender),
-        )
-        .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
+        let Some(activity) =
+            room_activity_from_sync_message(room_id, &event, sender, highlight(&event.sender))
+        else {
+            return Ok(Vec::new());
+        };
+        // An edit that did not decrypt, or is no message edit, is no
+        // bundled `replace` (ruma drops one that does not deserialize).
+        let bundled_edit = event
+            .unsigned
+            .relations
+            .replace
+            .as_deref()
+            .and_then(|edit| {
+                room_activity_update_from_sync_message_replacement(
+                    room_id,
+                    edit,
+                    sync_message_replacement(edit)?,
+                )
+            });
+        return Ok(
+            std::iter::once(RoomHistoryBackfillEvent::Activity(Box::new(activity)))
+                .chain(bundled_edit.map(RoomHistoryBackfillEvent::ActivityUpdate))
+                .collect(),
+        );
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncReactionEvent>() {
-        return Ok(Some(RoomHistoryBackfillEvent::ActivityUpdate(
+        return Ok(vec![RoomHistoryBackfillEvent::ActivityUpdate(
             room_activity_update_from_sync_reaction(room_id, &event),
-        )));
+        )]);
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomRedactionEvent>() {
         let redacted_event_id = event.redacts(redaction_rules).to_string();
-        return Ok(Some(RoomHistoryBackfillEvent::ActivityUpdate(
+        return Ok(vec![RoomHistoryBackfillEvent::ActivityUpdate(
             room_activity_update_from_sync_redaction(room_id, &event, redacted_event_id),
-        )));
+        )]);
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomTopicEvent>() {
         let sender = senders.get(&event.sender).await?;
-        return Ok(Some(RoomHistoryBackfillEvent::Activity(Box::new(
+        return Ok(vec![RoomHistoryBackfillEvent::Activity(Box::new(
             room_activity_from_sync_topic(room_id, &event, sender, highlight(&event.sender)),
-        ))));
+        ))]);
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomMemberEvent>() {
@@ -5240,7 +5265,9 @@ async fn room_history_backfill_event_from_timeline_event(
             highlight(&event.sender),
         )
         .await?
-        .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
+        .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity)))
+        .into_iter()
+        .collect());
     }
 
     // Every power-level field has a default, so any state event would
@@ -5260,10 +5287,12 @@ async fn room_history_backfill_event_from_timeline_event(
             highlight(&event.sender),
         )
         .await?
-        .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
+        .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity)))
+        .into_iter()
+        .collect());
     }
 
-    Ok(None)
+    Ok(Vec::new())
 }
 
 pub(crate) async fn fetch_room_event(
@@ -5362,7 +5391,11 @@ async fn fetch_room_event_activity(
         &mut SenderProfileCache::new(&room),
     )
     .await?
+    .into_iter()
+    .next()
     {
+        // A quote shows the message as sent: its bundled edit is not
+        // applied (a gap).
         Some(RoomHistoryBackfillEvent::Activity(activity)) => Ok(*activity),
         Some(RoomHistoryBackfillEvent::ActivityUpdate(_)) | None => {
             Err(MatrixCoreError::new("unsupported event"))
@@ -7185,11 +7218,12 @@ mod tests {
             })
     }
 
+    /// What an event with no bundled edit maps to: one event at most.
     fn backfill_event(
         event: &TimelineEvent,
         redaction_rules: &RedactionRules,
     ) -> Option<RoomHistoryBackfillEvent> {
-        with_memberless_room(async |room| {
+        let mut events = with_memberless_room(async |room| {
             room_history_backfill_event_from_timeline_event(
                 room,
                 event,
@@ -7198,7 +7232,9 @@ mod tests {
             )
             .await
             .expect("map backfill event")
-        })
+        });
+        assert!(events.len() <= 1, "{events:#?}");
+        events.pop()
     }
 
     fn backfill_events(
@@ -8415,6 +8451,122 @@ mod tests {
                 }
             ))
         );
+    }
+
+    /// A history message with `replace` as its server-bundled edit.
+    fn message_with_bundled_edit(replace: serde_json::Value) -> TimelineEvent {
+        timeline_event(serde_json::json!({
+            "type": "m.room.message",
+            "room_id": "!history:example.org",
+            "content": { "msgtype": "m.text", "body": "tpyo" },
+            "event_id": "$typo:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000100u64,
+            "unsigned": { "m.relations": { "m.replace": replace } }
+        }))
+    }
+
+    fn typo_line() -> RoomHistoryBackfillEvent {
+        RoomHistoryBackfillEvent::Activity(Box::new(RoomActivity {
+            room_id: "!room:example.org".to_owned(),
+            activity_id: "event:$typo:example.org".to_owned(),
+            timestamp_ms: 1_700_000_000_100,
+            highlight: false,
+            relation: None,
+            kind: RoomActivityKind::Message(RoomMessageActivity {
+                event_id: Some("$typo:example.org".to_owned()),
+                transaction_id: None,
+                sender: profile("@alice:example.org"),
+                presentation: RoomMessagePresentationKind::Text,
+                body: "tpyo".to_owned(),
+                styles: Vec::new(),
+                user_links: Vec::new(),
+                send_state: RoomMessageSendState::Sent,
+            }),
+        }))
+    }
+
+    /// The edit of a history message may be on a newer page, which came
+    /// first and had no line to edit; the server bundles the latest edit
+    /// with the message, and it follows the message's line. (Whether it is
+    /// the message sender's, and the latest shown, is the UI's to judge.)
+    #[test]
+    fn a_backfilled_message_brings_its_bundled_edit() {
+        let events = backfill_events(
+            vec![message_with_bundled_edit(serde_json::json!({
+                "type": "m.room.message",
+                "room_id": "!history:example.org",
+                "content": {
+                    "msgtype": "m.text",
+                    "body": "* typo",
+                    "m.new_content": { "msgtype": "m.text", "body": "typo" },
+                    "m.relates_to": { "rel_type": "m.replace", "event_id": "$typo:example.org" }
+                },
+                "event_id": "$fix:example.org",
+                "sender": "@alice:example.org",
+                "origin_server_ts": 1700000000900u64
+            }))],
+            RedactionRules::V1,
+        );
+
+        assert_eq!(
+            events,
+            vec![
+                typo_line(),
+                RoomHistoryBackfillEvent::ActivityUpdate(RoomActivityUpdate {
+                    room_id: "!room:example.org".to_owned(),
+                    target: RoomActivityUpdateTarget::Event {
+                        event_id: "$typo:example.org".to_owned(),
+                    },
+                    kind: RoomActivityUpdateKind::MessageReplaced {
+                        replacement_event_id: "$fix:example.org".to_owned(),
+                        sender: "@alice:example.org".to_owned(),
+                        timestamp_ms: 1_700_000_000_900,
+                        presentation: RoomMessagePresentationKind::Text,
+                        body: "typo".to_owned(),
+                        styles: Vec::new(),
+                        user_links: Vec::new(),
+                    },
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_malformed_bundled_edit_brings_nothing() {
+        for replace in [
+            // Not a message.
+            serde_json::json!({
+                "type": "m.reaction",
+                "content": {
+                    "m.relates_to": {
+                        "rel_type": "m.annotation",
+                        "event_id": "$typo:example.org",
+                        "key": "+1"
+                    }
+                },
+                "event_id": "$fix:example.org",
+                "sender": "@alice:example.org",
+                "origin_server_ts": 1700000000900u64
+            }),
+            // No new content.
+            serde_json::json!({
+                "type": "m.room.message",
+                "content": {
+                    "msgtype": "m.text",
+                    "body": "* typo",
+                    "m.relates_to": { "rel_type": "m.replace", "event_id": "$typo:example.org" }
+                },
+                "event_id": "$fix:example.org",
+                "sender": "@alice:example.org",
+                "origin_server_ts": 1700000000900u64
+            }),
+        ] {
+            assert_eq!(
+                backfill_events(vec![message_with_bundled_edit(replace)], RedactionRules::V1),
+                vec![typo_line()]
+            );
+        }
     }
 
     #[test]
