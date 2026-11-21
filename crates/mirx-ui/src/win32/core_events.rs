@@ -574,8 +574,8 @@ pub(super) fn apply_core_event(
             echo_lines_in_active_view(state, lines);
         }
         Event::E2eeStatus(status) => {
-            for line in status_log::e2ee_status(&status) {
-                log_status(state, StatusLineKind::Info, line);
+            for (kind, line) in status_log::e2ee_status(&status) {
+                log_status(state, kind, line);
             }
             state.model.last_e2ee_status = Some(status);
             state.model.status = "e2ee status updated".to_owned();
@@ -2508,13 +2508,17 @@ mod tests {
     #[test]
     fn e2ee_status_event_updates_model_and_logs_status() {
         let mut state = test_state();
-        let status = e2ee_status(
-            E2eeRecoveryState::Incomplete,
-            E2eeBackupState::Enabled,
-            false,
-            Some(true),
-            Some(false),
-        );
+        // A new session: the account's keys are on the server, not here.
+        let status = E2eeStatus {
+            session: E2eeSessionState::Unverified,
+            ..e2ee_status(
+                E2eeRecoveryState::Incomplete,
+                E2eeBackupState::Enabled,
+                false,
+                Some(true),
+                Some(false),
+            )
+        };
 
         apply_core_event(&mut state, Event::E2eeStatus(status.clone())).unwrap();
 
@@ -2523,10 +2527,25 @@ mod tests {
         assert_eq!(
             status_log_lines(&state),
             vec![
-                "[22:12] * E2EE: recovery incomplete, local backup disabled, server backup exists, cross-signing incomplete"
+                "[22:12] * E2EE: recovery incomplete, local backup disabled, server backup exists, cross-signing incomplete, this session not verified"
                     .to_owned(),
                 "[22:12] * Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys"
                     .to_owned(),
+                format!("[22:12] * {}", status_log::SESSION_UNVERIFIED_WARNING),
+            ]
+        );
+        assert_eq!(
+            state
+                .model
+                .status_log
+                .lines()
+                .iter()
+                .map(|line| line.kind)
+                .collect::<Vec<_>>(),
+            [
+                StatusLineKind::Info,
+                StatusLineKind::Info,
+                StatusLineKind::Error
             ]
         );
     }

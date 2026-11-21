@@ -396,10 +396,13 @@ pub(super) unsafe fn run_slash_command(
                 let state = state_mut(hwnd);
                 let lines = match &state.model.last_e2ee_status {
                     Some(status) => status_log::e2ee_status(status),
-                    None => vec![status_log::E2EE_STATUS_UNKNOWN.to_owned()],
+                    None => vec![(
+                        StatusLineKind::Info,
+                        status_log::E2EE_STATUS_UNKNOWN.to_owned(),
+                    )],
                 };
-                for line in lines {
-                    log_status(state, StatusLineKind::Info, line);
+                for (kind, line) in lines {
+                    log_status(state, kind, line);
                 }
                 activate_view(hwnd, &ViewId::Status, None)?;
                 Ok(Some("e2ee status shown".to_owned()))

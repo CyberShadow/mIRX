@@ -120,8 +120,8 @@ use url::Url;
 use crate::api::{
     BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent,
     CreateRoomRequest, CreateRoomVisibility, DeviceSummary, E2eeBackupState, E2eeBackupStatus,
-    E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event,
-    FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, InviteRoomMemberRequest,
+    E2eeCrossSigningStatus, E2eeRecoveryState, E2eeSessionState, E2eeStatus, EditMessageRequest,
+    Event, FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, InviteRoomMemberRequest,
     JoinRoomRequest, KickRoomMemberRequest, ListPublicRoomsRequest, MarkRoomReadRequest,
     MemberPowerRole, Operation, PublicRoom, PublicRoomsPage, PublicRoomsResult,
     ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
@@ -509,6 +509,31 @@ pub(crate) async fn summarize_e2ee_status(
             .cross_signing_status()
             .await
             .map(map_cross_signing_status),
+        session: e2ee_session_state(client).await?,
+    })
+}
+
+/// The SDK's verification state of this session, told apart when there
+/// is no identity at all to verify it with.
+async fn e2ee_session_state(client: &Client) -> Result<E2eeSessionState, MatrixCoreError> {
+    let encryption = client.encryption();
+    Ok(match encryption.verification_state().get() {
+        EncryptionVerificationState::Unknown => E2eeSessionState::Unknown,
+        EncryptionVerificationState::Verified => E2eeSessionState::Verified,
+        EncryptionVerificationState::Unverified => {
+            let own_user_id = client.user_id().expect("E2EE status runs signed in");
+            match encryption
+                .get_user_identity(own_user_id)
+                .await
+                .map_err(|err| {
+                    MatrixCoreError::new(format!(
+                        "failed to read your cross-signing identity: {err}"
+                    ))
+                })? {
+                Some(_) => E2eeSessionState::Unverified,
+                None => E2eeSessionState::NoCrossSigning,
+            }
+        }
     })
 }
 
@@ -1681,19 +1706,53 @@ pub(crate) fn start_e2ee_recovery_state_task(
 
     tokio::task::spawn_local(async move {
         while states.next().await.is_some() {
+            emit_cached_e2ee_status(&client, &events).await;
+        }
+    })
+}
+
+/// Emits the E2EE status whenever this session's verification state
+/// changes: once verified from another session, or after recovery signs
+/// it. The SDK sets its state after every query of your own keys,
+/// changed or not, and an identity can appear with it.
+pub(crate) fn start_e2ee_session_state_task(client: Client, events: EventSender) -> JoinHandle<()> {
+    let mut states = client.encryption().verification_state();
+
+    tokio::task::spawn_local(async move {
+        // The first value is the current one, which the sign-in summary
+        // reports.
+        let mut last = None;
+        while states.next().await.is_some() {
             match summarize_e2ee_status(&client, BackupServerStatusMode::Cached).await {
-                Ok(status) => emit_event(&events, Event::E2eeStatus(status)),
-                Err(err) => emit_event(
-                    &events,
-                    Event::Error(CoreErrorEvent {
-                        operation: Operation::E2eeStatus,
-                        room_id: None,
-                        message: err.to_string(),
-                    }),
-                ),
+                Ok(status) => {
+                    let changed = last.is_some_and(|last| last != status.session);
+                    last = Some(status.session);
+                    if changed {
+                        emit_event(&events, Event::E2eeStatus(status));
+                    }
+                }
+                Err(err) => emit_e2ee_status_error(&events, err),
             }
         }
     })
+}
+
+async fn emit_cached_e2ee_status(client: &Client, events: &EventSender) {
+    match summarize_e2ee_status(client, BackupServerStatusMode::Cached).await {
+        Ok(status) => emit_event(events, Event::E2eeStatus(status)),
+        Err(err) => emit_e2ee_status_error(events, err),
+    }
+}
+
+fn emit_e2ee_status_error(events: &EventSender, err: MatrixCoreError) {
+    emit_event(
+        events,
+        Event::Error(CoreErrorEvent {
+            operation: Operation::E2eeStatus,
+            room_id: None,
+            message: err.to_string(),
+        }),
+    );
 }
 
 pub(crate) fn start_e2ee_backup_state_task(client: Client, events: EventSender) -> JoinHandle<()> {
@@ -1702,18 +1761,7 @@ pub(crate) fn start_e2ee_backup_state_task(client: Client, events: EventSender) 
     tokio::task::spawn_local(async move {
         while let Some(state) = states.next().await {
             match state {
-                Ok(_) => match summarize_e2ee_status(&client, BackupServerStatusMode::Cached).await
-                {
-                    Ok(status) => emit_event(&events, Event::E2eeStatus(status)),
-                    Err(err) => emit_event(
-                        &events,
-                        Event::Error(CoreErrorEvent {
-                            operation: Operation::E2eeStatus,
-                            room_id: None,
-                            message: err.to_string(),
-                        }),
-                    ),
-                },
+                Ok(_) => emit_cached_e2ee_status(&client, &events).await,
                 Err(_) => emit_event(
                     &events,
                     Event::Error(CoreErrorEvent {
@@ -14419,12 +14467,16 @@ mod tests {
         }
     }
 
-    mod devices {
+    /// Sessions and their trust: `/devices`, and this session's state.
+    mod trust {
         use matrix_sdk::ruma::{owned_device_id, owned_user_id};
 
-        use super::super::{list_user_devices, sorted_devices, user_identity_state};
+        use super::super::{
+            BackupServerStatusMode, list_user_devices, sorted_devices,
+            start_e2ee_session_state_task, summarize_e2ee_status, user_identity_state,
+        };
         use super::*;
-        use crate::api::{DeviceSummary, UserDevices, UserIdentityState};
+        use crate::api::{DeviceSummary, E2eeSessionState, UserDevices, UserIdentityState};
 
         fn block_on<F: std::future::Future>(future: F) -> F::Output {
             tokio::runtime::Builder::new_current_thread()
@@ -14611,6 +14663,91 @@ mod tests {
                         .to_string()
                 );
             });
+        }
+
+        #[test]
+        fn e2ee_status_reports_this_sessions_verification() {
+            block_on(tokio::task::LocalSet::new().run_until(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                let alice_id = owned_user_id!("@alice:example.org");
+                let laptop = server
+                    .client_builder_for_crypto_end_to_end(&alice_id, &owned_device_id!("L4PT0P"))
+                    .build()
+                    .await;
+                let phone = server
+                    .set_up_new_device_for_encryption(
+                        &laptop,
+                        &owned_device_id!("PH0NE"),
+                        Vec::new(),
+                    )
+                    .await;
+                let session = |client: Client| async move {
+                    summarize_e2ee_status(&client, BackupServerStatusMode::Cached)
+                        .await
+                        .expect("summarize")
+                        .session
+                };
+                let query_own_keys = |client: Client| async move {
+                    client
+                        .encryption()
+                        .request_user_identity(client.user_id().expect("signed in"))
+                        .await
+                        .expect("query own keys");
+                };
+                // Your keys, with no identity among them.
+                query_own_keys(phone.clone()).await;
+                assert_eq!(
+                    session(phone.clone()).await,
+                    E2eeSessionState::NoCrossSigning
+                );
+
+                let (events, event_rx) = mpsc::channel();
+                let task = start_e2ee_session_state_task(phone.clone(), events);
+                let statuses = || async {
+                    // Let the task see the SDK's update.
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    event_rx
+                        .try_iter()
+                        .map(|event| match event {
+                            Event::E2eeStatus(status) => status.session,
+                            other => panic!("expected an E2EE status, got {other:?}"),
+                        })
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(statuses().await, Vec::new());
+
+                // The laptop sets up cross-signing. To the phone the SDK's
+                // state stays unverified; an identity appears with it.
+                laptop
+                    .encryption()
+                    .bootstrap_cross_signing(None)
+                    .await
+                    .expect("bootstrap cross-signing");
+                query_own_keys(phone.clone()).await;
+                assert_eq!(statuses().await, vec![E2eeSessionState::Unverified]);
+
+                // The laptop signs the phone.
+                query_own_keys(laptop.clone()).await;
+                laptop
+                    .encryption()
+                    .get_device(&alice_id, &owned_device_id!("PH0NE"))
+                    .await
+                    .expect("read the store")
+                    .expect("the phone is known")
+                    .verify()
+                    .await
+                    .expect("sign the phone");
+                query_own_keys(phone.clone()).await;
+                assert_eq!(statuses().await, vec![E2eeSessionState::Verified]);
+                assert_eq!(session(phone.clone()).await, E2eeSessionState::Verified);
+
+                // The SDK sets its state after each query of your keys,
+                // unchanged: nothing to report.
+                query_own_keys(phone.clone()).await;
+                assert_eq!(statuses().await, Vec::new());
+                task.abort();
+            }));
         }
 
         #[test]

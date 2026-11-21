@@ -531,6 +531,10 @@ pub(super) fn frame_status_text(state: &WindowState) -> String {
         text.push_str(e2ee_backup_health_summary(status));
         text.push_str(", cross-signing ");
         text.push_str(e2ee_cross_signing_label(status.cross_signing.as_ref()));
+        if status.session != E2eeSessionState::Verified {
+            text.push_str(", session ");
+            text.push_str(e2ee_session_label(status.session));
+        }
     }
 
     if let Some(error) = &model.last_error {
@@ -674,6 +678,29 @@ mod tests {
             frame_status_text(&state),
             "e2ee status updated | e2ee: recovery incomplete, backup healthy, cross-signing complete"
         );
+
+        for (session, suffix) in [
+            (E2eeSessionState::Unverified, ", session not verified"),
+            (E2eeSessionState::NoCrossSigning, ", session not verified"),
+            (E2eeSessionState::Unknown, ", session unknown"),
+        ] {
+            state.model.last_e2ee_status = Some(E2eeStatus {
+                session,
+                ..e2ee_status(
+                    E2eeRecoveryState::Incomplete,
+                    E2eeBackupState::Enabled,
+                    true,
+                    Some(true),
+                    Some(true),
+                )
+            });
+            assert_eq!(
+                frame_status_text(&state),
+                format!(
+                    "e2ee status updated | e2ee: recovery incomplete, backup healthy, cross-signing complete{suffix}"
+                )
+            );
+        }
     }
 
     #[test]

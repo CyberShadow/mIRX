@@ -5,21 +5,21 @@ use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CoreConfig,
     CreateDirectRoomRequest, CreateRoomRequest, CreateRoomVisibility, DeviceSummary,
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation,
-    E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus,
-    EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord,
-    InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
-    ListPublicRoomsRequest, LoginMethod, LoginRequest, MarkRoomReadRequest, MemberPowerRole,
-    Operation, PublicRoom, PublicRoomsPage, PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
-    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
-    RejectRoomInviteRequest, RequestVerificationRequest, RoomActivity, RoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
-    RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
-    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
-    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
-    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomReadState,
-    RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary,
-    RoomTagSummary, RoomTyping, RoomUserProfile, SendFileRequest, SendMessageRequest,
+    E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeSessionState,
+    E2eeStatus, EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
+    HighlightWord, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
+    LeaveRoomRequest, ListPublicRoomsRequest, LoginMethod, LoginRequest, MarkRoomReadRequest,
+    MemberPowerRole, Operation, PublicRoom, PublicRoomsPage, PublicRoomsResult,
+    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest,
+    RedactEventRequest, RejectRoomInviteRequest, RequestVerificationRequest, RoomActivity,
+    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
+    RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
+    RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
+    RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
+    RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
+    RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTagSummary, RoomTyping, RoomUserProfile, SendFileRequest, SendMessageRequest,
     SendReactionRequest, SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
     SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
@@ -3013,16 +3013,24 @@ fn e2ee_status_event_round_trips_through_serde() {
             has_user_signing: false,
             complete: false,
         }),
+        session: E2eeSessionState::Unverified,
     });
 
     let json = serde_json::to_string(&event).expect("serialize e2ee status event");
     assert_eq!(
         json,
-        r#"{"E2eeStatus":{"recovery":"enabled","backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true},"cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false}}}"#
+        r#"{"E2eeStatus":{"recovery":"enabled","backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true},"cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false},"session":"unverified"}}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize e2ee status event");
     assert_eq!(restored, event);
+    for session in ["unknown", "verified", "no_cross_signing"] {
+        serde_json::from_str::<E2eeSessionState>(&format!("\"{session}\"")).expect(session);
+    }
+    assert!(
+        serde_json::from_str::<Event>(&json.replace(r#","session":"unverified""#, "")).is_err(),
+        "the session state is required"
+    );
 }
 
 #[test]
@@ -3274,7 +3282,7 @@ fn e2ee_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<Event>(
-            r#"{"E2eeStatus":{"recovery":"enabled","backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true,"unexpected":"value"},"cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":true,"complete":true}}}"#
+            r#"{"E2eeStatus":{"recovery":"enabled","backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true,"unexpected":"value"},"cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":true,"complete":true},"session":"verified"}}"#
         )
         .is_err(),
         "e2ee backup status must reject unknown fields"
@@ -3282,7 +3290,7 @@ fn e2ee_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<Event>(
-            r#"{"E2eeStatus":{"recovery":"enabled","backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true},"cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":true,"complete":true,"unexpected":"value"}}}"#
+            r#"{"E2eeStatus":{"recovery":"enabled","backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true},"cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":true,"complete":true,"unexpected":"value"},"session":"verified"}}"#
         )
         .is_err(),
         "e2ee cross-signing status must reject unknown fields"

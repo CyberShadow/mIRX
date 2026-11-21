@@ -132,6 +132,7 @@ enum WorkerState {
         room_read_state_update_task: TokioJoinHandle<()>,
         e2ee_recovery_state_task: TokioJoinHandle<()>,
         e2ee_backup_state_task: TokioJoinHandle<()>,
+        e2ee_session_state_task: TokioJoinHandle<()>,
         verification_tasks: HashMap<(String, String), TokioJoinHandle<()>>,
     },
 }
@@ -616,6 +617,9 @@ async fn enter_session(
     );
     let room_list_update_task =
         matrix::start_room_list_update_task(client.clone(), event_tx.clone());
+    // Subscribed before the first summary, so no change falls between.
+    let e2ee_session_state_task =
+        matrix::start_e2ee_session_state_task(client.clone(), event_tx.clone());
     match matrix::summarize_e2ee_status(&client, BackupServerStatusMode::Fetch).await {
         Ok(status) => emit_event(event_tx, Event::E2eeStatus(status)),
         Err(err) => emit_matrix_error(event_tx, Operation::E2eeStatus, err),
@@ -636,6 +640,7 @@ async fn enter_session(
         room_read_state_update_task,
         e2ee_recovery_state_task,
         e2ee_backup_state_task,
+        e2ee_session_state_task,
         verification_tasks: HashMap::new(),
     };
 
@@ -1679,6 +1684,7 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
         room_read_state_update_task,
         e2ee_recovery_state_task,
         e2ee_backup_state_task,
+        e2ee_session_state_task,
         verification_tasks,
     } = state
     else {
@@ -1697,6 +1703,7 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
     room_read_state_update_task.abort();
     e2ee_recovery_state_task.abort();
     e2ee_backup_state_task.abort();
+    e2ee_session_state_task.abort();
     abort_verification_tasks(verification_tasks);
 
     if let Err(err) = matrix::logout(client.clone()).await {
@@ -1740,6 +1747,7 @@ async fn shutdown_state(state: &mut WorkerState) {
             room_read_state_update_task,
             e2ee_recovery_state_task,
             e2ee_backup_state_task,
+            e2ee_session_state_task,
             verification_tasks,
         } => sync_task
             .into_iter()
@@ -1750,6 +1758,7 @@ async fn shutdown_state(state: &mut WorkerState) {
                 room_read_state_update_task,
                 e2ee_recovery_state_task,
                 e2ee_backup_state_task,
+                e2ee_session_state_task,
             ])
             .chain(verification_tasks.into_values())
             .collect::<Vec<_>>(),
@@ -2091,6 +2100,7 @@ mod tests {
             room_read_state_update_task: tokio::task::spawn_local(async {}),
             e2ee_recovery_state_task: tokio::task::spawn_local(async {}),
             e2ee_backup_state_task: tokio::task::spawn_local(async {}),
+            e2ee_session_state_task: tokio::task::spawn_local(async {}),
             session_update_task: tokio::task::spawn_local(async {}),
             send_queue_update_task: tokio::task::spawn_local(async {}),
             verification_tasks: HashMap::new(),
@@ -2654,6 +2664,7 @@ mod tests {
                 room_read_state_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 e2ee_recovery_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 e2ee_backup_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
+                e2ee_session_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 session_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 send_queue_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 verification_tasks: HashMap::new(),
@@ -2678,6 +2689,7 @@ mod tests {
                 room_read_state_update_task,
                 e2ee_recovery_state_task,
                 e2ee_backup_state_task,
+                e2ee_session_state_task,
                 session_update_task,
                 send_queue_update_task,
                 ..
@@ -2690,6 +2702,7 @@ mod tests {
                 room_read_state_update_task.abort();
                 e2ee_recovery_state_task.abort();
                 e2ee_backup_state_task.abort();
+                e2ee_session_state_task.abort();
                 session_update_task.abort();
                 send_queue_update_task.abort();
             }
@@ -2833,6 +2846,7 @@ mod tests {
                 room_read_state_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 e2ee_recovery_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 e2ee_backup_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
+                e2ee_session_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 session_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 send_queue_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 verification_tasks: HashMap::from([(

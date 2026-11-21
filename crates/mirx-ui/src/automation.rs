@@ -3275,14 +3275,15 @@ fn parse_verification_action_args(
 mod tests {
     use mirx_core::{
         CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
-        E2eeRecoveryState, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
-        RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
-        RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
-        RoomMediaSource, RoomMemberRank, RoomMembership, RoomMessageActivity,
-        RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomReadState,
-        RoomRedactedActivity, RoomSummary, RoomTagSummary, RoomVideoActivity, RoomVideoInfo,
-        SessionAuth, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-        VerificationDirection, VerificationRequest, VerificationState, VerificationStateEvent,
+        E2eeRecoveryState, E2eeSessionState, E2eeStatus, Event, Operation, RoomActivity,
+        RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo,
+        RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+        RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberRank, RoomMembership,
+        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+        RoomNotificationMode, RoomReadState, RoomRedactedActivity, RoomSummary, RoomTagSummary,
+        RoomVideoActivity, RoomVideoInfo, SessionAuth, SpaceChildSummary, StoredSession,
+        UnsupportedRoomMessageActivity, VerificationDirection, VerificationRequest,
+        VerificationState, VerificationStateEvent,
     };
     use serde_json::{Value, json};
 
@@ -3379,6 +3380,7 @@ mod tests {
                 has_user_signing: false,
                 complete: false,
             }),
+            session: E2eeSessionState::Verified,
         }
     }
 
@@ -5661,7 +5663,8 @@ mod tests {
                             "has_self_signing":true,
                             "has_user_signing":false,
                             "complete":false
-                        }
+                        },
+                        "session":"verified"
                     },
                     "last_verification":null,
                     "last_error":null,
@@ -6583,6 +6586,7 @@ mod tests {
                     "recovery":"incomplete",
                     "backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true},
                     "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false},
+                    "session":"verified",
                     "unexpected":true
                 },
                 "last_verification":null,
@@ -6598,7 +6602,8 @@ mod tests {
                 "e2ee_status":{
                     "recovery":"incomplete",
                     "backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true,"unexpected":true},
-                    "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false}
+                    "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false},
+                    "session":"verified"
                 },
                 "last_verification":null,
                 "last_error":null,
@@ -6613,7 +6618,8 @@ mod tests {
                 "e2ee_status":{
                     "recovery":"incomplete",
                     "backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true},
-                    "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false,"unexpected":true}
+                    "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false,"unexpected":true},
+                    "session":"verified"
                 },
                 "last_verification":null,
                 "last_error":null,

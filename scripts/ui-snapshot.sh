@@ -940,7 +940,7 @@ configure_case_expectations() {
         --expect-status-view '[22:12] * Logged in as @me:example (device MIRXDEVICE)'
         --expect-status-view '[22:12] * Syncing with the homeserver'
         --expect-status-view '[22:12] * Synced rooms: 1 joined, 0 invited'
-        --expect-status-view '[22:12] * E2EE: recovery enabled, local backup enabled, server backup not checked, cross-signing complete'
+        --expect-status-view '[22:12] * E2EE: recovery enabled, local backup enabled, server backup not checked, cross-signing complete, this session verified'
         --expect-status-view '[22:12] * Error during send text: message send failed'
       )
       status_view_forbid_args=(
@@ -1396,7 +1396,8 @@ configure_case_expectations() {
     e2ee-recovery-needed)
       expect_active_view='status'
       status_view_expect_args=(
-        --expect-status-view '[22:12] * E2EE: recovery incomplete, local backup disabled, server backup exists, cross-signing incomplete'
+        --expect-status-view '[22:12] * E2EE: recovery incomplete, local backup disabled, server backup exists, cross-signing incomplete, this session not verified'
+        --expect-status-view '[22:12] * This session is not verified: /verify to verify it from another of your sessions, or /e2ee recover with your recovery key'
         --expect-status-view '* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
       )
       status_view_forbid_args=(
@@ -1404,7 +1405,7 @@ configure_case_expectations() {
         --expect-no-status-view 'passphrase='
       )
       status_bar_expect_args=(
-        --expect-status-bar 'e2ee: recovery incomplete, local backup disabled, cross-signing incomplete'
+        --expect-status-bar 'e2ee: recovery incomplete, local backup disabled, cross-signing incomplete, session not verified'
       )
       status_bar_forbid_args=(
         --expect-no-status-bar 'recovery_secret'
@@ -1421,7 +1422,7 @@ configure_case_expectations() {
     e2ee-recovery-enabled)
       expect_active_view='status'
       status_view_expect_args=(
-        --expect-status-view '[22:12] * E2EE: recovery enabled, local backup enabled, server backup exists, cross-signing complete'
+        --expect-status-view '[22:12] * E2EE: recovery enabled, local backup enabled, server backup exists, cross-signing complete, this session verified'
         --expect-status-view '* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
       )
       status_view_forbid_args=(
@@ -1447,7 +1448,8 @@ configure_case_expectations() {
       expect_error='recover_e2ee: failed to recover E2EE secrets'
       expect_active_view='status'
       status_view_expect_args=(
-        --expect-status-view '[22:12] * E2EE: recovery incomplete, local backup disabled, server backup exists, cross-signing incomplete'
+        --expect-status-view '[22:12] * E2EE: recovery incomplete, local backup disabled, server backup exists, cross-signing incomplete, this session not verified'
+        --expect-status-view '[22:12] * This session is not verified: /verify to verify it from another of your sessions, or /e2ee recover with your recovery key'
         --expect-status-view '* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
         --expect-status-view '[22:12] * Error during e2ee recovery: failed to recover E2EE secrets: invalid recovery key or passphrase'
       )
@@ -1456,7 +1458,7 @@ configure_case_expectations() {
         --expect-no-status-view 'passphrase='
       )
       status_bar_expect_args=(
-        --expect-status-bar 'e2ee: recovery incomplete, local backup disabled, cross-signing incomplete'
+        --expect-status-bar 'e2ee: recovery incomplete, local backup disabled, cross-signing incomplete, session not verified'
         --expect-status-bar 'error: e2ee recovery: failed to recover E2EE secrets'
       )
       status_bar_forbid_args=(
@@ -1474,7 +1476,7 @@ configure_case_expectations() {
     e2ee-backup-missing)
       expect_active_view='status'
       status_view_expect_args=(
-        --expect-status-view '[22:12] * E2EE: recovery enabled, local backup enabled, server backup missing, cross-signing complete'
+        --expect-status-view '[22:12] * E2EE: recovery enabled, local backup enabled, server backup missing, cross-signing complete, this session verified'
         --expect-status-view '* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
       )
       status_view_forbid_args=(

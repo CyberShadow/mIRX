@@ -107,6 +107,7 @@ pub(super) fn e2ee_status(
             has_user_signing: complete,
             complete,
         }),
+        session: E2eeSessionState::Verified,
     }
 }
 

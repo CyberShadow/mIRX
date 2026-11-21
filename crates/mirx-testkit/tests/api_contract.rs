@@ -6,9 +6,10 @@ use std::path::PathBuf;
 
 use mirx_core::{
     BackfillRoomHistoryRequest as CoreBackfillRoomHistoryRequest, E2eeBackupState,
-    E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event as CoreEvent,
-    FetchRoomMediaRequest as CoreFetchRoomMediaRequest, RoomActivity as CoreRoomActivity,
-    RoomActivityKind as CoreRoomActivityKind, RoomActivityUpdate as CoreRoomActivityUpdate,
+    E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeSessionState, E2eeStatus,
+    Event as CoreEvent, FetchRoomMediaRequest as CoreFetchRoomMediaRequest,
+    RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
+    RoomActivityUpdate as CoreRoomActivityUpdate,
     RoomActivityUpdateKind as CoreRoomActivityUpdateKind,
     RoomActivityUpdateTarget as CoreRoomActivityUpdateTarget,
     RoomHistoryBackfill as CoreRoomHistoryBackfill,
@@ -211,6 +212,7 @@ fn sample_e2ee_status() -> E2eeStatus {
             has_user_signing: false,
             complete: false,
         }),
+        session: E2eeSessionState::Verified,
     }
 }
 
@@ -6718,7 +6720,8 @@ fn model_e2ee_status_round_trips_typed_state_json() {
                 "has_self_signing":true,
                 "has_user_signing":false,
                 "complete":false
-            }
+            },
+            "session":"verified"
         },
         "last_verification":null,
         "last_error":null,
@@ -6748,7 +6751,8 @@ fn model_e2ee_status_round_trips_typed_state_json() {
                     "has_self_signing":true,
                     "has_user_signing":false,
                     "complete":false
-                }
+                },
+                "session":"verified"
             },
             "last_verification":null,
             "last_error":null,
@@ -6770,6 +6774,7 @@ fn model_e2ee_status_rejects_unknown_nested_fields() {
                 "recovery":"incomplete",
                 "backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true},
                 "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false},
+                "session":"verified",
                 "unexpected":true
             },
             "last_verification":null,
@@ -6785,7 +6790,8 @@ fn model_e2ee_status_rejects_unknown_nested_fields() {
             "e2ee_status":{
                 "recovery":"incomplete",
                 "backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true,"unexpected":true},
-                "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false}
+                "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false},
+                "session":"verified"
             },
             "last_verification":null,
             "last_error":null,
@@ -6800,7 +6806,8 @@ fn model_e2ee_status_rejects_unknown_nested_fields() {
             "e2ee_status":{
                 "recovery":"incomplete",
                 "backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true},
-                "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false,"unexpected":true}
+                "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false,"unexpected":true},
+                "session":"verified"
             },
             "last_verification":null,
             "last_error":null,

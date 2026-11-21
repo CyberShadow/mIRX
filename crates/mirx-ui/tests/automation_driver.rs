@@ -14,7 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mirx_core::{
     DeviceSummary, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState,
-    E2eeStatus, Event, HighlightWord, RoomActivity as CoreRoomActivity,
+    E2eeSessionState, E2eeStatus, Event, HighlightWord, RoomActivity as CoreRoomActivity,
     RoomActivityKind as CoreRoomActivityKind, RoomActivityRelation as CoreRoomActivityRelation,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomHistoryBackfill,
     RoomHistoryBackfillEvent, RoomMedia as CoreRoomMedia, RoomMediaFormat as CoreRoomMediaFormat,
@@ -1180,6 +1180,7 @@ fn sample_e2ee_status() -> E2eeStatus {
             has_user_signing: false,
             complete: false,
         }),
+        session: E2eeSessionState::Verified,
     }
 }
 

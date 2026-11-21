@@ -7,14 +7,15 @@
 //! may print other lines too, such as `-> *Alice* hi`.
 
 use mirx_core::{
-    E2eeStatus, VerificationDirection, VerificationRequest, VerificationState,
+    E2eeSessionState, E2eeStatus, VerificationDirection, VerificationRequest, VerificationState,
     VerificationStateEvent,
 };
 
 use super::menus::verification_actions_text;
 use super::{
     e2ee_cross_signing_label, e2ee_local_backup_label, e2ee_recovery_state_label,
-    e2ee_server_backup_label, format_verification_emojis, verification_state_event_from_request,
+    e2ee_server_backup_label, e2ee_session_label, format_verification_emojis,
+    verification_state_event_from_request,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,18 +167,46 @@ pub(super) fn synced(joined: usize, invited: usize) -> String {
     format!("Synced rooms: {joined} joined, {invited} invited")
 }
 
-pub(super) fn e2ee_status(status: &E2eeStatus) -> Vec<String> {
-    vec![
-        format!(
-            "E2EE: recovery {}, local backup {}, server backup {}, cross-signing {}",
-            e2ee_recovery_state_label(status.recovery),
-            e2ee_local_backup_label(&status.backup),
-            e2ee_server_backup_label(status.backup.exists_on_server),
-            e2ee_cross_signing_label(status.cross_signing.as_ref()),
+/// The E2EE summary and the commands, then, when this session needs
+/// verifying, a warning saying how.
+pub(super) fn e2ee_status(status: &E2eeStatus) -> Vec<(StatusLineKind, String)> {
+    let mut lines = vec![
+        (
+            StatusLineKind::Info,
+            format!(
+                "E2EE: recovery {}, local backup {}, server backup {}, cross-signing {}, this session {}",
+                e2ee_recovery_state_label(status.recovery),
+                e2ee_local_backup_label(&status.backup),
+                e2ee_server_backup_label(status.backup.exists_on_server),
+                e2ee_cross_signing_label(status.cross_signing.as_ref()),
+                e2ee_session_label(status.session),
+            ),
         ),
-        "Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys"
-            .to_owned(),
-    ]
+        (
+            StatusLineKind::Info,
+            "Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys"
+                .to_owned(),
+        ),
+    ];
+    if session_needs_verifying(status) {
+        lines.push((StatusLineKind::Error, SESSION_UNVERIFIED_WARNING.to_owned()));
+    }
+    lines
+}
+
+pub(super) const SESSION_UNVERIFIED_WARNING: &str = "This session is not verified: /verify to verify it from another of your sessions, or /e2ee recover with your recovery key";
+
+/// Whether to warn that this session is not verified: your identity does
+/// not sign it, and this session lacks the self-signing key to sign
+/// itself. A session holding that key signs itself (setting up or
+/// recovering cross-signing), and is unverified only until the SDK's
+/// next query of your keys sees the signature.
+fn session_needs_verifying(status: &E2eeStatus) -> bool {
+    status.session == E2eeSessionState::Unverified
+        && status
+            .cross_signing
+            .as_ref()
+            .is_some_and(|keys| !keys.has_self_signing)
 }
 
 /// A new flow: who asked whom, and the actions that answer it. A flow
@@ -271,7 +300,7 @@ pub(super) fn error(operation_name: &str, message: &str) -> String {
 mod tests {
     use mirx_core::{
         E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState,
-        VerificationDecimals, VerificationEmoji,
+        E2eeSessionState, VerificationDecimals, VerificationEmoji,
     };
 
     use super::*;
@@ -357,28 +386,86 @@ mod tests {
 
     #[test]
     fn e2ee_status_lines_state_every_part_and_the_commands() {
-        let status = E2eeStatus {
+        let keys = |has_self_signing| E2eeCrossSigningStatus {
+            has_master: has_self_signing,
+            has_self_signing,
+            has_user_signing: has_self_signing,
+            complete: has_self_signing,
+        };
+        let status = |session, cross_signing| E2eeStatus {
             recovery: E2eeRecoveryState::Disabled,
             backup: E2eeBackupStatus {
                 state: E2eeBackupState::Enabled,
                 enabled_locally: true,
                 exists_on_server: None,
             },
-            cross_signing: Some(E2eeCrossSigningStatus {
-                has_master: true,
-                has_self_signing: true,
-                has_user_signing: true,
-                complete: true,
-            }),
+            cross_signing,
+            session,
         };
+        let info = |line: &str| (StatusLineKind::Info, line.to_owned());
+        let commands = info(
+            "Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys",
+        );
         assert_eq!(
-            e2ee_status(&status),
+            e2ee_status(&status(E2eeSessionState::Verified, Some(keys(true)))),
             vec![
-                "E2EE: recovery disabled, local backup enabled, server backup not checked, cross-signing complete"
-                    .to_owned(),
-                "Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys"
-                    .to_owned(),
+                info(
+                    "E2EE: recovery disabled, local backup enabled, server backup not checked, cross-signing complete, this session verified"
+                ),
+                commands.clone(),
             ]
+        );
+
+        // Only a session that cannot sign itself, of an account with an
+        // identity, needs verifying.
+        assert_eq!(
+            e2ee_status(&status(E2eeSessionState::Unverified, Some(keys(false)))),
+            vec![
+                info(
+                    "E2EE: recovery disabled, local backup enabled, server backup not checked, cross-signing incomplete, this session not verified"
+                ),
+                commands.clone(),
+                (StatusLineKind::Error, SESSION_UNVERIFIED_WARNING.to_owned()),
+            ]
+        );
+        for (session, cross_signing, label) in [
+            // It holds the key: it signs itself, until the next key query
+            // sees it.
+            (
+                E2eeSessionState::Unverified,
+                Some(keys(true)),
+                "complete, this session not verified",
+            ),
+            (
+                E2eeSessionState::Unverified,
+                None,
+                "unknown, this session not verified",
+            ),
+            (
+                E2eeSessionState::NoCrossSigning,
+                Some(keys(false)),
+                "incomplete, this session not verified",
+            ),
+            (
+                E2eeSessionState::Unknown,
+                Some(keys(false)),
+                "incomplete, this session unknown",
+            ),
+        ] {
+            assert_eq!(
+                e2ee_status(&status(session, cross_signing)),
+                vec![
+                    info(&format!(
+                        "E2EE: recovery disabled, local backup enabled, server backup not checked, cross-signing {label}"
+                    )),
+                    commands.clone(),
+                ],
+                "{session:?}"
+            );
+        }
+        assert_eq!(
+            SESSION_UNVERIFIED_WARNING,
+            "This session is not verified: /verify to verify it from another of your sessions, or /e2ee recover with your recovery key"
         );
     }
 

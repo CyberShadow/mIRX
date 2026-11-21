@@ -1386,6 +1386,22 @@ pub struct E2eeStatus {
     pub recovery: E2eeRecoveryState,
     pub backup: E2eeBackupStatus,
     pub cross_signing: Option<E2eeCrossSigningStatus>,
+    pub session: E2eeSessionState,
+}
+
+/// Whether this session is verified: whether your cross-signing identity
+/// signs it, as the SDK says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum E2eeSessionState {
+    /// Not known yet, before the SDK has read this session's own device.
+    Unknown,
+    Verified,
+    /// Your identity does not sign this session (yet).
+    Unverified,
+    /// Unverified, and your account has no cross-signing identity to
+    /// verify it with.
+    NoCrossSigning,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

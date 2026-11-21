@@ -127,6 +127,15 @@ pub(super) fn e2ee_backup_health_summary(status: &E2eeStatus) -> &'static str {
     }
 }
 
+/// This session's verification, as the SDK's trust state says.
+pub(super) fn e2ee_session_label(session: E2eeSessionState) -> &'static str {
+    match session {
+        E2eeSessionState::Verified => "verified",
+        E2eeSessionState::Unverified | E2eeSessionState::NoCrossSigning => "not verified",
+        E2eeSessionState::Unknown => "unknown",
+    }
+}
+
 pub(super) fn e2ee_cross_signing_label(status: Option<&E2eeCrossSigningStatus>) -> &'static str {
     match status {
         Some(status) if status.complete => "complete",
@@ -341,7 +350,11 @@ mod tests {
             Some(false),
             Some(true),
         );
-        assert!(status_log::e2ee_status(&missing)[0].contains("server backup missing"));
+        assert!(
+            status_log::e2ee_status(&missing)[0]
+                .1
+                .contains("server backup missing")
+        );
         assert_eq!(
             e2ee_backup_health_summary(&missing),
             "backup missing on server"
@@ -354,7 +367,11 @@ mod tests {
             None,
             Some(true),
         );
-        assert!(status_log::e2ee_status(&unknown)[0].contains("server backup not checked"));
+        assert!(
+            status_log::e2ee_status(&unknown)[0]
+                .1
+                .contains("server backup not checked")
+        );
         assert_eq!(
             e2ee_backup_health_summary(&unknown),
             "server backup not checked"
