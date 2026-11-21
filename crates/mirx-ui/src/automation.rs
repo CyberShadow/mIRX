@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 62;
+pub(crate) const PROTOCOL_VERSION: u32 = 63;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -925,7 +925,46 @@ pub(crate) struct WaitIdleResponse {
     pub(crate) idle: bool,
     pub(crate) event_generation: u64,
     pub(crate) pending_core_events: u64,
+    /// Commands sent to the core that it has not acked yet, counting acks
+    /// still in `pending_core_events`.
+    pub(crate) pending_core_commands: u64,
+    /// A message posted to the UI thread (input, a menu command, a
+    /// follow-up a handler posted) waits to be dispatched.
+    pub(crate) posted_messages_pending: bool,
     pub(crate) synthetic_load_in_progress: bool,
+}
+
+/// What one WAIT_IDLE probe saw, before the verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct IdleProbe {
+    pub(crate) event_generation: u64,
+    pub(crate) pending_core_events: u64,
+    pub(crate) pending_core_commands: u64,
+    pub(crate) posted_messages_pending: bool,
+    pub(crate) synthetic_load_in_progress: bool,
+    /// The event generation the previous probe saw.
+    pub(crate) previous_generation: Option<u64>,
+}
+
+impl WaitIdleResponse {
+    /// Idle: the core has answered every command it was sent and the UI
+    /// applied those answers, nothing posted waits, no synthetic load runs,
+    /// and no event arrived since the previous probe (for the core's
+    /// background events, such as sync, that no command accounts for).
+    pub(crate) fn from_probe(probe: IdleProbe) -> Self {
+        Self {
+            idle: probe.pending_core_events == 0
+                && probe.pending_core_commands == 0
+                && !probe.posted_messages_pending
+                && !probe.synthetic_load_in_progress
+                && probe.previous_generation == Some(probe.event_generation),
+            event_generation: probe.event_generation,
+            pending_core_events: probe.pending_core_events,
+            pending_core_commands: probe.pending_core_commands,
+            posted_messages_pending: probe.posted_messages_pending,
+            synthetic_load_in_progress: probe.synthetic_load_in_progress,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3370,8 +3409,8 @@ mod tests {
         DumpSubmittedSetupRecoveryCommand, DumpSubmittedUserCommand,
         DumpSubmittedVerificationRequest, DumpUnsupportedRoomMessageActivity,
         DumpUserCommandAction, FindActiveViewArgs, FindActiveViewResponse, GetVersionResponse,
-        LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiArrangement, MdiState,
-        MdiView, MdiWindowPlacement, MdiWindowState, MircFormatKey, NavigationNode,
+        IdleProbe, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiArrangement,
+        MdiState, MdiView, MdiWindowPlacement, MdiWindowState, MircFormatKey, NavigationNode,
         NavigationNodeKey, NavigationPathSegment, NoArgs, OpenDialogArgs,
         OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs, PROTOCOL_VERSION,
         ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
@@ -3637,9 +3676,51 @@ mod tests {
         );
     }
 
+    fn idle_probe(previous_generation: Option<u64>) -> IdleProbe {
+        IdleProbe {
+            event_generation: 7,
+            pending_core_events: 0,
+            pending_core_commands: 0,
+            posted_messages_pending: false,
+            synthetic_load_in_progress: false,
+            previous_generation,
+        }
+    }
+
     #[test]
-    fn protocol_version_is_62() {
-        assert_eq!(PROTOCOL_VERSION, 62);
+    fn idle_needs_every_command_answered_nothing_posted_and_a_settled_generation() {
+        assert!(WaitIdleResponse::from_probe(idle_probe(Some(7))).idle);
+        for probe in [
+            // The first probe, or one after an event, settles nothing yet.
+            idle_probe(None),
+            idle_probe(Some(6)),
+            IdleProbe {
+                pending_core_events: 1,
+                ..idle_probe(Some(7))
+            },
+            // The core has not answered a command yet: its refusal may be
+            // on the way.
+            IdleProbe {
+                pending_core_commands: 1,
+                ..idle_probe(Some(7))
+            },
+            // Input the driver posted before asking has not been handled.
+            IdleProbe {
+                posted_messages_pending: true,
+                ..idle_probe(Some(7))
+            },
+            IdleProbe {
+                synthetic_load_in_progress: true,
+                ..idle_probe(Some(7))
+            },
+        ] {
+            assert!(!WaitIdleResponse::from_probe(probe).idle, "{probe:?}");
+        }
+    }
+
+    #[test]
+    fn protocol_version_is_63() {
+        assert_eq!(PROTOCOL_VERSION, 63);
     }
 
     #[test]
@@ -5664,7 +5745,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":62,
+                    "protocol_version":63,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5676,6 +5757,8 @@ mod tests {
                     idle: true,
                     event_generation: 7,
                     pending_core_events: 0,
+                    pending_core_commands: 0,
+                    posted_messages_pending: false,
                     synthetic_load_in_progress: false,
                 },
             ))
@@ -5687,6 +5770,8 @@ mod tests {
                     "idle":true,
                     "event_generation":7,
                     "pending_core_events":0,
+                    "pending_core_commands":0,
+                    "posted_messages_pending":false,
                     "synthetic_load_in_progress":false
                 }
             })

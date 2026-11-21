@@ -2,6 +2,30 @@
 
 use super::*;
 
+/// Lets the thread handle what was posted to it (the MDI client posts
+/// itself `WM_MDICALCCHILDSCROLL` as the load lays out windows), as its
+/// message loop does between a driver's requests. The self-test runs
+/// inside the posted `WM_SELF_TEST`, so without this nothing posted would
+/// ever be dispatched, and WAIT_IDLE waits for every posted message.
+unsafe fn dispatch_posted_messages() {
+    let mut message = MSG::default();
+    while PeekMessageW(
+        &mut message,
+        null_mut(),
+        0,
+        0,
+        PM_REMOVE | PM_QS_POSTMESSAGE,
+    ) != 0
+    {
+        assert_ne!(
+            message.message, WM_QUIT,
+            "the self-test ends the app itself"
+        );
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+}
+
 pub(super) unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
     let edit = compose_edit(hwnd);
     let expected_text = "self-test message";
@@ -147,6 +171,7 @@ pub(super) unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
 
     let mut idle = false;
     for _ in 0..8 {
+        dispatch_posted_messages();
         let wait_idle = send_automation_request(
             hwnd,
             COMMAND_ID_WAIT_IDLE,

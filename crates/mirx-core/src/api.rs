@@ -1915,6 +1915,14 @@ pub enum SyncStopReason {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Event {
     Started,
+    /// The core finished one command: every event it emitted for it is
+    /// ahead of this one, so the UI knows the core has answered everything
+    /// it was sent (`CommandSender::sent`). Work the command left running
+    /// (sync, the send queue, an identity reset waiting for approval)
+    /// answers later, on its own. Never in a fixture or a replayed load:
+    /// only the core acks its own commands.
+    #[serde(skip)]
+    CommandHandled,
     /// A browser sign-in waits for the user to sign in on this page, which
     /// sends the browser back to mirx; `LoggedIn` or a `Login` error
     /// follows, or `LoginCancelled`.

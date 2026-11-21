@@ -83,7 +83,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW,
     SystemParametersInfoW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN,
     WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
+    WM_MOUSEWHEEL, WM_NULL, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -2266,6 +2266,17 @@ fn activate_switchbar_item_by_command(
     app: &MirxApp,
     identity: &ViewIdentity,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    click_switchbar_item(app, identity)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+/// Sends the switchbar button's command, as a click does, and returns once
+/// the frame handled it (not waiting for the core).
+fn click_switchbar_item(
+    app: &MirxApp,
+    identity: &ViewIdentity,
+) -> Result<(), Box<dyn std::error::Error>> {
     let ui_state = app.dump_ui_state()?;
     let index = ui_state
         .switchbar
@@ -2282,7 +2293,6 @@ fn activate_switchbar_item_by_command(
             0,
         );
     }
-    app.wait_idle(Duration::from_secs(5))?;
     Ok(())
 }
 
@@ -3044,7 +3054,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 62);
+    assert_eq!(version.protocol_version, 63);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -3415,7 +3425,6 @@ fn activity_colours_come_back_after_a_restart() -> Result<(), Box<dyn std::error
     app.wait_for_connection("syncing", Duration::from_secs(30))?;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        app.wait_idle(Duration::from_secs(5))?;
         let ui_state = app.dump_ui_state()?;
         if find_ui_room(&ui_state, "!beta:example")
             .read_state
@@ -3551,7 +3560,6 @@ fn wait_for_status_line(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let deadline = Instant::now() + timeout;
     loop {
-        app.wait_idle(Duration::from_secs(5))?;
         let lines = status_view_lines(app)?;
         if lines.iter().any(|status_line| status_line.contains(line)) {
             return Ok(());
@@ -3563,33 +3571,10 @@ fn wait_for_status_line(
     }
 }
 
-/// Waits for a line in a window: the automation core answers a command
-/// with its refusal at no fixed moment, which `wait_idle` cannot see coming.
-fn wait_for_view_line(
-    app: &MirxApp,
-    identity: &ViewIdentity,
-    line: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        app.wait_idle(Duration::from_secs(5))?;
-        let ui_state = app.dump_ui_state()?;
-        let view = find_view(&ui_state, identity);
-        if view_contains(view, line) {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(format!("{identity:?} never showed {line:?}: {:?}", view.lines).into());
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
-
 /// Until the sync's first response came: `SyncConnected`.
 fn wait_until_connected(app: &MirxApp) -> Result<(), Box<dyn std::error::Error>> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        app.wait_idle(Duration::from_secs(5))?;
         let status = app.dump_model()?.status;
         if status == "connected to example" {
             return Ok(());
@@ -4667,6 +4652,14 @@ fn launch_signed_in_member_app(
     let options = launch_options(Some(local_app_data.to_path_buf()));
     let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&signed_in_member_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_view(room_identity("!beta:example"))?;
+    Ok(app)
+}
+
+/// Alice signed in, with Bob in `!beta:example`.
+fn signed_in_member_events() -> Vec<Event> {
     let member = |user_id: &str, display_name: &str, is_own_user| RoomMemberSummary {
         user_id: user_id.to_owned(),
         display_name: Some(display_name.to_owned()),
@@ -4691,10 +4684,7 @@ fn launch_signed_in_member_app(
             member("@bob:example", "Bob", false),
         ],
     }));
-    app.load_events(&serde_json::to_string(&events)?)?;
-    app.wait_idle(Duration::from_secs(5))?;
-    app.select_view(room_identity("!beta:example"))?;
-    Ok(app)
+    events
 }
 
 #[test]
@@ -4728,16 +4718,12 @@ fn automation_driver_slash_verify_starts_verifications() -> Result<(), Box<dyn s
             request("@alice:example", None),
         ]
     );
-    let beta = room_identity("!beta:example");
-    wait_for_view_line(
-        &app,
-        &beta,
-        "* /verify: verification requires an authenticated session",
-    )?;
     let ui_state = app.dump_ui_state()?;
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
+    assert!(view_contains(beta, "* /verify: no such nick: Nobody"));
     assert!(view_contains(
-        find_view(&ui_state, &beta),
-        "* /verify: no such nick: Nobody"
+        beta,
+        "* /verify: verification requires an authenticated session"
     ));
 
     drop(app);
@@ -4868,16 +4854,13 @@ fn automation_driver_identity_accept_submits_and_refuses_unchanged()
     );
     let events = [Event::UserIdentityAccepted("@bob:example".to_owned())];
     app.append_synthetic_events(&serde_json::to_string(&events)?)?;
-    // The automation core is not signed in.
-    wait_for_view_line(
-        &app,
-        &room_identity("!beta:example"),
-        "* /identity: accepting an identity requires an authenticated session",
-    )?;
+    app.wait_idle(Duration::from_secs(5))?;
     let ui_state = app.dump_ui_state()?;
     let beta = find_view(&ui_state, &room_identity("!beta:example"));
     for line in [
         "* /identity: Alice's identity has not changed",
+        // The automation core is not signed in.
+        "* /identity: accepting an identity requires an authenticated session",
         "* Bob's new identity accepted",
     ] {
         assert!(view_contains(beta, line), "{line}: {:?}", beta.lines);
@@ -5033,6 +5016,103 @@ fn automation_driver_reset_e2ee_needs_a_session() -> Result<(), Box<dyn std::err
     Ok(())
 }
 
+/// A homeserver that takes its time: every request is answered with a 404
+/// after `delay`, so a sign-in against it keeps the core busy (its worker
+/// handles one command at a time) without anything leaving the host.
+fn spawn_slow_homeserver(delay: Duration) -> Result<String, Box<dyn std::error::Error>> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            std::thread::spawn(move || {
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request);
+                std::thread::sleep(delay);
+                let body = r#"{"errcode":"M_UNRECOGNIZED","error":"slow"}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            });
+        }
+    });
+    Ok(format!("http://{address}"))
+}
+
+/// `wait_idle` returns only once the core answered every command it was
+/// sent. The core is kept busy by a slow sign-in, so twenty refusals from
+/// the unsigned automation core come a second or more after they were
+/// typed; one `wait_idle` still finds them all in the window.
+#[test]
+fn automation_driver_wait_idle_waits_for_the_cores_answers()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let slow = spawn_slow_homeserver(Duration::from_secs(1))?;
+    app.login(&slow, "alice", "secret", None)?;
+    // Loading and selecting are synchronous: no `wait_idle`, which would
+    // wait for the sign-in.
+    app.load_events(&serde_json::to_string(&signed_in_member_events())?)?;
+    app.select_view(room_identity("!beta:example"))?;
+    const COMMANDS: usize = 20;
+    for n in 0..COMMANDS {
+        app.set_compose_text(&format!("/devices @u{n}:example"))?;
+        app.send_compose_key(ComposeKey::Return)?;
+    }
+    app.wait_idle(Duration::from_secs(60))?;
+
+    let ui_state = app.dump_ui_state()?;
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
+    assert_eq!(
+        view_lines_containing(
+            beta,
+            "* /devices: listing devices requires an authenticated session"
+        )
+        .len(),
+        COMMANDS,
+        "{:?}",
+        beta.lines
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(local_app_data);
+    Ok(())
+}
+
+/// `wait_idle` returns only once what the driver posted was handled. The
+/// automation requests are sent messages, which the UI thread handles
+/// before posted ones, so behind a queue of posted no-ops the probe comes
+/// first; yet the posted View > Switchbar has hidden the switchbar once
+/// `wait_idle` returns.
+#[test]
+fn automation_driver_wait_idle_covers_posted_input() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_signed_in_member_app(&local_app_data)?;
+    assert!(app.dump_ui_state()?.frame_layout.switchbar.is_some());
+
+    let frame = app.automation_frame_hwnd() as HWND;
+    for _ in 0..2000 {
+        assert_ne!(unsafe { PostMessageW(frame, WM_NULL, 0, 0) }, 0);
+    }
+    assert_ne!(
+        unsafe { PostMessageW(frame, WM_COMMAND, MENU_ID_VIEW_SWITCHBAR as WPARAM, 0) },
+        0
+    );
+    app.wait_idle(Duration::from_secs(10))?;
+    assert_eq!(app.dump_ui_state()?.frame_layout.switchbar, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(local_app_data);
+    Ok(())
+}
+
 #[test]
 fn automation_driver_devices_lists_sessions_whois_style() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -5091,16 +5171,13 @@ fn automation_driver_devices_lists_sessions_whois_style() -> Result<(), Box<dyn 
         }),
     ];
     app.append_synthetic_events(&serde_json::to_string(&events)?)?;
-    wait_for_view_line(
-        &app,
-        &room_identity("!beta:example"),
-        "* /devices: listing devices requires an authenticated session",
-    )?;
+    app.wait_idle(Duration::from_secs(5))?;
 
     let ui_state = app.dump_ui_state()?;
     let beta = find_view(&ui_state, &room_identity("!beta:example"));
     for line in [
         "* /devices: no such nick: Nobody",
+        "* /devices: listing devices requires an authenticated session",
         "* Alice sessions:",
         "* Alice L4PT0P \"Laptop\" verified, last seen Fri Nov 20 14:02:11 2026 (this session)",
         "* Alice PH0NE unverified",
@@ -5191,11 +5268,7 @@ fn automation_driver_recover_e2ee_before_auth_never_echoes_secret()
     app.recover_e2ee("sample recovery secret")?;
     app.wait_idle(Duration::from_secs(5))?;
     app.select_status_view()?;
-    wait_for_status_line(
-        &app,
-        "E2EE recovery requires an authenticated session",
-        Duration::from_secs(5),
-    )?;
+    app.wait_idle(Duration::from_secs(2))?;
 
     let model = app.dump_model()?;
     assert_eq!(
@@ -5226,11 +5299,7 @@ fn automation_driver_setup_e2ee_recovery_before_auth_never_echoes_passphrase()
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
 
     app.setup_e2ee_recovery(Some("sample setup passphrase"), true)?;
-    wait_for_status_line(
-        &app,
-        "E2EE recovery setup requires an authenticated session",
-        Duration::from_secs(5),
-    )?;
+    app.wait_idle(Duration::from_secs(5))?;
     let model = app.dump_model()?;
     assert_eq!(
         model.last_error,
@@ -9125,6 +9194,9 @@ fn page_keys_in_the_editbox_scroll_the_timeline() -> Result<(), Box<dyn std::err
 
     // Empty, Ctrl+Home and Ctrl+End go to the top and the bottom.
     app.set_compose_text("")?;
+    // The mock never answers /messages, so the core stays busy with this
+    // backfill and is never idle again: no `wait_idle` from here on. The
+    // synthetic answers below apply as they are appended.
     press_keys(&[VK_CONTROL, VK_HOME]);
     wait_for_top_line(timeline, 0)?;
     assert_eq!(app.dump_model()?.submitted_history_commands.len(), 1);
@@ -9132,13 +9204,12 @@ fn page_keys_in_the_editbox_scroll_the_timeline() -> Result<(), Box<dyn std::err
     wait_for_top_line(timeline, bottom)?;
 
     // The Status window's editbox pages its own timeline.
-    activate_switchbar_item_by_command(&app, &ViewIdentity::Status)?;
+    click_switchbar_item(&app, &ViewIdentity::Status)?;
     assert_compose_has_focus(&app);
     for _ in 0..12 {
         app.set_compose_text("/help")?;
         app.send_compose_key(ComposeKey::Return)?;
     }
-    app.wait_idle(Duration::from_secs(5))?;
     let status = app.active_timeline_hwnd()? as HWND;
     let status_bottom = unsafe { timeline_top_line(status) };
     assert!(status_bottom > 0, "/help must fill the Status window");
@@ -9359,6 +9430,9 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
         Duration::from_secs(5),
     )?;
 
+    // The mock never answers /messages, so the core stays busy with this
+    // backfill and is never idle again: no `wait_idle` from here on. The
+    // synthetic answers below apply as they are appended.
     let result = app.find_active_view("absent needle")?;
     assert_eq!(result.history_search, UiFindHistorySearchState::Loading);
     let model = app.dump_model()?;
@@ -9383,7 +9457,6 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
             "older seed row",
         ))],
     )])?)?;
-    app.wait_idle(Duration::from_secs(5))?;
 
     app.trigger_active_timeline_history_backfill()?;
     let model = app.dump_model()?;
@@ -9404,7 +9477,6 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
         },
     )])?)?;
     app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
-    app.wait_idle(Duration::from_secs(5))?;
 
     let ui_state = app.dump_ui_state()?;
     let (room, view) = find_room_state_and_view(&ui_state, "!beta:example");
@@ -9498,6 +9570,9 @@ fn custom_room_timeline_history_backfill_exhausted_is_visible_and_blocks_retry()
         Duration::from_secs(5),
     )?;
 
+    // The mock never answers /messages, so the core stays busy with this
+    // backfill and is never idle again: no `wait_idle` from here on. The
+    // synthetic answers below apply as they are appended.
     let result = app.find_active_view("absent needle")?;
     assert_eq!(result.history_search, UiFindHistorySearchState::Loading);
     let model = app.dump_model()?;
@@ -9508,7 +9583,6 @@ fn custom_room_timeline_history_backfill_exhausted_is_visible_and_blocks_retry()
         None,
         Vec::new(),
     )])?)?;
-    app.wait_idle(Duration::from_secs(5))?;
 
     let ui_state = app.dump_ui_state()?;
     let (room, view) = find_room_state_and_view(&ui_state, "!beta:example");
@@ -9755,6 +9829,9 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
         0,
         "backfill must start from the oldest visible current row"
     );
+    // The mock never answers /messages, so the core stays busy with this
+    // backfill and is never idle again: no `wait_idle` from here on. The
+    // synthetic answers below apply as they are appended.
     app.trigger_active_timeline_history_backfill()?;
 
     app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
@@ -9785,7 +9862,6 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
             )),
         ],
     )])?)?;
-    app.wait_idle(Duration::from_secs(5))?;
 
     assert!(
         unsafe { timeline_top_line(timeline_hwnd) } > 0,

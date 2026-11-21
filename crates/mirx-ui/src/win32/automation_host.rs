@@ -164,6 +164,50 @@ unsafe fn dispatch_command(hwnd: HWND, command: ParsedCommand) -> ResponseEnvelo
     }
 }
 
+/// What WAIT_IDLE looks at, recording the event generation for the next
+/// probe.
+unsafe fn probe_idle(state: &mut WindowState) -> IdleProbe {
+    let pending_core_events = state
+        .event_queue
+        .lock()
+        .expect("core event queue poisoned")
+        .len() as u64;
+    let previous_generation = state
+        .last_idle_probe_generation
+        .replace(state.event_generation);
+    IdleProbe {
+        event_generation: state.event_generation,
+        pending_core_events,
+        pending_core_commands: pending_core_commands(state),
+        // The probe runs inside the driver's sent WM_COPYDATA, which the
+        // thread handles before any posted message: whatever the driver
+        // (or a handler) posted before asking still waits in the queue.
+        posted_messages_pending: GetQueueStatus(QS_ALLPOSTMESSAGE) >> 16 != 0,
+        synthetic_load_in_progress: state.synthetic_load_in_progress,
+        previous_generation,
+    }
+}
+
+/// The commands sent to the core that it has not acked, or whose ack the
+/// UI has not applied yet.
+fn pending_core_commands(state: &mut WindowState) -> u64 {
+    // The inert core of a render-state run answers nothing: its commands
+    // are handled once dropped.
+    if let Some(receiver) = &mut state.inert_command_receiver {
+        while receiver.try_recv().is_ok() {
+            state.core_commands_handled += 1;
+        }
+    }
+    let sent = state.command_sender.as_ref().map_or(0, CommandSender::sent);
+    sent.checked_sub(state.core_commands_handled)
+        .unwrap_or_else(|| {
+            panic!(
+                "the core acked {} commands, more than the {sent} sent",
+                state.core_commands_handled
+            )
+        })
+}
+
 unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, FailureEnvelope> {
     match command {
         ParsedCommand::Ping { id } => serialize_success_json(&id, PongResponse { pong: true }),
@@ -175,36 +219,9 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             drain_core_events_and_refresh(hwnd).map_err(|message| {
                 failure_response(Some(id.clone()), "state_unavailable", message)
             })?;
-
-            let (pending_core_events, event_generation, synthetic_load_in_progress, idle) = {
-                let state = state_mut(hwnd);
-                let pending_core_events = state
-                    .event_queue
-                    .lock()
-                    .expect("core event queue poisoned")
-                    .len() as u64;
-                let event_generation = state.event_generation;
-                let synthetic_load_in_progress = state.synthetic_load_in_progress;
-                let idle = pending_core_events == 0
-                    && !synthetic_load_in_progress
-                    && state.last_idle_probe_generation == Some(event_generation);
-                state.last_idle_probe_generation = Some(event_generation);
-                (
-                    pending_core_events,
-                    event_generation,
-                    synthetic_load_in_progress,
-                    idle,
-                )
-            };
-
             serialize_success_json(
                 &id,
-                WaitIdleResponse {
-                    idle,
-                    event_generation,
-                    pending_core_events,
-                    synthetic_load_in_progress,
-                },
+                WaitIdleResponse::from_probe(probe_idle(state_mut(hwnd))),
             )
         }
         ParsedCommand::DumpModel { id } => {

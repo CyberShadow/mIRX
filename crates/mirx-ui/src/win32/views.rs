@@ -1547,6 +1547,32 @@ mod tests {
     }
 
     #[test]
+    fn a_command_ack_is_counted_and_rebuilds_nothing() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                state_mut(hwnd).model.rooms = vec![room("!a:example", "A", false)];
+                sync_views_and_tree(hwnd).unwrap();
+                let counters = |hwnd| {
+                    let counters = &state_ref(hwnd).refresh_counters;
+                    (
+                        counters.timeline_row_builds(),
+                        counters.rows_wrapped(),
+                        counters.treebar_rebuilds(),
+                        counters.switchbar_rebuilds(),
+                    )
+                };
+                let before = counters(hwnd);
+                let generation = state_ref(hwnd).event_generation;
+
+                apply_events_and_refresh(hwnd, vec![Event::CommandHandled]).unwrap();
+                assert_eq!(state_ref(hwnd).core_commands_handled, 1);
+                assert_eq!(state_ref(hwnd).event_generation, generation + 1);
+                assert_eq!(counters(hwnd), before);
+            });
+        }
+    }
+
+    #[test]
     fn resolve_active_view_preserves_existing_active_room() {
         let model = UiModel {
             rooms: vec![

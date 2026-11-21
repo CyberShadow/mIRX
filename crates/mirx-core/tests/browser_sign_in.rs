@@ -103,6 +103,9 @@ impl Harness {
         }) else {
             unreachable!()
         };
+        // The login command is done once it gave the page; the redirect
+        // that ends the sign-in is no command.
+        assert_eq!(next_event(self.core.events()), Event::CommandHandled);
         Url::parse(&url).expect("the sign-in address is a URL")
     }
 
@@ -525,9 +528,11 @@ fn cancelling_a_browser_sign_in_closes_the_listener() {
         panic!("expected the start sync error");
     };
     assert_eq!(error.operation, Operation::StartSync);
+    assert_eq!(next_event(harness.core.events()), Event::CommandHandled);
 
     harness.send(Command::CancelLogin);
     assert_eq!(next_event(harness.core.events()), Event::LoginCancelled);
+    assert_eq!(next_event(harness.core.events()), Event::CommandHandled);
     assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
 
     harness.browser_login(None);
@@ -560,6 +565,7 @@ fn shutdown_stops_waiting_for_the_browser() {
         .port()
         .expect("a port");
     harness.send(Command::Shutdown);
+    assert_eq!(next_event(harness.core.events()), Event::CommandHandled);
     assert_eq!(next_event(harness.core.events()), Event::Stopped);
     assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
     harness.core.join().expect("join core");

@@ -4,6 +4,8 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 
@@ -34,18 +36,35 @@ use crate::matrix::{
 
 pub(crate) type EventSender = mpsc::Sender<Event>;
 
+/// Sends commands to the core and counts them; clones share the count.
+/// The core answers each command with `Event::CommandHandled` after the
+/// command's own events, so `sent()` minus the acks applied is the number
+/// of commands the core has not answered yet.
 #[derive(Debug, Clone)]
 pub struct CommandSender {
     sender: UnboundedSender<Command>,
+    sent: Arc<AtomicU64>,
 }
 
 impl CommandSender {
     pub fn new(sender: UnboundedSender<Command>) -> Self {
-        Self { sender }
+        Self {
+            sender,
+            sent: Arc::new(AtomicU64::new(0)),
+        }
     }
 
     pub fn send(&self, command: Command) -> Result<(), SendCommandError> {
+        // Counted before it is sent, so no reader ever sees the command's
+        // ack before its count. A failed send means the core is gone: the
+        // command stays unanswered, as it is.
+        self.sent.fetch_add(1, Ordering::Relaxed);
         self.sender.send(command).map_err(|_| SendCommandError)
+    }
+
+    /// How many commands were sent through this sender and its clones.
+    pub fn sent(&self) -> u64 {
+        self.sent.load(Ordering::Relaxed)
     }
 }
 
@@ -257,7 +276,11 @@ async fn run_worker(
         match next {
             Next::Command(None) => break,
             Next::Command(Some(command)) => {
-                if handle_command(command, &config, &event_tx, &mut state).await {
+                let stop = handle_command(command, &config, &event_tx, &mut state).await;
+                // After every event the command emitted itself; a redirect
+                // or a finished identity reset is no command, so no ack.
+                emit_event(&event_tx, Event::CommandHandled);
+                if stop {
                     break;
                 }
             }

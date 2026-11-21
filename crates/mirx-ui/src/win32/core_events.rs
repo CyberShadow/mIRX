@@ -394,6 +394,7 @@ pub(super) fn apply_core_event(
 ) -> Result<ActivityAttention, String> {
     state.model.connection = connection::after_event(state.model.connection, &event);
     match event {
+        Event::CommandHandled => state.core_commands_handled += 1,
         Event::Started => {
             if matches!(
                 state.model.lifecycle_state,

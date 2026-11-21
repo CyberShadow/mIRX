@@ -2276,6 +2276,13 @@ impl MirxApp {
         self.inner.pid()
     }
 
+    /// Waits until everything the test set going has been handled: every
+    /// message it sent or posted to the UI thread, and every command the UI
+    /// sent the core (each one's answers applied). Not the core's background
+    /// work (sync, the send queue, an identity reset awaiting approval),
+    /// and not `SendInput` keys: poll for those with the `wait_for_*`
+    /// helpers, which do not wait for idle, as a command left in flight on
+    /// purpose (a hung `/messages`) would keep it from ever coming.
     pub fn wait_idle(&self, timeout: Duration) -> Result<(), TestkitError> {
         self.inner.wait_idle(timeout)
     }
@@ -2733,8 +2740,6 @@ impl MirxApp {
     ) -> Result<(), TestkitError> {
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            self.wait_idle(remaining)?;
             if self.dump_model()?.lifecycle_state == expected {
                 return Ok(());
             }
@@ -2754,8 +2759,6 @@ impl MirxApp {
     ) -> Result<(), TestkitError> {
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            self.wait_idle(remaining)?;
             if self.dump_model()?.connection == expected {
                 return Ok(());
             }
@@ -2777,8 +2780,6 @@ impl MirxApp {
     ) -> Result<UiState, TestkitError> {
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            self.wait_idle(remaining)?;
             let ui_state = self.dump_ui_state()?;
             if done(&ui_state) {
                 return Ok(ui_state);
@@ -2799,8 +2800,6 @@ impl MirxApp {
     ) -> Result<(), TestkitError> {
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            self.wait_idle(remaining)?;
             if self.list_rooms()?.len() >= min_rooms {
                 return Ok(());
             }
@@ -3031,6 +3030,8 @@ struct WaitIdleResponse {
     idle: bool,
     event_generation: u64,
     pending_core_events: u64,
+    pending_core_commands: u64,
+    posted_messages_pending: bool,
     synthetic_load_in_progress: bool,
 }
 
@@ -3854,7 +3855,7 @@ mod imp {
                 }
                 if Instant::now() >= deadline {
                     return Err(TestkitError::Timeout(format!(
-                        "WAIT_IDLE did not report idle for pid {} hwnd 0x{:x}",
+                        "WAIT_IDLE did not report idle for pid {} hwnd 0x{:x}; last probe: {response:?}",
                         self.pid, self.hwnd as usize
                     )));
                 }
@@ -4557,8 +4558,6 @@ mod imp {
         ) -> Result<(), TestkitError> {
             let deadline = Instant::now() + timeout;
             loop {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                self.wait_idle(remaining)?;
                 let entries = self.room_activity(room_id)?;
                 if entries.iter().any(|entry| entry.contains(substr)) {
                     return Ok(());

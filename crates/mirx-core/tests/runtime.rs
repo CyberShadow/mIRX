@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CoreConfig,
-    CreateDirectRoomRequest, CreateRoomRequest, CreateRoomVisibility, DeviceSummary,
+    CoreHandle, CreateDirectRoomRequest, CreateRoomRequest, CreateRoomVisibility, DeviceSummary,
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation,
     E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeSessionState,
     E2eeStatus, EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
@@ -28,6 +28,23 @@ use mirx_core::{
     VerificationRequest, VerificationState, VerificationStateEvent, start, validate_highlight_word,
 };
 use tempfile::TempDir;
+
+/// The next event that is not a command's ack. The core acks every
+/// command with `CommandHandled` after the command's own events (pinned by
+/// `every_command_is_acked_after_its_answers`); a test about the answers
+/// themselves skips the acks.
+fn next_answer(handle: &CoreHandle, what: &str) -> Event {
+    loop {
+        match handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap_or_else(|err| panic!("{what}: {err}"))
+        {
+            Event::CommandHandled => {}
+            event => return event,
+        }
+    }
+}
 
 fn test_config() -> (TempDir, CoreConfig) {
     let temp_dir = TempDir::new().expect("temporary profile directory");
@@ -76,24 +93,14 @@ fn assert_invalid_verification_command(command: Command) {
     let (_temp_dir, config) = test_config();
     let handle = start(config).expect("start core");
 
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("started event"),
-        Event::Started
-    );
+    assert_eq!(next_answer(&handle, "started event"), Event::Started);
 
     handle
         .command_sender()
         .send(command)
         .expect("send verification command");
 
-    match handle
-        .events()
-        .recv_timeout(Duration::from_secs(2))
-        .expect("verification error")
-    {
+    match next_answer(&handle, "verification error") {
         Event::Error(err) => {
             assert_eq!(err.operation, Operation::Verification);
             assert_eq!(
@@ -108,13 +115,7 @@ fn assert_invalid_verification_command(command: Command) {
         .command_sender()
         .send(Command::Shutdown)
         .expect("send shutdown");
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("stopped event"),
-        Event::Stopped
-    );
+    assert_eq!(next_answer(&handle, "stopped event"), Event::Stopped);
     handle.join().expect("join worker");
 }
 
@@ -183,24 +184,14 @@ fn assert_invalid_authenticated_command(
     let (_temp_dir, config) = test_config();
     let handle = start(config).expect("start core");
 
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("started event"),
-        Event::Started
-    );
+    assert_eq!(next_answer(&handle, "started event"), Event::Started);
 
     handle
         .command_sender()
         .send(command)
         .expect("send authenticated command");
 
-    match handle
-        .events()
-        .recv_timeout(Duration::from_secs(2))
-        .expect("authenticated command error")
-    {
+    match next_answer(&handle, "authenticated command error") {
         Event::Error(err) => {
             assert_eq!(err.operation, expected_operation);
             assert_eq!(err.room_id.as_deref(), expected_room_id);
@@ -213,13 +204,7 @@ fn assert_invalid_authenticated_command(
         .command_sender()
         .send(Command::Shutdown)
         .expect("send shutdown");
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("stopped event"),
-        Event::Stopped
-    );
+    assert_eq!(next_answer(&handle, "stopped event"), Event::Stopped);
     handle.join().expect("join worker");
 }
 
@@ -236,27 +221,89 @@ fn startup_and_shutdown_emit_lifecycle_events() {
     let (_temp_dir, config) = test_config();
     let handle = start(config).expect("start core");
 
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("started event"),
-        Event::Started
-    );
+    assert_eq!(next_answer(&handle, "started event"), Event::Started);
 
     handle
         .command_sender()
         .send(Command::Shutdown)
         .expect("send shutdown");
 
-    assert_eq!(
-        handle
+    assert_eq!(next_answer(&handle, "stopped event"), Event::Stopped);
+
+    handle.join().expect("join worker");
+}
+
+/// Every event the core has emitted so far, in order, until it goes quiet.
+fn events_until_stopped(handle: &CoreHandle) -> Vec<Event> {
+    let mut events = Vec::new();
+    loop {
+        let event = handle
             .events()
             .recv_timeout(Duration::from_secs(2))
-            .expect("stopped event"),
-        Event::Stopped
-    );
+            .expect("core event");
+        let stopped = event == Event::Stopped;
+        events.push(event);
+        if stopped {
+            return events;
+        }
+    }
+}
 
+fn error_operation(event: &Event) -> Option<Operation> {
+    match event {
+        Event::Error(error) => Some(error.operation),
+        _ => None,
+    }
+}
+
+#[test]
+fn every_command_is_acked_after_its_answers() {
+    let (_temp_dir, config) = test_config();
+    let handle = start(config).expect("start core");
+    let sender = handle.command_sender();
+    sender
+        .send(Command::FetchUserProfile("@alice:example.org".to_owned()))
+        .expect("send fetch user profile");
+    sender
+        .send(Command::ListUserDevices("@alice:example.org".to_owned()))
+        .expect("send list user devices");
+    sender.send(Command::StartSync).expect("send start sync");
+    assert_eq!(sender.sent(), 3);
+    // A clone counts into the same total.
+    sender
+        .clone()
+        .send(Command::Shutdown)
+        .expect("send shutdown");
+    assert_eq!(sender.sent(), 4);
+
+    let events = events_until_stopped(&handle);
+    let shape: Vec<_> = events
+        .iter()
+        .map(|event| match event {
+            Event::Started => "started".to_owned(),
+            Event::CommandHandled => "ack".to_owned(),
+            Event::Stopped => "stopped".to_owned(),
+            other => format!(
+                "{:?}",
+                error_operation(other).unwrap_or_else(|| panic!("unexpected {other:?}"))
+            ),
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            "started",
+            "FetchUserProfile",
+            "ack",
+            "ListUserDevices",
+            "ack",
+            "StartSync",
+            "ack",
+            // Shutdown is acked too, before the worker stops.
+            "ack",
+            "stopped",
+        ]
+    );
     handle.join().expect("join worker");
 }
 
@@ -298,13 +345,7 @@ fn invalid_command_ordering_emits_typed_error_events() {
     let (_temp_dir, config) = test_config();
     let handle = start(config).expect("start core");
 
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("started event"),
-        Event::Started
-    );
+    assert_eq!(next_answer(&handle, "started event"), Event::Started);
 
     handle
         .command_sender()
@@ -343,30 +384,12 @@ fn invalid_command_ordering_emits_typed_error_events() {
         .send(Command::Logout)
         .expect("send logout");
 
-    let start_sync_error = handle
-        .events()
-        .recv_timeout(Duration::from_secs(2))
-        .expect("start sync error");
-    let stop_sync_error = handle
-        .events()
-        .recv_timeout(Duration::from_secs(2))
-        .expect("stop sync error");
-    let send_message_error = handle
-        .events()
-        .recv_timeout(Duration::from_secs(2))
-        .expect("send message error");
-    let mark_room_read_error = handle
-        .events()
-        .recv_timeout(Duration::from_secs(2))
-        .expect("mark room read error");
-    let create_direct_room_error = handle
-        .events()
-        .recv_timeout(Duration::from_secs(2))
-        .expect("create direct room error");
-    let logout_error = handle
-        .events()
-        .recv_timeout(Duration::from_secs(2))
-        .expect("logout error");
+    let start_sync_error = next_answer(&handle, "start sync error");
+    let stop_sync_error = next_answer(&handle, "stop sync error");
+    let send_message_error = next_answer(&handle, "send message error");
+    let mark_room_read_error = next_answer(&handle, "mark room read error");
+    let create_direct_room_error = next_answer(&handle, "create direct room error");
+    let logout_error = next_answer(&handle, "logout error");
 
     match start_sync_error {
         Event::Error(err) => assert_eq!(err.operation, Operation::StartSync),
@@ -412,13 +435,7 @@ fn invalid_command_ordering_emits_typed_error_events() {
         .command_sender()
         .send(Command::Shutdown)
         .expect("send shutdown");
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("stopped event"),
-        Event::Stopped
-    );
+    assert_eq!(next_answer(&handle, "stopped event"), Event::Stopped);
     handle.join().expect("join worker");
 }
 
@@ -858,24 +875,14 @@ fn refresh_e2ee_status_before_login_emits_status_error() {
     let (_temp_dir, config) = test_config();
     let handle = start(config).expect("start core");
 
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("started event"),
-        Event::Started
-    );
+    assert_eq!(next_answer(&handle, "started event"), Event::Started);
 
     handle
         .command_sender()
         .send(Command::RefreshE2eeStatus)
         .expect("send refresh e2ee status");
 
-    match handle
-        .events()
-        .recv_timeout(Duration::from_secs(2))
-        .expect("e2ee status error")
-    {
+    match next_answer(&handle, "e2ee status error") {
         Event::Error(err) => {
             assert_eq!(err.operation, Operation::E2eeStatus);
             assert_eq!(err.message, "E2EE status requires an authenticated session");
@@ -887,13 +894,7 @@ fn refresh_e2ee_status_before_login_emits_status_error() {
         .command_sender()
         .send(Command::Shutdown)
         .expect("send shutdown");
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("stopped event"),
-        Event::Stopped
-    );
+    assert_eq!(next_answer(&handle, "stopped event"), Event::Stopped);
     handle.join().expect("join worker");
 }
 
@@ -902,13 +903,7 @@ fn recover_e2ee_before_login_emits_recovery_error() {
     let (_temp_dir, config) = test_config();
     let handle = start(config).expect("start core");
 
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("started event"),
-        Event::Started
-    );
+    assert_eq!(next_answer(&handle, "started event"), Event::Started);
 
     handle
         .command_sender()
@@ -917,11 +912,7 @@ fn recover_e2ee_before_login_emits_recovery_error() {
         }))
         .expect("send recover e2ee");
 
-    match handle
-        .events()
-        .recv_timeout(Duration::from_secs(2))
-        .expect("e2ee recovery error")
-    {
+    match next_answer(&handle, "e2ee recovery error") {
         Event::Error(err) => {
             assert_eq!(err.operation, Operation::RecoverE2ee);
             assert_eq!(
@@ -936,13 +927,7 @@ fn recover_e2ee_before_login_emits_recovery_error() {
         .command_sender()
         .send(Command::Shutdown)
         .expect("send shutdown");
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("stopped event"),
-        Event::Stopped
-    );
+    assert_eq!(next_answer(&handle, "stopped event"), Event::Stopped);
     handle.join().expect("join worker");
 }
 
@@ -951,13 +936,7 @@ fn setup_e2ee_recovery_before_login_emits_setup_error() {
     let (_temp_dir, config) = test_config();
     let handle = start(config).expect("start core");
 
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("started event"),
-        Event::Started
-    );
+    assert_eq!(next_answer(&handle, "started event"), Event::Started);
 
     handle
         .command_sender()
@@ -967,11 +946,7 @@ fn setup_e2ee_recovery_before_login_emits_setup_error() {
         }))
         .expect("send setup e2ee recovery");
 
-    match handle
-        .events()
-        .recv_timeout(Duration::from_secs(2))
-        .expect("e2ee recovery setup error")
-    {
+    match next_answer(&handle, "e2ee recovery setup error") {
         Event::Error(err) => {
             assert_eq!(err.operation, Operation::SetupE2eeRecovery);
             assert_eq!(
@@ -986,13 +961,7 @@ fn setup_e2ee_recovery_before_login_emits_setup_error() {
         .command_sender()
         .send(Command::Shutdown)
         .expect("send shutdown");
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("stopped event"),
-        Event::Stopped
-    );
+    assert_eq!(next_answer(&handle, "stopped event"), Event::Stopped);
     handle.join().expect("join worker");
 }
 
@@ -1007,13 +976,7 @@ fn login_store_initialization_failure_emits_typed_error_event() {
     };
     let handle = start(config).expect("start core");
 
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("started event"),
-        Event::Started
-    );
+    assert_eq!(next_answer(&handle, "started event"), Event::Started);
 
     handle
         .command_sender()
@@ -1028,11 +991,7 @@ fn login_store_initialization_failure_emits_typed_error_event() {
         }))
         .expect("send login");
 
-    match handle
-        .events()
-        .recv_timeout(Duration::from_secs(2))
-        .expect("login error")
-    {
+    match next_answer(&handle, "login error") {
         Event::Error(err) => {
             assert_eq!(err.operation, Operation::Login);
             assert!(
@@ -1048,13 +1007,7 @@ fn login_store_initialization_failure_emits_typed_error_event() {
         .command_sender()
         .send(Command::Shutdown)
         .expect("send shutdown");
-    assert_eq!(
-        handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("stopped event"),
-        Event::Stopped
-    );
+    assert_eq!(next_answer(&handle, "stopped event"), Event::Stopped);
     handle.join().expect("join worker");
 }
 

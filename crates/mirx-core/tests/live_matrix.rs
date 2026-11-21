@@ -126,7 +126,8 @@ fn wait_for_live_login_and_synced_rooms(handle: &CoreHandle) {
                 assert_non_empty_session(&session, "session update");
             }
             Event::SyncedRooms(_) => saw_rooms = true,
-            Event::RoomActivity(_)
+            Event::CommandHandled
+            | Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
             | Event::RoomMembers(_)
@@ -162,7 +163,8 @@ fn wait_for_live_logged_out(handle: &CoreHandle, context: &str) {
             Event::SessionUpdated { session } => {
                 assert_non_empty_session(&session, "session update");
             }
-            Event::RoomActivity(_)
+            Event::CommandHandled
+            | Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
             | Event::RoomMembers(_)
@@ -195,7 +197,8 @@ fn wait_for_live_synced_rooms(handle: &CoreHandle, context: &str) -> Vec<RoomSum
             Event::SessionUpdated { session } => {
                 assert_non_empty_session(&session, "session update");
             }
-            Event::RoomActivity(_)
+            Event::CommandHandled
+            | Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
             | Event::RoomMembers(_)
@@ -239,7 +242,8 @@ fn wait_for_live_room_topic(handle: &CoreHandle, room_id: &str, expected_topic: 
             Event::SessionUpdated { session } => {
                 assert_non_empty_session(&session, "session update");
             }
-            Event::RoomActivity(_)
+            Event::CommandHandled
+            | Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
             | Event::RoomMembers(_)
@@ -279,7 +283,8 @@ fn live_shutdown_and_join(handle: CoreHandle) {
             Event::SessionUpdated { session } => {
                 assert_non_empty_session(&session, "session update");
             }
-            Event::RoomActivity(_)
+            Event::CommandHandled
+            | Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
             | Event::RoomMembers(_)
@@ -478,7 +483,8 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             Event::SessionUpdated { session } => {
                 assert_non_empty_session(&session, "session update");
             }
-            Event::RoomActivity(_)
+            Event::CommandHandled
+            | Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
             | Event::RoomMembers(_)
@@ -516,7 +522,8 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             Event::SessionUpdated { session } => {
                 assert_non_empty_session(&session, "session update");
             }
-            Event::RoomActivity(_)
+            Event::CommandHandled
+            | Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
             | Event::RoomMembers(_)
