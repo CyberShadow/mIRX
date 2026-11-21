@@ -40,9 +40,10 @@ const SETUP_E2EE_DIALOG_OK_ID: usize = 5015;
 const SETUP_E2EE_DIALOG_CANCEL_ID: usize = 5016;
 const RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID: u16 = 5017;
 const RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID: usize = 5018;
-const RESET_E2EE_DIALOG_PASSWORD_ID: u16 = 5019;
-const RESET_E2EE_DIALOG_RESET_ID: usize = 5020;
-const RESET_E2EE_DIALOG_CANCEL_ID: usize = 5021;
+/// A confirmation's controls (`ConfirmDialog`), in each of its classes.
+const CONFIRM_DIALOG_PASSWORD_ID: u16 = 5019;
+const CONFIRM_DIALOG_CONFIRM_ID: usize = 5020;
+const CONFIRM_DIALOG_CANCEL_ID: usize = 5021;
 const SINGLE_FIELD_DIALOG_EDIT_ID: u16 = 5010;
 const SINGLE_FIELD_DIALOG_OK_ID: usize = 5011;
 const SINGLE_FIELD_DIALOG_CANCEL_ID: usize = 5012;
@@ -69,8 +70,8 @@ const fn default_button(id: usize) -> LRESULT {
 const LOGIN_DIALOG_WIDTH: i32 = 280;
 const SINGLE_FIELD_DIALOG_WIDTH: i32 = 260;
 const RECOVERY_KEY_HANDOFF_DIALOG_WIDTH: i32 = 320;
-/// Wide enough for the warning to wrap to a few lines.
-const RESET_E2EE_DIALOG_WIDTH: i32 = 320;
+/// Wide enough for a confirmation's warning to wrap to a few lines.
+const CONFIRM_DIALOG_WIDTH: i32 = 320;
 
 // Windows' dialog metrics at 96 dpi, in pixels: what the dialog units of
 // mIRC's MS Shell Dlg 8 resource dialogs come to.
@@ -125,19 +126,42 @@ struct SetupE2eeRecoveryDialogState {
     result: Arc<Mutex<Option<SetupE2eeRecoveryForm>>>,
 }
 
+/// A destructive action's confirmation dialog: the warning, then the
+/// account password field or a note that the browser confirms, then the
+/// action's button and Cancel. Cancel is the default: Enter, typed after
+/// the password as in any other dialog, must not do it.
+struct ConfirmDialog {
+    class_name: &'static str,
+    title: &'static str,
+    warning: String,
+    /// The action's button label, with its access key.
+    confirm_label: &'static str,
+    confirm_with: ConfirmWith,
+}
+
+/// How the server wants a destructive action confirmed.
+enum ConfirmWith {
+    /// The account password: a session that signed in with the Matrix
+    /// login API.
+    Password,
+    /// The server's page in the browser, as this note tells.
+    Browser(&'static str),
+}
+
+/// A confirmed action.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ResetE2eeForm {
-    /// The account password; `None` from a session the browser confirms
-    /// for, or an empty field, which the core refuses before it changes
+pub(super) struct ConfirmForm {
+    /// The account password; `None` from a confirmation without the field,
+    /// or an empty field, which the core refuses before it changes
     /// anything.
     pub(super) password: Option<String>,
 }
 
-struct ResetE2eeDialogState {
-    /// Whether the dialog has the password field: a session that signed in
-    /// with the Matrix login API confirms a reset with its password.
+struct ConfirmDialogState {
+    /// Whether the dialog has the password field, which every way of
+    /// closing it clears.
     asks_password: bool,
-    result: Arc<Mutex<Option<ResetE2eeForm>>>,
+    result: Arc<Mutex<Option<ConfirmForm>>>,
 }
 
 /// What a reset destroys, which the dialog says before anything else.
@@ -169,7 +193,7 @@ const DIALOG_CLASSES: [(&str, WNDPROC); 9] = [
     ),
     (
         RESET_E2EE_DIALOG_CLASS_NAME,
-        Some(reset_e2ee_dialog_window_proc),
+        Some(confirm_dialog_window_proc),
     ),
     (
         RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME,
@@ -661,10 +685,9 @@ unsafe extern "system" fn setup_e2ee_dialog_window_proc(
     }
 }
 
-/// Reset is not the default button: Enter, typed after the password as in
-/// any other dialog, must not destroy the backup. Only a click on Reset (or
-/// its access key) does.
-unsafe extern "system" fn reset_e2ee_dialog_window_proc(
+/// Every `ConfirmDialog`'s window procedure. The action's button is not
+/// the default: only a click on it (or its access key) confirms.
+unsafe extern "system" fn confirm_dialog_window_proc(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,
@@ -672,43 +695,41 @@ unsafe extern "system" fn reset_e2ee_dialog_window_proc(
 ) -> LRESULT {
     match message {
         WM_NCCREATE => {
-            window_data::adopt_create_param::<ResetE2eeDialogState>(hwnd, lparam);
+            window_data::adopt_create_param::<ConfirmDialogState>(hwnd, lparam);
             // Sets the window text from the CreateWindowExW title.
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
         WM_COMMAND => match wparam & 0xffff {
-            RESET_E2EE_DIALOG_RESET_ID => {
-                let state = reset_e2ee_dialog_state(hwnd);
+            CONFIRM_DIALOG_CONFIRM_ID => {
+                let state = confirm_dialog_state(hwnd);
                 let password = state
                     .asks_password
-                    .then(|| {
-                        read_window_text(GetDlgItem(hwnd, RESET_E2EE_DIALOG_PASSWORD_ID.into()))
-                    })
+                    .then(|| read_window_text(GetDlgItem(hwnd, CONFIRM_DIALOG_PASSWORD_ID.into())))
                     .filter(|password| !password.is_empty());
-                clear_reset_e2ee_dialog_password(hwnd);
+                clear_confirm_dialog_password(hwnd);
                 *state
                     .result
                     .lock()
-                    .expect("reset e2ee dialog result mutex poisoned") =
-                    Some(ResetE2eeForm { password });
+                    .expect("confirm dialog result mutex poisoned") =
+                    Some(ConfirmForm { password });
                 end_modal_dialog(hwnd);
                 0
             }
-            RESET_E2EE_DIALOG_CANCEL_ID | ESC_CANCEL_ID => {
-                clear_reset_e2ee_dialog_password(hwnd);
+            CONFIRM_DIALOG_CANCEL_ID | ESC_CANCEL_ID => {
+                clear_confirm_dialog_password(hwnd);
                 end_modal_dialog(hwnd);
                 0
             }
             _ => DefWindowProcW(hwnd, message, wparam, lparam),
         },
-        DM_GETDEFID => default_button(RESET_E2EE_DIALOG_CANCEL_ID),
+        DM_GETDEFID => default_button(CONFIRM_DIALOG_CANCEL_ID),
         WM_CLOSE => {
-            clear_reset_e2ee_dialog_password(hwnd);
+            clear_confirm_dialog_password(hwnd);
             end_modal_dialog(hwnd);
             0
         }
         WM_NCDESTROY => {
-            window_data::drop_owned::<ResetE2eeDialogState>(hwnd);
+            window_data::drop_owned::<ConfirmDialogState>(hwnd);
             0
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -978,67 +999,86 @@ pub(super) unsafe fn show_setup_e2ee_dialog(
         .clone())
 }
 
-unsafe fn create_reset_e2ee_dialog(
+unsafe fn create_confirm_dialog(
     owner: HWND,
-    auth: &SessionAuth,
-    result: Arc<Mutex<Option<ResetE2eeForm>>>,
+    confirm: &ConfirmDialog,
+    result: Arc<Mutex<Option<ConfirmForm>>>,
 ) -> Result<HWND, String> {
-    let asks_password = match auth {
-        SessionAuth::Matrix => true,
-        SessionAuth::OAuth { .. } => false,
-    };
-    let mut state = window_data::CreateParam::new(ResetE2eeDialogState {
-        asks_password,
+    let mut state = window_data::CreateParam::new(ConfirmDialogState {
+        asks_password: matches!(confirm.confirm_with, ConfirmWith::Password),
         result,
     });
     create_modal_dialog(
         owner,
-        RESET_E2EE_DIALOG_CLASS_NAME,
-        "Reset E2EE Identity",
+        confirm.class_name,
+        confirm.title,
         state.as_param(),
         |dialog| {
-            let mut column = DialogColumn::new(dialog, RESET_E2EE_DIALOG_WIDTH);
-            column.label(RESET_E2EE_WARNING, 0, 0)?;
+            let mut column = DialogColumn::new(dialog, CONFIRM_DIALOG_WIDTH);
+            column.label(&confirm.warning, 0, 0)?;
             column.y += DIALOG_GAP;
-            if asks_password {
-                column.label("Account password", 0, 0)?;
-                column.edit(RESET_E2EE_DIALOG_PASSWORD_ID, "", ES_PASSWORD as u32)?;
-            } else {
-                column.label(
-                    "Your server will ask you to approve the reset in your browser.",
-                    0,
-                    0,
-                )?;
+            match confirm.confirm_with {
+                ConfirmWith::Password => {
+                    column.label("Account password", 0, 0)?;
+                    column.edit(CONFIRM_DIALOG_PASSWORD_ID, "", ES_PASSWORD as u32)?;
+                }
+                ConfirmWith::Browser(note) => {
+                    column.label(note, 0, 0)?;
+                }
             }
             column.buttons_with_default(
                 &[
-                    (RESET_E2EE_DIALOG_RESET_ID, "&Reset"),
-                    (RESET_E2EE_DIALOG_CANCEL_ID, "Cancel"),
+                    (CONFIRM_DIALOG_CONFIRM_ID, confirm.confirm_label),
+                    (CONFIRM_DIALOG_CANCEL_ID, "Cancel"),
                 ],
-                RESET_E2EE_DIALOG_CANCEL_ID,
+                CONFIRM_DIALOG_CANCEL_ID,
             )
         },
     )
 }
 
-/// The Reset E2EE Identity dialog, its focus on the password if it asks for
-/// one, else on Cancel.
-pub(super) unsafe fn show_reset_e2ee_dialog(
+/// A confirmation, its focus on the password if it asks for one, else on
+/// Cancel; `None` if cancelled.
+unsafe fn show_confirm_dialog(
     owner: HWND,
-    auth: &SessionAuth,
-) -> Result<Option<ResetE2eeForm>, String> {
+    confirm: &ConfirmDialog,
+) -> Result<Option<ConfirmForm>, String> {
     let result = Arc::new(Mutex::new(None));
-    let dialog = create_reset_e2ee_dialog(owner, auth, Arc::clone(&result))?;
-    let focus = match auth {
-        SessionAuth::Matrix => RESET_E2EE_DIALOG_PASSWORD_ID,
-        SessionAuth::OAuth { .. } => RESET_E2EE_DIALOG_CANCEL_ID as u16,
+    let dialog = create_confirm_dialog(owner, confirm, Arc::clone(&result))?;
+    let focus = match confirm.confirm_with {
+        ConfirmWith::Password => CONFIRM_DIALOG_PASSWORD_ID,
+        ConfirmWith::Browser(_) => CONFIRM_DIALOG_CANCEL_ID as u16,
     };
     SetFocus(GetDlgItem(dialog, focus.into()));
     run_modal_dialog(owner, dialog);
     Ok(result
         .lock()
-        .expect("reset e2ee dialog result mutex poisoned")
+        .expect("confirm dialog result mutex poisoned")
         .clone())
+}
+
+/// The Reset E2EE Identity confirmation: a Matrix session confirms with
+/// its password, an OAuth 2.0 one in the browser.
+fn reset_e2ee_confirmation(auth: &SessionAuth) -> ConfirmDialog {
+    ConfirmDialog {
+        class_name: RESET_E2EE_DIALOG_CLASS_NAME,
+        title: "Reset E2EE Identity",
+        warning: RESET_E2EE_WARNING.to_owned(),
+        confirm_label: "&Reset",
+        confirm_with: match auth {
+            SessionAuth::Matrix => ConfirmWith::Password,
+            SessionAuth::OAuth { .. } => ConfirmWith::Browser(
+                "Your server will ask you to approve the reset in your browser.",
+            ),
+        },
+    }
+}
+
+pub(super) unsafe fn show_reset_e2ee_dialog(
+    owner: HWND,
+    auth: &SessionAuth,
+) -> Result<Option<ConfirmForm>, String> {
+    show_confirm_dialog(owner, &reset_e2ee_confirmation(auth))
 }
 
 /// One labelled field with OK and Cancel: the Commands menu's prompts and
@@ -1317,14 +1357,14 @@ unsafe fn clear_recover_e2ee_dialog_secret(hwnd: HWND) {
     set_window_text(GetDlgItem(hwnd, RECOVER_E2EE_DIALOG_SECRET_ID.into()), "");
 }
 
-unsafe fn reset_e2ee_dialog_state(hwnd: HWND) -> &'static ResetE2eeDialogState {
-    window_data::get(hwnd).expect("the reset e2ee dialog has its state")
+unsafe fn confirm_dialog_state(hwnd: HWND) -> &'static ConfirmDialogState {
+    window_data::get(hwnd).expect("a confirm dialog has its state")
 }
 
 /// Clears the password, if the dialog asked for one.
-unsafe fn clear_reset_e2ee_dialog_password(hwnd: HWND) {
-    if reset_e2ee_dialog_state(hwnd).asks_password {
-        set_window_text(GetDlgItem(hwnd, RESET_E2EE_DIALOG_PASSWORD_ID.into()), "");
+unsafe fn clear_confirm_dialog_password(hwnd: HWND) {
+    if confirm_dialog_state(hwnd).asks_password {
+        set_window_text(GetDlgItem(hwnd, CONFIRM_DIALOG_PASSWORD_ID.into()), "");
     }
 }
 
@@ -1432,7 +1472,7 @@ mod tests {
     ) {
         KillTimer(frame, timer);
         let dialog = owned_dialog(frame, RESET_E2EE_DIALOG_CLASS_NAME);
-        let edit = GetDlgItem(dialog, RESET_E2EE_DIALOG_PASSWORD_ID.into());
+        let edit = GetDlgItem(dialog, CONFIRM_DIALOG_PASSWORD_ID.into());
         PostMessageW(edit, WM_CHAR, 'p' as WPARAM, 0);
         PostMessageW(edit, WM_KEYDOWN, VK_RETURN_KEY, 0);
     }
@@ -1446,19 +1486,16 @@ mod tests {
     ) {
         KillTimer(frame, timer);
         let dialog = owned_dialog(frame, RESET_E2EE_DIALOG_CLASS_NAME);
-        set_window_text(
-            GetDlgItem(dialog, RESET_E2EE_DIALOG_PASSWORD_ID.into()),
-            "p",
-        );
-        PostMessageW(dialog, WM_COMMAND, RESET_E2EE_DIALOG_RESET_ID, 0);
+        set_window_text(GetDlgItem(dialog, CONFIRM_DIALOG_PASSWORD_ID.into()), "p");
+        PostMessageW(dialog, WM_COMMAND, CONFIRM_DIALOG_CONFIRM_ID, 0);
     }
 
     /// Clicks Reset in a reset dialog with no password field.
     unsafe extern "system" fn click_reset(frame: HWND, _message: u32, timer: usize, _time: u32) {
         KillTimer(frame, timer);
         let dialog = owned_dialog(frame, RESET_E2EE_DIALOG_CLASS_NAME);
-        assert!(GetDlgItem(dialog, RESET_E2EE_DIALOG_PASSWORD_ID.into()).is_null());
-        PostMessageW(dialog, WM_COMMAND, RESET_E2EE_DIALOG_RESET_ID, 0);
+        assert!(GetDlgItem(dialog, CONFIRM_DIALOG_PASSWORD_ID.into()).is_null());
+        PostMessageW(dialog, WM_COMMAND, CONFIRM_DIALOG_CONFIRM_ID, 0);
     }
 
     /// Enter presses Cancel, the default: only a click on Reset resets.
@@ -1475,7 +1512,7 @@ mod tests {
                 SetTimer(hwnd, 1, 0, Some(click_reset_after_a_password));
                 assert_eq!(
                     show_reset_e2ee_dialog(hwnd, &SessionAuth::Matrix).unwrap(),
-                    Some(ResetE2eeForm {
+                    Some(ConfirmForm {
                         password: Some("p".to_owned())
                     })
                 );
@@ -1485,7 +1522,7 @@ mod tests {
                 };
                 assert_eq!(
                     show_reset_e2ee_dialog(hwnd, &oauth).unwrap(),
-                    Some(ResetE2eeForm { password: None })
+                    Some(ConfirmForm { password: None })
                 );
                 assert_ne!(IsWindowEnabled(hwnd), 0, "closing it enables the frame");
             });
@@ -1575,12 +1612,17 @@ mod tests {
                     create_login_dialog(frame, "matrix.org", Arc::default()).unwrap(),
                     create_recover_e2ee_dialog(frame, Arc::default()).unwrap(),
                     create_setup_e2ee_dialog(frame, Arc::default()).unwrap(),
-                    create_reset_e2ee_dialog(frame, &SessionAuth::Matrix, Arc::default()).unwrap(),
-                    create_reset_e2ee_dialog(
+                    create_confirm_dialog(
                         frame,
-                        &SessionAuth::OAuth {
+                        &reset_e2ee_confirmation(&SessionAuth::Matrix),
+                        Arc::default(),
+                    )
+                    .unwrap(),
+                    create_confirm_dialog(
+                        frame,
+                        &reset_e2ee_confirmation(&SessionAuth::OAuth {
                             client_id: "client".to_owned(),
-                        },
+                        }),
                         Arc::default(),
                     )
                     .unwrap(),
