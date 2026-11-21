@@ -154,111 +154,13 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
             }
             _ => false,
         });
-    match (&update.target, &update.kind) {
-        (
-            RoomActivityUpdateTarget::Transaction { .. },
-            RoomActivityUpdateKind::MessageSent { .. },
-        ) => state
-            .model
-            .room_views
-            .entry_or_default(room_id.clone())
-            .mark_message_sent(update.clone()),
-        (
-            RoomActivityUpdateTarget::Transaction { .. },
-            RoomActivityUpdateKind::MessageFailed { .. },
-        ) => state
-            .model
-            .room_views
-            .entry_or_default(room_id.clone())
-            .mark_message_failed(update.clone()),
-        (
-            RoomActivityUpdateTarget::Event { event_id },
-            RoomActivityUpdateKind::MessageReplaced {
-                presentation,
-                body,
-                styles,
-                user_links,
-                ..
-            },
-        ) => {
-            let _ = state
-                .model
-                .room_views
-                .entry_or_default(room_id.clone())
-                .replace_message(
-                    event_id,
-                    MessageReplacementFields {
-                        presentation: *presentation,
-                        body: body.clone(),
-                        styles: styles.clone(),
-                        user_links: user_links.clone(),
-                    },
-                );
-        }
-        (
-            RoomActivityUpdateTarget::Event { event_id },
-            RoomActivityUpdateKind::ActivityRedacted { .. },
-        ) => {
-            let redacted = state
-                .model
-                .room_views
-                .entry_or_default(room_id.clone())
-                .redact_activity(event_id);
-            if redacted {
-                prune_decoded_images(state);
-            }
-        }
-        (
-            RoomActivityUpdateTarget::Event { event_id },
-            RoomActivityUpdateKind::ReactionAdded {
-                reaction_event_id,
-                sender,
-                timestamp_ms,
-                key,
-            },
-        ) => {
-            let _ = state
-                .model
-                .room_views
-                .entry_or_default(room_id.clone())
-                .add_reaction(event_id, reaction_event_id, sender, *timestamp_ms, key);
-        }
-        (
-            RoomActivityUpdateTarget::Event { event_id },
-            RoomActivityUpdateKind::ReactionRemoved {
-                reaction_event_id,
-                key,
-                ..
-            },
-        ) => {
-            let _ = state
-                .model
-                .room_views
-                .entry_or_default(room_id.clone())
-                .remove_reaction(event_id, reaction_event_id, key);
-        }
-        (
-            RoomActivityUpdateTarget::Transaction { .. },
-            RoomActivityUpdateKind::MessageReplaced { .. },
-        ) => panic!("message edit requires an event target"),
-        (
-            RoomActivityUpdateTarget::Transaction { .. },
-            RoomActivityUpdateKind::ActivityRedacted { .. },
-        ) => panic!("activity redacted update requires an event target"),
-        (
-            RoomActivityUpdateTarget::Transaction { .. },
-            RoomActivityUpdateKind::ReactionAdded { .. },
-        ) => panic!("reaction add requires an event target"),
-        (
-            RoomActivityUpdateTarget::Transaction { .. },
-            RoomActivityUpdateKind::ReactionRemoved { .. },
-        ) => panic!("reaction removal requires an event target"),
-        (RoomActivityUpdateTarget::Event { .. }, RoomActivityUpdateKind::MessageSent { .. }) => {
-            panic!("message sent update requires a transaction target")
-        }
-        (RoomActivityUpdateTarget::Event { .. }, RoomActivityUpdateKind::MessageFailed { .. }) => {
-            panic!("message failed update requires a transaction target")
-        }
+    let applied = state
+        .model
+        .room_views
+        .entry_or_default(room_id.clone())
+        .apply_update(&update);
+    if applied && matches!(update.kind, RoomActivityUpdateKind::ActivityRedacted { .. }) {
+        prune_decoded_images(state);
     }
     if refresh_last_activity
         && let Some(updated_activity) =

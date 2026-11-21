@@ -435,17 +435,16 @@ use room_list_window::{
     handle_room_list_notify, refresh_room_list_rows, start_room_list,
 };
 use room_model::{
-    BufferTrim, LastMessageActivity, MessageReplacementFields, ReplyTarget, ReplyTargetState,
-    RoomHistoryBackfillState, RoomPreviewMediaState, RoomViewModel, RoomViews, RoomWindowKind,
-    activity_level_for, failed_room_activity_update_view_id, is_invite_command_target,
-    is_invited_room, is_joined_message_room, is_navigable_room, is_sendable_room,
-    joined_room_notification_mode, last_activity_from_room_activity, navigable_room_by_id,
-    projected_thread_by_id, raise_view_activity, read_target_for_room_activity,
-    room_activity_belongs_to_thread, room_activity_event_id, room_activity_sender_user_id,
-    room_activity_target_view_id, room_activity_update_marks_inactive_room, room_by_id,
-    room_window_kind, rooms_in_window_order, sendable_room_by_id,
-    validate_synthetic_room_activity_events, view_id_is_valid, view_id_is_valid_for_rooms,
-    window_message,
+    BufferTrim, LastMessageActivity, ReplyTarget, ReplyTargetState, RoomHistoryBackfillState,
+    RoomPreviewMediaState, RoomViewModel, RoomViews, RoomWindowKind, activity_level_for,
+    failed_room_activity_update_view_id, is_invite_command_target, is_invited_room,
+    is_joined_message_room, is_navigable_room, is_sendable_room, joined_room_notification_mode,
+    last_activity_from_room_activity, navigable_room_by_id, projected_thread_by_id,
+    raise_view_activity, read_target_for_room_activity, room_activity_belongs_to_thread,
+    room_activity_event_id, room_activity_sender_user_id, room_activity_target_view_id,
+    room_activity_update_marks_inactive_room, room_by_id, room_window_kind, rooms_in_window_order,
+    sendable_room_by_id, validate_synthetic_room_activity_events, view_id_is_valid,
+    view_id_is_valid_for_rooms, window_message,
 };
 #[cfg(test)]
 use room_model::{RoomArrivals, ThreadViewModel};

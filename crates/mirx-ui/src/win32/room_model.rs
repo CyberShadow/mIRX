@@ -543,55 +543,7 @@ impl RoomViewModel {
                         continue;
                     }
 
-                    let applied = match (&update.target, &update.kind) {
-                        (
-                            RoomActivityUpdateTarget::Event { event_id },
-                            RoomActivityUpdateKind::MessageReplaced {
-                                presentation,
-                                body,
-                                styles,
-                                user_links,
-                                ..
-                            },
-                        ) => self.replace_message(
-                            event_id,
-                            MessageReplacementFields {
-                                presentation: *presentation,
-                                body: body.clone(),
-                                styles: styles.clone(),
-                                user_links: user_links.clone(),
-                            },
-                        ),
-                        (
-                            RoomActivityUpdateTarget::Event { event_id },
-                            RoomActivityUpdateKind::ActivityRedacted { .. },
-                        ) => self.redact_activity(event_id),
-                        (
-                            RoomActivityUpdateTarget::Event { event_id },
-                            RoomActivityUpdateKind::ReactionAdded {
-                                reaction_event_id,
-                                sender,
-                                timestamp_ms,
-                                key,
-                            },
-                        ) => self.add_reaction(
-                            event_id,
-                            reaction_event_id,
-                            sender,
-                            *timestamp_ms,
-                            key,
-                        ),
-                        (
-                            RoomActivityUpdateTarget::Event { event_id },
-                            RoomActivityUpdateKind::ReactionRemoved {
-                                reaction_event_id,
-                                key,
-                                ..
-                            },
-                        ) => self.remove_reaction(event_id, reaction_event_id, key),
-                        _ => false,
-                    };
-                    changed |= applied;
+                    changed |= self.apply_update(&update);
                 }
             }
         }
@@ -725,19 +677,12 @@ impl RoomViewModel {
         }
     }
 
-    pub(super) fn mark_message_sent(&mut self, update: RoomActivityUpdate) {
-        let RoomActivityUpdate { target, kind, .. } = update;
-        let RoomActivityUpdateTarget::Transaction { transaction_id } = target else {
-            panic!("message sent update requires a transaction target");
-        };
-        let RoomActivityUpdateKind::MessageSent { event_id } = kind else {
-            panic!("message sent update requires a sent activity update");
-        };
+    fn mark_message_sent(&mut self, transaction_id: &str, event_id: &str) {
         let transaction_index = self
-            .find_pending_message_activity_index(transaction_id.as_str())
+            .find_pending_message_activity_index(transaction_id)
             .expect("outgoing sent requires an existing queued timeline row");
         let duplicate_event_index = self
-            .find_message_activity_index(None, Some(event_id.as_str()))
+            .find_message_activity_index(None, Some(event_id))
             .filter(|event_index| *event_index != transaction_index);
         let duplicate_event =
             duplicate_event_index.map(|event_index| self.activities[event_index].clone());
@@ -798,7 +743,7 @@ impl RoomViewModel {
             panic!("outgoing sent requires a message room activity");
         };
 
-        message.event_id = Some(event_id.clone());
+        message.event_id = Some(event_id.to_owned());
         if let Some(synced_sender) = synced_sender {
             message.sender = synced_sender;
         }
@@ -816,27 +761,16 @@ impl RoomViewModel {
         self.rebuild_threads();
     }
 
-    pub(super) fn mark_message_failed(&mut self, update: RoomActivityUpdate) {
-        let RoomActivityUpdate { target, kind, .. } = update;
-        let RoomActivityUpdateTarget::Transaction { transaction_id } = target else {
-            panic!("message failed update requires a transaction target");
-        };
-        let RoomActivityUpdateKind::MessageFailed {
-            message,
-            recoverable,
-        } = kind
-        else {
-            panic!("message failed update requires a failed activity update");
-        };
+    fn mark_message_failed(&mut self, transaction_id: &str, message: &str, recoverable: bool) {
         let activity = self
-            .find_pending_message_activity_mut(transaction_id.as_str())
+            .find_pending_message_activity_mut(transaction_id)
             .expect("outgoing failed requires an existing queued timeline row");
         let RoomActivityKind::Message(room_message) = &mut activity.kind else {
             panic!("outgoing failed requires a message room activity");
         };
 
         room_message.send_state = RoomMessageSendState::Failed {
-            message,
+            message: message.to_owned(),
             recoverable,
         };
         self.rebuild_threads();
@@ -1151,6 +1085,78 @@ impl RoomViewModel {
             .collect();
     }
 
+    /// Applies an update to what the room shows; whether anything changed.
+    /// A target the room does not show (any more, or yet) changes nothing,
+    /// but a send-state update's queued line must be there.
+    pub(super) fn apply_update(&mut self, update: &RoomActivityUpdate) -> bool {
+        match (&update.target, &update.kind) {
+            (
+                RoomActivityUpdateTarget::Transaction { transaction_id },
+                RoomActivityUpdateKind::MessageSent { event_id },
+            ) => {
+                self.mark_message_sent(transaction_id, event_id);
+                true
+            }
+            (
+                RoomActivityUpdateTarget::Transaction { transaction_id },
+                RoomActivityUpdateKind::MessageFailed {
+                    message,
+                    recoverable,
+                },
+            ) => {
+                self.mark_message_failed(transaction_id, message, *recoverable);
+                true
+            }
+            (
+                RoomActivityUpdateTarget::Event { event_id },
+                RoomActivityUpdateKind::MessageReplaced {
+                    presentation,
+                    body,
+                    styles,
+                    user_links,
+                    ..
+                },
+            ) => self.replace_message(
+                event_id,
+                MessageReplacementFields {
+                    presentation: *presentation,
+                    body: body.clone(),
+                    styles: styles.clone(),
+                    user_links: user_links.clone(),
+                },
+            ),
+            (
+                RoomActivityUpdateTarget::Event { event_id },
+                RoomActivityUpdateKind::ActivityRedacted { .. },
+            ) => self.redact_activity(event_id),
+            (
+                RoomActivityUpdateTarget::Event { event_id },
+                RoomActivityUpdateKind::ReactionAdded {
+                    reaction_event_id,
+                    sender,
+                    timestamp_ms,
+                    key,
+                },
+            ) => self.add_reaction(event_id, reaction_event_id, sender, *timestamp_ms, key),
+            (
+                RoomActivityUpdateTarget::Event { event_id },
+                RoomActivityUpdateKind::ReactionRemoved {
+                    reaction_event_id,
+                    key,
+                    ..
+                },
+            ) => self.remove_reaction(event_id, reaction_event_id, key),
+            (
+                RoomActivityUpdateTarget::Event { .. },
+                RoomActivityUpdateKind::MessageSent { .. }
+                | RoomActivityUpdateKind::MessageFailed { .. },
+            ) => panic!("a send-state update requires a transaction target: {update:?}"),
+            (RoomActivityUpdateTarget::Transaction { .. }, _) => {
+                panic!("an event's update requires an event target: {update:?}")
+            }
+        }
+    }
+
     fn validate_update(&self, update: &RoomActivityUpdate) -> Result<(), String> {
         match (&update.target, &update.kind) {
             (
@@ -1280,100 +1286,7 @@ pub(super) fn validate_synthetic_room_activity_events(
             Event::RoomActivityUpdate(update) => {
                 let room_view = room_views.entry_or_default(update.room_id.clone());
                 room_view.validate_update(update)?;
-                match (&update.target, &update.kind) {
-                    (
-                        RoomActivityUpdateTarget::Transaction { .. },
-                        RoomActivityUpdateKind::MessageSent { .. },
-                    ) => room_view.mark_message_sent(update.clone()),
-                    (
-                        RoomActivityUpdateTarget::Transaction { .. },
-                        RoomActivityUpdateKind::MessageFailed { .. },
-                    ) => room_view.mark_message_failed(update.clone()),
-                    (
-                        RoomActivityUpdateTarget::Event { event_id },
-                        RoomActivityUpdateKind::MessageReplaced {
-                            presentation,
-                            body,
-                            styles,
-                            user_links,
-                            ..
-                        },
-                    ) => {
-                        let replaced = room_view.replace_message(
-                            event_id,
-                            MessageReplacementFields {
-                                presentation: *presentation,
-                                body: body.clone(),
-                                styles: styles.clone(),
-                                user_links: user_links.clone(),
-                            },
-                        );
-                        assert!(replaced, "validated synthetic message edit must resolve");
-                    }
-                    (
-                        RoomActivityUpdateTarget::Transaction { .. },
-                        RoomActivityUpdateKind::MessageReplaced { .. },
-                    ) => panic!("message edit requires an event target"),
-                    (
-                        RoomActivityUpdateTarget::Event { event_id },
-                        RoomActivityUpdateKind::ActivityRedacted { .. },
-                    ) => {
-                        let redacted = room_view.redact_activity(event_id);
-                        assert!(
-                            redacted,
-                            "validated synthetic activity redaction must resolve"
-                        );
-                    }
-                    (
-                        RoomActivityUpdateTarget::Event { event_id },
-                        RoomActivityUpdateKind::ReactionAdded {
-                            reaction_event_id,
-                            sender,
-                            timestamp_ms,
-                            key,
-                        },
-                    ) => {
-                        let added = room_view.add_reaction(
-                            event_id,
-                            reaction_event_id,
-                            sender,
-                            *timestamp_ms,
-                            key,
-                        );
-                        assert!(added, "validated synthetic reaction add must resolve");
-                    }
-                    (
-                        RoomActivityUpdateTarget::Event { event_id },
-                        RoomActivityUpdateKind::ReactionRemoved {
-                            reaction_event_id,
-                            key,
-                            ..
-                        },
-                    ) => {
-                        let removed = room_view.remove_reaction(event_id, reaction_event_id, key);
-                        assert!(removed, "validated synthetic reaction removal must resolve");
-                    }
-                    (
-                        RoomActivityUpdateTarget::Event { .. },
-                        RoomActivityUpdateKind::MessageSent { .. },
-                    ) => panic!("message sent update requires a transaction target"),
-                    (
-                        RoomActivityUpdateTarget::Event { .. },
-                        RoomActivityUpdateKind::MessageFailed { .. },
-                    ) => panic!("message failed update requires a transaction target"),
-                    (
-                        RoomActivityUpdateTarget::Transaction { .. },
-                        RoomActivityUpdateKind::ActivityRedacted { .. },
-                    ) => panic!("activity redacted update requires an event target"),
-                    (
-                        RoomActivityUpdateTarget::Transaction { .. },
-                        RoomActivityUpdateKind::ReactionAdded { .. },
-                    ) => panic!("reaction add requires an event target"),
-                    (
-                        RoomActivityUpdateTarget::Transaction { .. },
-                        RoomActivityUpdateKind::ReactionRemoved { .. },
-                    ) => panic!("reaction removal requires an event target"),
-                }
+                room_view.apply_update(update);
             }
             _ => {}
         }
@@ -2472,7 +2385,7 @@ mod tests {
         let Event::RoomActivityUpdate(update) = outgoing_sent("!ops:example", "t1", "$hi") else {
             unreachable!()
         };
-        room_view.mark_message_sent(update);
+        assert!(room_view.apply_update(&update));
         assert_eq!(
             arrivals(&room_view),
             [("event:$hi", Some(0)), ("event:$other", Some(1))]
@@ -2485,7 +2398,7 @@ mod tests {
         let Event::RoomActivityUpdate(update) = outgoing_sent("!ops:example", "t1", "$hi") else {
             unreachable!()
         };
-        room_view.mark_message_sent(update);
+        assert!(room_view.apply_update(&update));
         assert_eq!(arrivals(&room_view), [("event:$hi", Some(0))]);
 
         // Replaced by the synced event carrying its transaction.
