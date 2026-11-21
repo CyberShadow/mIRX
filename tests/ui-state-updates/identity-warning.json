@@ -1,0 +1,17 @@
+[
+  {
+    "UserDevices": {
+      "user_id": "@bob:example",
+      "identity": "unverified",
+      "devices": [
+        {
+          "device_id": "B0BPH0NE",
+          "display_name": "Bob's phone",
+          "verified": false,
+          "this_session": false,
+          "last_seen_ms": null
+        }
+      ]
+    }
+  }
+]

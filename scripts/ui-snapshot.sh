@@ -328,6 +328,11 @@ configure_case_expectations() {
           ordered_actions=(dialog:setup_e2ee_recovery)
           expect_dialog_title='Set Up E2EE Recovery'
           ;;
+        dialog-reset-e2ee)
+          # A password session: the dialog asks for the account password.
+          ordered_actions=(dialog:reset_e2ee)
+          expect_dialog_title='Reset E2EE Identity'
+          ;;
         dialog-close-confirm)
           ordered_actions=(dialog:close_active_view)
           expect_dialog_title='mirx'
@@ -1426,7 +1431,7 @@ configure_case_expectations() {
       expect_active_view='status'
       status_view_expect_args=(
         --expect-status-view '[22:12] * E2EE: recovery incomplete, local backup disabled, server backup exists, cross-signing incomplete, this session not verified'
-        --expect-status-view '[22:12] * This session is not verified: /verify to verify it from another of your sessions, or /e2ee recover with your recovery key'
+        --expect-status-view '[22:12] * This session is not verified: /verify to verify it from another of your sessions, /e2ee recover with your recovery key, or /e2ee reset if you have neither'
         --expect-status-view '* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
       )
       status_view_forbid_args=(
@@ -1478,7 +1483,7 @@ configure_case_expectations() {
       expect_active_view='status'
       status_view_expect_args=(
         --expect-status-view '[22:12] * E2EE: recovery incomplete, local backup disabled, server backup exists, cross-signing incomplete, this session not verified'
-        --expect-status-view '[22:12] * This session is not verified: /verify to verify it from another of your sessions, or /e2ee recover with your recovery key'
+        --expect-status-view '[22:12] * This session is not verified: /verify to verify it from another of your sessions, /e2ee recover with your recovery key, or /e2ee reset if you have neither'
         --expect-status-view '* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
         --expect-status-view '[22:12] * Error during e2ee recovery: failed to recover E2EE secrets: invalid recovery key or passphrase'
       )
@@ -1527,13 +1532,48 @@ configure_case_expectations() {
       )
       expect_switchbar_active='status'
       ;;
+    e2ee-identity-reset-approval)
+      # The server confirms a reset in the browser: mirx opened the page.
+      expect_active_view='status'
+      status_view_expect_args=(
+        --expect-status-view '[22:12] * To reset your E2EE identity, approve it on the page your browser opened; mirx waits 2 minutes, /e2ee reset cancel stops it'
+        --expect-status-view '[22:12] * If no browser opened, go to https://account.example/account?action=org.matrix.cross_signing_reset'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'waiting for identity reset approval'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='status'
+      ;;
+    e2ee-identity-reset-done)
+      # The reset uploaded a new identity that signs this session; the
+      # backup came back, recovery did not.
+      expect_active_view='status'
+      status_view_expect_args=(
+        --expect-status-view '[22:12] * Your E2EE identity was reset; this session is verified with the new one'
+        --expect-status-view '[22:12] * Recovery is off: /e2ee setup to set it up again'
+        --expect-status-view ', this session verified'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='status'
+      ;;
     e2ee-session-unverified)
       # Your identity is set up elsewhere, without recovery: this session
       # holds no keys and needs verifying.
       expect_active_view='status'
       status_view_expect_args=(
         --expect-status-view '[22:12] * E2EE: recovery disabled, local backup unknown, server backup missing, cross-signing incomplete, this session not verified'
-        --expect-status-view '[22:12] * This session is not verified: /verify to verify it from another of your sessions, or /e2ee recover with your recovery key'
+        --expect-status-view '[22:12] * This session is not verified: /verify to verify it from another of your sessions, /e2ee recover with your recovery key, or /e2ee reset if you have neither'
       )
       status_bar_expect_args=(
         --expect-status-bar ', session not verified'
@@ -1987,6 +2027,27 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!ops:example'
       ;;
+    identity-warning)
+      # Bob reset his identity, and so did Carol, whom you had verified;
+      # /devices Bob then names the change.
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      ordered_actions=(
+        "append:$root_dir/tests/ui-state-updates/identity-warning.json"
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::[22:12] * Warning: Bob'"'"'s identity was reset; /identity accept @bob:example to accept it, or /verify @bob:example'
+        --expect-room-view '!ops:example::[22:12] * Warning: you verified Carol, and their identity was reset; /verify @carol:example to verify it again, or /identity accept @carol:example to withdraw your verification'
+        --expect-room-view '!ops:example::[22:12] * Bob changed identity; /identity accept @bob:example, or /verify @bob:example'
+        --expect-room-view '!ops:example::[22:12] * Bob B0BPH0NE "Bob'"'"'s phone" unverified'
+        --expect-room-view '!ops:example::[22:12] * Bob End of /DEVICES list'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::@me:example'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+      )
+      expect_switchbar_active='room:!ops:example'
+      ;;
     devices-user)
       expect_selected='!ops:example'
       expect_active_view='room:!ops:example'
@@ -1994,7 +2055,7 @@ configure_case_expectations() {
         "append:$root_dir/tests/ui-state-updates/devices-user.json"
       )
       room_view_expect_args=(
-        --expect-room-view '!ops:example::[22:12] * Alice changed identity since you verified them; /verify @alice:example'
+        --expect-room-view '!ops:example::[22:12] * Alice changed identity since you verified them; /verify @alice:example, or /identity accept @alice:example'
         --expect-room-view '!ops:example::[22:12] * Alice ALICEPHONE "Alice'"'"'s phone" unverified'
         --expect-room-view '!ops:example::[22:12] * Alice ALICELAPTOP unverified'
         --expect-room-view '!ops:example::[22:12] * Alice End of /DEVICES list'

@@ -1,0 +1,84 @@
+[
+  "Started",
+  {
+    "LoggedIn": {
+      "session": {
+        "user_id": "@me:example",
+        "device_id": "MIRXDEVICE",
+        "access_token": "fixture-access-token",
+        "refresh_token": null,
+        "auth": "Matrix"
+      },
+      "homeserver_url": "https://matrix.example/"
+    }
+  },
+  "SyncStarted",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!ops:example",
+        "display_name": "Ops",
+        "topic": null,
+        "encrypted": true,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!ops:example",
+      "members": [
+        {
+          "user_id": "@me:example",
+          "display_name": "Me",
+          "display_name_ambiguous": false,
+          "is_own_user": true,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        }
+      ]
+    }
+  },
+  {
+    "RoomIdentityChanges": {
+      "room_id": "!ops:example",
+      "changes": [
+        {
+          "user_id": "@bob:example",
+          "trust": "pin_violation"
+        },
+        {
+          "user_id": "@carol:example",
+          "trust": "verification_violation"
+        }
+      ]
+    }
+  }
+]
