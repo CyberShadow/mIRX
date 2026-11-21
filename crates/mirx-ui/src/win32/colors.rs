@@ -286,15 +286,23 @@ pub(super) fn contrasting_text(background: TextColor) -> TextColor {
 /// How the 16 boxes lie: two rows of eight, as in mIRC's Colors dialog.
 pub(super) const PALETTE_COLUMNS: i32 = 8;
 const PALETTE_ROWS: i32 = PALETTE_COLORS as i32 / PALETTE_COLUMNS;
-/// The space between two boxes.
-const PALETTE_GAP: i32 = 2;
+/// The space between two boxes, at 96 dpi.
+pub(super) const PALETTE_GAP: i32 = 2;
+
+/// The area of the boxes `cell_width` by `cell_height` apart by `gap`.
+pub(super) fn palette_size(cell_width: i32, cell_height: i32, gap: i32) -> (i32, i32) {
+    (
+        PALETTE_COLUMNS * cell_width + (PALETTE_COLUMNS - 1) * gap,
+        PALETTE_ROWS * cell_height + (PALETTE_ROWS - 1) * gap,
+    )
+}
 
 /// The box of each palette colour in a `width` by `height` area, in index
-/// order, apart by a gap; the remainder is spread over the last row and
+/// order, apart by `gap`; the remainder is spread over the last row and
 /// column.
-pub(super) fn palette_cell_rects(width: i32, height: i32) -> [RECT; PALETTE_COLORS] {
-    let cell_width = (width - PALETTE_GAP * (PALETTE_COLUMNS - 1)) / PALETTE_COLUMNS;
-    let cell_height = (height - PALETTE_GAP * (PALETTE_ROWS - 1)) / PALETTE_ROWS;
+pub(super) fn palette_cell_rects(width: i32, height: i32, gap: i32) -> [RECT; PALETTE_COLORS] {
+    let cell_width = (width - gap * (PALETTE_COLUMNS - 1)) / PALETTE_COLUMNS;
+    let cell_height = (height - gap * (PALETTE_ROWS - 1)) / PALETTE_ROWS;
     assert!(
         cell_width > 0 && cell_height > 0,
         "a palette is big enough for its boxes"
@@ -304,8 +312,8 @@ pub(super) fn palette_cell_rects(width: i32, height: i32) -> [RECT; PALETTE_COLO
             index as i32 / PALETTE_COLUMNS,
             index as i32 % PALETTE_COLUMNS,
         );
-        let left = column * (cell_width + PALETTE_GAP);
-        let top = row * (cell_height + PALETTE_GAP);
+        let left = column * (cell_width + gap);
+        let top = row * (cell_height + gap);
         RECT {
             left,
             top,
@@ -525,7 +533,9 @@ mod tests {
 
     #[test]
     fn every_cell_centre_hits_its_cell_and_gaps_hit_none() {
-        let cells = palette_cell_rects(8 * 20 + 7 * 2, 2 * 20 + 2);
+        let (width, height) = palette_size(20, 20, 2);
+        assert_eq!((width, height), (8 * 20 + 7 * 2, 2 * 20 + 2));
+        let cells = palette_cell_rects(width, height, 2);
         let cell = cells[9];
         assert_eq!(
             (cell.left, cell.top, cell.right, cell.bottom),

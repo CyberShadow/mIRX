@@ -24,21 +24,21 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::colors::{
-    PALETTE_COLORS, PaletteIndex, paint_palette_cells, palette_cell_at, palette_cell_rects,
+    PALETTE_COLORS, PALETTE_GAP, PaletteIndex, paint_palette_cells, palette_cell_at,
+    palette_cell_rects, palette_size,
 };
 use super::compose::{compose_edit, insert_color_number};
+use super::dpi::Dpi;
 use super::mirc_format::{ColorCodeInProgress, ColorCodePart, color_code_in_progress};
 use super::{WindowState, last_os_error, read_window_text, state_ref, wide_null};
 use crate::automation::{UiColorCodePart, UiColorIndex, UiRect};
 
 const COLOR_INDEX_CLASS_NAME: &str = "mirxColorIndex";
+// At 96 dpi.
 const CELL_WIDTH: i32 = 20;
 const CELL_HEIGHT: i32 = 18;
 /// Around the boxes, inside the border.
 const MARGIN: i32 = 2;
-/// The boxes' area: two rows of eight, 2 px apart.
-const CELLS_WIDTH: i32 = 8 * CELL_WIDTH + 7 * 2;
-const CELLS_HEIGHT: i32 = 2 * CELL_HEIGHT + 2;
 const STYLE: u32 = WS_POPUP | WS_BORDER;
 const EX_STYLE: u32 = WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST;
 
@@ -64,11 +64,14 @@ pub(super) unsafe fn create_color_index(frame: HWND) -> Result<HWND, String> {
     if RegisterClassExW(&window_class) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
         return Err(last_os_error("RegisterClassExW color index"));
     }
+    let dpi = Dpi::of_window(frame);
+    let (cells_width, cells_height) = cells_size(dpi);
+    let margin = dpi.px(MARGIN);
     let mut size = RECT {
         left: 0,
         top: 0,
-        right: CELLS_WIDTH + 2 * MARGIN,
-        bottom: CELLS_HEIGHT + 2 * MARGIN,
+        right: cells_width + 2 * margin,
+        bottom: cells_height + 2 * margin,
     };
     AdjustWindowRectEx(&mut size, STYLE, 0, EX_STYLE);
     let popup = CreateWindowExW(
@@ -91,13 +94,21 @@ pub(super) unsafe fn create_color_index(frame: HWND) -> Result<HWND, String> {
     Ok(popup)
 }
 
-/// The boxes, in the popup's client coordinates.
-fn cells() -> [RECT; PALETTE_COLORS] {
-    palette_cell_rects(CELLS_WIDTH, CELLS_HEIGHT).map(|cell| RECT {
-        left: cell.left + MARGIN,
-        top: cell.top + MARGIN,
-        right: cell.right + MARGIN,
-        bottom: cell.bottom + MARGIN,
+/// The boxes' area at `dpi`: two rows of eight.
+fn cells_size(dpi: Dpi) -> (i32, i32) {
+    palette_size(dpi.px(CELL_WIDTH), dpi.px(CELL_HEIGHT), dpi.px(PALETTE_GAP))
+}
+
+/// The boxes, in the `popup`'s client coordinates.
+unsafe fn cells(popup: HWND) -> [RECT; PALETTE_COLORS] {
+    let dpi = Dpi::of_window(popup);
+    let (width, height) = cells_size(dpi);
+    let margin = dpi.px(MARGIN);
+    palette_cell_rects(width, height, dpi.px(PALETTE_GAP)).map(|cell| RECT {
+        left: cell.left + margin,
+        top: cell.top + margin,
+        right: cell.right + margin,
+        bottom: cell.bottom + margin,
     })
 }
 
@@ -204,7 +215,7 @@ unsafe fn paint(hwnd: HWND) {
     let font = SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
     let mode = SetBkMode(hdc, TRANSPARENT as i32);
     let first = PaletteIndex::new(0).expect("0 is a palette index");
-    paint_palette_cells(hdc, &cells(), first, None, true);
+    paint_palette_cells(hdc, &cells(hwnd), first, None, true);
     SetBkMode(hdc, mode);
     SelectObject(hdc, font);
     EndPaint(hwnd, &paint);
@@ -229,7 +240,7 @@ unsafe extern "system" fn window_proc(
                 i32::from((lparam >> 16) as u16 as i16),
             );
             // A click between boxes picks nothing.
-            if let Some(index) = palette_cell_at(&cells(), x, y) {
+            if let Some(index) = palette_cell_at(&cells(hwnd), x, y) {
                 insert_color_number(GetWindow(hwnd, GW_OWNER), index);
             }
             0
@@ -260,6 +271,6 @@ pub(super) unsafe fn dump(frame: HWND) -> Option<UiColorIndex> {
             ColorCodePart::Background => UiColorCodePart::Background,
         },
         rect: ui_rect(&rect),
-        cells: cells().iter().map(ui_rect).collect(),
+        cells: cells(popup).iter().map(ui_rect).collect(),
     })
 }

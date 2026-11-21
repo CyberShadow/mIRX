@@ -67,25 +67,60 @@ const fn default_button(id: usize) -> LRESULT {
     ((DC_HASDEFID as LRESULT) << 16) | id as LRESULT
 }
 
-/// The dialogs' content widths: what their labels and fields need.
+/// The dialogs' content widths at 96 dpi: what their labels and fields
+/// need.
 const LOGIN_DIALOG_WIDTH: i32 = 280;
 const SINGLE_FIELD_DIALOG_WIDTH: i32 = 260;
 const RECOVERY_KEY_HANDOFF_DIALOG_WIDTH: i32 = 320;
 /// Wide enough for a confirmation's warning to wrap to a few lines.
 const CONFIRM_DIALOG_WIDTH: i32 = 320;
 
-// Windows' dialog metrics at 96 dpi, in pixels: what the dialog units of
-// mIRC's MS Shell Dlg 8 resource dialogs come to.
-/// Between the dialog's edge and its controls.
-pub(super) const DIALOG_MARGIN: i32 = 11;
-/// Between related controls.
-pub(super) const DIALOG_GAP: i32 = 7;
-/// Between a label and the field under it.
-pub(super) const DIALOG_LABEL_GAP: i32 = 3;
-pub(super) const DIALOG_BUTTON_WIDTH: i32 = 75;
-pub(super) const DIALOG_BUTTON_HEIGHT: i32 = 23;
-pub(super) const DIALOG_EDIT_HEIGHT: i32 = 21;
-pub(super) const DIALOG_CHECKBOX_HEIGHT: i32 = 17;
+/// Windows' dialog metrics at a dialog's DPI, in pixels: what the dialog
+/// units of mIRC's MS Shell Dlg 8 resource dialogs come to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct DialogMetrics {
+    /// Between the dialog's edge and its controls.
+    pub(super) margin: i32,
+    /// Between related controls.
+    pub(super) gap: i32,
+    /// Between a label and the field under it.
+    pub(super) label_gap: i32,
+    pub(super) button_width: i32,
+    pub(super) button_height: i32,
+    pub(super) edit_height: i32,
+    pub(super) checkbox_height: i32,
+}
+
+impl DialogMetrics {
+    /// At 96 dpi.
+    const STANDARD: DialogMetrics = DialogMetrics {
+        margin: 11,
+        gap: 7,
+        label_gap: 3,
+        button_width: 75,
+        button_height: 23,
+        edit_height: 21,
+        checkbox_height: 17,
+    };
+
+    pub(super) fn at(dpi: Dpi) -> Self {
+        let standard = Self::STANDARD;
+        Self {
+            margin: dpi.px(standard.margin),
+            gap: dpi.px(standard.gap),
+            label_gap: dpi.px(standard.label_gap),
+            button_width: dpi.px(standard.button_width),
+            button_height: dpi.px(standard.button_height),
+            edit_height: dpi.px(standard.edit_height),
+            checkbox_height: dpi.px(standard.checkbox_height),
+        }
+    }
+
+    /// The metrics of `dialog`, at its DPI.
+    pub(super) unsafe fn of(dialog: HWND) -> Self {
+        Self::at(Dpi::of_window(dialog))
+    }
+}
 /// An edit's style: a native dialog edit has the sunken client edge and no
 /// flat border.
 pub(super) const DIALOG_EDIT_STYLE: u32 = WS_TABSTOP | ES_AUTOHSCROLL as u32;
@@ -282,11 +317,12 @@ pub(super) unsafe fn create_modal_dialog(
     apply_dialog_font(dialog);
 
     let (right, bottom) = controls_extent(dialog);
+    let margin = DialogMetrics::of(dialog).margin;
     let mut frame = RECT {
         left: 0,
         top: 0,
-        right: right + DIALOG_MARGIN,
-        bottom: bottom + DIALOG_MARGIN,
+        right: right + margin,
+        bottom: bottom + margin,
     };
     if AdjustWindowRectEx(&mut frame, DIALOG_STYLE, 0, DIALOG_EX_STYLE) == 0 {
         DestroyWindow(dialog);
@@ -381,18 +417,28 @@ pub(super) unsafe fn dialog_text_size(text: &str, wrap_width: i32) -> (i32, i32)
 /// field and the buttons in a row under them, as mIRC's small dialogs do.
 struct DialogColumn {
     dialog: HWND,
+    metrics: DialogMetrics,
+    /// In pixels at the dialog's DPI.
     width: i32,
     /// Where the next control goes.
     y: i32,
 }
 
 impl DialogColumn {
-    fn new(dialog: HWND, width: i32) -> Self {
+    /// A column `width` pixels wide, at the dialog's DPI.
+    unsafe fn new(dialog: HWND, width: i32) -> Self {
+        let metrics = DialogMetrics::of(dialog);
         Self {
             dialog,
+            metrics,
             width,
-            y: DIALOG_MARGIN,
+            y: metrics.margin,
         }
+    }
+
+    /// A column `width` pixels wide at 96 dpi.
+    unsafe fn standard(dialog: HWND, width: i32) -> Self {
+        Self::new(dialog, Dpi::of_window(dialog).px(width))
     }
 
     /// Adds a control at `x` on the next row, and leaves `gap` under it.
@@ -422,8 +468,8 @@ impl DialogColumn {
         let (_, height) = dialog_text_size(text, self.width);
         self.add(
             (STATIC_CLASS_NAME, text, style, 0, id),
-            (DIALOG_MARGIN, self.width, height),
-            DIALOG_LABEL_GAP,
+            (self.metrics.margin, self.width, height),
+            self.metrics.label_gap,
         )
     }
 
@@ -436,8 +482,8 @@ impl DialogColumn {
                 DIALOG_EDIT_EX_STYLE,
                 id,
             ),
-            (DIALOG_MARGIN, self.width, DIALOG_EDIT_HEIGHT),
-            DIALOG_GAP,
+            (self.metrics.margin, self.width, self.metrics.edit_height),
+            self.metrics.gap,
         )
     }
 
@@ -450,8 +496,12 @@ impl DialogColumn {
                 0,
                 id,
             ),
-            (DIALOG_MARGIN, self.width, DIALOG_CHECKBOX_HEIGHT),
-            DIALOG_GAP,
+            (
+                self.metrics.margin,
+                self.width,
+                self.metrics.checkbox_height,
+            ),
+            self.metrics.gap,
         )
     }
 
@@ -469,14 +519,20 @@ impl DialogColumn {
         buttons: &[(usize, &str)],
         default: usize,
     ) -> Result<(), String> {
-        let row_width = buttons.len() as i32 * (DIALOG_BUTTON_WIDTH + DIALOG_GAP) - DIALOG_GAP;
-        let x = DIALOG_MARGIN + self.width - row_width;
+        let DialogMetrics {
+            margin,
+            gap,
+            button_width,
+            ..
+        } = self.metrics;
+        let row_width = buttons.len() as i32 * (button_width + gap) - gap;
+        let x = margin + self.width - row_width;
         self.button_row(x, buttons, default)
     }
 
     /// One default button, centred a margin under the fields.
     unsafe fn centred_button(self, id: usize, text: &str) -> Result<(), String> {
-        let x = DIALOG_MARGIN + (self.width - DIALOG_BUTTON_WIDTH) / 2;
+        let x = self.metrics.margin + (self.width - self.metrics.button_width) / 2;
         self.button_row(x, &[(id, text)], id)
     }
 
@@ -486,7 +542,14 @@ impl DialogColumn {
         buttons: &[(usize, &str)],
         default: usize,
     ) -> Result<(), String> {
-        self.y += DIALOG_MARGIN - DIALOG_GAP;
+        let DialogMetrics {
+            margin,
+            gap,
+            button_width,
+            button_height,
+            ..
+        } = self.metrics;
+        self.y += margin - gap;
         for (id, text) in buttons {
             let style = if *id == default {
                 BS_DEFPUSHBUTTON
@@ -503,15 +566,8 @@ impl DialogColumn {
                 GetModuleHandleW(null()),
                 null_mut(),
             )?;
-            MoveWindow(
-                button,
-                x,
-                self.y,
-                DIALOG_BUTTON_WIDTH,
-                DIALOG_BUTTON_HEIGHT,
-                0,
-            );
-            x += DIALOG_BUTTON_WIDTH + DIALOG_GAP;
+            MoveWindow(button, x, self.y, button_width, button_height, 0);
+            x += button_width + gap;
         }
         Ok(())
     }
@@ -898,7 +954,7 @@ unsafe fn create_login_dialog(
         "Select Server",
         state.as_param(),
         |dialog| {
-            let mut column = DialogColumn::new(dialog, LOGIN_DIALOG_WIDTH);
+            let mut column = DialogColumn::standard(dialog, LOGIN_DIALOG_WIDTH);
             column.label(
                 "Server (matrix.org, or leave empty for a full user ID)",
                 0,
@@ -944,7 +1000,7 @@ unsafe fn create_recover_e2ee_dialog(
         "Recover E2EE",
         state.as_param(),
         |dialog| {
-            let mut column = DialogColumn::new(dialog, SINGLE_FIELD_DIALOG_WIDTH);
+            let mut column = DialogColumn::standard(dialog, SINGLE_FIELD_DIALOG_WIDTH);
             column.label("Recovery key or passphrase", 0, 0)?;
             column.edit(RECOVER_E2EE_DIALOG_SECRET_ID, "", ES_PASSWORD as u32)?;
             column.buttons(&[
@@ -979,7 +1035,7 @@ unsafe fn create_setup_e2ee_dialog(
         "Set Up E2EE Recovery",
         state.as_param(),
         |dialog| {
-            let mut column = DialogColumn::new(dialog, SINGLE_FIELD_DIALOG_WIDTH);
+            let mut column = DialogColumn::standard(dialog, SINGLE_FIELD_DIALOG_WIDTH);
             column.label("Passphrase (optional)", 0, 0)?;
             column.edit(SETUP_E2EE_DIALOG_PASSPHRASE_ID, "", ES_PASSWORD as u32)?;
             column.checkbox(SETUP_E2EE_DIALOG_WAIT_ID, "Wait for backups to upload")?;
@@ -1019,9 +1075,9 @@ unsafe fn create_confirm_dialog(
         confirm.title,
         state.as_param(),
         |dialog| {
-            let mut column = DialogColumn::new(dialog, CONFIRM_DIALOG_WIDTH);
+            let mut column = DialogColumn::standard(dialog, CONFIRM_DIALOG_WIDTH);
             column.label(&confirm.warning, 0, 0)?;
-            column.y += DIALOG_GAP;
+            column.y += column.metrics.gap;
             match confirm.confirm_with {
                 ConfirmWith::Password => {
                     column.label("Account password", 0, 0)?;
@@ -1124,7 +1180,7 @@ unsafe fn create_single_field_dialog(
         title,
         state.as_param(),
         |dialog| {
-            let mut column = DialogColumn::new(dialog, SINGLE_FIELD_DIALOG_WIDTH);
+            let mut column = DialogColumn::standard(dialog, SINGLE_FIELD_DIALOG_WIDTH);
             column.label(label, 0, 0)?;
             column.edit(SINGLE_FIELD_DIALOG_EDIT_ID, initial_text, 0)?;
             column.buttons(&[
@@ -1167,7 +1223,7 @@ unsafe fn create_recovery_key_handoff_dialog(
         "E2EE Recovery Key",
         null(),
         |dialog| {
-            let mut column = DialogColumn::new(dialog, RECOVERY_KEY_HANDOFF_DIALOG_WIDTH);
+            let mut column = DialogColumn::standard(dialog, RECOVERY_KEY_HANDOFF_DIALOG_WIDTH);
             column.label(
                 "Save this recovery key now. It will not be shown again.",
                 0,
@@ -1175,7 +1231,7 @@ unsafe fn create_recovery_key_handoff_dialog(
             )?;
             // A single-line edit's height, plus the key's further lines
             // wrapped with room to spare for the edit's edges and margins.
-            let wrap_width = RECOVERY_KEY_HANDOFF_DIALOG_WIDTH - 2 * DIALOG_MARGIN;
+            let wrap_width = column.width - 2 * column.metrics.margin;
             let (_, line_height) = dialog_text_size("X", wrap_width);
             let (_, key_height) = dialog_text_size(recovery_key, wrap_width);
             column.add(
@@ -1187,11 +1243,11 @@ unsafe fn create_recovery_key_handoff_dialog(
                     RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID,
                 ),
                 (
-                    DIALOG_MARGIN,
-                    RECOVERY_KEY_HANDOFF_DIALOG_WIDTH,
-                    DIALOG_EDIT_HEIGHT + key_height - line_height,
+                    column.metrics.margin,
+                    column.width,
+                    column.metrics.edit_height + key_height - line_height,
                 ),
-                DIALOG_GAP,
+                column.metrics.gap,
             )?;
             column.buttons(&[(RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID, "I Saved It")])
         },
@@ -1411,6 +1467,34 @@ mod tests {
 
     use super::super::test_fixtures::*;
     use super::*;
+
+    #[test]
+    fn dialog_metrics_are_windows_at_96_dpi_and_scale() {
+        assert_eq!(
+            DialogMetrics::at(Dpi::STANDARD),
+            DialogMetrics {
+                margin: 11,
+                gap: 7,
+                label_gap: 3,
+                button_width: 75,
+                button_height: 23,
+                edit_height: 21,
+                checkbox_height: 17,
+            }
+        );
+        assert_eq!(
+            DialogMetrics::at(Dpi::new(144)),
+            DialogMetrics {
+                margin: 17,
+                gap: 11,
+                label_gap: 5,
+                button_width: 113,
+                button_height: 35,
+                edit_height: 32,
+                checkbox_height: 26,
+            }
+        );
+    }
 
     /// The open dialog of `class` that `frame` owns.
     unsafe fn owned_dialog(frame: HWND, class: &str) -> HWND {
@@ -1684,7 +1768,10 @@ mod tests {
         GetClientRect(dialog, &mut client);
         assert_eq!(
             controls_extent(dialog),
-            (client.right - DIALOG_MARGIN, client.bottom - DIALOG_MARGIN),
+            (
+                client.right - DialogMetrics::of(dialog).margin,
+                client.bottom - DialogMetrics::of(dialog).margin
+            ),
             "{name} fits its controls"
         );
         let (mut dialog_rect, mut owner_rect) = (RECT::default(), RECT::default());

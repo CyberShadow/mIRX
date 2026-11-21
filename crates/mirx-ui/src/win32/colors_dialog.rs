@@ -21,20 +21,18 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBN_SELCHANGE,
     CBS_DROPDOWNLIST, DLGC_WANTARROWS, DefWindowProcW, GetClientRect, GetDlgItem, GetParent,
-    IDC_ARROW, IDCANCEL, IDOK, LoadCursorW, MoveWindow, RegisterClassExW, SendMessageW, WM_COMMAND,
-    WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
-    WM_SETFOCUS, WNDCLASSEXW, WNDPROC, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE,
-    WS_VSCROLL,
+    GetSystemMetrics, IDC_ARROW, IDCANCEL, IDOK, LoadCursorW, MoveWindow, RegisterClassExW,
+    SM_CXEDGE, SM_CYEDGE, SendMessageW, WM_COMMAND, WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS,
+    WM_LBUTTONDOWN, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFOCUS, WNDCLASSEXW, WNDPROC,
+    WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use super::colors::{
-    ColorItem, ColorScheme, PALETTE_COLORS, PaletteIndex, PaletteKey, paint_palette_cells,
-    palette_cell_at, palette_cell_rects, palette_key_move,
+    ColorItem, ColorScheme, PALETTE_COLORS, PALETTE_GAP, PaletteIndex, PaletteKey,
+    paint_palette_cells, palette_cell_at, palette_cell_rects, palette_key_move, palette_size,
 };
-use super::dialogs::{
-    DIALOG_BUTTON_HEIGHT, DIALOG_BUTTON_WIDTH, DIALOG_EDIT_HEIGHT, DIALOG_GAP, DIALOG_MARGIN,
-    create_modal_dialog, dialog_text_size, end_modal_dialog,
-};
+use super::dialogs::{DialogMetrics, create_modal_dialog, dialog_text_size, end_modal_dialog};
+use super::dpi::Dpi;
 use super::window_data::{self, WindowData};
 use super::{
     BUTTON_CLASS_NAME, COMBOBOX_CLASS_NAME, STATIC_CLASS_NAME, create_child_window, last_os_error,
@@ -51,10 +49,9 @@ pub(super) const COLORS_ITEM_ID: u16 = 6502;
 pub(super) const COLORS_PALETTE_ID: u16 = 6503;
 pub(super) const COLORS_RESET_ID: u16 = 6504;
 
-/// A palette box's side, and the gap `palette_cell_rects` leaves.
+// The layout's lengths at 96 dpi.
+/// A palette box's side.
 const PALETTE_CELL: i32 = 20;
-const PALETTE_WIDTH: i32 = 8 * PALETTE_CELL + 7 * 2;
-const PALETTE_HEIGHT: i32 = 2 * PALETTE_CELL + 2;
 const ITEM_COMBO_WIDTH: i32 = 160;
 /// The drop-down's list: every item without a scroll in the dialog font.
 const ITEM_COMBO_DROPPED_HEIGHT: i32 = 300;
@@ -80,7 +77,7 @@ const SAMPLE_LINES: [(&str, ColorItem); 15] = [
 const TREEBAR_LINES: [&str; 2] = ["Status", "#room"];
 const LISTBOX_LINES: [&str; 2] = ["@Op", "Bob"];
 const EDITBOX_TEXT: &str = "Editbox text";
-/// Around the text in each part.
+/// Around the text in each part, at 96 dpi.
 const PREVIEW_PADDING: i32 = 4;
 
 /// A part of the preview: a background, or a sample text in its item's
@@ -96,7 +93,12 @@ pub(super) struct PreviewArea {
 /// its editbox, and the nick list, with text `line_height` apart and as
 /// wide as `measure` says. The backgrounds come first, then the texts over
 /// them: the order they paint in. The preview is as big as its parts.
-pub(super) fn preview_layout(line_height: i32, measure: impl Fn(&str) -> i32) -> Vec<PreviewArea> {
+/// `padding` is the space around each part's text, in pixels.
+pub(super) fn preview_layout(
+    line_height: i32,
+    padding: i32,
+    measure: impl Fn(&str) -> i32,
+) -> Vec<PreviewArea> {
     let widest = |lines: &[&str]| {
         lines
             .iter()
@@ -105,11 +107,11 @@ pub(super) fn preview_layout(line_height: i32, measure: impl Fn(&str) -> i32) ->
             .expect("every part has lines")
     };
     let samples = SAMPLE_LINES.map(|(text, _)| text);
-    let tree_width = 2 * PREVIEW_PADDING + widest(&TREEBAR_LINES);
-    let timeline_width = 2 * PREVIEW_PADDING + widest(&samples);
-    let list_width = 2 * PREVIEW_PADDING + widest(&LISTBOX_LINES);
-    let timeline_height = 2 * PREVIEW_PADDING + SAMPLE_LINES.len() as i32 * line_height;
-    let height = timeline_height + 2 * PREVIEW_PADDING + line_height;
+    let tree_width = 2 * padding + widest(&TREEBAR_LINES);
+    let timeline_width = 2 * padding + widest(&samples);
+    let list_width = 2 * padding + widest(&LISTBOX_LINES);
+    let timeline_height = 2 * padding + SAMPLE_LINES.len() as i32 * line_height;
+    let height = timeline_height + 2 * padding + line_height;
     let timeline_left = tree_width;
     let list_left = timeline_left + timeline_width;
     let rect = |left, top, right, bottom| RECT {
@@ -128,7 +130,7 @@ pub(super) fn preview_layout(line_height: i32, measure: impl Fn(&str) -> i32) ->
         item,
         text: Some(text),
     };
-    let line_top = |index: usize| PREVIEW_PADDING + index as i32 * line_height;
+    let line_top = |index: usize| padding + index as i32 * line_height;
     let mut areas = vec![
         background(rect(0, 0, tree_width, height), ColorItem::Treebar),
         background(
@@ -145,30 +147,20 @@ pub(super) fn preview_layout(line_height: i32, measure: impl Fn(&str) -> i32) ->
         ),
     ];
     for (index, line) in TREEBAR_LINES.into_iter().enumerate() {
-        areas.push(text(
-            PREVIEW_PADDING,
-            line_top(index),
-            line,
-            ColorItem::TreebarText,
-        ));
+        areas.push(text(padding, line_top(index), line, ColorItem::TreebarText));
     }
     for (index, (line, item)) in SAMPLE_LINES.into_iter().enumerate() {
-        areas.push(text(
-            timeline_left + PREVIEW_PADDING,
-            line_top(index),
-            line,
-            item,
-        ));
+        areas.push(text(timeline_left + padding, line_top(index), line, item));
     }
     areas.push(text(
-        timeline_left + PREVIEW_PADDING,
-        timeline_height + PREVIEW_PADDING,
+        timeline_left + padding,
+        timeline_height + padding,
         EDITBOX_TEXT,
         ColorItem::EditboxText,
     ));
     for (index, line) in LISTBOX_LINES.into_iter().enumerate() {
         areas.push(text(
-            list_left + PREVIEW_PADDING,
+            list_left + padding,
             line_top(index),
             line,
             ColorItem::ListboxText,
@@ -242,7 +234,9 @@ impl ColorsDialog {
     pub(super) unsafe fn open(owner: HWND, scheme: &ColorScheme) -> Result<Self, String> {
         let glyphs = &state_ref(owner).text_font.glyphs;
         let screen = GetDC(null_mut());
-        let preview_areas = preview_layout(glyphs.metrics().tmHeight, |text| {
+        // The dialog lies over the frame, at its DPI.
+        let padding = Dpi::of_window(owner).px(PREVIEW_PADDING);
+        let preview_areas = preview_layout(glyphs.metrics().tmHeight, padding, |text| {
             glyphs.measure(screen, text)
         });
         ReleaseDC(null_mut(), screen);
@@ -345,10 +339,19 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         control
     };
     let state = dialog_state(hwnd);
+    let dpi = Dpi::of_window(hwnd);
+    let DialogMetrics {
+        margin,
+        gap,
+        button_width,
+        button_height,
+        edit_height,
+        ..
+    } = DialogMetrics::at(dpi);
 
     // The preview's client area is its layout; the sunken edge is around it.
     let (preview_width, preview_height) = preview_size(&state.preview_areas);
-    const EDGE: i32 = 2;
+    let (edge_x, edge_y) = (GetSystemMetrics(SM_CXEDGE), GetSystemMetrics(SM_CYEDGE));
     state.preview = place(
         control(
             PREVIEW_CLASS_NAME,
@@ -357,20 +360,20 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             WS_EX_CLIENTEDGE,
             COLORS_PREVIEW_ID,
         )?,
-        DIALOG_MARGIN,
-        DIALOG_MARGIN,
-        preview_width + 2 * EDGE,
-        preview_height + 2 * EDGE,
+        margin,
+        margin,
+        preview_width + 2 * edge_x,
+        preview_height + 2 * edge_y,
     );
-    let dialog_width = preview_width + 2 * EDGE;
+    let dialog_width = preview_width + 2 * edge_x;
 
-    let item_y = DIALOG_MARGIN + preview_height + 2 * EDGE + DIALOG_GAP;
+    let item_y = margin + preview_height + 2 * edge_y + gap;
     let label = "Item:";
     let (label_width, label_height) = dialog_text_size(label, dialog_width);
     place(
         control(STATIC_CLASS_NAME, label, 0, 0, 0)?,
-        DIALOG_MARGIN,
-        item_y + (DIALOG_EDIT_HEIGHT - label_height) / 2,
+        margin,
+        item_y + (edit_height - label_height) / 2,
         label_width,
         label_height,
     );
@@ -384,46 +387,43 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             0,
             COLORS_ITEM_ID,
         )?,
-        DIALOG_MARGIN + label_width + DIALOG_GAP,
+        margin + label_width + gap,
         item_y,
-        ITEM_COMBO_WIDTH,
-        ITEM_COMBO_DROPPED_HEIGHT,
+        dpi.px(ITEM_COMBO_WIDTH),
+        dpi.px(ITEM_COMBO_DROPPED_HEIGHT),
     );
     for item in ColorItem::ALL {
         let label = wide_null(item.label());
         SendMessageW(state.item, CB_ADDSTRING, 0, label.as_ptr() as LPARAM);
     }
 
-    let palette_y = item_y + DIALOG_EDIT_HEIGHT + DIALOG_GAP;
+    let palette_y = item_y + edit_height + gap;
+    let cell = dpi.px(PALETTE_CELL);
+    let (palette_width, palette_height) = palette_size(cell, cell, dpi.px(PALETTE_GAP));
     state.palette = place(
         control(PALETTE_CLASS_NAME, "", WS_TABSTOP, 0, COLORS_PALETTE_ID)?,
-        DIALOG_MARGIN,
+        margin,
         palette_y,
-        PALETTE_WIDTH,
-        PALETTE_HEIGHT,
+        palette_width,
+        palette_height,
     );
 
     // Reset left, OK and Cancel right, under the palette.
-    let buttons_y = palette_y + PALETTE_HEIGHT + DIALOG_MARGIN;
-    let right = DIALOG_MARGIN + dialog_width;
+    let buttons_y = palette_y + palette_height + margin;
+    let right = margin + dialog_width;
     for (id, text, style, x) in [
-        (
-            COLORS_RESET_ID as usize,
-            "&Reset",
-            BS_PUSHBUTTON,
-            DIALOG_MARGIN,
-        ),
+        (COLORS_RESET_ID as usize, "&Reset", BS_PUSHBUTTON, margin),
         (
             IDOK as usize,
             "OK",
             BS_DEFPUSHBUTTON,
-            right - 2 * DIALOG_BUTTON_WIDTH - DIALOG_GAP,
+            right - 2 * button_width - gap,
         ),
         (
             IDCANCEL as usize,
             "Cancel",
             BS_PUSHBUTTON,
-            right - DIALOG_BUTTON_WIDTH,
+            right - button_width,
         ),
     ] {
         place(
@@ -436,8 +436,8 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             )?,
             x,
             buttons_y,
-            DIALOG_BUTTON_WIDTH,
-            DIALOG_BUTTON_HEIGHT,
+            button_width,
+            button_height,
         );
     }
 
@@ -597,7 +597,11 @@ unsafe extern "system" fn preview_window_proc(
 unsafe fn palette_cells(hwnd: HWND) -> [RECT; PALETTE_COLORS] {
     let mut client = RECT::default();
     GetClientRect(hwnd, &mut client);
-    palette_cell_rects(client.right, client.bottom)
+    palette_cell_rects(
+        client.right,
+        client.bottom,
+        Dpi::of_window(hwnd).px(PALETTE_GAP),
+    )
 }
 
 unsafe fn paint_palette(hwnd: HWND) {
@@ -717,7 +721,7 @@ mod tests {
 
     #[test]
     fn the_preview_shows_every_item_and_clicks_pick_them() {
-        let areas = preview_layout(15, mono);
+        let areas = preview_layout(15, PREVIEW_PADDING, mono);
         for item in ColorItem::ALL {
             let (x, y) = preview_click_point(&areas, item);
             assert_eq!(preview_item_at(&areas, x, y), Some(item), "{item:?}");

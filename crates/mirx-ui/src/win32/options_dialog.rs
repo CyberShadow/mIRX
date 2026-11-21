@@ -38,10 +38,10 @@ use mirx_core::HighlightWord;
 use super::automation_dump::dump_activity_colors;
 use super::colors::{PALETTE_COLORS, PaletteIndex, paint_palette_cells};
 use super::dialogs::{
-    DIALOG_BUTTON_HEIGHT, DIALOG_BUTTON_WIDTH, DIALOG_CHECKBOX_HEIGHT, DIALOG_EDIT_EX_STYLE,
-    DIALOG_EDIT_HEIGHT, DIALOG_EDIT_STYLE, DIALOG_GAP, DIALOG_LABEL_GAP, DIALOG_MARGIN,
-    controls_extent, create_modal_dialog, dialog_text_size, end_modal_dialog,
+    DIALOG_EDIT_EX_STYLE, DIALOG_EDIT_STYLE, DialogMetrics, controls_extent, create_modal_dialog,
+    dialog_text_size, end_modal_dialog,
 };
+use super::dpi::Dpi;
 use super::logging::logs_folder_label;
 use super::options::{
     FIRST_PAGE, HighlightChanges, HighlightList, OPTIONS_TREE, OptionsField, OptionsForm,
@@ -99,9 +99,9 @@ const HIGHLIGHT_SIGNED_OUT_NOTE: &str = "Connect to edit highlight words.";
 const TIPS_NOTE: &str =
     "Muted rooms never show tips; Mentions and keywords rooms only for highlights.";
 
+// The layout's lengths at 96 dpi.
 const TREE_WIDTH: i32 = 150;
 const TREE_HEIGHT: i32 = 260;
-const PAGE_X: i32 = DIALOG_MARGIN + TREE_WIDTH + DIALOG_MARGIN;
 const PAGE_WIDTH: i32 = 320;
 const TIMESTAMP_FORMAT_WIDTH: i32 = 120;
 /// A number field: up to four digits.
@@ -321,6 +321,20 @@ unsafe fn dialog_state(hwnd: HWND) -> &'static mut DialogState {
 
 unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     let instance = GetModuleHandleW(null());
+    let dpi = Dpi::of_window(hwnd);
+    let DialogMetrics {
+        margin,
+        gap,
+        label_gap,
+        button_width,
+        button_height,
+        edit_height,
+        checkbox_height,
+    } = DialogMetrics::at(dpi);
+    let (tree_width, page_width) = (dpi.px(TREE_WIDTH), dpi.px(PAGE_WIDTH));
+    let page_x = margin + tree_width + margin;
+    let number_field_width = dpi.px(NUMBER_FIELD_WIDTH);
+    let window_buffer_field_width = dpi.px(WINDOW_BUFFER_FIELD_WIDTH);
     let control = |class: &str, text: &str, style: u32, ex_style: u32, id: u16| {
         create_child_window(
             hwnd,
@@ -339,7 +353,7 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     };
     // A label as large as its text wrapped to the page.
     let label = |text: &str, id: u16, style: u32, x: i32, y: i32| {
-        let (width, height) = dialog_text_size(text, PAGE_WIDTH);
+        let (width, height) = dialog_text_size(text, page_width);
         let label = place(
             control(STATIC_CLASS_NAME, text, style, 0, id)?,
             x,
@@ -351,17 +365,16 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     };
     // A label left of the field on the row at `row_y`, centred on it.
     let label_beside_field = |text: &str, x: i32, row_y: i32| {
-        let (_, height) = dialog_text_size(text, PAGE_WIDTH);
-        let (label, (width, _)) = label(text, 0, 0, x, row_y + (DIALOG_EDIT_HEIGHT - height) / 2)?;
+        let (_, height) = dialog_text_size(text, page_width);
+        let (label, (width, _)) = label(text, 0, 0, x, row_y + (edit_height - height) / 2)?;
         Ok::<_, String>((label, width))
     };
     let state = dialog_state(hwnd);
 
     // mIRC labels its tree, which names the shown page; there is no
     // page heading.
-    let (_, (_, category_height)) =
-        label("Category:", 0, WS_VISIBLE, DIALOG_MARGIN, DIALOG_MARGIN)?;
-    let tree_top = DIALOG_MARGIN + category_height + DIALOG_LABEL_GAP;
+    let (_, (_, category_height)) = label("Category:", 0, WS_VISIBLE, margin, margin)?;
+    let tree_top = margin + category_height + label_gap;
     state.tree = place(
         control(
             TREE_CLASS_NAME,
@@ -375,10 +388,10 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             WS_EX_CLIENTEDGE,
             OPTIONS_TREE_ID,
         )?,
-        DIALOG_MARGIN,
+        margin,
         tree_top,
-        TREE_WIDTH,
-        TREE_HEIGHT,
+        tree_width,
+        dpi.px(TREE_HEIGHT),
     );
     let mut category = 0;
     for (label, depth, _) in OPTIONS_TREE {
@@ -427,27 +440,27 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     ] {
         *field = place(
             control(BUTTON_CLASS_NAME, text, checkbox, 0, id)?,
-            PAGE_X,
+            page_x,
             row_y,
-            PAGE_WIDTH,
-            DIALOG_CHECKBOX_HEIGHT,
+            page_width,
+            checkbox_height,
         );
         state
             .page_controls
             .push((OptionsPage::ConnectOptions, *field));
-        row_y += DIALOG_CHECKBOX_HEIGHT + DIALOG_GAP;
+        row_y += checkbox_height + gap;
     }
     // The Retry and Delay rows sit under Enable connect retry, their
     // fields lined up.
-    let retry_x = PAGE_X + DIALOG_MARGIN;
+    let retry_x = page_x + margin;
     let retry_labels = ["Retry:", "Delay:"];
     let retry_field_x = retry_x
         + retry_labels
             .iter()
-            .map(|text| dialog_text_size(text, PAGE_WIDTH).0)
+            .map(|text| dialog_text_size(text, page_width).0)
             .max()
             .expect("there are two labels")
-        + DIALOG_GAP;
+        + gap;
     for ((text, unit), (field, id)) in retry_labels.into_iter().zip(["times", "seconds"]).zip([
         (&mut state.fields.retry_times, OPTIONS_RETRY_TIMES_ID),
         (&mut state.fields.retry_delay, OPTIONS_RETRY_DELAY_ID),
@@ -463,18 +476,18 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             )?,
             retry_field_x,
             row_y,
-            NUMBER_FIELD_WIDTH,
-            DIALOG_EDIT_HEIGHT,
+            number_field_width,
+            edit_height,
         );
         let (unit_label, _) =
-            label_beside_field(unit, retry_field_x + NUMBER_FIELD_WIDTH + DIALOG_GAP, row_y)?;
+            label_beside_field(unit, retry_field_x + number_field_width + gap, row_y)?;
         for control in [row_label, *field, unit_label] {
             state
                 .page_controls
                 .push((OptionsPage::ConnectOptions, control));
             state.fields.retry_rows.push(control);
         }
-        row_y += DIALOG_EDIT_HEIGHT + DIALOG_GAP;
+        row_y += edit_height + gap;
     }
 
     state.fields.timestamp_show = place(
@@ -485,13 +498,13 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             0,
             OPTIONS_TIMESTAMP_SHOW_ID,
         )?,
-        PAGE_X,
+        page_x,
         page_top,
-        PAGE_WIDTH,
-        DIALOG_CHECKBOX_HEIGHT,
+        page_width,
+        checkbox_height,
     );
-    let format_y = page_top + DIALOG_CHECKBOX_HEIGHT + DIALOG_GAP;
-    let (format_label, format_label_width) = label_beside_field("Format:", PAGE_X, format_y)?;
+    let format_y = page_top + checkbox_height + gap;
+    let (format_label, format_label_width) = label_beside_field("Format:", page_x, format_y)?;
     state.fields.timestamp_format = place(
         control(
             EDIT_CLASS_NAME,
@@ -500,17 +513,17 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             DIALOG_EDIT_EX_STYLE,
             OPTIONS_TIMESTAMP_FORMAT_ID,
         )?,
-        PAGE_X + format_label_width + DIALOG_GAP,
+        page_x + format_label_width + gap,
         format_y,
-        TIMESTAMP_FORMAT_WIDTH,
-        DIALOG_EDIT_HEIGHT,
+        dpi.px(TIMESTAMP_FORMAT_WIDTH),
+        edit_height,
     );
     let (tokens, _) = label(
         &format!("Tokens: {}", format_tokens()),
         OPTIONS_TIMESTAMP_TOKENS_ID,
         0,
-        PAGE_X,
-        format_y + DIALOG_EDIT_HEIGHT + DIALOG_GAP,
+        page_x,
+        format_y + edit_height + gap,
     )?;
     for control in [
         state.fields.timestamp_show,
@@ -524,8 +537,8 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     }
 
     let (buttons_label, buttons_label_width) =
-        label_beside_field("Switchbar buttons:", PAGE_X, page_top)?;
-    let buttons_x = PAGE_X + buttons_label_width + DIALOG_GAP;
+        label_beside_field("Switchbar buttons:", page_x, page_top)?;
+    let buttons_x = page_x + buttons_label_width + gap;
     state.fields.switchbar_buttons = place(
         control(
             EDIT_CLASS_NAME,
@@ -536,12 +549,12 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         )?,
         buttons_x,
         page_top,
-        NUMBER_FIELD_WIDTH,
-        DIALOG_EDIT_HEIGHT,
+        number_field_width,
+        edit_height,
     );
     let (pixels_label, _) = label_beside_field(
         "pixels wide (40-400)",
-        buttons_x + NUMBER_FIELD_WIDTH + DIALOG_GAP,
+        buttons_x + number_field_width + gap,
         page_top,
     )?;
     for control in [buttons_label, state.fields.switchbar_buttons, pixels_label] {
@@ -549,20 +562,20 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     }
     // mIRC's switchbar colours, one row each under the buttons' width.
     let activity_labels = ["Event:", "Message:", "Highlight:"];
-    let activity_x = PAGE_X
+    let activity_x = page_x
         + activity_labels
             .iter()
-            .map(|text| dialog_text_size(text, PAGE_WIDTH).0)
+            .map(|text| dialog_text_size(text, page_width).0)
             .max()
             .expect("there are three labels")
-        + DIALOG_GAP;
+        + gap;
     for (row, (text, id)) in activity_labels
         .into_iter()
         .zip(OPTIONS_ACTIVITY_COLOR_IDS)
         .enumerate()
     {
-        let row_y = page_top + (row as i32 + 1) * (DIALOG_EDIT_HEIGHT + DIALOG_GAP);
-        let (row_label, _) = label_beside_field(text, PAGE_X, row_y)?;
+        let row_y = page_top + (row as i32 + 1) * (edit_height + gap);
+        let (row_label, _) = label_beside_field(text, page_x, row_y)?;
         let combo = place(
             control(
                 COMBOBOX_CLASS_NAME,
@@ -573,9 +586,9 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             )?,
             activity_x,
             row_y,
-            ACTIVITY_COLOR_WIDTH,
+            dpi.px(ACTIVITY_COLOR_WIDTH),
             // A drop-down's height includes its open list.
-            DIALOG_EDIT_HEIGHT + ACTIVITY_COLOR_DROPPED_ITEMS * ACTIVITY_COLOR_ITEM_HEIGHT + 2,
+            edit_height + ACTIVITY_COLOR_DROPPED_ITEMS * dpi.px(ACTIVITY_COLOR_ITEM_HEIGHT) + 2,
         );
         // Without CBS_HASSTRINGS an item is its data: the palette index.
         for index in 0..PALETTE_COLORS {
@@ -591,13 +604,13 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         "Highlight messages that contain these words:",
         0,
         0,
-        PAGE_X,
+        page_x,
         page_top,
     )?;
-    let list_width = PAGE_WIDTH - DIALOG_BUTTON_WIDTH - DIALOG_GAP;
-    let side_x = PAGE_X + list_width + DIALOG_GAP;
-    let list_top = page_top + highlight_label_height + DIALOG_LABEL_GAP;
-    let word_top = list_top + HIGHLIGHT_LIST_HEIGHT + DIALOG_GAP;
+    let list_width = page_width - button_width - gap;
+    let side_x = page_x + list_width + gap;
+    let list_top = page_top + highlight_label_height + label_gap;
+    let word_top = list_top + dpi.px(HIGHLIGHT_LIST_HEIGHT) + gap;
     let controls = &mut state.highlight_controls;
     controls.list = place(
         control(
@@ -607,10 +620,10 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             WS_EX_CLIENTEDGE,
             OPTIONS_HIGHLIGHT_LIST_ID,
         )?,
-        PAGE_X,
+        page_x,
         list_top,
         list_width,
-        HIGHLIGHT_LIST_HEIGHT,
+        dpi.px(HIGHLIGHT_LIST_HEIGHT),
     );
     controls.delete = place(
         control(
@@ -622,8 +635,8 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         )?,
         side_x,
         list_top,
-        DIALOG_BUTTON_WIDTH,
-        DIALOG_BUTTON_HEIGHT,
+        button_width,
+        button_height,
     );
     controls.word = place(
         control(
@@ -633,10 +646,10 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             DIALOG_EDIT_EX_STYLE,
             OPTIONS_HIGHLIGHT_WORD_ID,
         )?,
-        PAGE_X,
+        page_x,
         word_top,
         list_width,
-        DIALOG_EDIT_HEIGHT,
+        edit_height,
     );
     controls.add = place(
         control(
@@ -647,9 +660,9 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             OPTIONS_HIGHLIGHT_ADD_ID,
         )?,
         side_x,
-        word_top + (DIALOG_EDIT_HEIGHT - DIALOG_BUTTON_HEIGHT) / 2,
-        DIALOG_BUTTON_WIDTH,
-        DIALOG_BUTTON_HEIGHT,
+        word_top + (edit_height - button_height) / 2,
+        button_width,
+        button_height,
     );
     let (highlight_note, _) = label(
         match state.highlight {
@@ -658,8 +671,8 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         },
         OPTIONS_HIGHLIGHT_NOTE_ID,
         0,
-        PAGE_X,
-        word_top + DIALOG_EDIT_HEIGHT + DIALOG_GAP,
+        page_x,
+        word_top + edit_height + gap,
     )?;
     let controls = &state.highlight_controls;
     for control in [
@@ -680,7 +693,7 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     refill_highlight_list(state);
 
     // mIRC's Logging page: what logs by itself, and how lines are written.
-    let (auto_label, (_, auto_label_height)) = label("Automatically log:", 0, 0, PAGE_X, page_top)?;
+    let (auto_label, (_, auto_label_height)) = label("Automatically log:", 0, 0, page_x, page_top)?;
     state
         .page_controls
         .push((OptionsPage::IrcLogging, auto_label));
@@ -688,24 +701,20 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     let check_box_row = |text: &str, id: u16, indent: i32, row_y: &mut i32| {
         let check_box = place(
             control(BUTTON_CLASS_NAME, text, checkbox, 0, id)?,
-            PAGE_X + indent,
+            page_x + indent,
             *row_y,
-            PAGE_WIDTH - indent,
-            DIALOG_CHECKBOX_HEIGHT,
+            page_width - indent,
+            checkbox_height,
         );
-        *row_y += DIALOG_CHECKBOX_HEIGHT + DIALOG_GAP;
+        *row_y += checkbox_height + gap;
         Ok::<_, String>(check_box)
     };
-    let mut row_y = page_top + auto_label_height + DIALOG_LABEL_GAP;
+    let mut row_y = page_top + auto_label_height + label_gap;
     // The kinds of window sit under "Automatically log:".
-    state.fields.log_channels = check_box_row(
-        "Channels",
-        OPTIONS_LOG_CHANNELS_ID,
-        DIALOG_MARGIN,
-        &mut row_y,
-    )?;
+    state.fields.log_channels =
+        check_box_row("Channels", OPTIONS_LOG_CHANNELS_ID, margin, &mut row_y)?;
     state.fields.log_queries =
-        check_box_row("Queries", OPTIONS_LOG_QUERIES_ID, DIALOG_MARGIN, &mut row_y)?;
+        check_box_row("Queries", OPTIONS_LOG_QUERIES_ID, margin, &mut row_y)?;
     state.fields.log_strip_codes =
         check_box_row("Strip codes", OPTIONS_LOG_STRIP_CODES_ID, 0, &mut row_y)?;
     state.fields.log_timestamp =
@@ -722,7 +731,7 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         &format!("Folder: {}", logs_folder_label()),
         OPTIONS_LOG_FOLDER_ID,
         0,
-        PAGE_X,
+        page_x,
         row_y,
     )?;
     state.page_controls.push((OptionsPage::IrcLogging, folder));
@@ -770,29 +779,25 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         "Show tips when mirx is not the active application for:",
         0,
         0,
-        PAGE_X,
+        page_x,
         page_top,
     )?;
-    let mut row_y = page_top + tips_label_height + DIALOG_LABEL_GAP;
-    state.fields.tips_highlights = check_box_row(
-        "Highlights",
-        OPTIONS_TIPS_HIGHLIGHTS_ID,
-        DIALOG_MARGIN,
-        &mut row_y,
-    )?;
+    let mut row_y = page_top + tips_label_height + label_gap;
+    state.fields.tips_highlights =
+        check_box_row("Highlights", OPTIONS_TIPS_HIGHLIGHTS_ID, margin, &mut row_y)?;
     state.fields.tips_queries = check_box_row(
         "Query messages",
         OPTIONS_TIPS_QUERIES_ID,
-        DIALOG_MARGIN,
+        margin,
         &mut row_y,
     )?;
     state.fields.tips_channels = check_box_row(
         "Channel messages",
         OPTIONS_TIPS_CHANNELS_ID,
-        DIALOG_MARGIN,
+        margin,
         &mut row_y,
     )?;
-    let (tips_note, _) = label(TIPS_NOTE, OPTIONS_TIPS_NOTE_ID, 0, PAGE_X, row_y)?;
+    let (tips_note, _) = label(TIPS_NOTE, OPTIONS_TIPS_NOTE_ID, 0, page_x, row_y)?;
     for control in [
         tips_label,
         state.fields.tips_highlights,
@@ -807,8 +812,8 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
 
     // mIRC's Options > Other: its Window buffer row.
     let (buffer_label, buffer_label_width) =
-        label_beside_field("Window buffer:", PAGE_X, page_top)?;
-    let buffer_x = PAGE_X + buffer_label_width + DIALOG_GAP;
+        label_beside_field("Window buffer:", page_x, page_top)?;
+    let buffer_x = page_x + buffer_label_width + gap;
     state.fields.window_buffer = place(
         control(
             EDIT_CLASS_NAME,
@@ -819,12 +824,12 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         )?,
         buffer_x,
         page_top,
-        WINDOW_BUFFER_FIELD_WIDTH,
-        DIALOG_EDIT_HEIGHT,
+        window_buffer_field_width,
+        edit_height,
     );
     let (lines_label, _) = label_beside_field(
         "lines (100-50000)",
-        buffer_x + WINDOW_BUFFER_FIELD_WIDTH + DIALOG_GAP,
+        buffer_x + window_buffer_field_width + gap,
         page_top,
     )?;
     for control in [buffer_label, state.fields.window_buffer, lines_label] {
@@ -835,8 +840,8 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     // for Enter and Esc. They sit a margin under the tree and every page,
     // right-aligned with the pages.
     let (_, pages_bottom) = controls_extent(hwnd);
-    let buttons_y = pages_bottom + DIALOG_MARGIN;
-    let cancel_x = PAGE_X + PAGE_WIDTH - DIALOG_BUTTON_WIDTH;
+    let buttons_y = pages_bottom + margin;
+    let cancel_x = page_x + page_width - button_width;
     place(
         control(
             BUTTON_CLASS_NAME,
@@ -845,10 +850,10 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             0,
             IDOK as u16,
         )?,
-        cancel_x - DIALOG_GAP - DIALOG_BUTTON_WIDTH,
+        cancel_x - gap - button_width,
         buttons_y,
-        DIALOG_BUTTON_WIDTH,
-        DIALOG_BUTTON_HEIGHT,
+        button_width,
+        button_height,
     );
     place(
         control(
@@ -860,8 +865,8 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         )?,
         cancel_x,
         buttons_y,
-        DIALOG_BUTTON_WIDTH,
-        DIALOG_BUTTON_HEIGHT,
+        button_width,
+        button_height,
     );
 
     let form = OptionsForm::from_settings(&state.current);
@@ -993,11 +998,13 @@ unsafe fn draw_activity_color(item: &DRAWITEMSTRUCT) {
         &item.rcItem,
         GetSysColorBrush(background) as HBRUSH,
     );
+    let dpi = Dpi::of_window(item.hwndItem);
+    let (inset_x, inset_y) = (dpi.px(2), dpi.px(1));
     let cell = RECT {
-        left: item.rcItem.left + 2,
-        top: item.rcItem.top + 1,
-        right: item.rcItem.right - 2,
-        bottom: item.rcItem.bottom - 1,
+        left: item.rcItem.left + inset_x,
+        top: item.rcItem.top + inset_y,
+        right: item.rcItem.right - inset_x,
+        bottom: item.rcItem.bottom - inset_y,
     };
     let index = palette_index(item.itemID as usize);
     let mode = SetBkMode(item.hDC, TRANSPARENT as i32);
@@ -1150,7 +1157,7 @@ pub(super) unsafe extern "system" fn window_proc(
                 item.CtlType, ODT_COMBOBOX,
                 "only the colour drop-downs are owner-drawn"
             );
-            item.itemHeight = ACTIVITY_COLOR_ITEM_HEIGHT as u32;
+            item.itemHeight = Dpi::of_window(hwnd).px(ACTIVITY_COLOR_ITEM_HEIGHT) as u32;
             1
         }
         WM_DRAWITEM => {
