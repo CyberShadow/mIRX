@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 
 use common::Harness;
 use mirx_core::{
-    BackfillRoomHistoryRequest, Command, EditMessageRequest, Event, ListPublicRoomsRequest,
-    LoginMethod, LoginRequest, Operation, RestoreSessionRequest, RoomMessagePresentationKind,
-    SendFileRequest, SendMessageRequest, SessionAuth, StoredSession,
+    BackfillRoomHistoryRequest, Command, EditMessageRequest, Event, HistoryFrom,
+    ListPublicRoomsRequest, LoginMethod, LoginRequest, Operation, RestoreSessionRequest,
+    RoomMessagePresentationKind, SendFileRequest, SendMessageRequest, SessionAuth, StoredSession,
 };
 use serde_json::json;
 use wiremock::matchers::{method, path_regex};
@@ -79,7 +79,7 @@ fn line(room_id: &str, body: &str) -> Command {
 fn backfill(room_id: &str) -> Command {
     Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
         room_id: room_id.to_owned(),
-        from: None,
+        from: HistoryFrom::Latest,
         limit: 20,
     })
 }

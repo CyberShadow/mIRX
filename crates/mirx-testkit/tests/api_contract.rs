@@ -8,8 +8,8 @@ use mirx_core::{
     BackfillRoomHistoryRequest as CoreBackfillRoomHistoryRequest, E2eeBackupState,
     E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeSessionState, E2eeStatus,
     Event as CoreEvent, FetchRoomMediaRequest as CoreFetchRoomMediaRequest,
-    RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
-    RoomActivityUpdate as CoreRoomActivityUpdate,
+    HistoryFrom as CoreHistoryFrom, RoomActivity as CoreRoomActivity,
+    RoomActivityKind as CoreRoomActivityKind, RoomActivityUpdate as CoreRoomActivityUpdate,
     RoomActivityUpdateKind as CoreRoomActivityUpdateKind,
     RoomActivityUpdateTarget as CoreRoomActivityUpdateTarget,
     RoomHistoryBackfill as CoreRoomHistoryBackfill,
@@ -21,8 +21,8 @@ use mirx_core::{
 use mirx_testkit::{
     AutomationDialog, BackfillRoomHistoryRequest, ComposeKey, ContextMenuCommand,
     E2eeRecoverySetupResult, FetchRoomImageMediaRequest, FindActiveViewArgs, FindActiveViewResult,
-    FrameSize, LaunchOptions, LoginArgs, MdiArrangement, MdiState, MdiView, MdiWindowPlacement,
-    MdiWindowState, MemberMenuState, MemberModerationAction, MemberPowerRole,
+    FrameSize, HistoryFrom, LaunchOptions, LoginArgs, MdiArrangement, MdiState, MdiView,
+    MdiWindowPlacement, MdiWindowState, MemberMenuState, MemberModerationAction, MemberPowerRole,
     MembershipCommandAction, Model, NavigationNode, NavigationPathSegment, ProtocolVersion,
     RecoverE2eeArgs, RestoreSessionArgs, RoomActivity, RoomActivityKind, RoomActivityRelation,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
@@ -937,7 +937,9 @@ fn data_models_round_trip_through_json() {
                 num_notifications: 3,
                 num_mentions: 1,
             }),
-            history_backfill: UiRoomHistoryBackfillState::Idle,
+            history_backfill: UiRoomHistoryBackfillState::Idle {
+                next: HistoryFrom::Latest,
+            },
             timeline_row_builds: 4,
         }],
         text_font: UiTextFont {
@@ -1411,6 +1413,7 @@ fn data_models_round_trip_through_json() {
                     },
                     "history_backfill": {
                         "state": "idle",
+                        "next": { "type": "latest" },
                     },
                     "timeline_row_builds": 4u64,
                 }
@@ -1545,46 +1548,55 @@ fn find_active_view_dtos_round_trip_through_json() {
 fn ui_room_history_backfill_state_round_trips_through_json() {
     let cases = vec![
         (
-            UiRoomHistoryBackfillState::Idle,
+            UiRoomHistoryBackfillState::Idle {
+                next: HistoryFrom::Latest,
+            },
             serde_json::json!({
                 "state": "idle",
+                "next": { "type": "latest" },
             }),
         ),
         (
-            UiRoomHistoryBackfillState::Loading { from: None },
+            UiRoomHistoryBackfillState::Idle {
+                next: HistoryFrom::BeforeEvent {
+                    event_id: "$kept".to_owned(),
+                },
+            },
             serde_json::json!({
-                "state": "loading",
-                "from": null,
+                "state": "idle",
+                "next": { "type": "before_event", "event_id": "$kept" },
             }),
         ),
         (
             UiRoomHistoryBackfillState::Loading {
-                from: Some("t0".to_owned()),
+                from: HistoryFrom::Latest,
             },
             serde_json::json!({
                 "state": "loading",
-                "from": "t0",
+                "from": { "type": "latest" },
+            }),
+        ),
+        (
+            UiRoomHistoryBackfillState::Loading {
+                from: HistoryFrom::Token {
+                    token: "t0".to_owned(),
+                },
+            },
+            serde_json::json!({
+                "state": "loading",
+                "from": { "type": "token", "token": "t0" },
             }),
         ),
         (
             UiRoomHistoryBackfillState::Failed {
-                from: None,
+                from: HistoryFrom::Token {
+                    token: "t1".to_owned(),
+                },
                 message: "request failed".to_owned(),
             },
             serde_json::json!({
                 "state": "failed",
-                "from": null,
-                "message": "request failed",
-            }),
-        ),
-        (
-            UiRoomHistoryBackfillState::Failed {
-                from: Some("t1".to_owned()),
-                message: "request failed".to_owned(),
-            },
-            serde_json::json!({
-                "state": "failed",
-                "from": "t1",
+                "from": { "type": "token", "token": "t1" },
                 "message": "request failed",
             }),
         ),
@@ -1613,26 +1625,28 @@ fn ui_room_history_backfill_state_round_trips_through_json() {
 fn ui_room_history_backfill_state_rejects_unknown_fields() {
     for json in [
         serde_json::json!({
-            "state": "loading",
-            "from": null,
+            "state": "idle",
+            "next": { "type": "latest" },
             "unexpected": true,
         }),
         serde_json::json!({
             "state": "loading",
-            "from": "token",
+            "from": { "type": "token", "token": "token" },
             "unexpected": true,
         }),
         serde_json::json!({
+            "state": "loading",
+            "from": { "type": "token", "token": "token", "unexpected": true },
+        }),
+        serde_json::json!({
             "state": "failed",
+            "from": { "type": "latest" },
+            "message": "boom",
+            "unexpected": true,
+        }),
+        serde_json::json!({
+            "state": "loading",
             "from": null,
-            "message": "boom",
-            "unexpected": true,
-        }),
-        serde_json::json!({
-            "state": "failed",
-            "from": "token",
-            "message": "boom",
-            "unexpected": true,
         }),
     ] {
         assert!(
@@ -3693,34 +3707,59 @@ fn backfill_room_history_request_round_trips_through_json_across_packages() {
         (
             BackfillRoomHistoryRequest {
                 room_id: "!room:example".to_owned(),
-                from: None,
+                from: HistoryFrom::Latest,
                 limit: 50,
             },
             CoreBackfillRoomHistoryRequest {
                 room_id: "!room:example".to_owned(),
-                from: None,
+                from: CoreHistoryFrom::Latest,
                 limit: 50,
             },
             serde_json::json!({
                 "room_id": "!room:example",
-                "from": null,
+                "from": { "type": "latest" },
                 "limit": 50
             }),
         ),
         (
             BackfillRoomHistoryRequest {
                 room_id: "!room:example".to_owned(),
-                from: Some("token".to_owned()),
+                from: HistoryFrom::Token {
+                    token: "token".to_owned(),
+                },
                 limit: 50,
             },
             CoreBackfillRoomHistoryRequest {
                 room_id: "!room:example".to_owned(),
-                from: Some("token".to_owned()),
+                from: CoreHistoryFrom::Token {
+                    token: "token".to_owned(),
+                },
                 limit: 50,
             },
             serde_json::json!({
                 "room_id": "!room:example",
-                "from": "token",
+                "from": { "type": "token", "token": "token" },
+                "limit": 50
+            }),
+        ),
+        (
+            BackfillRoomHistoryRequest {
+                room_id: "!room:example".to_owned(),
+                from: HistoryFrom::BeforeEvent {
+                    event_id: "$kept:example".to_owned(),
+                },
+                limit: 50,
+            },
+            CoreBackfillRoomHistoryRequest {
+                room_id: "!room:example".to_owned(),
+                from: CoreHistoryFrom::BeforeEvent {
+                    event_id: "$kept:example".to_owned(),
+                },
+                limit: 50,
+            },
+            serde_json::json!({
+                "room_id": "!room:example",
+                "from": { "type": "before_event", "event_id": "$kept:example" },
                 "limit": 50
             }),
         ),
@@ -3845,7 +3884,6 @@ fn room_history_backfill_event_activity_update_round_trips_through_json_across_p
 fn room_history_backfill_with_updates_round_trips_through_json_across_packages() {
     let backfill = RoomHistoryBackfill {
         room_id: "!ops:example.org".to_owned(),
-        start: "t4747337_219380_2603".to_owned(),
         end: Some("t4747337_219379_2603".to_owned()),
         events: vec![RoomHistoryBackfillEvent::ActivityUpdate(
             sample_room_history_activity_update(),
@@ -3853,7 +3891,6 @@ fn room_history_backfill_with_updates_round_trips_through_json_across_packages()
     };
     let json = serde_json::json!({
         "room_id": "!ops:example.org",
-        "start": "t4747337_219380_2603",
         "end": "t4747337_219379_2603",
         "events": [
             {
@@ -3886,7 +3923,6 @@ fn room_history_backfill_with_updates_round_trips_through_json_across_packages()
 
     let core_backfill = CoreRoomHistoryBackfill {
         room_id: "!ops:example.org".to_owned(),
-        start: "t4747337_219380_2603".to_owned(),
         end: Some("t4747337_219379_2603".to_owned()),
         events: vec![CoreRoomHistoryBackfillEvent::ActivityUpdate(
             sample_core_room_history_activity_update(),
@@ -3908,7 +3944,6 @@ fn room_history_backfill_with_updates_round_trips_through_json_across_packages()
 fn room_history_backfill_with_activity_ingests_core_json_and_defaults_reactions() {
     let backfill = RoomHistoryBackfill {
         room_id: "!ops:example.org".to_owned(),
-        start: "t4747337_219380_2603".to_owned(),
         end: Some("t4747337_219379_2603".to_owned()),
         events: vec![
             RoomHistoryBackfillEvent::Activity(Box::new(sample_room_history_activity())),
@@ -3917,7 +3952,6 @@ fn room_history_backfill_with_activity_ingests_core_json_and_defaults_reactions(
     };
     let testkit_json = serde_json::json!({
         "room_id": "!ops:example.org",
-        "start": "t4747337_219380_2603",
         "end": "t4747337_219379_2603",
         "events": [
             {
@@ -3952,7 +3986,6 @@ fn room_history_backfill_with_activity_ingests_core_json_and_defaults_reactions(
     });
     let core_json = serde_json::json!({
         "room_id": "!ops:example.org",
-        "start": "t4747337_219380_2603",
         "end": "t4747337_219379_2603",
         "events": [
             {
@@ -3997,7 +4030,6 @@ fn room_history_backfill_with_activity_ingests_core_json_and_defaults_reactions(
 
     let core_backfill = CoreRoomHistoryBackfill {
         room_id: "!ops:example.org".to_owned(),
-        start: "t4747337_219380_2603".to_owned(),
         end: Some("t4747337_219379_2603".to_owned()),
         events: vec![
             CoreRoomHistoryBackfillEvent::Activity(Box::new(sample_core_room_history_activity())),
@@ -4018,7 +4050,8 @@ fn room_history_backfill_with_activity_ingests_core_json_and_defaults_reactions(
 
 #[test]
 fn backfill_room_history_request_rejects_unknown_fields_in_testkit_and_core() {
-    let json = r#"{"room_id":"!room:example","from":null,"limit":50,"unexpected":"value"}"#;
+    let json =
+        r#"{"room_id":"!room:example","from":{"type":"latest"},"limit":50,"unexpected":"value"}"#;
 
     assert!(
         serde_json::from_str::<BackfillRoomHistoryRequest>(json).is_err(),
@@ -4032,7 +4065,7 @@ fn backfill_room_history_request_rejects_unknown_fields_in_testkit_and_core() {
 
 #[test]
 fn room_history_backfill_rejects_unknown_fields_in_testkit_and_core() {
-    let json = r#"{"room_id":"!room:example.org","start":"t1","end":null,"events":[],"unexpected":"value"}"#;
+    let json = r#"{"room_id":"!room:example.org","end":null,"events":[],"unexpected":"value"}"#;
 
     assert!(
         serde_json::from_str::<RoomHistoryBackfill>(json).is_err(),
@@ -5609,12 +5642,14 @@ fn model_submitted_history_commands_round_trip_through_json() {
         submitted_history_commands: vec![
             SubmittedHistoryCommand {
                 room_id: "!room:example".to_owned(),
-                from: None,
+                from: HistoryFrom::Latest,
                 limit: 50,
             },
             SubmittedHistoryCommand {
                 room_id: "!room:example".to_owned(),
-                from: Some("token".to_owned()),
+                from: HistoryFrom::Token {
+                    token: "token".to_owned(),
+                },
                 limit: 50,
             },
         ],
@@ -5646,12 +5681,12 @@ fn model_submitted_history_commands_round_trip_through_json() {
             "submitted_history_commands": [
                 {
                     "room_id": "!room:example",
-                    "from": null,
+                    "from": { "type": "latest" },
                     "limit": 50
                 },
                 {
                     "room_id": "!room:example",
-                    "from": "token",
+                    "from": { "type": "token", "token": "token" },
                     "limit": 50
                 }
             ],
@@ -5672,12 +5707,12 @@ fn model_submitted_history_commands_round_trip_through_json() {
             "submitted_history_commands": [
                 {
                     "room_id": "!room:example",
-                    "from": null,
+                    "from": { "type": "latest" },
                     "limit": 50
                 },
                 {
                     "room_id": "!room:example",
-                    "from": "token",
+                    "from": { "type": "token", "token": "token" },
                     "limit": 50
                 }
             ],
@@ -5985,7 +6020,7 @@ fn model_submitted_history_commands_reject_unknown_nested_fields() {
         "submitted_history_commands": [
             {
                 "room_id": "!room:example",
-                "from": "token",
+                "from": { "type": "token", "token": "token" },
                 "limit": 50,
                 "unexpected": true
             }
@@ -6397,7 +6432,7 @@ fn data_models_reject_unknown_fields() {
             "activity":null,
             "read_target_event_id":null,
             "read_state":null,
-            "history_backfill":{"state":"idle"},
+            "history_backfill":{"state":"idle","next":{"type":"latest"}},
             "unexpected":true
         }"#
         )

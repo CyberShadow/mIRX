@@ -127,8 +127,8 @@ use crate::api::{
     BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent,
     CreateRoomRequest, CreateRoomVisibility, DeviceSummary, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeRecoveryState, E2eeSessionState, E2eeStatus, EditMessageRequest,
-    Event, FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, IdentityChange,
-    IdentityTrust, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
+    Event, FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, HistoryFrom,
+    IdentityChange, IdentityTrust, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
     ListPublicRoomsRequest, MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoom,
     PublicRoomsPage, PublicRoomsResult, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest,
     RedactEventRequest, RequestVerificationRequest, RoomActivity, RoomActivityKind,
@@ -5057,8 +5057,24 @@ pub(crate) async fn backfill_room_history(
     }
 
     let room = joined_room_by_id(client, &request.room_id)?;
+    let from = match request.from {
+        HistoryFrom::Latest => None,
+        HistoryFrom::Token { token } => Some(token),
+        HistoryFrom::BeforeEvent { event_id } => {
+            match history_token_before_event(&room, &event_id).await? {
+                Some(token) => Some(token),
+                None => {
+                    return Ok(RoomHistoryBackfill {
+                        room_id: request.room_id,
+                        end: None,
+                        events: Vec::new(),
+                    });
+                }
+            }
+        }
+    };
     let limit = UInt::from(request.limit);
-    let mut options = MessagesOptions::backward().from(request.from.as_deref());
+    let mut options = MessagesOptions::backward().from(from.as_deref());
     options.limit = limit;
     options.filter.limit = Some(limit);
 
@@ -5074,10 +5090,29 @@ pub(crate) async fn backfill_room_history(
 
     Ok(RoomHistoryBackfill {
         room_id: request.room_id,
-        start: response.start,
         end: response.end,
         events,
     })
+}
+
+/// The `/messages` token just before `event_id`: the `start` of its
+/// `/context`, or `None` when the room has nothing older. The context asks
+/// for no events, because how a server splits its limit between before and
+/// after is its own choice; only the token is used.
+async fn history_token_before_event(
+    room: &Room,
+    event_id: &str,
+) -> Result<Option<String>, MatrixCoreError> {
+    let event_id = owned_event_id_from_str(event_id)?;
+    let context = room
+        .event_with_context(&event_id, false, UInt::MIN, None)
+        .await
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to find {event_id} in Matrix room history: {err}"
+            ))
+        })?;
+    Ok(context.prev_batch_token)
 }
 
 /// Maps a backward `/messages` page to oldest-first backfill events. Sender
@@ -6743,15 +6778,15 @@ mod tests {
     use crate::api::{
         BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreErrorEvent, E2eeBackupState,
         E2eeCrossSigningStatus, E2eeRecoveryState, Event, FetchRoomEventRequest,
-        FetchRoomMediaRequest, InviteRoomMemberRequest, KickRoomMemberRequest, MemberPowerRole,
-        Operation, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RoomActivity, RoomActivityKind,
-        RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-        RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
-        RoomEventFetch, RoomEventFetchResult, RoomFileActivity, RoomFileInfo,
-        RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMediaFormat, RoomMediaKind,
-        RoomMediaSource, RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers,
-        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-        RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState,
+        FetchRoomMediaRequest, HistoryFrom, InviteRoomMemberRequest, KickRoomMemberRequest,
+        MemberPowerRole, Operation, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RoomActivity,
+        RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+        RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
+        RoomEncryptedFileKey, RoomEventFetch, RoomEventFetchResult, RoomFileActivity, RoomFileInfo,
+        RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo,
+        RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
+        RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
+        RoomMessageSendState, RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState,
         RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
         RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity,
         RoomVideoInfo, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
@@ -6804,7 +6839,10 @@ mod tests {
         },
         send_queue::{LocalEchoContent, RoomSendQueue, RoomSendQueueUpdate, SendQueueUpdate},
         store::SerializableEventContent,
-        test_utils::mocks::{MatrixMockServer, PushRuleIdSpec, RoomMessagesResponseTemplate},
+        test_utils::mocks::{
+            MatrixMockServer, PushRuleIdSpec, RoomContextResponseTemplate,
+            RoomMessagesResponseTemplate,
+        },
     };
     use matrix_sdk_base::cross_process_lock::CrossProcessLockConfig;
     use matrix_sdk_base::{
@@ -8485,7 +8523,7 @@ mod tests {
                         &client,
                         BackfillRoomHistoryRequest {
                             room_id: "!room:example.org".to_owned(),
-                            from: None,
+                            from: HistoryFrom::Latest,
                             limit,
                         },
                     )
@@ -10239,7 +10277,7 @@ mod tests {
                 &client,
                 BackfillRoomHistoryRequest {
                     room_id: room_id().to_string(),
-                    from: None,
+                    from: HistoryFrom::Latest,
                     limit: 10,
                 },
             )
@@ -10270,6 +10308,201 @@ mod tests {
                         reason: Some("flooding".to_owned()),
                     },
                 })
+            );
+        });
+    }
+
+    /// A room with the mock serving `/context/$kept:localhost` with `start`.
+    async fn backfill_before_event_fixture(
+        start: Option<&str>,
+    ) -> (MatrixMockServer, matrix_sdk::Client) {
+        let mock_server = MatrixMockServer::new().await;
+        let client = mock_server.client_builder().build().await;
+        mock_server
+            .sync_room(&client, JoinedRoomBuilder::new(room_id().as_ref()))
+            .await;
+        let mut kept = text_message_json("$kept:localhost", "@bob:localhost", "kept");
+        kept["room_id"] = serde_json::json!(room_id().as_str());
+        let context = RoomContextResponseTemplate::new(timeline_event(kept));
+        let context = match start {
+            Some(start) => context.start(start),
+            None => context,
+        };
+        mock_server
+            .mock_room_event_context()
+            .match_event_id()
+            .ok(context)
+            .mock_once()
+            .mount()
+            .await;
+        (mock_server, client)
+    }
+
+    fn before_kept_request() -> BackfillRoomHistoryRequest {
+        BackfillRoomHistoryRequest {
+            room_id: room_id().to_string(),
+            from: HistoryFrom::BeforeEvent {
+                event_id: "$kept:localhost".to_owned(),
+            },
+            limit: 10,
+        }
+    }
+
+    #[test]
+    fn backfill_before_event_pages_from_the_context_start_token() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let (mock_server, client) = backfill_before_event_fixture(Some("t-ctx")).await;
+            let mut older = text_message_json("$older:localhost", "@bob:localhost", "older");
+            older["room_id"] = serde_json::json!(room_id().as_str());
+            let mut oldest = text_message_json("$oldest:localhost", "@bob:localhost", "oldest");
+            oldest["room_id"] = serde_json::json!(room_id().as_str());
+            mock_server
+                .mock_room_messages()
+                .match_from("t-ctx")
+                .ok(RoomMessagesResponseTemplate::default()
+                    .events(vec![
+                        Raw::<AnyTimelineEvent>::from_json_string(older.to_string())
+                            .expect("raw older"),
+                        Raw::<AnyTimelineEvent>::from_json_string(oldest.to_string())
+                            .expect("raw oldest"),
+                    ])
+                    .end_token("t-next"))
+                .mock_once()
+                .mount()
+                .await;
+
+            let backfill = backfill_room_history(&client, before_kept_request())
+                .await
+                .expect("backfill before an event");
+
+            let ids = backfill
+                .events
+                .iter()
+                .map(|event| match event {
+                    RoomHistoryBackfillEvent::Activity(activity) => activity.activity_id.as_str(),
+                    update => panic!("unexpected backfill update {update:?}"),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(ids, ["event:$oldest:localhost", "event:$older:localhost"]);
+            assert_eq!(backfill.end.as_deref(), Some("t-next"));
+            let context_requests = mock_server
+                .server()
+                .received_requests()
+                .await
+                .expect("recorded requests")
+                .into_iter()
+                .filter(|request| request.url.path().contains("/context/"))
+                .map(|request| request.url.query().map(str::to_owned))
+                .collect::<Vec<_>>();
+            assert_eq!(context_requests, [Some("limit=0".to_owned())]);
+        });
+    }
+
+    #[test]
+    fn backfill_before_event_without_a_start_token_is_exhausted() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let (mock_server, client) = backfill_before_event_fixture(None).await;
+            mock_server
+                .mock_room_messages()
+                .ok(RoomMessagesResponseTemplate::default())
+                .expect(0)
+                .mount()
+                .await;
+
+            let backfill = backfill_room_history(&client, before_kept_request())
+                .await
+                .expect("backfill before the first event");
+
+            assert_eq!(
+                backfill,
+                RoomHistoryBackfill {
+                    room_id: room_id().to_string(),
+                    end: None,
+                    events: Vec::new(),
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn backfill_before_an_unknown_event_fails() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_room(&client, JoinedRoomBuilder::new(room_id().as_ref()))
+                .await;
+            mock_server
+                .mock_room_event_context()
+                .respond_with(wiremock::ResponseTemplate::new(404).set_body_json(
+                    serde_json::json!({ "errcode": "M_NOT_FOUND", "error": "Event not found." }),
+                ))
+                .mock_once()
+                .mount()
+                .await;
+            mock_server
+                .mock_room_messages()
+                .ok(RoomMessagesResponseTemplate::default())
+                .expect(0)
+                .mount()
+                .await;
+
+            let err = backfill_room_history(&client, before_kept_request())
+                .await
+                .expect_err("an unknown event has no history before it");
+
+            assert!(
+                err.to_string()
+                    .starts_with("failed to find $kept:localhost in Matrix room history: "),
+                "{err}"
+            );
+        });
+    }
+
+    #[test]
+    fn backfill_before_a_malformed_event_id_fails_before_any_request() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_room(&client, JoinedRoomBuilder::new(room_id().as_ref()))
+                .await;
+
+            let err = backfill_room_history(
+                &client,
+                BackfillRoomHistoryRequest {
+                    from: HistoryFrom::BeforeEvent {
+                        event_id: "not-an-event".to_owned(),
+                    },
+                    ..before_kept_request()
+                },
+            )
+            .await
+            .expect_err("a malformed event id is refused");
+
+            assert!(
+                err.to_string().starts_with("invalid Matrix event id: "),
+                "{err}"
             );
         });
     }
@@ -10780,7 +11013,7 @@ mod tests {
                 &client,
                 BackfillRoomHistoryRequest {
                     room_id: room_id().to_string(),
-                    from: None,
+                    from: HistoryFrom::Latest,
                     limit: 10,
                 },
             )
@@ -11127,7 +11360,7 @@ mod tests {
                 &client,
                 BackfillRoomHistoryRequest {
                     room_id: room_id().to_string(),
-                    from: None,
+                    from: HistoryFrom::Latest,
                     limit: 10,
                 },
             )

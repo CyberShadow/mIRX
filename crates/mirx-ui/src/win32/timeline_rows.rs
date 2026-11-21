@@ -352,13 +352,13 @@ fn push_room_typing_row(rows: &mut Vec<TimelineRow>, room_view: &RoomViewModel) 
 }
 
 fn push_room_history_backfill_row(rows: &mut Vec<TimelineRow>, history: &RoomHistoryBackfillState) {
-    let text = match &history.status {
-        RoomHistoryBackfillStatus::Idle => return,
-        RoomHistoryBackfillStatus::Loading { .. } => "* Loading older history...".to_owned(),
-        RoomHistoryBackfillStatus::Failed { message, .. } => {
+    let text = match &history {
+        RoomHistoryBackfillState::Idle { .. } => return,
+        RoomHistoryBackfillState::Loading { .. } => "* Loading older history...".to_owned(),
+        RoomHistoryBackfillState::Failed { message, .. } => {
             format!("* Unable to load older history: {message}. Scroll to top to retry.")
         }
-        RoomHistoryBackfillStatus::Exhausted => "* No older history available.".to_owned(),
+        RoomHistoryBackfillState::Exhausted => "* No older history available.".to_owned(),
     };
     rows.push(
         TimelineRow::full_width(TimelineRowKind::Plain, text.clone()).with_identity(
@@ -2449,8 +2449,9 @@ mod tests {
             .room_views
             .get_mut("!ops:example")
             .expect("room view exists after room activity")
-            .history
-            .status = RoomHistoryBackfillStatus::Loading { from: None };
+            .history = RoomHistoryBackfillState::Loading {
+            from: HistoryFrom::Latest,
+        };
 
         let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
 
@@ -2496,9 +2497,10 @@ mod tests {
             .room_views
             .get_mut("!ops:example")
             .expect("room view exists after room activity")
-            .history
-            .status = RoomHistoryBackfillStatus::Failed {
-            from: Some("token-1".to_owned()),
+            .history = RoomHistoryBackfillState::Failed {
+            from: HistoryFrom::Token {
+                token: "token-1".to_owned(),
+            },
             message: "homeserver unavailable".to_owned(),
         };
 
@@ -2527,8 +2529,7 @@ mod tests {
             .room_views
             .get_mut("!ops:example")
             .expect("room view exists after room activity")
-            .history
-            .status = RoomHistoryBackfillStatus::Exhausted;
+            .history = RoomHistoryBackfillState::Exhausted;
 
         let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
 
@@ -3567,7 +3568,6 @@ mod tests {
             "!ops:example",
             RoomHistoryBackfill {
                 room_id: "!ops:example".to_owned(),
-                start: "t1".to_owned(),
                 end: None,
                 events: vec![RoomHistoryBackfillEvent::Activity(Box::new(
                     sent_message_activity("!ops:example", "$old", None, "old", 1_600_000_000_000),

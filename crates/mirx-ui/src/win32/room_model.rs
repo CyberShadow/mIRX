@@ -4,30 +4,29 @@ use std::borrow::Borrow;
 
 use super::*;
 
+/// Where a room window's older history stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum RoomHistoryBackfillStatus {
-    Idle,
-    Loading {
-        from: Option<String>,
+pub(super) enum RoomHistoryBackfillState {
+    /// The next page, when the window asks for one, starts at `next`.
+    Idle {
+        next: HistoryFrom,
     },
+    Loading {
+        from: HistoryFrom,
+    },
+    /// The room has nothing older.
     Exhausted,
+    /// The page from `from` failed; asking again retries it.
     Failed {
-        from: Option<String>,
+        from: HistoryFrom,
         message: String,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RoomHistoryBackfillState {
-    pub(super) next_token: Option<String>,
-    pub(super) status: RoomHistoryBackfillStatus,
-}
-
 impl Default for RoomHistoryBackfillState {
     fn default() -> Self {
-        Self {
-            next_token: None,
-            status: RoomHistoryBackfillStatus::Idle,
+        Self::Idle {
+            next: HistoryFrom::Latest,
         }
     }
 }
@@ -2247,7 +2246,6 @@ mod tests {
             "!ops:example",
             RoomHistoryBackfill {
                 room_id: "!ops:example".to_owned(),
-                start: "t1".to_owned(),
                 end: None,
                 events: vec![RoomHistoryBackfillEvent::Activity(Box::new(sent(
                     "$old", "old",

@@ -618,13 +618,10 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             .iter()
             .map(|room| UiRoomState {
                 timeline_row_builds: state.refresh_counters.room_row_builds(&room.room_id),
-                history_backfill: state
-                    .model
-                    .room_views
-                    .get(&room.room_id)
-                    .map_or(UiRoomHistoryBackfillState::Idle, |room_view| {
-                        dump_ui_room_history_backfill_state(&room_view.history)
-                    }),
+                history_backfill: state.model.room_views.get(&room.room_id).map_or_else(
+                    || dump_ui_room_history_backfill_state(&RoomHistoryBackfillState::default()),
+                    |room_view| dump_ui_room_history_backfill_state(&room_view.history),
+                ),
                 room_id: room.room_id.clone(),
                 display_name: room.display_name.clone(),
                 membership: room.membership,
@@ -670,16 +667,18 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
 fn dump_ui_room_history_backfill_state(
     history: &RoomHistoryBackfillState,
 ) -> UiRoomHistoryBackfillState {
-    match &history.status {
-        RoomHistoryBackfillStatus::Idle => UiRoomHistoryBackfillState::Idle,
-        RoomHistoryBackfillStatus::Loading { from } => {
+    match history {
+        RoomHistoryBackfillState::Idle { next } => {
+            UiRoomHistoryBackfillState::Idle { next: next.clone() }
+        }
+        RoomHistoryBackfillState::Loading { from } => {
             UiRoomHistoryBackfillState::Loading { from: from.clone() }
         }
-        RoomHistoryBackfillStatus::Failed { from, message } => UiRoomHistoryBackfillState::Failed {
+        RoomHistoryBackfillState::Failed { from, message } => UiRoomHistoryBackfillState::Failed {
             from: from.clone(),
             message: message.clone(),
         },
-        RoomHistoryBackfillStatus::Exhausted => UiRoomHistoryBackfillState::Exhausted,
+        RoomHistoryBackfillState::Exhausted => UiRoomHistoryBackfillState::Exhausted,
     }
 }
 
@@ -1440,39 +1439,35 @@ mod tests {
 
     #[test]
     fn dump_ui_room_history_backfill_state_projects_all_variants() {
+        let token = |token: &str| HistoryFrom::Token {
+            token: token.to_owned(),
+        };
         assert_eq!(
             dump_ui_room_history_backfill_state(&RoomHistoryBackfillState::default()),
-            UiRoomHistoryBackfillState::Idle
-        );
-        assert_eq!(
-            dump_ui_room_history_backfill_state(&RoomHistoryBackfillState {
-                next_token: None,
-                status: RoomHistoryBackfillStatus::Loading {
-                    from: Some("token-1".to_owned()),
-                },
-            }),
-            UiRoomHistoryBackfillState::Loading {
-                from: Some("token-1".to_owned()),
+            UiRoomHistoryBackfillState::Idle {
+                next: HistoryFrom::Latest
             }
         );
         assert_eq!(
-            dump_ui_room_history_backfill_state(&RoomHistoryBackfillState {
-                next_token: Some("token-2".to_owned()),
-                status: RoomHistoryBackfillStatus::Failed {
-                    from: Some("token-1".to_owned()),
-                    message: "homeserver unavailable".to_owned(),
-                },
+            dump_ui_room_history_backfill_state(&RoomHistoryBackfillState::Loading {
+                from: token("token-1"),
+            }),
+            UiRoomHistoryBackfillState::Loading {
+                from: token("token-1"),
+            }
+        );
+        assert_eq!(
+            dump_ui_room_history_backfill_state(&RoomHistoryBackfillState::Failed {
+                from: token("token-1"),
+                message: "homeserver unavailable".to_owned(),
             }),
             UiRoomHistoryBackfillState::Failed {
-                from: Some("token-1".to_owned()),
+                from: token("token-1"),
                 message: "homeserver unavailable".to_owned(),
             }
         );
         assert_eq!(
-            dump_ui_room_history_backfill_state(&RoomHistoryBackfillState {
-                next_token: None,
-                status: RoomHistoryBackfillStatus::Exhausted,
-            }),
+            dump_ui_room_history_backfill_state(&RoomHistoryBackfillState::Exhausted),
             UiRoomHistoryBackfillState::Exhausted
         );
     }

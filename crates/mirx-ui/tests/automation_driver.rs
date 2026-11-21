@@ -31,24 +31,25 @@ use mirx_core::{
 };
 use mirx_testkit::{
     AutomationDialog, ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult,
-    FindActiveViewResult, FrameSize, IdentityWarning, IdentityWarningKind, LaunchOptions,
-    MdiArrangement, MdiView, MdiWindowPlacement, MdiWindowState, MemberModerationAction,
-    MemberPowerRole, MembershipCommandAction, MircFormatKey, MirxApp, Model, NavigationNode,
-    NavigationNodeKey, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
-    RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
-    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
-    RoomImageMediaState, RoomMediaSource, RoomMemberChange, RoomMessageActivity,
-    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomTag, SessionAuth, ShownTip, SpaceChild, StoredSession, SubmittedDirectRoomCommand,
-    SubmittedEditCommand, SubmittedFileCommand, SubmittedHistoryCommand, SubmittedIdentityReset,
-    SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedMessageCommand,
-    SubmittedNotificationCommand, SubmittedPowerLevelCommand, SubmittedProfileCommand,
-    SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
-    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomListRequest,
-    SubmittedRoomTopicCommand, SubmittedSessionCommand, SubmittedSetupRecoveryCommand,
-    SubmittedUserCommand, SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem,
-    TestkitError, UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
+    FindActiveViewResult, FrameSize, HistoryFrom, IdentityWarning, IdentityWarningKind,
+    LaunchOptions, MdiArrangement, MdiView, MdiWindowPlacement, MdiWindowState,
+    MemberModerationAction, MemberPowerRole, MembershipCommandAction, MircFormatKey, MirxApp,
+    Model, NavigationNode, NavigationNodeKey, NavigationPathSegment, Room, RoomActivity,
+    RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo,
+    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+    RoomImageActivity, RoomImageInfo, RoomImageMediaState, RoomMediaSource, RoomMemberChange,
+    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomTag, SessionAuth, ShownTip, SpaceChild, StoredSession,
+    SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedFileCommand,
+    SubmittedHistoryCommand, SubmittedIdentityReset, SubmittedMemberModerationCommand,
+    SubmittedMembershipCommand, SubmittedMessageCommand, SubmittedNotificationCommand,
+    SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
+    SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
+    SubmittedReplyThreadTarget, SubmittedRoomListRequest, SubmittedRoomTopicCommand,
+    SubmittedSessionCommand, SubmittedSetupRecoveryCommand, SubmittedUserCommand,
+    SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem, TestkitError,
+    UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
     UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
     UiFindState, UiLoggingOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
     UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
@@ -1388,13 +1389,11 @@ fn history_backfill_event_from_event(event: Event) -> RoomHistoryBackfillEvent {
 
 fn room_history_backfill_event(
     room_id: &str,
-    start: &str,
     end: Option<&str>,
     events: Vec<RoomHistoryBackfillEvent>,
 ) -> Event {
     Event::RoomHistoryBackfill(RoomHistoryBackfill {
         room_id: room_id.to_owned(),
-        start: start.to_owned(),
         end: end.map(str::to_owned),
         events,
     })
@@ -3104,7 +3103,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 64);
+    assert_eq!(version.protocol_version, 65);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -3636,7 +3635,9 @@ fn a_hung_history_request_holds_up_no_join_or_send() -> Result<(), Box<dyn std::
     let (room, _) = find_room_state_and_view(&ui_state, "!beta:example");
     assert_eq!(
         room.history_backfill,
-        UiRoomHistoryBackfillState::Loading { from: None }
+        UiRoomHistoryBackfillState::Loading {
+            from: HistoryFrom::Latest
+        }
     );
 
     let older = |event_id: &str, body: &str, ts: u64| {
@@ -7346,7 +7347,6 @@ fn backfilled_history_is_not_logged() -> Result<(), Box<dyn std::error::Error>> 
     type_commands(&app, &["/log on"])?;
     app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
         "!beta:example",
-        "start",
         Some("next"),
         vec![history_backfill_event_from_event(text_event_with_event_id(
             "!beta:example",
@@ -9542,7 +9542,7 @@ fn wheel_to_the_top_asks_for_older_history() -> Result<(), Box<dyn std::error::E
         app.dump_model()?.submitted_history_commands,
         vec![SubmittedHistoryCommand {
             room_id: "!beta:example".to_owned(),
-            from: None,
+            from: HistoryFrom::Latest,
             limit: 50,
         }]
     );
@@ -9690,7 +9690,7 @@ fn custom_room_timeline_history_backfill_submits_once_while_loading()
         model.submitted_history_commands.first(),
         Some(&SubmittedHistoryCommand {
             room_id: "!beta:example".to_owned(),
-            from: None,
+            from: HistoryFrom::Latest,
             limit: 50,
         })
     );
@@ -9698,7 +9698,9 @@ fn custom_room_timeline_history_backfill_submits_once_while_loading()
     let (room, view) = find_room_state_and_view(&ui_state, "!beta:example");
     assert_eq!(
         room.history_backfill,
-        UiRoomHistoryBackfillState::Loading { from: None }
+        UiRoomHistoryBackfillState::Loading {
+            from: HistoryFrom::Latest
+        }
     );
     assert!(view_contains(view, "* Loading older history..."));
 
@@ -9739,7 +9741,7 @@ fn render_state_room_find_backfill_records_loading_and_matches_older_history()
         model.submitted_history_commands.first(),
         Some(&SubmittedHistoryCommand {
             room_id: "!history:example".to_owned(),
-            from: None,
+            from: HistoryFrom::Latest,
             limit: 50,
         })
     );
@@ -9748,7 +9750,9 @@ fn render_state_room_find_backfill_records_loading_and_matches_older_history()
     let (room, view) = find_room_state_and_view(&ui_state, "!history:example");
     assert_eq!(
         room.history_backfill,
-        UiRoomHistoryBackfillState::Loading { from: None }
+        UiRoomHistoryBackfillState::Loading {
+            from: HistoryFrom::Latest
+        }
     );
     assert!(view_contains(view, "* Loading older history..."));
     assert_eq!(
@@ -9767,7 +9771,6 @@ fn render_state_room_find_backfill_records_loading_and_matches_older_history()
 
     app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
         "!history:example",
-        "start",
         Some("next"),
         vec![history_backfill_event_from_event(text_event_with_event_id(
             "!history:example",
@@ -9849,13 +9852,12 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
         model.submitted_history_commands.last(),
         Some(&SubmittedHistoryCommand {
             room_id: "!beta:example".to_owned(),
-            from: None,
+            from: HistoryFrom::Latest,
             limit: 50,
         })
     );
     app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
         "!beta:example",
-        "s-current",
         Some("token-next"),
         vec![history_backfill_event_from_event(text_event_with_event_id(
             "!beta:example",
@@ -9873,7 +9875,9 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
         model.submitted_history_commands.last(),
         Some(&SubmittedHistoryCommand {
             room_id: "!beta:example".to_owned(),
-            from: Some("token-next".to_owned()),
+            from: HistoryFrom::Token {
+                token: "token-next".to_owned(),
+            },
             limit: 50,
         })
     );
@@ -9891,7 +9895,9 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
     assert_eq!(
         room.history_backfill,
         UiRoomHistoryBackfillState::Failed {
-            from: Some("token-next".to_owned()),
+            from: HistoryFrom::Token {
+                token: "token-next".to_owned(),
+            },
             message: "homeserver unavailable".to_owned(),
         }
     );
@@ -9927,7 +9933,9 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
         model.submitted_history_commands.last(),
         Some(&SubmittedHistoryCommand {
             room_id: "!beta:example".to_owned(),
-            from: Some("token-next".to_owned()),
+            from: HistoryFrom::Token {
+                token: "token-next".to_owned(),
+            },
             limit: 50,
         })
     );
@@ -9936,7 +9944,9 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
     assert_eq!(
         room.history_backfill,
         UiRoomHistoryBackfillState::Loading {
-            from: Some("token-next".to_owned())
+            from: HistoryFrom::Token {
+                token: "token-next".to_owned(),
+            }
         }
     );
 
@@ -9987,7 +9997,6 @@ fn custom_room_timeline_history_backfill_exhausted_is_visible_and_blocks_retry()
     assert_eq!(model.submitted_history_commands.len(), 1);
     app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
         "!beta:example",
-        "s-current",
         None,
         Vec::new(),
     )])?)?;
@@ -10039,7 +10048,7 @@ fn trigger_active_timeline_history_backfill_submits_for_thread_parent_room()
         app.dump_model()?.submitted_history_commands,
         vec![SubmittedHistoryCommand {
             room_id: "!ops:example".to_owned(),
-            from: None,
+            from: HistoryFrom::Latest,
             limit: 50,
         }]
     );
@@ -10070,7 +10079,6 @@ fn render_state_thread_find_backfill_matches_older_thread_reply()
 
     app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
         "!find-thread:example",
-        "start",
         Some("next"),
         vec![
             history_backfill_event_from_event(message_event_with_event_id_and_relation(
@@ -10244,7 +10252,6 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
 
     app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
         "!beta:example",
-        "s-current",
         Some("token-next"),
         vec![
             history_backfill_event_from_event(text_event_with_event_id(
@@ -10337,7 +10344,11 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
     );
     assert_eq!(
         find_ui_room(&ui_state, "!beta:example").history_backfill,
-        UiRoomHistoryBackfillState::Idle
+        UiRoomHistoryBackfillState::Idle {
+            next: HistoryFrom::Token {
+                token: "token-next".to_owned(),
+            },
+        }
     );
 
     drop(app);
@@ -11165,7 +11176,9 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
             activity: None,
             read_target_event_id: None,
             read_state: None,
-            history_backfill: UiRoomHistoryBackfillState::Idle,
+            history_backfill: UiRoomHistoryBackfillState::Idle {
+                next: HistoryFrom::Latest,
+            },
             // Refresh work is not what this test is about.
             timeline_row_builds: find_ui_room(&initial_state, "!direct:example")
                 .timeline_row_builds,
@@ -13722,7 +13735,9 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
                 num_notifications: 0,
                 num_mentions: 0,
             }),
-            history_backfill: UiRoomHistoryBackfillState::Idle,
+            history_backfill: UiRoomHistoryBackfillState::Idle {
+                next: HistoryFrom::Latest,
+            },
             // Refresh work is not what this test is about.
             timeline_row_builds: find_ui_room(&initial_state, "!beta:example").timeline_row_builds,
         }
@@ -13749,7 +13764,9 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
                 num_notifications: 2,
                 num_mentions: 1,
             }),
-            history_backfill: UiRoomHistoryBackfillState::Idle,
+            history_backfill: UiRoomHistoryBackfillState::Idle {
+                next: HistoryFrom::Latest,
+            },
             // Refresh work is not what this test is about.
             timeline_row_builds: find_ui_room(&initial_state, "!alpha:example").timeline_row_builds,
         }
@@ -13791,7 +13808,9 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
                 num_notifications: 2,
                 num_mentions: 1,
             }),
-            history_backfill: UiRoomHistoryBackfillState::Idle,
+            history_backfill: UiRoomHistoryBackfillState::Idle {
+                next: HistoryFrom::Latest,
+            },
             // Refresh work is not what this test is about.
             timeline_row_builds: find_ui_room(&activated_state, "!alpha:example")
                 .timeline_row_builds,
@@ -21689,7 +21708,7 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
         model.submitted_history_commands,
         vec![SubmittedHistoryCommand {
             room_id: "!ops:example".to_owned(),
-            from: None,
+            from: HistoryFrom::Latest,
             limit: 50,
         }]
     );
@@ -21830,7 +21849,7 @@ fn automation_driver_find_active_view_reports_no_match_without_changing_view()
         model.submitted_history_commands,
         vec![SubmittedHistoryCommand {
             room_id: "!beta:example".to_owned(),
-            from: None,
+            from: HistoryFrom::Latest,
             limit: 50,
         }]
     );
@@ -22104,7 +22123,6 @@ fn automation_driver_find_active_view_recomputes_after_timeline_rebuild()
 
     app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
         "!rebuild:example",
-        "backfill-start",
         Some("backfill-end"),
         vec![history_backfill_event_from_event(text_event_with_event_id(
             "!rebuild:example",

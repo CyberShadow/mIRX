@@ -284,10 +284,11 @@ fn apply_room_history_backfill_event(state: &mut WindowState, backfill: RoomHist
     let end = backfill.end.clone();
     let room_view = state.model.room_views.entry_or_default(room_id.clone());
     room_view.apply_history_backfill(&room_id, backfill);
-    room_view.history.next_token = end.clone();
-    room_view.history.status = match end {
-        Some(_) => RoomHistoryBackfillStatus::Idle,
-        None => RoomHistoryBackfillStatus::Exhausted,
+    room_view.history = match end {
+        Some(token) => RoomHistoryBackfillState::Idle {
+            next: HistoryFrom::Token { token },
+        },
+        None => RoomHistoryBackfillState::Exhausted,
     };
     prune_decoded_images(state);
 }
@@ -298,11 +299,10 @@ fn apply_backfill_room_history_error(state: &mut WindowState, room_id: &str, mes
     let Some(room_view) = state.model.room_views.get_mut(room_id) else {
         return;
     };
-    let RoomHistoryBackfillStatus::Loading { from } = &room_view.history.status else {
+    let RoomHistoryBackfillState::Loading { from } = &room_view.history else {
         return;
     };
-    let from = from.clone();
-    room_view.history.status = RoomHistoryBackfillStatus::Failed {
+    room_view.history = RoomHistoryBackfillState::Failed {
         from: from.clone(),
         message,
     };
@@ -5070,8 +5070,11 @@ mod tests {
                 .model
                 .room_views
                 .entry_or_default(room_id.to_owned())
-                .history
-                .next_token = Some("token-2".to_owned());
+                .history = RoomHistoryBackfillState::Idle {
+                next: HistoryFrom::Token {
+                    token: "token-2".to_owned(),
+                },
+            };
         }
         assert_eq!(
             submit_backfill_room_history_for_room(&mut state, "!room:example"),
@@ -5085,12 +5088,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            state.model.room_views["!other:example"].history.status,
-            RoomHistoryBackfillStatus::Idle
+            state.model.room_views["!other:example"].history,
+            RoomHistoryBackfillState::Idle {
+                next: HistoryFrom::Token {
+                    token: "token-2".to_owned(),
+                },
+            }
         );
         assert!(matches!(
-            state.model.room_views["!room:example"].history.status,
-            RoomHistoryBackfillStatus::Loading { .. }
+            state.model.room_views["!room:example"].history,
+            RoomHistoryBackfillState::Loading { .. }
         ));
 
         apply_core_event(
@@ -5099,9 +5106,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            state.model.room_views["!room:example"].history.status,
-            RoomHistoryBackfillStatus::Failed {
-                from: Some("token-2".to_owned()),
+            state.model.room_views["!room:example"].history,
+            RoomHistoryBackfillState::Failed {
+                from: HistoryFrom::Token {
+                    token: "token-2".to_owned(),
+                },
                 message: "offline".to_owned(),
             }
         );

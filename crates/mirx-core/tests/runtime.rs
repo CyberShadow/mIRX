@@ -7,7 +7,7 @@ use mirx_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation,
     E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeSessionState,
     E2eeStatus, EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
-    HighlightWord, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
+    HighlightWord, HistoryFrom, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
     LeaveRoomRequest, ListPublicRoomsRequest, LoginMethod, LoginRequest, MarkRoomReadRequest,
     MemberPowerRole, Operation, PublicRoom, PublicRoomsPage, PublicRoomsResult,
     ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest,
@@ -799,7 +799,9 @@ fn backfill_room_history_before_login_emits_backfill_room_history_error() {
     assert_invalid_authenticated_command(
         Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
             room_id: "!ops:example.org".to_owned(),
-            from: Some("t123-456".to_owned()),
+            from: HistoryFrom::Token {
+                token: "t123-456".to_owned(),
+            },
             limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
         }),
         Operation::BackfillRoomHistory,
@@ -1480,18 +1482,30 @@ fn backfill_room_history_request_round_trips_through_serde() {
         (
             BackfillRoomHistoryRequest {
                 room_id: "!room:example.org".to_owned(),
-                from: None,
+                from: HistoryFrom::Latest,
                 limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
             },
-            r#"{"room_id":"!room:example.org","from":null,"limit":50}"#,
+            r#"{"room_id":"!room:example.org","from":{"type":"latest"},"limit":50}"#,
         ),
         (
             BackfillRoomHistoryRequest {
                 room_id: "!room:example.org".to_owned(),
-                from: Some("t4747337_219380_2603".to_owned()),
+                from: HistoryFrom::Token {
+                    token: "t4747337_219380_2603".to_owned(),
+                },
                 limit: ROOM_HISTORY_BACKFILL_LIMIT_MAX,
             },
-            r#"{"room_id":"!room:example.org","from":"t4747337_219380_2603","limit":50}"#,
+            r#"{"room_id":"!room:example.org","from":{"type":"token","token":"t4747337_219380_2603"},"limit":50}"#,
+        ),
+        (
+            BackfillRoomHistoryRequest {
+                room_id: "!room:example.org".to_owned(),
+                from: HistoryFrom::BeforeEvent {
+                    event_id: "$kept:example.org".to_owned(),
+                },
+                limit: ROOM_HISTORY_BACKFILL_LIMIT_MAX,
+            },
+            r#"{"room_id":"!room:example.org","from":{"type":"before_event","event_id":"$kept:example.org"},"limit":50}"#,
         ),
     ] {
         let serialized =
@@ -1508,7 +1522,7 @@ fn backfill_room_history_request_round_trips_through_serde() {
 fn backfill_room_history_request_rejects_unknown_fields() {
     assert!(
         serde_json::from_str::<BackfillRoomHistoryRequest>(
-            r#"{"room_id":"!room:example.org","from":null,"limit":50,"unexpected":"value"}"#
+            r#"{"room_id":"!room:example.org","from":{"type":"latest"},"limit":50,"unexpected":"value"}"#
         )
         .is_err(),
         "backfill room history request must reject unknown fields"
@@ -2778,7 +2792,6 @@ fn reaction_removed_update_rejects_missing_or_extra_fields() {
 fn room_history_backfill_event_round_trips_through_serde() {
     let event = Event::RoomHistoryBackfill(RoomHistoryBackfill {
         room_id: "!ops:example.org".to_owned(),
-        start: "t4747337_219380_2603".to_owned(),
         end: Some("t4747337_219379_2603".to_owned()),
         events: vec![
             RoomHistoryBackfillEvent::Activity(Box::new(RoomActivity {
@@ -2816,7 +2829,7 @@ fn room_history_backfill_event_round_trips_through_serde() {
     let json = serde_json::to_string(&event).expect("serialize room history backfill event");
     assert_eq!(
         json,
-        r#"{"RoomHistoryBackfill":{"room_id":"!ops:example.org","start":"t4747337_219380_2603","end":"t4747337_219379_2603","events":[{"type":"activity","room_id":"!ops:example.org","activity_id":"event:$message:example.org","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$message:example.org","transaction_id":null,"sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"older message","styles":[],"user_links":[],"send_state":{"state":"sent"}}},{"type":"activity_update","room_id":"!ops:example.org","target":{"type":"event","event_id":"$message:example.org"},"kind":{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@bob:example.org","timestamp_ms":1700000000100,"key":"heart"}}]}}"#
+        r#"{"RoomHistoryBackfill":{"room_id":"!ops:example.org","end":"t4747337_219379_2603","events":[{"type":"activity","room_id":"!ops:example.org","activity_id":"event:$message:example.org","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$message:example.org","transaction_id":null,"sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"older message","styles":[],"user_links":[],"send_state":{"state":"sent"}}},{"type":"activity_update","room_id":"!ops:example.org","target":{"type":"event","event_id":"$message:example.org"},"kind":{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@bob:example.org","timestamp_ms":1700000000100,"key":"heart"}}]}}"#
     );
 
     let restored: Event =
@@ -2828,7 +2841,7 @@ fn room_history_backfill_event_round_trips_through_serde() {
 fn room_history_backfill_rejects_unknown_fields() {
     assert!(
         serde_json::from_str::<RoomHistoryBackfill>(
-            r#"{"room_id":"!room:example.org","start":"t1","end":null,"events":[],"unexpected":"value"}"#
+            r#"{"room_id":"!room:example.org","end":null,"events":[],"unexpected":"value"}"#
         )
         .is_err(),
         "room history backfill must reject unknown fields"
@@ -2839,7 +2852,7 @@ fn room_history_backfill_rejects_unknown_fields() {
 fn room_history_backfill_rejects_invalid_nested_event_tag() {
     assert!(
         serde_json::from_str::<RoomHistoryBackfill>(
-            r#"{"room_id":"!room:example.org","start":"t1","end":null,"events":[{"type":"unknown","room_id":"!room:example.org"}]}"#
+            r#"{"room_id":"!room:example.org","end":null,"events":[{"type":"unknown","room_id":"!room:example.org"}]}"#
         )
         .is_err(),
         "room history backfill must reject events with unknown tags"

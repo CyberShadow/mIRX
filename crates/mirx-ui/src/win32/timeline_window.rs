@@ -948,11 +948,11 @@ pub(super) unsafe fn continue_original_jump(
             .room_views
             .get(&room_id)
             .expect("a reply's room has its timeline");
-        let history = match &room_view.history.status {
-            RoomHistoryBackfillStatus::Idle => replies::JumpHistory::Idle,
-            RoomHistoryBackfillStatus::Loading { .. } => replies::JumpHistory::Loading,
-            RoomHistoryBackfillStatus::Exhausted => replies::JumpHistory::Exhausted,
-            RoomHistoryBackfillStatus::Failed { message, .. } => replies::JumpHistory::Failed {
+        let history = match &room_view.history {
+            RoomHistoryBackfillState::Idle { .. } => replies::JumpHistory::Idle,
+            RoomHistoryBackfillState::Loading { .. } => replies::JumpHistory::Loading,
+            RoomHistoryBackfillState::Exhausted => replies::JumpHistory::Exhausted,
+            RoomHistoryBackfillState::Failed { message, .. } => replies::JumpHistory::Failed {
                 message: message.clone(),
                 just_now: failed_backfill_room_id == Some(room_id.as_str()),
             },
@@ -1043,10 +1043,7 @@ pub(super) fn loading_room_history_room_id(room_views: &RoomViews) -> Option<Str
     let mut loading_room_ids = room_views
         .iter()
         .filter(|(_, room_view)| {
-            matches!(
-                room_view.history.status,
-                RoomHistoryBackfillStatus::Loading { .. }
-            )
+            matches!(room_view.history, RoomHistoryBackfillState::Loading { .. })
         })
         .map(|(room_id, _)| room_id.clone());
     let loading_room_id = loading_room_ids.next();
@@ -1077,15 +1074,15 @@ pub(super) fn submit_backfill_room_history_for_room(
 
     let command = {
         let room_view = state.model.room_views.entry_or_default(room_id.to_owned());
-        if matches!(
-            room_view.history.status,
-            RoomHistoryBackfillStatus::Exhausted
-        ) {
-            return Ok(false);
-        }
-
-        let from = room_view.history.next_token.clone();
-        room_view.history.status = RoomHistoryBackfillStatus::Loading { from: from.clone() };
+        let from = match &room_view.history {
+            RoomHistoryBackfillState::Idle { next: from }
+            | RoomHistoryBackfillState::Failed { from, .. } => from.clone(),
+            RoomHistoryBackfillState::Exhausted => return Ok(false),
+            RoomHistoryBackfillState::Loading { .. } => {
+                unreachable!("no room loads history while another asks")
+            }
+        };
+        room_view.history = RoomHistoryBackfillState::Loading { from: from.clone() };
         Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
             room_id: room_id.to_owned(),
             from,
@@ -1293,7 +1290,7 @@ mod tests {
             state.recorded_commands,
             vec![Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
                 room_id: "!room:example".to_owned(),
-                from: None,
+                from: HistoryFrom::Latest,
                 limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
             })]
         );
@@ -1303,9 +1300,8 @@ mod tests {
                 .room_views
                 .get("!room:example")
                 .map(|room_view| &room_view.history),
-            Some(&RoomHistoryBackfillState {
-                next_token: None,
-                status: RoomHistoryBackfillStatus::Loading { from: None },
+            Some(&RoomHistoryBackfillState::Loading {
+                from: HistoryFrom::Latest,
             })
         );
 
@@ -1332,9 +1328,8 @@ mod tests {
                 .room_views
                 .get("!room:example")
                 .map(|room_view| &room_view.history),
-            Some(&RoomHistoryBackfillState {
-                next_token: None,
-                status: RoomHistoryBackfillStatus::Loading { from: None },
+            Some(&RoomHistoryBackfillState::Loading {
+                from: HistoryFrom::Latest,
             })
         );
 
@@ -1354,7 +1349,6 @@ mod tests {
             &mut state,
             room_history_backfill(
                 "!room:example",
-                "token-1",
                 Some("token-2"),
                 vec![history_backfill_event_from_event(timeline(
                     "!room:example",
@@ -1370,9 +1364,10 @@ mod tests {
                 .room_views
                 .get("!room:example")
                 .map(|room_view| &room_view.history),
-            Some(&RoomHistoryBackfillState {
-                next_token: Some("token-2".to_owned()),
-                status: RoomHistoryBackfillStatus::Idle,
+            Some(&RoomHistoryBackfillState::Idle {
+                next: HistoryFrom::Token {
+                    token: "token-2".to_owned(),
+                },
             })
         );
 
@@ -1384,7 +1379,9 @@ mod tests {
             state.recorded_commands.last(),
             Some(&Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
                 room_id: "!room:example".to_owned(),
-                from: Some("token-2".to_owned()),
+                from: HistoryFrom::Token {
+                    token: "token-2".to_owned(),
+                },
                 limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
             }))
         );
@@ -1405,7 +1402,6 @@ mod tests {
             &mut state,
             room_history_backfill(
                 "!room:example",
-                "token-1",
                 None,
                 vec![history_backfill_event_from_event(timeline(
                     "!room:example",
@@ -1421,10 +1417,7 @@ mod tests {
                 .room_views
                 .get("!room:example")
                 .map(|room_view| &room_view.history),
-            Some(&RoomHistoryBackfillState {
-                next_token: None,
-                status: RoomHistoryBackfillStatus::Exhausted,
-            })
+            Some(&RoomHistoryBackfillState::Exhausted)
         );
         assert_eq!(
             submit_backfill_room_history_for_room(&mut state, "!room:example"),
@@ -1443,8 +1436,11 @@ mod tests {
             .model
             .room_views
             .entry_or_default("!room:example".to_owned())
-            .history
-            .next_token = Some("token-2".to_owned());
+            .history = RoomHistoryBackfillState::Idle {
+            next: HistoryFrom::Token {
+                token: "token-2".to_owned(),
+            },
+        };
 
         assert_eq!(
             submit_backfill_room_history_for_room(&mut state, "!room:example"),
@@ -1466,12 +1462,11 @@ mod tests {
                 .room_views
                 .get("!room:example")
                 .map(|room_view| &room_view.history),
-            Some(&RoomHistoryBackfillState {
-                next_token: Some("token-2".to_owned()),
-                status: RoomHistoryBackfillStatus::Failed {
-                    from: Some("token-2".to_owned()),
-                    message: "temporary backfill failure".to_owned(),
+            Some(&RoomHistoryBackfillState::Failed {
+                from: HistoryFrom::Token {
+                    token: "token-2".to_owned(),
                 },
+                message: "temporary backfill failure".to_owned(),
             })
         );
 
@@ -1483,7 +1478,9 @@ mod tests {
             state.recorded_commands.last(),
             Some(&Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
                 room_id: "!room:example".to_owned(),
-                from: Some("token-2".to_owned()),
+                from: HistoryFrom::Token {
+                    token: "token-2".to_owned(),
+                },
                 limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
             }))
         );
@@ -1594,12 +1591,7 @@ mod tests {
                 // A page without it asks for the next.
                 apply_events_and_refresh(
                     hwnd,
-                    vec![room_history_backfill(
-                        "!ops:example",
-                        "t0",
-                        Some("t1"),
-                        vec![],
-                    )],
+                    vec![room_history_backfill("!ops:example", Some("t1"), vec![])],
                 )
                 .unwrap();
                 assert!(state_ref(hwnd).pending_original_jump.is_some());
@@ -1609,7 +1601,6 @@ mod tests {
                     hwnd,
                     vec![room_history_backfill(
                         "!ops:example",
-                        "t1",
                         Some("t2"),
                         vec![history_backfill_event_from_event(
                             timeline_with_transaction_id(
@@ -1641,7 +1632,7 @@ mod tests {
                 go_to_original_of_selected_message(hwnd).unwrap();
                 apply_events_and_refresh(
                     hwnd,
-                    vec![room_history_backfill("!ops:example", "t0", None, vec![])],
+                    vec![room_history_backfill("!ops:example", None, vec![])],
                 )
                 .unwrap();
                 assert_eq!(state_ref(hwnd).pending_original_jump, None);
@@ -1687,7 +1678,7 @@ mod tests {
                 let top_line = timeline_state_ref(timeline).top_line;
                 apply_events_and_refresh(
                     hwnd,
-                    vec![room_history_backfill("!ops:example", "t0", None, vec![])],
+                    vec![room_history_backfill("!ops:example", None, vec![])],
                 )
                 .unwrap();
                 assert_ne!(top_line_event_id(timeline).as_deref(), Some("$old"));

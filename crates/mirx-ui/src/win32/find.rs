@@ -424,12 +424,12 @@ fn build_timeline_find_state_and_maybe_submit_history_backfill(
             .model
             .room_views
             .get(room_id)
-            .map(|room_view| room_view.history.status.clone())
-            .unwrap_or(RoomHistoryBackfillStatus::Idle);
+            .map(|room_view| room_view.history.clone())
+            .unwrap_or_default();
         match history_status {
-            RoomHistoryBackfillStatus::Exhausted => RoomFindHistorySearch::Exhausted,
-            RoomHistoryBackfillStatus::Loading { .. } => RoomFindHistorySearch::Loading,
-            RoomHistoryBackfillStatus::Failed { message, .. } => {
+            RoomHistoryBackfillState::Exhausted => RoomFindHistorySearch::Exhausted,
+            RoomHistoryBackfillState::Loading { .. } => RoomFindHistorySearch::Loading,
+            RoomHistoryBackfillState::Failed { message, .. } => {
                 if submit_backfill_room_history_for_room(state, room_id)?
                     || loading_room_history_room_id(&state.model.room_views).is_some()
                 {
@@ -438,7 +438,7 @@ fn build_timeline_find_state_and_maybe_submit_history_backfill(
                     RoomFindHistorySearch::Failed { message }
                 }
             }
-            RoomHistoryBackfillStatus::Idle => {
+            RoomHistoryBackfillState::Idle { .. } => {
                 if submit_backfill_room_history_for_room(state, room_id)?
                     || loading_room_history_room_id(&state.model.room_views).is_some()
                 {
@@ -604,16 +604,16 @@ fn continue_timeline_find_history_search_after_refresh_state(
         .model
         .room_views
         .get(room_id)
-        .map(|room_view| room_view.history.status.clone())
-        .unwrap_or(RoomHistoryBackfillStatus::Idle);
+        .map(|room_view| room_view.history.clone())
+        .unwrap_or_default();
     let history_search = match history_status {
-        RoomHistoryBackfillStatus::Idle => {
+        RoomHistoryBackfillState::Idle { .. } => {
             let _ = submit_backfill_room_history_for_room(state, room_id)?;
             RoomFindHistorySearch::Loading
         }
-        RoomHistoryBackfillStatus::Loading { .. } => RoomFindHistorySearch::Loading,
-        RoomHistoryBackfillStatus::Exhausted => RoomFindHistorySearch::Exhausted,
-        RoomHistoryBackfillStatus::Failed { message, .. } => {
+        RoomHistoryBackfillState::Loading { .. } => RoomFindHistorySearch::Loading,
+        RoomHistoryBackfillState::Exhausted => RoomFindHistorySearch::Exhausted,
+        RoomHistoryBackfillState::Failed { message, .. } => {
             RoomFindHistorySearch::Failed { message }
         }
     };
@@ -948,7 +948,7 @@ mod tests {
             state.recorded_commands,
             vec![Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
                 room_id: "!room:example".to_owned(),
-                from: None,
+                from: HistoryFrom::Latest,
                 limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
             })]
         );
@@ -963,8 +963,9 @@ mod tests {
             .model
             .room_views
             .entry_or_default("!room:example".to_owned())
-            .history
-            .status = RoomHistoryBackfillStatus::Loading { from: None };
+            .history = RoomHistoryBackfillState::Loading {
+            from: HistoryFrom::Latest,
+        };
 
         let find_state = build_timeline_find_state_and_maybe_submit_history_backfill(
             &mut state,
@@ -1017,7 +1018,7 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            room_history_backfill("!room-a:example", "token-a", Some("token-b"), Vec::new()),
+            room_history_backfill("!room-a:example", Some("token-b"), Vec::new()),
         )
         .unwrap();
         assert!(
@@ -1030,7 +1031,7 @@ mod tests {
             state.recorded_commands.last(),
             Some(&Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
                 room_id: "!room-b:example".to_owned(),
-                from: None,
+                from: HistoryFrom::Latest,
                 limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
             }))
         );
@@ -1062,7 +1063,7 @@ mod tests {
             .model
             .room_views
             .entry_or_default("!room:example".to_owned());
-        room_view.history.status = RoomHistoryBackfillStatus::Exhausted;
+        room_view.history = RoomHistoryBackfillState::Exhausted;
 
         assert!(
             !continue_timeline_find_history_search_after_refresh_state(&mut state, &view_id,)
@@ -1090,16 +1091,10 @@ mod tests {
             .room_views
             .get_mut("!room:example")
             .unwrap()
-            .history
-            .next_token = Some("retry-token".to_owned());
-        state
-            .model
-            .room_views
-            .get_mut("!room:example")
-            .unwrap()
-            .history
-            .status = RoomHistoryBackfillStatus::Failed {
-            from: Some("retry-token".to_owned()),
+            .history = RoomHistoryBackfillState::Failed {
+            from: HistoryFrom::Token {
+                token: "retry-token".to_owned(),
+            },
             message: "homeserver unavailable".to_owned(),
         };
 
@@ -1123,8 +1118,13 @@ mod tests {
                 .model
                 .room_views
                 .get("!room:example")
-                .map(|room_view| room_view.history.next_token.as_deref()),
-            Some(Some("retry-token"))
+                .map(|room_view| &room_view.history),
+            Some(&RoomHistoryBackfillState::Failed {
+                from: HistoryFrom::Token {
+                    token: "retry-token".to_owned(),
+                },
+                message: "homeserver unavailable".to_owned(),
+            })
         );
     }
 
@@ -1207,7 +1207,7 @@ mod tests {
             state.recorded_commands,
             vec![Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
                 room_id: "!room:example".to_owned(),
-                from: None,
+                from: HistoryFrom::Latest,
                 limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
             })]
         );
@@ -1292,8 +1292,7 @@ mod tests {
             .model
             .room_views
             .entry_or_default("!room:example".to_owned())
-            .history
-            .status = RoomHistoryBackfillStatus::Exhausted;
+            .history = RoomHistoryBackfillState::Exhausted;
 
         assert!(
             !continue_timeline_find_history_search_after_refresh_state(&mut state, &view_id)
@@ -1322,9 +1321,8 @@ mod tests {
             .room_views
             .get_mut("!room:example")
             .unwrap()
-            .history
-            .status = RoomHistoryBackfillStatus::Failed {
-            from: None,
+            .history = RoomHistoryBackfillState::Failed {
+            from: HistoryFrom::Latest,
             message: "homeserver unavailable".to_owned(),
         };
         assert!(

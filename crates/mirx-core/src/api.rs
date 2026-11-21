@@ -440,8 +440,21 @@ pub struct MarkRoomReadRequest {
 #[serde(deny_unknown_fields)]
 pub struct BackfillRoomHistoryRequest {
     pub room_id: String,
-    pub from: Option<String>,
+    pub from: HistoryFrom,
     pub limit: u32,
+}
+
+/// Where a history page starts, going back.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HistoryFrom {
+    /// The live end of the room: the first page a window asks for.
+    Latest,
+    /// A `/messages` token: the previous page's `end`.
+    Token { token: String },
+    /// Just before this event: what a window that dropped its older lines
+    /// asks for.
+    BeforeEvent { event_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1308,7 +1321,8 @@ pub enum RoomHistoryBackfillEvent {
 #[serde(deny_unknown_fields)]
 pub struct RoomHistoryBackfill {
     pub room_id: String,
-    pub start: String,
+    /// Where the next older page starts; `None` when the room has no older
+    /// history.
     pub end: Option<String>,
     pub events: Vec<RoomHistoryBackfillEvent>,
 }

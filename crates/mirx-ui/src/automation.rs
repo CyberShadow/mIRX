@@ -3,7 +3,7 @@
 use std::fmt;
 
 use mirx_core::{
-    CoreErrorEvent, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
+    CoreErrorEvent, E2eeStatus, Event, HistoryFrom, Operation, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
     RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberChange, RoomMemberRank,
     RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 64;
+pub(crate) const PROTOCOL_VERSION: u32 = 65;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1524,14 +1524,9 @@ pub(crate) struct UiRoomState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum UiRoomHistoryBackfillState {
-    Idle,
-    Loading {
-        from: Option<String>,
-    },
-    Failed {
-        from: Option<String>,
-        message: String,
-    },
+    Idle { next: HistoryFrom },
+    Loading { from: HistoryFrom },
+    Failed { from: HistoryFrom, message: String },
     Exhausted,
 }
 
@@ -2093,7 +2088,7 @@ pub(crate) struct DumpSubmittedRedactionCommand {
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpSubmittedHistoryCommand {
     pub(crate) room_id: String,
-    pub(crate) from: Option<String>,
+    pub(crate) from: HistoryFrom,
     pub(crate) limit: u32,
 }
 
@@ -3372,8 +3367,8 @@ fn parse_verification_action_args(
 mod tests {
     use mirx_core::{
         CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
-        E2eeRecoveryState, E2eeSessionState, E2eeStatus, Event, Operation, RoomActivity,
-        RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo,
+        E2eeRecoveryState, E2eeSessionState, E2eeStatus, Event, HistoryFrom, Operation,
+        RoomActivity, RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo,
         RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
         RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberRank, RoomMembership,
         RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
@@ -3770,8 +3765,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_64() {
-        assert_eq!(PROTOCOL_VERSION, 64);
+    fn protocol_version_is_65() {
+        assert_eq!(PROTOCOL_VERSION, 65);
     }
 
     #[test]
@@ -5797,7 +5792,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":64,
+                    "protocol_version":65,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6391,7 +6386,9 @@ mod tests {
                             num_notifications: 3,
                             num_mentions: 1,
                         }),
-                        history_backfill: UiRoomHistoryBackfillState::Idle,
+                        history_backfill: UiRoomHistoryBackfillState::Idle {
+                            next: HistoryFrom::Latest,
+                        },
                         timeline_row_builds: 4,
                     }],
                     text_font: super::UiTextFont {
@@ -6674,7 +6671,7 @@ mod tests {
                                 "num_notifications":3,
                                 "num_mentions":1
                             },
-                            "history_backfill":{"state":"idle"},
+                            "history_backfill":{"state":"idle","next":{"type":"latest"}},
                             "timeline_row_builds":4
                         }
                     ],
@@ -7503,12 +7500,14 @@ mod tests {
             submitted_history_commands: vec![
                 DumpSubmittedHistoryCommand {
                     room_id: "!room:example".to_owned(),
-                    from: None,
+                    from: HistoryFrom::Latest,
                     limit: 50,
                 },
                 DumpSubmittedHistoryCommand {
                     room_id: "!room:example".to_owned(),
-                    from: Some("token".to_owned()),
+                    from: HistoryFrom::Token {
+                        token: "token".to_owned(),
+                    },
                     limit: 50,
                 },
             ],
@@ -7539,12 +7538,12 @@ mod tests {
                 "submitted_history_commands":[
                     {
                         "room_id":"!room:example",
-                        "from":null,
+                        "from":{"type":"latest"},
                         "limit":50
                     },
                     {
                         "room_id":"!room:example",
-                        "from":"token",
+                        "from":{"type":"token","token":"token"},
                         "limit":50
                     }
                 ],
@@ -7630,7 +7629,7 @@ mod tests {
             "submitted_history_commands":[
                 {
                     "room_id":"!room:example",
-                    "from":"token",
+                    "from":{"type":"token","token":"token"},
                     "limit":50,
                     "unexpected":true
                 }
@@ -7756,7 +7755,7 @@ mod tests {
                 "activity":null,
                 "read_target_event_id":null,
                 "read_state":null,
-                "history_backfill":{"state":"idle"},
+                "history_backfill":{"state":"idle","next":{"type":"latest"}},
                 "unexpected":true
             }))
             .is_err()

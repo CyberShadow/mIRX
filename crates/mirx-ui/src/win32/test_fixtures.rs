@@ -447,13 +447,11 @@ pub(super) fn room_read_state(
 
 pub(super) fn room_history_backfill(
     room_id: &str,
-    start: &str,
     end: Option<&str>,
     events: Vec<RoomHistoryBackfillEvent>,
 ) -> Event {
     Event::RoomHistoryBackfill(RoomHistoryBackfill {
         room_id: room_id.to_owned(),
-        start: start.to_owned(),
         end: end.map(str::to_owned),
         events,
     })

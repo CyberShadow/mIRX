@@ -637,7 +637,7 @@ pub struct SubmittedRedactionCommand {
 #[serde(deny_unknown_fields)]
 pub struct SubmittedHistoryCommand {
     pub room_id: String,
-    pub from: Option<String>,
+    pub from: HistoryFrom,
     pub limit: u32,
 }
 
@@ -958,8 +958,17 @@ pub enum RoomMediaSource {
 #[serde(deny_unknown_fields)]
 pub struct BackfillRoomHistoryRequest {
     pub room_id: String,
-    pub from: Option<String>,
+    pub from: HistoryFrom,
     pub limit: u32,
+}
+
+/// Mirrors `mirx_core::HistoryFrom`: where a history page starts, going back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HistoryFrom {
+    Latest,
+    Token { token: String },
+    BeforeEvent { event_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1166,7 +1175,6 @@ pub enum RoomHistoryBackfillEvent {
 #[serde(deny_unknown_fields)]
 pub struct RoomHistoryBackfill {
     pub room_id: String,
-    pub start: String,
     pub end: Option<String>,
     pub events: Vec<RoomHistoryBackfillEvent>,
 }
@@ -1788,14 +1796,9 @@ pub struct UiRoomState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum UiRoomHistoryBackfillState {
-    Idle,
-    Loading {
-        from: Option<String>,
-    },
-    Failed {
-        from: Option<String>,
-        message: String,
-    },
+    Idle { next: HistoryFrom },
+    Loading { from: HistoryFrom },
+    Failed { from: HistoryFrom, message: String },
     Exhausted,
 }
 
