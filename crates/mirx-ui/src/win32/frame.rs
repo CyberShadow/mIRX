@@ -124,7 +124,23 @@ unsafe extern "system" fn window_proc(
         },
         WM_SIZE => {
             layout_controls(hwnd);
+            // Restored: the active window's lines are on screen again.
+            if wparam != SIZE_MINIMIZED as WPARAM
+                && let Err(message) = read_receipts::read_active_window(hwnd)
+            {
+                show_error_message(hwnd, "Read receipt", &message);
+            }
             0
+        }
+        // Coming back to mirx reads what arrived in the active window
+        // meanwhile.
+        WM_ACTIVATEAPP => {
+            if wparam != 0
+                && let Err(message) = read_receipts::read_active_window(hwnd)
+            {
+                show_error_message(hwnd, "Read receipt", &message);
+            }
+            default_window_proc(hwnd, message, wparam, lparam)
         }
         WM_SETCURSOR if splitter::set_cursor(hwnd, wparam, lparam) => 1,
         WM_LBUTTONDOWN if splitter::begin_drag(hwnd, lparam) => 0,

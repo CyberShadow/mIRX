@@ -95,6 +95,86 @@ pub(super) fn view_activation_receipt<'a>(
     )
 }
 
+/// The read receipt mirx last sent per room: in flight until the server's
+/// echo moves the room's `latest_active_event_id`, which takes a sync.
+/// The active window's new lines are read once each meanwhile.
+#[derive(Debug, Default)]
+pub(super) struct SentReceipts {
+    by_room: BTreeMap<String, String>,
+}
+
+impl SentReceipts {
+    pub(super) fn record(&mut self, room_id: &str, event_id: &str) {
+        self.by_room.insert(room_id.to_owned(), event_id.to_owned());
+    }
+
+    fn is_sent(&self, room_id: &str, event_id: &str) -> bool {
+        self.by_room.get(room_id).map(String::as_str) == Some(event_id)
+    }
+
+    pub(super) fn retain_rooms(&mut self, mut keep: impl FnMut(&str) -> bool) {
+        self.by_room.retain(|room_id, _| keep(room_id));
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.by_room.clear();
+    }
+}
+
+/// The receipt the active room window's newest line `line` wants while
+/// the user is in front of it: the server counts the room unread up to
+/// before it, and mirx has not sent it already (`already_sent`). A room
+/// only marked unread stays so until the user activates its window.
+fn live_receipt<'a>(
+    line: Option<&'a str>,
+    read_state: Option<&RoomReadState>,
+    already_sent: bool,
+) -> Option<&'a str> {
+    let line = line?;
+    let read_state = read_state?;
+    (counted_unread(read_state) && !read_up_to(read_state, line) && !already_sent).then_some(line)
+}
+
+/// Reads the active room window's new lines while the user is in front of
+/// it (`in_front`): the receipt for its newest line, if it wants one. A
+/// thread window gets none: its receipt is unthreaded, and would mark main
+/// timeline lines the window does not show as read too. Only while
+/// connected, as the read marker's move, and never for a replayed load.
+fn read_active_room(state: &mut WindowState, in_front: bool) -> Result<(), String> {
+    let ViewId::Room(room_id) = &state.active_view else {
+        return Ok(());
+    };
+    if !in_front
+        || state.model.connection != ConnectionState::Syncing
+        || state.synthetic_load_in_progress
+    {
+        return Ok(());
+    }
+    let line = state
+        .model
+        .room_views
+        .get(room_id)
+        .and_then(|room_view| window_read_line(room_view, &state.active_view));
+    let Some(event_id) = live_receipt(
+        line,
+        state.model.room_read_states.get(room_id),
+        line.is_some_and(|line| state.sent_receipts.is_sent(room_id, line)),
+    )
+    .map(str::to_owned) else {
+        return Ok(());
+    };
+    let room_id = room_id.clone();
+    submit_mark_room_read(state, &room_id, event_id)
+}
+
+/// `read_active_room` while mirx is the application in front and its
+/// frame `hwnd` is not minimized: after every core event batch, and when
+/// the user comes back to mirx.
+pub(super) unsafe fn read_active_window(hwnd: HWND) -> Result<(), String> {
+    let in_front = mirx_is_foreground() && IsIconic(hwnd) == 0;
+    read_active_room(state_mut(hwnd), in_front)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_fixtures::*;
@@ -347,6 +427,183 @@ mod tests {
                 assert_eq!(receipts(state_ref(hwnd)), ["$m3", "$m3"]);
             });
         }
+    }
+
+    #[test]
+    fn the_active_window_reads_its_new_line_once_while_counted_unread() {
+        let line = Some("$b");
+        let receipt = |read_state: Option<RoomReadState>, already_sent: bool| {
+            live_receipt(line, read_state.as_ref(), already_sent)
+        };
+        assert_eq!(
+            receipt(Some(read_state(Some("$a"), false, 1, 0, 0)), false),
+            line
+        );
+        assert_eq!(receipt(Some(read_state(None, false, 0, 1, 0)), false), line);
+        // Read, or read up to the line already.
+        assert_eq!(
+            receipt(Some(read_state(Some("$a"), false, 0, 0, 0)), false),
+            None
+        );
+        assert_eq!(
+            receipt(Some(read_state(Some("$b"), false, 1, 0, 0)), false),
+            None
+        );
+        // Marked unread only: it stays so until the window is activated.
+        assert_eq!(
+            receipt(Some(read_state(Some("$b"), true, 0, 0, 0)), false),
+            None
+        );
+        assert_eq!(
+            receipt(Some(read_state(Some("$a"), true, 0, 0, 0)), false),
+            None
+        );
+        // In flight.
+        assert_eq!(
+            receipt(Some(read_state(Some("$a"), false, 1, 0, 0)), true),
+            None
+        );
+        assert_eq!(receipt(None, false), None);
+        assert_eq!(
+            live_receipt(None, Some(&read_state(None, false, 1, 0, 0)), false),
+            None
+        );
+    }
+
+    /// Ops active and connected, its line `$a` read, and a sender whose
+    /// commands wait.
+    fn active_ops_state() -> WindowState {
+        let mut state = test_state();
+        let (sender, commands) = inert_command_sender();
+        std::mem::forget(commands);
+        state.command_sender = Some(sender);
+        state.model.connection = ConnectionState::Syncing;
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        state.active_view = room_view_id("!ops:example");
+        apply_core_event(
+            &mut state,
+            Event::RoomActivity(Box::new(sent_message_activity(
+                "!ops:example",
+                "$a",
+                None,
+                "hi",
+                1,
+            ))),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            room_read_state("!ops:example", Some("$a"), None, false, 0, 0, 0),
+        )
+        .unwrap();
+        state
+    }
+
+    fn bob_says(event_id: &str) -> Event {
+        Event::RoomActivity(Box::new(sent_message_activity(
+            "!ops:example",
+            event_id,
+            None,
+            "news",
+            2,
+        )))
+    }
+
+    #[test]
+    fn the_active_window_in_front_reads_new_lines_once() {
+        // The line first, then the server's count of it.
+        let mut state = active_ops_state();
+        apply_core_event(&mut state, bob_says("$b")).unwrap();
+        read_active_room(&mut state, true).unwrap();
+        assert_eq!(receipts(&state), Vec::<&str>::new());
+        apply_core_event(
+            &mut state,
+            room_read_state("!ops:example", Some("$a"), None, false, 1, 1, 0),
+        )
+        .unwrap();
+        read_active_room(&mut state, false).unwrap();
+        assert_eq!(receipts(&state), Vec::<&str>::new());
+        read_active_room(&mut state, true).unwrap();
+        assert_eq!(receipts(&state), ["$b"]);
+        // Until the echo, it is in flight.
+        read_active_room(&mut state, true).unwrap();
+        assert_eq!(receipts(&state), ["$b"]);
+        // The next line, its count with it.
+        apply_core_event(&mut state, bob_says("$c")).unwrap();
+        apply_core_event(
+            &mut state,
+            room_read_state("!ops:example", Some("$a"), None, false, 2, 2, 0),
+        )
+        .unwrap();
+        read_active_room(&mut state, true).unwrap();
+        assert_eq!(receipts(&state), ["$b", "$c"]);
+        // The echo.
+        apply_core_event(
+            &mut state,
+            room_read_state("!ops:example", Some("$c"), None, false, 0, 0, 0),
+        )
+        .unwrap();
+        read_active_room(&mut state, true).unwrap();
+        assert_eq!(receipts(&state), ["$b", "$c"]);
+
+        // The count first, then the line: the line before it is counted.
+        let mut state = active_ops_state();
+        apply_core_event(
+            &mut state,
+            room_read_state("!ops:example", Some("$a"), None, false, 1, 1, 0),
+        )
+        .unwrap();
+        read_active_room(&mut state, true).unwrap();
+        assert_eq!(receipts(&state), Vec::<&str>::new());
+        apply_core_event(&mut state, bob_says("$b")).unwrap();
+        read_active_room(&mut state, true).unwrap();
+        assert_eq!(receipts(&state), ["$b"]);
+    }
+
+    #[test]
+    fn only_a_connected_live_room_window_reads_new_lines() {
+        let unread = |state: &mut WindowState| {
+            apply_core_event(state, bob_says("$b")).unwrap();
+            apply_core_event(
+                state,
+                room_read_state("!ops:example", Some("$a"), None, false, 1, 1, 0),
+            )
+            .unwrap();
+        };
+        let mut state = active_ops_state();
+        unread(&mut state);
+        state.model.connection = ConnectionState::SignedIn;
+        read_active_room(&mut state, true).unwrap();
+        assert_eq!(receipts(&state), Vec::<&str>::new());
+
+        let mut state = active_ops_state();
+        unread(&mut state);
+        state.synthetic_load_in_progress = true;
+        read_active_room(&mut state, true).unwrap();
+        assert_eq!(receipts(&state), Vec::<&str>::new());
+
+        // A thread window's receipt would read the room's lines too.
+        let mut state = active_ops_state();
+        unread(&mut state);
+        state.active_view = thread_view_id("!ops:example", "$a");
+        read_active_room(&mut state, true).unwrap();
+        assert_eq!(receipts(&state), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn sent_receipts_go_with_the_session_and_the_rooms() {
+        let mut state = active_ops_state();
+        state.sent_receipts.record("!ops:example", "$a");
+        state.sent_receipts.record("!gone:example", "$g");
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![room("!ops:example", "Ops", false)]),
+        )
+        .unwrap();
+        assert!(state.sent_receipts.is_sent("!ops:example", "$a"));
+        assert!(!state.sent_receipts.is_sent("!gone:example", "$g"));
+        with_local_app_data(|_| apply_core_event(&mut state, Event::LoggedOut).unwrap());
+        assert!(!state.sent_receipts.is_sent("!ops:example", "$a"));
     }
 
     #[test]

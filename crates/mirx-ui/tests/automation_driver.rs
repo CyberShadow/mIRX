@@ -407,6 +407,8 @@ struct MockBackfillHomeserver {
     faults: Arc<MockFaults>,
     /// The bodies of the `read_markers` requests, in arrival order.
     read_markers: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// `!beta:example`'s sync timeline, which every `/sync` serves whole.
+    timeline: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
 /// What the mock homeserver fails, as the network would: a failed request
@@ -442,6 +444,11 @@ impl MockBackfillHomeserver {
             }
             std::thread::sleep(POLL_INTERVAL);
         }
+    }
+
+    /// A new event in Beta's timeline, from the next `/sync` on.
+    fn append_timeline(&self, event: serde_json::Value) {
+        self.timeline.lock().expect("the timeline").push(event);
     }
 
     fn held(&self) -> usize {
@@ -498,7 +505,8 @@ enum MockAuth {
 }
 
 /// Serves `!beta:example` with Alice and Bob in the sync `state` section and
-/// `timeline_events` as its sync timeline. Every `/sync` gets the same body.
+/// `timeline_events` as its sync timeline. Every `/sync` gets the same body,
+/// until the test appends to the timeline.
 /// The `/members` list also has the members that join in the timeline.
 fn spawn_mock_homeserver(
     messages: MockMessages,
@@ -535,6 +543,8 @@ fn spawn_mock_homeserver_with_auth(
     let mock_faults = Arc::clone(&faults);
     let read_markers = Arc::new(Mutex::new(Vec::new()));
     let mock_read_markers = Arc::clone(&read_markers);
+    let timeline = Arc::new(Mutex::new(timeline_events.clone()));
+    let mock_timeline = Arc::clone(&timeline);
     let room_account_data = fully_read
         .into_iter()
         .map(|event_id| {
@@ -705,11 +715,13 @@ fn spawn_mock_homeserver_with_auth(
                 if path.contains("since=") {
                     std::thread::sleep(Duration::from_millis(500));
                 }
+                let timeline = mock_timeline.lock().expect("the timeline").clone();
                 respond_json(
                     &mut stream,
                     200,
                     &serde_json::json!({
-                        "next_batch": "s-sync",
+                        // A new token for every timeline.
+                        "next_batch": format!("s-sync-{}", timeline.len()),
                         "device_one_time_keys_count": {
                             "signed_curve25519": 0
                         },
@@ -765,7 +777,7 @@ fn spawn_mock_homeserver_with_auth(
                                         ]
                                     },
                                     "timeline": {
-                                        "events": timeline_events,
+                                        "events": timeline,
                                         "limited": false,
                                         "prev_batch": "s-current"
                                     },
@@ -1007,6 +1019,7 @@ fn spawn_mock_homeserver_with_auth(
         base_url: format!("http://{address}"),
         faults,
         read_markers,
+        timeline,
     })
 }
 
@@ -3729,6 +3742,45 @@ fn automation_driver_leaving_a_room_moves_the_read_marker() -> Result<(), Box<dy
         server.wait_for_read_markers(2)?[1..],
         [serde_json::json!({ "m.fully_read": "$bob-4" })]
     );
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(server.read_markers.lock().unwrap().len(), 2);
+    assert_eq!(app.dump_model()?.last_error, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// While mirx is in front, the active window's new lines are read: each
+/// gets its receipt once, though the server never echoes it.
+#[test]
+fn automation_driver_active_window_reads_new_lines() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let server = spawn_mock_homeserver_with_read_marker(bob_lines(4), "$bob-2")?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    wait_for_line_marker(&app)?;
+    app.select_navigation_view(&room_identity("!beta:example"))?;
+    unsafe { SetForegroundWindow(app.automation_frame_hwnd() as HWND) };
+    assert_eq!(
+        server.wait_for_read_markers(1)?,
+        [serde_json::json!({ "m.read": "$bob-4" })]
+    );
+
+    server.append_timeline(bob_lines(5).pop().expect("Bob's fifth line"));
+    assert_eq!(
+        server.wait_for_read_markers(2)?[1..],
+        [serde_json::json!({ "m.read": "$bob-5" })]
+    );
+    // Every sync serves the line again; it was read once.
+    std::thread::sleep(Duration::from_secs(2));
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(server.read_markers.lock().unwrap().len(), 2);
     assert_eq!(app.dump_model()?.last_error, None);

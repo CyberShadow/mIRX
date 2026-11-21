@@ -129,17 +129,18 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, QS_ALLPOSTMESSAGE, RegisterClassExW,
     SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK,
     SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE, SCROLLINFO, SHOW_WINDOW_CMD, SIF_ALL, SIF_PAGE,
-    SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_MINIMIZE, SW_SHOW, SW_SHOWMINNOACTIVE,
-    SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
-    WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
-    WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE,
-    WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE,
-    WM_MDITILE, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_QUIT,
-    WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW,
-    WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE,
-    WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    SIF_POS, SIF_RANGE, SIF_TRACKPOS, SIZE_MINIMIZED, SW_HIDE, SW_MINIMIZE, SW_SHOW,
+    SW_SHOWMINNOACTIVE, SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW,
+    ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel,
+    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATEAPP, WM_APP, WM_CHAR, WM_CLOSE,
+    WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETFONT,
+    WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+    WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE,
+    WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY,
+    WM_NOTIFY, WM_PAINT, WM_PASTE, WM_QUIT, WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE,
+    WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU,
+    WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use self::app_icon::{IconSize, app_icon};
@@ -320,7 +321,8 @@ use connection::{ConnectAction, DisconnectAction};
 use core_events::apply_core_event;
 use core_events::{
     apply_event_load, apply_events_and_refresh, drain_core_events_and_refresh, handle_core_events,
-    handle_view_activation, operation_name, resolve_timeline_room_id, submit_set_read_marker,
+    handle_view_activation, operation_name, resolve_timeline_room_id, submit_mark_room_read,
+    submit_set_read_marker,
 };
 #[cfg(test)]
 use dialogs::{
@@ -487,8 +489,8 @@ use timeline_window::{
 use timestamp::{LocalTime, LocalTimeFn, TimestampSetting, TimestampStyle};
 use tray::{
     TipCandidate, TrayState, choose_tray_menu_item, dump_shown_tips, dump_tray, hide_to_tray,
-    minimize_frame, on_taskbar_created, on_tray_icon, remove_tray_icon, show_tip, sync_tray_icon,
-    taskbar_created_message,
+    minimize_frame, mirx_is_foreground, on_taskbar_created, on_tray_icon, remove_tray_icon,
+    show_tip, sync_tray_icon, taskbar_created_message,
 };
 use verification::{
     apply_verification_event, apply_verification_request, e2ee_backup_health_summary,
@@ -760,6 +762,9 @@ struct WindowState {
     /// The treebar's items as `sync_tree` last built them.
     applied_navigation: Option<NavItem>,
     room_activity: BTreeMap<ViewId, ViewActivityLevel>,
+    /// The read receipt mirx last sent per room, until the server echoes
+    /// it.
+    sent_receipts: read_receipts::SentReceipts,
     /// Joined queries whose window the user closed. Like mIRC's closed query
     /// windows, they stay closed until a new message from the other side or
     /// an explicit activation. Holds only joined DM rooms in `model.rooms`.
@@ -1009,6 +1014,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         switchbar_labels: Vec::new(),
         applied_navigation: None,
         room_activity: BTreeMap::new(),
+        sent_receipts: Default::default(),
         closed_queries: BTreeSet::new(),
         nick_completion: None,
         edit_window_proc: None,

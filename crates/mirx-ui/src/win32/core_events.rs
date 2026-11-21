@@ -450,6 +450,9 @@ pub(super) fn apply_core_event(
                 navigable_room_by_id(&rooms, room_id)
                     .is_some_and(|room| room_window_kind(room) == RoomWindowKind::Query)
             });
+            state
+                .sent_receipts
+                .retain_rooms(|room_id| sendable_room_by_id(&rooms, room_id).is_some());
             // Mutable access moves a room's revision, which rebuilds its
             // window: take it only for rooms that change.
             let unsendable_with_people = state
@@ -647,6 +650,7 @@ pub(super) fn apply_core_event(
             state.model.highlight_words = None;
             state.model.ignored_users = None;
             state.room_activity.clear();
+            state.sent_receipts.clear();
             state.find_states.clear();
             state.decoded_images.clear();
             log_status(
@@ -852,6 +856,7 @@ pub(super) unsafe fn apply_events_and_refresh(
     }
 
     sync_views_and_tree(hwnd)?;
+    read_receipts::read_active_window(hwnd)?;
     if attention.flash {
         request_frame_attention(hwnd);
     }
@@ -907,6 +912,7 @@ pub(super) unsafe fn apply_event_load(
         state.current_session_homeserver_url = None;
         state.room_activity.clear();
         state.closed_queries.clear();
+        state.sent_receipts.clear();
         state.find_states.clear();
         state.selected_timeline_event = None;
         state.model = initial_model();
@@ -958,21 +964,23 @@ pub(super) unsafe fn drain_core_events_and_refresh(hwnd: HWND) -> Result<usize, 
     apply_events_and_refresh(hwnd, events).map(|()| event_count)
 }
 
-fn submit_mark_room_read(
+/// Sends the read receipt for `event_id`, and records it as in flight.
+pub(super) fn submit_mark_room_read(
     state: &mut WindowState,
     room_id: &str,
     event_id: String,
 ) -> Result<(), String> {
-    let command = Command::MarkRoomRead(MarkRoomReadRequest {
-        room_id: room_id.to_owned(),
-        event_id,
-    });
     let Some(sender) = state.command_sender.as_ref() else {
         return Ok(());
     };
+    let command = Command::MarkRoomRead(MarkRoomReadRequest {
+        room_id: room_id.to_owned(),
+        event_id: event_id.clone(),
+    });
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue mark room read command: {err}"))?;
+    state.sent_receipts.record(room_id, &event_id);
     #[cfg(test)]
     state.recorded_commands.push(command);
     Ok(())
