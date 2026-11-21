@@ -1,1 +1,1 @@
-[{"RoomHistoryBackfill":{"room_id":"!find-history:example","start":"s-current","end":null,"events":[]}}]
+[{"RoomHistoryBackfill":{"room_id":"!find-history:example","end":null,"events":[]}}]
