@@ -750,6 +750,12 @@ struct WindowState {
     primary_tree_items: BTreeMap<ViewId, isize>,
     views: BTreeMap<ViewId, MdiViewState>,
     hwnd_views: BTreeMap<isize, ViewId>,
+    /// The window the user is in: written only by an activation
+    /// (`views::apply_view_activation_state`), which enters it and leaves
+    /// the one before. A window whose room went is replaced by an
+    /// activation before its child is destroyed
+    /// (`views::destroy_stale_room_views`), so this names a registered
+    /// view except inside that function and at frame teardown.
     active_view: ViewId,
     selected_timeline_event: Option<SelectedTimelineEvent>,
     find_states: BTreeMap<ViewId, ViewFindState>,

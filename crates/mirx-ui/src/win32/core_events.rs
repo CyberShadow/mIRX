@@ -3200,7 +3200,6 @@ mod tests {
         assert_eq!(state.model.last_verification, None);
         assert_eq!(state.model.last_error, None);
         assert!(state.find_states.is_empty());
-        assert_eq!(state.active_view, ViewId::Status);
         assert_eq!(removed.len(), 1);
         assert!(state.views.contains_key(&ViewId::Status));
         assert!(

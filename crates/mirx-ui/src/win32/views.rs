@@ -578,9 +578,11 @@ unsafe fn layout_room_content(hwnd: HWND) {
     );
 }
 
-/// The view to keep active: the active one if it still has a window, else
-/// its room, the selected room, the first room or Status. A closed query
-/// has no window, so it is never picked.
+/// mirx's choice of the window that follows a gone one: the active one if
+/// it still has a window, else its room, the selected room, the first room
+/// or Status. A closed query has no window, so it is never picked. Used
+/// where the active window may have gone (`destroy_stale_room_views`) and
+/// at the end of every view sync (`sync_views_and_tree`).
 pub(super) fn resolve_active_view(
     active_view: &ViewId,
     selected_room: Option<&str>,
@@ -616,6 +618,9 @@ pub(super) fn resolve_active_view(
     }
 }
 
+/// Takes the windows whose room, thread or listing went out of the
+/// registry, and returns them for destroying. The active view may be one
+/// of them: `destroy_stale_room_views` activates its successor.
 pub(super) fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState> {
     let stale_view_ids = state
         .views
@@ -629,7 +634,7 @@ pub(super) fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState
         cancel_jump_for_view(state, view_id);
     }
 
-    let removed = stale_view_ids
+    stale_view_ids
         .into_iter()
         .filter_map(|view_id| {
             let view = state.views.remove(&view_id)?;
@@ -637,21 +642,7 @@ pub(super) fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState
             room_window_gone(state, &view_id);
             Some(view)
         })
-        .collect::<Vec<_>>();
-
-    let resolved_active_view = resolve_active_view(
-        &state.active_view,
-        state.model.selected_room.as_deref(),
-        &state.model,
-        &state.closed_queries,
-    );
-    if state.active_view != resolved_active_view {
-        state.selected_timeline_event = None;
-        hide_color_index(state);
-    }
-    state.active_view = resolved_active_view;
-
-    removed
+        .collect::<Vec<_>>()
 }
 
 unsafe fn create_mdi_child(
@@ -1037,16 +1028,10 @@ fn unregister_view_by_child(state: &mut WindowState, child: HWND) -> Option<View
         removed.child, child,
         "tracked child HWND must match registry"
     );
-    if state.active_view == view_id {
-        state.selected_timeline_event = None;
-        hide_color_index(state);
-        state.active_view = resolve_active_view(
-            &state.active_view,
-            state.model.selected_room.as_deref(),
-            &state.model,
-            &state.closed_queries,
-        );
-    }
+    // The active window is still the active view only at frame teardown,
+    // where nothing follows it: closing it activated MDI's next child
+    // before WM_NCDESTROY, and a window whose room went had its successor
+    // activated before it was destroyed (`destroy_stale_room_views`).
     Some(view_id)
 }
 
@@ -1143,16 +1128,37 @@ unsafe fn ensure_thread_view(
     )
 }
 
-pub(super) unsafe fn destroy_stale_room_views(hwnd: HWND) {
+/// Destroys the windows whose room, thread or listing went. If the active
+/// window is one of them, mirx's choice of the next one
+/// (`resolve_active_view`) is activated first, so MDI never picks one when
+/// the active child goes. The gone window is not left: its room has no
+/// marker to move.
+pub(super) unsafe fn destroy_stale_room_views(hwnd: HWND) -> Result<(), String> {
     let (mdi_client, stale_views) = {
         let state = state_mut(hwnd);
         (state.controls.mdi_client, take_stale_room_views(state))
     };
+    let successor = {
+        let state = state_ref(hwnd);
+        (!state.views.contains_key(&state.active_view)).then(|| {
+            resolve_active_view(
+                &state.active_view,
+                state.model.selected_room.as_deref(),
+                &state.model,
+                &state.closed_queries,
+            )
+        })
+    };
+    if let Some(successor) = successor {
+        // `activate_view`: the focus was in the window going.
+        activate_view(hwnd, &successor, None)?;
+    }
 
     // WM_MDIDESTROY, not WM_CLOSE: closing a room window asks to leave it.
     for view in stale_views {
         SendMessageW(mdi_client, WM_MDIDESTROY, view.child as WPARAM, 0);
     }
+    Ok(())
 }
 
 /// Everything a window's rows are built from. A window rebuilds its rows
@@ -1512,6 +1518,8 @@ unsafe fn handle_native_mdi_child_activation(child: HWND) -> Result<(), String> 
 
 #[cfg(test)]
 mod tests {
+    use windows_sys::Win32::UI::WindowsAndMessaging::IsChild;
+
     use super::super::test_fixtures::*;
     use super::*;
 
@@ -1873,7 +1881,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_thread_cleanup_falls_back_to_parent_room_when_possible() {
+    fn stale_thread_cleanup_takes_only_the_gone_thread() {
         let mut state = test_state();
         state.model.rooms = vec![room("!alpha:example", "Alpha", false)];
         state.model.selected_room = Some("!alpha:example".to_owned());
@@ -1907,7 +1915,12 @@ mod tests {
         let removed = take_stale_room_views(&mut state);
 
         assert_eq!(removed.len(), 1);
-        assert_eq!(state.active_view, ViewId::Room("!alpha:example".to_owned()));
+        assert_eq!(removed[0].child, 30 as HWND);
+        // The successor is activated by the caller, not guessed here.
+        assert_eq!(
+            state.active_view,
+            thread_view_id("!alpha:example", "$thread-root")
+        );
         assert!(!state.views.contains_key(&ViewId::Thread {
             room_id: "!alpha:example".to_owned(),
             thread_root_event_id: "$thread-root".to_owned(),
@@ -1942,8 +1955,13 @@ mod tests {
         let removed = take_stale_room_views(&mut state);
 
         assert_eq!(removed.len(), 1);
-        assert_eq!(state.active_view, ViewId::Status);
+        assert_eq!(removed[0].child, 20 as HWND);
+        assert_eq!(
+            state.active_view,
+            thread_view_id("!alpha:example", "$thread-root")
+        );
         assert!(state.views.contains_key(&ViewId::Status));
+        assert!(!state.hwnd_views.contains_key(&20));
     }
 
     #[test]
@@ -2051,6 +2069,172 @@ mod tests {
                 .views
                 .contains_key(&ViewId::Room("!beta:example".to_owned()))
         );
-        assert_eq!(state.active_view, ViewId::Room("!alpha:example".to_owned()));
+        // Only at frame teardown is the active window unregistered, and
+        // nothing follows it there.
+        assert_eq!(state.active_view, ViewId::Room("!beta:example".to_owned()));
+    }
+
+    fn ops_bob_dev() -> Vec<RoomSummary> {
+        vec![
+            room("!ops:example", "Ops", false),
+            query("!bob:example", "Bob", "@bob:example"),
+            room("!dev:example", "Dev", false),
+        ]
+    }
+
+    /// A connected frame with Ops, a query with Bob and Dev, a line each
+    /// and unread, with a sender whose commands wait. Ops was entered,
+    /// then Dev, so MDI's next child after Dev is Ops; no commands are
+    /// recorded yet.
+    unsafe fn with_rooms_frame(test: impl FnOnce(HWND)) {
+        with_test_frame(600, 400, |hwnd| {
+            let (sender, commands) = inert_command_sender();
+            std::mem::forget(commands);
+            let state = state_mut(hwnd);
+            state.command_sender = Some(sender);
+            state.model.connection = ConnectionState::Syncing;
+            state.model.rooms = ops_bob_dev();
+            sync_views_and_tree(hwnd).unwrap();
+            let mut events = Vec::new();
+            for (index, room_id) in ["!ops:example", "!bob:example", "!dev:example"]
+                .into_iter()
+                .enumerate()
+            {
+                events.push(timeline_with_transaction_id(
+                    room_id,
+                    &format!("${index}"),
+                    None,
+                    "hi",
+                    1_700_000_000_000 + index as u64 * 1_000,
+                ));
+                events.push(room_read_state(room_id, None, None, false, 1, 0, 0));
+            }
+            apply_events_and_refresh(hwnd, events).unwrap();
+            activate_view(hwnd, &room_view_id("!ops:example"), None).unwrap();
+            activate_view(hwnd, &room_view_id("!dev:example"), None).unwrap();
+            state_mut(hwnd).recorded_commands.clear();
+            test(hwnd);
+        });
+    }
+
+    fn recorded_read_commands(state: &WindowState) -> Vec<String> {
+        state
+            .recorded_commands
+            .iter()
+            .filter_map(|command| match command {
+                Command::MarkRoomRead(request) => {
+                    Some(format!("receipt {} {}", request.room_id, request.event_id))
+                }
+                Command::SetReadMarker(request) => {
+                    Some(format!("marker {} {}", request.room_id, request.event_id))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether `view_id`'s window was entered and not left since.
+    unsafe fn line_marker_sight(hwnd: HWND, view_id: &ViewId) -> line_marker::MarkerSight {
+        let content = state_ref(hwnd).views[view_id].content;
+        timeline_state_ref(view_timeline(view_id, content)).line_marker_sight
+    }
+
+    unsafe fn has_focus(hwnd: HWND, view_id: &ViewId) -> bool {
+        IsChild(state_ref(hwnd).views[view_id].child, GetFocus()) != 0
+    }
+
+    #[test]
+    fn the_window_after_a_gone_active_room_is_entered_and_left() {
+        unsafe {
+            with_rooms_frame(|hwnd| {
+                let ops = room_view_id("!ops:example");
+                // Ops has news since it was left.
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![
+                        timeline_with_transaction_id(
+                            "!ops:example",
+                            "$ops-news",
+                            None,
+                            "news",
+                            1_700_000_010_000,
+                        ),
+                        room_read_state("!ops:example", None, None, false, 1, 0, 0),
+                    ],
+                )
+                .unwrap();
+
+                let mut rooms = ops_bob_dev();
+                rooms.pop();
+                apply_events_and_refresh(hwnd, vec![Event::SyncedRooms(rooms)]).unwrap();
+
+                let state = state_ref(hwnd);
+                assert!(!state.views.contains_key(&room_view_id("!dev:example")));
+                assert_eq!(
+                    state.active_view,
+                    resolve_active_view(
+                        &room_view_id("!dev:example"),
+                        None,
+                        &state.model,
+                        &state.closed_queries
+                    )
+                );
+                assert_eq!(state.active_view, ops);
+                assert_eq!(
+                    line_marker_sight(hwnd, &ops),
+                    line_marker::MarkerSight::Unseen
+                );
+                assert_eq!(
+                    recorded_read_commands(state),
+                    vec!["receipt !ops:example $ops-news"]
+                );
+                assert!(has_focus(hwnd, &ops));
+
+                // Ops had no rule: leaving it moves its marker, once.
+                activate_view(hwnd, &ViewId::Status, None).unwrap();
+                assert_eq!(
+                    recorded_read_commands(state_ref(hwnd)),
+                    vec![
+                        "receipt !ops:example $ops-news",
+                        "marker !ops:example $ops-news"
+                    ]
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn a_gone_thread_window_activates_its_room() {
+        unsafe {
+            with_rooms_frame(|hwnd| {
+                let ops = room_view_id("!ops:example");
+                let thread = thread_view_id("!ops:example", "$0");
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![thread_timeline("!ops:example", "$reply", "$0", "re")],
+                )
+                .unwrap();
+                // MDI's next child after the thread window is Dev.
+                activate_view(hwnd, &thread, None).unwrap();
+                state_mut(hwnd).recorded_commands.clear();
+
+                state_mut(hwnd)
+                    .model
+                    .room_views
+                    .get_mut("!ops:example")
+                    .unwrap()
+                    .threads
+                    .clear();
+                sync_views_and_tree(hwnd).unwrap();
+
+                assert!(!state_ref(hwnd).views.contains_key(&thread));
+                assert_eq!(state_ref(hwnd).active_view, ops);
+                assert_eq!(
+                    line_marker_sight(hwnd, &ops),
+                    line_marker::MarkerSight::Unseen
+                );
+                assert!(has_focus(hwnd, &ops));
+            });
+        }
     }
 }

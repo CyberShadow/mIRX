@@ -224,7 +224,7 @@ pub(super) unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
             .map(|room| room.room_id.clone())
             .collect::<Vec<_>>()
     };
-    destroy_stale_room_views(hwnd);
+    destroy_stale_room_views(hwnd)?;
     for room_id in room_ids {
         ensure_room_view(hwnd, &room_id)?;
     }
