@@ -1,0 +1,24 @@
+[
+  {
+    "UserDevices": {
+      "user_id": "@alice:example",
+      "identity": "verification_violation",
+      "devices": [
+        {
+          "device_id": "ALICEPHONE",
+          "display_name": "Alice's phone",
+          "verified": false,
+          "this_session": false,
+          "last_seen_ms": null
+        },
+        {
+          "device_id": "ALICELAPTOP",
+          "display_name": null,
+          "verified": false,
+          "this_session": false,
+          "last_seen_ms": null
+        }
+      ]
+    }
+  }
+]

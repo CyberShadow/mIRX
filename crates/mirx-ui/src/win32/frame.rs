@@ -520,7 +520,11 @@ pub(super) fn frame_status_text(state: &WindowState) -> String {
         text.push_str(verification_state_label(&event.state));
         text.push(' ');
         text.push_str(&event.flow_id);
-        text.push_str(" from ");
+        // Sent is the one state known to be outgoing.
+        text.push_str(match event.state {
+            VerificationState::Sent => " to ",
+            _ => " from ",
+        });
         text.push_str(&event.user_id);
     }
 
@@ -716,6 +720,17 @@ mod tests {
         assert_eq!(
             frame_status_text(&state),
             "verification accepted with @alice:example | verification: accepted flow-verify-123 from @alice:example"
+        );
+
+        state.model.status = "verification request sent to @alice:example".to_owned();
+        state.model.last_verification = Some(VerificationStateEvent {
+            flow_id: "flow-out".to_owned(),
+            user_id: "@alice:example".to_owned(),
+            state: VerificationState::Sent,
+        });
+        assert_eq!(
+            frame_status_text(&state),
+            "verification request sent to @alice:example | verification: sent flow-out to @alice:example"
         );
     }
 

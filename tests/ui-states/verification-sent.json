@@ -1,0 +1,13 @@
+[
+  "Started",
+  {
+    "VerificationRequest": {
+      "flow_id": "flow-verify-sent",
+      "user_id": "@alice:example",
+      "direction": {
+        "type": "outgoing",
+        "to_device": null
+      }
+    }
+  }
+]

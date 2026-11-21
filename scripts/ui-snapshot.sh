@@ -1295,6 +1295,35 @@ configure_case_expectations() {
         --expect-no-navigation-text '@alice:example'
       )
       ;;
+    verification-sent)
+      expect_active_view='status'
+      expect_verification='flow-verify-sent'
+      expect_verification_state='sent'
+      verification_text_expect_args=(
+        --expect-verification-text 'flow_id=flow-verify-sent'
+        --expect-verification-text 'user_id=@alice:example'
+        --expect-verification-text 'state=sent'
+      )
+      status_view_expect_args=(
+        --expect-status-view '[22:12] * Verification request sent to @alice:example; waiting for them to accept'
+        --expect-status-view '* Actions: Tools > Cancel Verification, /verify cancel'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'verification request sent to @alice:example'
+        --expect-status-bar 'verification: sent flow-verify-sent to @alice:example'
+      )
+      status_view_forbid_args=(
+        --expect-no-status-view '/verify accept'
+        --expect-no-status-view '/verify confirm'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='status'
+      ;;
     verification-sas-ready)
       expect_active_view='status'
       expect_verification='flow-verify-sas-ready'
@@ -1489,6 +1518,25 @@ configure_case_expectations() {
       status_bar_forbid_args=(
         --expect-no-status-bar 'recovery_secret'
         --expect-no-status-bar 'passphrase='
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='status'
+      ;;
+    e2ee-session-unverified)
+      # Your identity is set up elsewhere, without recovery: this session
+      # holds no keys and needs verifying.
+      expect_active_view='status'
+      status_view_expect_args=(
+        --expect-status-view '[22:12] * E2EE: recovery disabled, local backup unknown, server backup missing, cross-signing incomplete, this session not verified'
+        --expect-status-view '[22:12] * This session is not verified: /verify to verify it from another of your sessions, or /e2ee recover with your recovery key'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar ', session not verified'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1915,6 +1963,45 @@ configure_case_expectations() {
         --expect-switchbar-item 'status::Status'
         --expect-switchbar-item 'room:!ops:example::Ops'
         --expect-switchbar-item 'room:!dm-alice:example::Alice'
+      )
+      expect_switchbar_active='room:!ops:example'
+      ;;
+    devices-list)
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      # /devices' answer is appended rather than typed: the snapshot core
+      # is not signed in and would refuse it at no fixed moment.
+      ordered_actions=(
+        "append:$root_dir/tests/ui-state-updates/devices-list.json"
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::[22:12] * Me sessions:'
+        --expect-room-view '!ops:example::[22:12] * Me MIRXDEVICE "mirx" verified, last seen Fri Nov 20 14:02:11 2026 (this session)'
+        --expect-room-view '!ops:example::[22:12] * Me PH0NE "Element Android" verified, last seen Thu Nov 19 14:02:11 2026'
+        --expect-room-view '!ops:example::[22:12] * Me 0LDW3B "Element Web" unverified'
+        --expect-room-view '!ops:example::[22:12] * Me End of /DEVICES list'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::@me:example'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+      )
+      expect_switchbar_active='room:!ops:example'
+      ;;
+    devices-user)
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      ordered_actions=(
+        "append:$root_dir/tests/ui-state-updates/devices-user.json"
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::[22:12] * Alice changed identity since you verified them; /verify @alice:example'
+        --expect-room-view '!ops:example::[22:12] * Alice ALICEPHONE "Alice'"'"'s phone" unverified'
+        --expect-room-view '!ops:example::[22:12] * Alice ALICELAPTOP unverified'
+        --expect-room-view '!ops:example::[22:12] * Alice End of /DEVICES list'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::@me:example'
+        --expect-switchbar-item 'room:!ops:example::Ops'
       )
       expect_switchbar_active='room:!ops:example'
       ;;

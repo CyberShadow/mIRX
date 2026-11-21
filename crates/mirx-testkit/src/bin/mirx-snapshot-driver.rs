@@ -451,13 +451,13 @@ mod cli {
                         "missing value for --expect-verification-state".to_owned()
                     })?;
                     match value.as_str() {
-                        "requested" | "accepted" | "ready" | "sas_ready" | "confirmed" | "done"
-                        | "cancelled" => {
+                        "requested" | "sent" | "accepted" | "ready" | "sas_ready" | "confirmed"
+                        | "done" | "cancelled" => {
                             config.expect_verification_state = Some(value);
                         }
                         _ => {
                             return Err(format!(
-                                "invalid --expect-verification-state value {value:?}; expected requested|accepted|ready|sas_ready|confirmed|done|cancelled\n{}",
+                                "invalid --expect-verification-state value {value:?}; expected requested|sent|accepted|ready|sas_ready|confirmed|done|cancelled\n{}",
                                 usage()
                             ));
                         }
@@ -774,7 +774,7 @@ mod cli {
             "  --expect-room-activity <room_id>::<substring>",
             "  --expect-error <substring>",
             "  --expect-verification <flow_id>",
-            "  --expect-verification-state <requested|accepted|ready|sas_ready|confirmed|done|cancelled>",
+            "  --expect-verification-state <requested|sent|accepted|ready|sas_ready|confirmed|done|cancelled>",
             "  --expect-verification-text <substring>",
             "  --expect-active-view <status|room:<room_id>|thread:<room_id>|<thread_root_event_id>>",
             "  --expect-view <identity>::<substring>",
