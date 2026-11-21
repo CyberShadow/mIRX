@@ -573,9 +573,13 @@ pub(super) unsafe fn paint_timeline(hwnd: HWND) {
     SelectObject(hdc, previous);
 
     EndPaint(hwnd, &paint);
-    // The line marker was on screen: leaving the window may move it.
-    if rule_visible(&state.paint_lines, state.top_line, visible_rows) {
-        timeline_state_mut(hwnd).line_marker_seen = true;
+    // The line marker was on screen in the window the user is in: leaving
+    // it may move the marker. A window painted beside the active one (tiled)
+    // is not the one being read.
+    if state.line_marker_sight == line_marker::MarkerSight::Unseen
+        && rule_visible(&state.paint_lines, state.top_line, visible_rows)
+    {
+        timeline_state_mut(hwnd).line_marker_sight = line_marker::MarkerSight::Seen;
     }
 }
 

@@ -45,9 +45,9 @@ pub(super) struct TimelineState {
     laid_out_visible_rows: usize,
     /// The left button marking text, from its press to its release.
     pub(super) drag: Option<TextDrag>,
-    /// Whether the line marker was painted on screen since the window was
-    /// last activated: mIRC moves the marker only once it was seen.
-    pub(super) line_marker_seen: bool,
+    /// Whether the user is in the window and saw its line marker: mIRC
+    /// moves the marker only once it was seen.
+    pub(super) line_marker_sight: line_marker::MarkerSight,
 }
 
 impl TimelineState {
@@ -66,7 +66,7 @@ impl TimelineState {
             wheel_remainder: 0,
             laid_out_visible_rows: 1,
             drag: None,
-            line_marker_seen: false,
+            line_marker_sight: line_marker::MarkerSight::Away,
         }
     }
 }

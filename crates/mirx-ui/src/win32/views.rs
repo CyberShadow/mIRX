@@ -1422,7 +1422,7 @@ unsafe fn apply_view_activation_state(
     }
     if newly_active {
         // Before the refresh below repaints it.
-        line_marker::window_activated(hwnd, view_id);
+        line_marker::enter_window(hwnd, view_id);
     }
 
     refresh_tree_activity_colors(hwnd)?;

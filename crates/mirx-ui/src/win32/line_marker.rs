@@ -10,40 +10,66 @@
 
 use super::*;
 
+/// Where the user is with a room window's line marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MarkerSight {
+    /// The window is not the one the user is in: never entered, left, or
+    /// mirx minimized. Leaving it moves nothing. The active window is away
+    /// only while mirx is minimized, since activation enters it, or when
+    /// it became active without MDI activating it (`unregister_view_by_child`
+    /// guessing the next window).
+    Away,
+    /// Entered, its rule not on screen yet.
+    Unseen,
+    /// Entered, and its rule was on screen.
+    Seen,
+}
+
 /// Where the read marker moves when the user leaves a room window: its
 /// last line `last_line_event`, unless the marker is there already, or the
 /// window showed its marker (`marker_row_shown`) and the user never saw it
-/// (`marker_seen`). A window without a marker row has nothing to see: its
-/// marker is not set, or on a line the window does not show.
+/// (`sight`). A window without a marker row has nothing to see: its
+/// marker is not set, or on a line the window does not show. A window the
+/// user was not in is not left.
 pub(super) fn read_marker_move<'a>(
     server_marker: Option<&str>,
     last_line_event: Option<&'a str>,
     marker_row_shown: bool,
-    marker_seen: bool,
+    sight: MarkerSight,
 ) -> Option<&'a str> {
     let last_line_event = last_line_event?;
-    (server_marker != Some(last_line_event) && (marker_seen || !marker_row_shown))
+    let seen = match sight {
+        MarkerSight::Away => return None,
+        MarkerSight::Unseen => false,
+        MarkerSight::Seen => true,
+    };
+    (server_marker != Some(last_line_event) && (seen || !marker_row_shown))
         .then_some(last_line_event)
 }
 
-/// The user leaves `view_id`'s window: another window is activated, or
-/// the active window closes. A room window whose marker was seen moves the
-/// room's read marker to its last line, while mirx is connected: the move
-/// shows only once the next sync echoes it, and offline the request could
-/// only fail, with an error about something the user did not ask for. The
-/// marker then stays where it was.
+/// The user leaves `view_id`'s window, which exists: another window is
+/// activated, or the active window closes. The window is away then. A room
+/// window whose marker was seen moves the room's read marker to its last
+/// line, while mirx is connected: the move shows only once the next sync
+/// echoes it, and offline the request could only fail, with an error about
+/// something the user did not ask for. The marker then stays where it was.
 pub(super) unsafe fn leave_window(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
     let ViewId::Room(room_id) = view_id else {
         return Ok(());
     };
     let state = state_ref(hwnd);
+    let timeline_hwnd = view_timeline(view_id, state.views[view_id].content);
+    let sight = std::mem::replace(
+        &mut timeline_state_mut(timeline_hwnd).line_marker_sight,
+        MarkerSight::Away,
+    );
     if state.model.connection != ConnectionState::Syncing {
         return Ok(());
     }
     let Some(room_view) = state.model.room_views.get(room_id) else {
         return Ok(());
     };
-    let timeline = timeline_state_ref(view_timeline(view_id, state.views[view_id].content));
+    let timeline = timeline_state_ref(timeline_hwnd);
     let marker_row_shown = timeline
         .source_rows
         .iter()
@@ -57,7 +83,7 @@ pub(super) unsafe fn leave_window(hwnd: HWND, view_id: &ViewId) -> Result<(), St
         server_marker,
         read_receipts::window_read_line(room_view, view_id),
         marker_row_shown,
-        timeline.line_marker_seen,
+        sight,
     )
     .map(str::to_owned) else {
         return Ok(());
@@ -66,14 +92,14 @@ pub(super) unsafe fn leave_window(hwnd: HWND, view_id: &ViewId) -> Result<(), St
     submit_set_read_marker(state_mut(hwnd), &room_id, event_id)
 }
 
-/// `view_id`'s window becomes the active one: its marker is not seen yet.
-/// The refresh that follows repaints it, and a marker on screen is seen
-/// then.
-pub(super) unsafe fn window_activated(hwnd: HWND, view_id: &ViewId) {
+/// The user enters `view_id`'s window, which becomes the active one: its
+/// marker is not seen yet. The refresh that follows repaints it, and a
+/// marker on screen is seen then.
+pub(super) unsafe fn enter_window(hwnd: HWND, view_id: &ViewId) {
     if let ViewId::Room(_) = view_id {
         let state = state_ref(hwnd);
-        timeline_state_mut(view_timeline(view_id, state.views[view_id].content)).line_marker_seen =
-            false;
+        timeline_state_mut(view_timeline(view_id, state.views[view_id].content))
+            .line_marker_sight = MarkerSight::Unseen;
     }
 }
 
@@ -183,7 +209,10 @@ mod tests {
             with_marker_frame(Some("$m1"), |hwnd| {
                 let timeline = ops_timeline(hwnd);
                 SendMessageW(timeline, WM_PAINT, 0, 0);
-                assert!(!timeline_state_ref(timeline).line_marker_seen);
+                assert_eq!(
+                    timeline_state_ref(timeline).line_marker_sight,
+                    MarkerSight::Unseen
+                );
                 // At the end, the marker far above was never on screen.
                 activate_view(hwnd, &ViewId::Status, None).unwrap();
                 assert_eq!(read_marker_moves(state_ref(hwnd)), Vec::new());
@@ -191,7 +220,10 @@ mod tests {
                 activate_view(hwnd, &room_view_id("!ops:example"), None).unwrap();
                 SendMessageW(timeline, WM_VSCROLL, SB_TOP as WPARAM, 0);
                 SendMessageW(timeline, WM_PAINT, 0, 0);
-                assert!(timeline_state_ref(timeline).line_marker_seen);
+                assert_eq!(
+                    timeline_state_ref(timeline).line_marker_sight,
+                    MarkerSight::Seen
+                );
                 // Back at the end: seen is seen.
                 SendMessageW(timeline, WM_VSCROLL, SB_BOTTOM as WPARAM, 0);
                 SendMessageW(timeline, WM_PAINT, 0, 0);
@@ -200,7 +232,10 @@ mod tests {
 
                 // The echo has not come: the next activation starts unseen.
                 activate_view(hwnd, &room_view_id("!ops:example"), None).unwrap();
-                assert!(!timeline_state_ref(timeline).line_marker_seen);
+                assert_eq!(
+                    timeline_state_ref(timeline).line_marker_sight,
+                    MarkerSight::Unseen
+                );
             });
         }
     }
@@ -384,20 +419,77 @@ mod tests {
     }
 
     #[test]
+    fn a_window_not_entered_is_never_left() {
+        unsafe {
+            with_marker_frame(None, |hwnd| {
+                let ops = room_view_id("!ops:example");
+                let timeline = ops_timeline(hwnd);
+                activate_view(hwnd, &room_view_id("!bob:example"), None).unwrap();
+                assert_eq!(read_marker_moves(state_ref(hwnd)), moved_to("$m39"));
+                assert_eq!(
+                    timeline_state_ref(timeline).line_marker_sight,
+                    MarkerSight::Away
+                );
+                // Painted beside the active window, it is not being read.
+                SendMessageW(timeline, WM_VSCROLL, SB_TOP as WPARAM, 0);
+                SendMessageW(timeline, WM_PAINT, 0, 0);
+                assert_eq!(
+                    timeline_state_ref(timeline).line_marker_sight,
+                    MarkerSight::Away
+                );
+                // Made the active one without being entered, as when the
+                // active window closes and mirx guesses the next one, and
+                // then left for the window MDI activates.
+                state_mut(hwnd).recorded_commands.clear();
+                state_mut(hwnd).active_view = ops;
+                activate_view(hwnd, &ViewId::Status, None).unwrap();
+                assert_eq!(read_marker_moves(state_ref(hwnd)), Vec::new());
+            });
+        }
+    }
+
+    #[test]
     fn the_marker_moves_to_the_last_line_once_seen() {
         let last = Some("$last");
         // Seen: it moves.
-        assert_eq!(read_marker_move(Some("$old"), last, true, true), last);
+        assert_eq!(
+            read_marker_move(Some("$old"), last, true, MarkerSight::Seen),
+            last
+        );
         // Shown and never seen: it stays, however much is below it.
-        assert_eq!(read_marker_move(Some("$old"), last, true, false), None);
+        assert_eq!(
+            read_marker_move(Some("$old"), last, true, MarkerSight::Unseen),
+            None
+        );
         // No marker row to see (none set, or on a line not shown).
-        assert_eq!(read_marker_move(None, last, false, false), last);
-        assert_eq!(read_marker_move(Some("$unshown"), last, false, false), last);
+        assert_eq!(
+            read_marker_move(None, last, false, MarkerSight::Unseen),
+            last
+        );
+        assert_eq!(
+            read_marker_move(Some("$unshown"), last, false, MarkerSight::Unseen),
+            last
+        );
         // Already there.
-        assert_eq!(read_marker_move(last, last, false, true), None);
-        assert_eq!(read_marker_move(last, last, false, false), None);
+        assert_eq!(read_marker_move(last, last, false, MarkerSight::Seen), None);
+        assert_eq!(
+            read_marker_move(last, last, false, MarkerSight::Unseen),
+            None
+        );
         // A window without a line the marker can name.
-        assert_eq!(read_marker_move(Some("$old"), None, true, true), None);
-        assert_eq!(read_marker_move(None, None, false, false), None);
+        assert_eq!(
+            read_marker_move(Some("$old"), None, true, MarkerSight::Seen),
+            None
+        );
+        assert_eq!(
+            read_marker_move(None, None, false, MarkerSight::Unseen),
+            None
+        );
+        // A window the user was not in.
+        assert_eq!(
+            read_marker_move(Some("$old"), last, true, MarkerSight::Away),
+            None
+        );
+        assert_eq!(read_marker_move(None, last, false, MarkerSight::Away), None);
     }
 }
