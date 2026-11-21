@@ -6974,7 +6974,7 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
          [connect]\r\nstartup=on\r\nreconnect=on\r\nretry=on\r\nretry_times=99\r\nretry_delay=10\r\n\
          [switchbar]\r\nshow=on\r\nbuttons=120\r\n\
          event=5\r\nmessage=4\r\nhighlight=12\r\n\
-         [treebar]\r\nshow=on\r\n\
+         [treebar]\r\nshow=on\r\nwidth=240\r\n\
          [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
          [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
          [tips]\r\nhighlights=on\r\nqueries=on\r\nchannels=off\r\n\
@@ -16004,6 +16004,58 @@ fn view_menu_hides_and_shows_the_bars_and_persists_them() -> Result<(), Box<dyn 
         shown.switchbar.expect("the switchbar is shown").bottom()
     );
     assert!(ui_state.menu_bar.contains(&view_menu(true, true)));
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn treebar_splitter_drag_resizes_the_treebar_and_persists() -> Result<(), Box<dyn std::error::Error>>
+{
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let launch = || {
+        launch_app_with_options(
+            &exe_path,
+            &[OsString::from("--automation")],
+            launch_options(Some(local_app_data.clone())),
+        )
+    };
+
+    let app = launch()?;
+    let layout = app.dump_ui_state()?.frame_layout;
+    let tree = layout.treebar.expect("the treebar is shown");
+    assert_eq!(tree.width, 240);
+    // A 4 px band between the treebar and the windows.
+    assert_eq!(layout.mdi_client.x, 244);
+    let frame = app.automation_frame_hwnd() as HWND;
+    let from = UiPoint {
+        x: 242,
+        y: tree.y + tree.height / 2,
+    };
+    let to = UiPoint {
+        x: from.x + 80,
+        y: from.y,
+    };
+    send_mouse(frame, WM_LBUTTONDOWN, MK_LBUTTON, &from);
+    send_mouse(frame, WM_MOUSEMOVE, MK_LBUTTON, &to);
+    send_mouse(frame, WM_LBUTTONUP, 0, &to);
+    app.wait_idle(Duration::from_secs(5))?;
+    let layout = app.dump_ui_state()?.frame_layout;
+    assert_eq!(layout.treebar.expect("the treebar is shown").width, 320);
+    assert_eq!(layout.mdi_client.x, 324);
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    assert!(
+        ini.contains("[treebar]\r\nshow=on\r\nwidth=320\r\n"),
+        "{ini}"
+    );
+    drop(app);
+
+    let app = launch()?;
+    let layout = app.dump_ui_state()?.frame_layout;
+    assert_eq!(layout.treebar.expect("the treebar is shown").width, 320);
+    assert_eq!(layout.mdi_client.x, 324);
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())

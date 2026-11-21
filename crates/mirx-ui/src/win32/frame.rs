@@ -1,6 +1,11 @@
 //! The frame window: its class, controls, layout, status bar and message
 //! loop.
 
+use windows_sys::Win32::Graphics::Gdi::COLOR_BTNFACE;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    WM_CAPTURECHANGED, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR,
+};
+
 use super::settings::ButtonWidth;
 use super::*;
 
@@ -36,7 +41,9 @@ pub(super) fn register_frame_class(instance: *mut c_void) -> Result<(), String> 
         hInstance: instance,
         hIcon: app_icon(instance, IconSize::Large),
         hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
+        // What shows of the frame's own client area: the treebar's
+        // splitter band, grey as mIRC's.
+        hbrBackground: (COLOR_BTNFACE as isize + 1) as HBRUSH,
         lpszMenuName: null(),
         lpszClassName: class_name.as_ptr(),
         hIconSm: app_icon(instance, IconSize::Small),
@@ -118,6 +125,16 @@ unsafe extern "system" fn window_proc(
             layout_controls(hwnd);
             0
         }
+        WM_SETCURSOR if splitter::set_cursor(hwnd, wparam, lparam) => 1,
+        WM_LBUTTONDOWN if splitter::begin_drag(hwnd, lparam) => 0,
+        WM_MOUSEMOVE if splitter::continue_drag(hwnd, lparam) => 0,
+        WM_LBUTTONUP if let Some(saved) = splitter::end_drag(hwnd, lparam) => {
+            if let Err(message) = saved {
+                show_error_message(hwnd, "Treebar", &message);
+            }
+            0
+        }
+        WM_CAPTURECHANGED if splitter::cancel_drag(hwnd) => 0,
         WM_COMMAND => {
             if handle_switchbar_command(hwnd, wparam)
                 || handle_window_key_command(hwnd, wparam)
@@ -459,10 +476,17 @@ pub(super) unsafe fn layout_controls(hwnd: HWND) {
     ShowWindow(state.controls.switchbar, show_or_hide(show_switchbar));
     ShowWindow(state.controls.tree, show_or_hide(show_treebar));
     let dpi = Dpi::of_window(hwnd);
-    let tree_width = if show_treebar {
-        dpi.px(TREE_WIDTH).min(width)
+    // A drag shows its width until the release saves it.
+    let wanted_tree_width = match state.treebar_drag {
+        Some(drag) => drag.width(),
+        None => dpi.px(settings.treebar.width.pixels()),
+    };
+    // The splitter band is the gap between the treebar and the MDI client.
+    let (tree_width, mdi_x) = if show_treebar {
+        let tree_width = splitter::tree_width(wanted_tree_width, width, dpi);
+        (tree_width, tree_width + dpi.px(splitter::SPLITTER_WIDTH))
     } else {
-        0
+        (0, 0)
     };
     let switchbar_height = if show_switchbar {
         // The switchbar wraps its buttons on its own WM_SIZE, so it gets
@@ -495,7 +519,7 @@ pub(super) unsafe fn layout_controls(hwnd: HWND) {
     GetWindowRect(state.controls.status_bar, &mut status_bar_rect);
     let status_bar_height =
         (status_bar_rect.bottom - status_bar_rect.top).min((height - switchbar_height).max(0));
-    let mdi_width = (width - tree_width).max(0);
+    let mdi_width = (width - mdi_x).max(0);
     let mdi_height = (height - switchbar_height - status_bar_height).max(0);
 
     MoveWindow(
@@ -508,7 +532,7 @@ pub(super) unsafe fn layout_controls(hwnd: HWND) {
     );
     MoveWindow(
         state.controls.mdi_client,
-        tree_width,
+        mdi_x,
         switchbar_height,
         mdi_width,
         mdi_height,
@@ -660,8 +684,12 @@ pub(super) unsafe fn default_window_proc(
 
 #[cfg(test)]
 mod tests {
+    use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
     use windows_sys::Win32::UI::Controls::{TB_GETSTATE, TBSTATE_WRAP};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
     use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+
+    use super::super::settings::TreebarWidth;
 
     use super::super::test_fixtures::*;
     use super::*;
@@ -934,6 +962,121 @@ mod tests {
                 assert_eq!(
                     frame_child_layout(hwnd, state_ref(hwnd).controls.mdi_client).y,
                     bar.height
+                );
+            });
+        }
+    }
+
+    unsafe fn send_mouse(hwnd: HWND, message: u32, (x, y): (i32, i32)) {
+        let lparam = ((y as u16 as isize) << 16) | x as u16 as isize;
+        SendMessageW(hwnd, message, MK_LBUTTON as WPARAM, lparam);
+    }
+
+    #[test]
+    fn the_splitter_band_parts_the_treebar_and_the_windows() {
+        unsafe {
+            with_test_frame(800, 600, |hwnd| {
+                let layout = dump_frame_layout(hwnd);
+                let tree = layout.treebar.unwrap();
+                assert_eq!((tree.x, tree.width), (0, 240));
+                assert_eq!(layout.mdi_client.x, 240 + splitter::SPLITTER_WIDTH);
+                assert_eq!(layout.mdi_client.y, tree.y);
+                let mut client = RECT::default();
+                GetClientRect(hwnd, &mut client);
+                assert_eq!(layout.mdi_client.x + layout.mdi_client.width, client.right);
+            });
+        }
+    }
+
+    #[test]
+    fn dragging_the_splitter_resizes_the_treebar_and_saves_its_width() {
+        unsafe {
+            with_test_frame(800, 600, |hwnd| {
+                let tree = dump_frame_layout(hwnd).treebar.unwrap();
+                let y = tree.y + 50;
+                send_mouse(hwnd, WM_LBUTTONDOWN, (241, y));
+                assert!(state_ref(hwnd).treebar_drag.is_some());
+                send_mouse(hwnd, WM_MOUSEMOVE, (301, y));
+                // Live, and not saved yet.
+                assert_eq!(dump_frame_layout(hwnd).treebar.unwrap().width, 300);
+                assert_eq!(
+                    state_ref(hwnd).settings.settings().treebar.width.pixels(),
+                    240
+                );
+                send_mouse(hwnd, WM_LBUTTONUP, (321, y));
+                assert_eq!(state_ref(hwnd).treebar_drag, None);
+                let layout = dump_frame_layout(hwnd);
+                assert_eq!(layout.treebar.unwrap().width, 320);
+                assert_eq!(layout.mdi_client.x, 324);
+                assert_eq!(
+                    state_ref(hwnd).settings.settings().treebar.width.pixels(),
+                    320
+                );
+
+                // Past the ends, the drag stops at them.
+                send_mouse(hwnd, WM_LBUTTONDOWN, (320, y));
+                send_mouse(hwnd, WM_MOUSEMOVE, (-100, y));
+                assert_eq!(dump_frame_layout(hwnd).treebar.unwrap().width, 40);
+                send_mouse(hwnd, WM_LBUTTONUP, (2000, y));
+                let mut client = RECT::default();
+                GetClientRect(hwnd, &mut client);
+                let widest = client.right - 4 - 100;
+                assert_eq!(dump_frame_layout(hwnd).treebar.unwrap().width, widest);
+                assert_eq!(
+                    state_ref(hwnd).settings.settings().treebar.width.pixels(),
+                    widest
+                );
+
+                // Off the band, a click is no drag.
+                send_mouse(hwnd, WM_LBUTTONDOWN, (widest + 4, y));
+                assert_eq!(state_ref(hwnd).treebar_drag, None);
+            });
+        }
+    }
+
+    #[test]
+    fn losing_the_mouse_mid_drag_puts_the_saved_width_back() {
+        unsafe {
+            with_test_frame(800, 600, |hwnd| {
+                let y = dump_frame_layout(hwnd).treebar.unwrap().y + 50;
+                send_mouse(hwnd, WM_LBUTTONDOWN, (242, y));
+                send_mouse(hwnd, WM_MOUSEMOVE, (402, y));
+                assert_eq!(dump_frame_layout(hwnd).treebar.unwrap().width, 400);
+                ReleaseCapture();
+                assert_eq!(state_ref(hwnd).treebar_drag, None);
+                assert_eq!(dump_frame_layout(hwnd).treebar.unwrap().width, 240);
+                assert_eq!(
+                    state_ref(hwnd).settings.settings().treebar.width,
+                    TreebarWidth::DEFAULT
+                );
+                // The button's release then belongs to no drag.
+                send_mouse(hwnd, WM_LBUTTONUP, (402, y));
+                assert_eq!(dump_frame_layout(hwnd).treebar.unwrap().width, 240);
+            });
+        }
+    }
+
+    #[test]
+    fn a_narrow_frame_squeezes_the_treebar_but_keeps_its_setting() {
+        unsafe {
+            with_test_frame(800, 600, |hwnd| {
+                state_mut(hwnd)
+                    .settings
+                    .update(|settings| settings.treebar.width = TreebarWidth::new(600).unwrap())
+                    .unwrap();
+                layout_controls(hwnd);
+                let mut client = RECT::default();
+                GetClientRect(hwnd, &mut client);
+                let layout = dump_frame_layout(hwnd);
+                assert_eq!(layout.treebar.unwrap().width, 600);
+                MoveWindow(hwnd, 0, 0, 500, 600, 1);
+                GetClientRect(hwnd, &mut client);
+                let layout = dump_frame_layout(hwnd);
+                assert_eq!(layout.treebar.unwrap().width, client.right - 104);
+                assert_eq!(layout.mdi_client.width, 100);
+                assert_eq!(
+                    state_ref(hwnd).settings.settings().treebar.width.pixels(),
+                    600
                 );
             });
         }

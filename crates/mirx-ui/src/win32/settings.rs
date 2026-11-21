@@ -320,12 +320,56 @@ pub(super) fn parse_button_width(text: &str) -> Result<ButtonWidth, String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TreebarSetting {
     pub(super) show: bool,
+    /// What its splitter was last dragged to.
+    pub(super) width: TreebarWidth,
 }
 
 impl Default for TreebarSetting {
     fn default() -> Self {
-        Self { show: true }
+        Self {
+            show: true,
+            width: TreebarWidth::DEFAULT,
+        }
     }
+}
+
+/// How wide the treebar is: 40-800 pixels at 96 dpi; the frame scales it
+/// with its DPI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TreebarWidth(u16);
+
+impl TreebarWidth {
+    const PIXELS: std::ops::RangeInclusive<u16> = 40..=800;
+    pub(super) const MIN: Self = Self(*Self::PIXELS.start());
+    pub(super) const MAX: Self = Self(*Self::PIXELS.end());
+    pub(super) const DEFAULT: Self = Self(240);
+
+    pub(super) fn new(pixels: u16) -> Result<Self, String> {
+        if Self::PIXELS.contains(&pixels) {
+            Ok(Self(pixels))
+        } else {
+            Err(TREEBAR_WIDTH_ERROR.to_owned())
+        }
+    }
+
+    pub(super) fn pixels(self) -> i32 {
+        i32::from(self.0)
+    }
+}
+
+impl std::fmt::Display for TreebarWidth {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+const TREEBAR_WIDTH_ERROR: &str = "width must be 40-800";
+
+/// Parses a treebar width: `width must be 40-800` for anything else.
+fn parse_treebar_width(text: &str) -> Result<TreebarWidth, String> {
+    text.parse::<u16>()
+        .map_err(|_| TREEBAR_WIDTH_ERROR.to_owned())
+        .and_then(TreebarWidth::new)
 }
 
 /// mIRC's Options > IRC > Logging.
@@ -539,6 +583,9 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Treebar, "show") => {
                 settings.treebar.show = parse_on_off(value, "show").map_err(error)?;
             }
+            (Section::Treebar, "width") => {
+                settings.treebar.width = parse_treebar_width(value.trim_end()).map_err(error)?;
+            }
             (Section::Logging, "channels") => {
                 settings.logging.channels = parse_on_off(value, "channels").map_err(error)?;
             }
@@ -638,7 +685,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
          retry_times={}\r\nretry_delay={}\r\n\
          [switchbar]\r\nshow={}\r\nbuttons={}\r\n\
          event={}\r\nmessage={}\r\nhighlight={}\r\n\
-         [treebar]\r\nshow={}\r\n\
+         [treebar]\r\nshow={}\r\nwidth={}\r\n\
          [logging]\r\nchannels={}\r\nqueries={}\r\nstrip={}\r\ntimestamp={}\r\n\
          [tray]\r\nalways={}\r\nstartup={}\r\nminimize={}\r\nsingle_click={}\r\n\
          [tips]\r\nhighlights={}\r\nqueries={}\r\nchannels={}\r\n\
@@ -659,6 +706,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         activity.message.get(),
         activity.highlight.get(),
         on_off(settings.treebar.show),
+        settings.treebar.width,
         on_off(logging.channels),
         on_off(logging.queries),
         on_off(logging.strip_codes),
@@ -747,7 +795,7 @@ mod tests {
         [timestamp]\r\nshow=on\r\nformat=[HH:nn]\r\n\
         [connect]\r\nstartup=on\r\nreconnect=on\r\nretry=on\r\nretry_times=99\r\nretry_delay=10\r\n\
         [switchbar]\r\nshow=on\r\nbuttons=120\r\nevent=5\r\nmessage=4\r\nhighlight=12\r\n\
-        [treebar]\r\nshow=on\r\n\
+        [treebar]\r\nshow=on\r\nwidth=240\r\n\
         [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
         [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
         [tips]\r\nhighlights=on\r\nqueries=on\r\nchannels=off\r\n\
@@ -809,7 +857,10 @@ mod tests {
                     highlight: PaletteIndex::new(0).unwrap(),
                 },
             },
-            treebar: TreebarSetting { show: false },
+            treebar: TreebarSetting {
+                show: false,
+                width: TreebarWidth::new(300).unwrap(),
+            },
             ..Settings::default()
         };
         let text = to_ini(&settings);
@@ -819,7 +870,7 @@ mod tests {
         assert!(text.contains(
             "[switchbar]\r\nshow=off\r\nbuttons=90\r\nevent=7\r\nmessage=9\r\nhighlight=0\r\n"
         ));
-        assert!(text.contains("[treebar]\r\nshow=off\r\n"));
+        assert!(text.contains("[treebar]\r\nshow=off\r\nwidth=300\r\n"));
         assert_eq!(parse_ini(&text), Ok(settings));
     }
 
@@ -836,7 +887,7 @@ mod tests {
         };
         let text = to_ini(&settings);
         assert!(text.contains(
-            "[treebar]\r\nshow=on\r\n\
+            "[treebar]\r\nshow=on\r\nwidth=240\r\n\
              [logging]\r\nchannels=on\r\nqueries=off\r\nstrip=on\r\ntimestamp=off\r\n[tray]"
         ));
         assert_eq!(parse_ini(&text), Ok(settings));
@@ -1108,6 +1159,32 @@ mod tests {
             parse_button_width("70000"),
             Err("buttons must be 40-400".to_owned())
         );
+    }
+
+    #[test]
+    fn treebar_widths_are_40_to_800_pixels() {
+        assert_eq!(
+            parse_ini("[treebar]\nWidth=300").map(|settings| settings.treebar),
+            Ok(TreebarSetting {
+                show: true,
+                width: TreebarWidth::new(300).unwrap(),
+            })
+        );
+        // A file from before the splitter keeps the default width.
+        assert_eq!(
+            parse_ini("[treebar]\nshow=off").map(|settings| settings.treebar.width),
+            Ok(TreebarWidth::DEFAULT)
+        );
+        assert_eq!(TreebarWidth::DEFAULT.pixels(), 240);
+        assert_eq!(TreebarWidth::MIN, TreebarWidth::new(40).unwrap());
+        assert_eq!(TreebarWidth::MAX, TreebarWidth::new(800).unwrap());
+        for text in ["39", "801", "-5", "wide", ""] {
+            assert_eq!(
+                parse_ini(&format!("[treebar]\nwidth={text}")),
+                Err("line 2: width must be 40-800".to_owned()),
+                "{text:?}"
+            );
+        }
     }
 
     #[test]

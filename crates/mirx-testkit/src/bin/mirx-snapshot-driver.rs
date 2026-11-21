@@ -130,6 +130,9 @@ mod cli {
             from: TextPoint,
             to: TextPoint,
         },
+        /// Drags the treebar's splitter `dx` pixels right (left if
+        /// negative) and releases it.
+        DragTreebarSplitter(i32),
     }
 
     impl Action {
@@ -764,7 +767,7 @@ mod cli {
             "  --trigger-history-backfill",
             "  --append-events <path>",
             "  --find-active-view <query>",
-            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>|colors:<item>=<index>[,...]|compose-text:<text>|compose-key:<format key>> (repeatable)",
+            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>|drag-treebar-splitter:<dx>|colors:<item>=<index>[,...]|compose-text:<text>|compose-key:<format key>> (repeatable)",
             "  <item> is a Colors dialog item's mirx.ini key such as join or editbox_text, and <index> a palette index 0-15",
             "  <format key> is bold, color, underline, italic, reset, reverse, or strikethrough",
             "  <node> is a treebar item: space:<room_id> for a space folder, or a view identity",
@@ -868,6 +871,12 @@ mod cli {
             return parse_wire_name(key)
                 .map(Action::ComposeKey)
                 .ok_or_else(invalid);
+        }
+        if let Some(dx) = value.strip_prefix("drag-treebar-splitter:") {
+            return dx
+                .parse()
+                .map(Action::DragTreebarSplitter)
+                .map_err(|_| invalid());
         }
         if let Some(points) = value.strip_prefix("drag:") {
             let (from, to) = points.split_once(':').ok_or_else(invalid)?;
@@ -1127,7 +1136,7 @@ mod cli {
             assert!(usage().contains("--select-view <identity> (repeatable)"));
             assert!(usage().contains("--append-events <path>"));
             assert!(usage().contains(
-                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>|colors:<item>=<index>[,...]|compose-text:<text>|compose-key:<format key>> (repeatable)"
+                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>|drag-treebar-splitter:<dx>|colors:<item>=<index>[,...]|compose-text:<text>|compose-key:<format key>> (repeatable)"
             ));
             assert!(usage().contains(
                 "--expect-navigation-node <node>::<expanded|collapsed>::<event|message|highlight|none>"
@@ -1612,6 +1621,37 @@ mod cli {
                     }
                 ]
             );
+        }
+
+        #[test]
+        fn parse_args_accepts_treebar_splitter_drags() {
+            let config = parse_args(
+                [
+                    "--action",
+                    "drag-treebar-splitter:80",
+                    "--action",
+                    "drag-treebar-splitter:-20",
+                    "--action",
+                    "find:needle",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap();
+            assert_eq!(
+                config.actions,
+                [
+                    Action::DragTreebarSplitter(80),
+                    Action::DragTreebarSplitter(-20),
+                    Action::Find("needle".to_owned()),
+                ]
+            );
+            for bad in ["drag-treebar-splitter:", "drag-treebar-splitter:wide"] {
+                assert!(
+                    parse_args(["--action", bad].into_iter().map(str::to_owned)).is_err(),
+                    "{bad}"
+                );
+            }
         }
 
         #[test]
@@ -2438,8 +2478,9 @@ mod windows_main {
             })
     }
 
-    /// mirx's treebar width at 96 dpi (`TREE_WIDTH` in mirx-ui's
-    /// `win32.rs`), which `--expect-dpi` checks the layout scaled.
+    /// mirx's default treebar width at 96 dpi (`TreebarWidth::DEFAULT` in
+    /// mirx-ui's `settings.rs`), which `--expect-dpi` checks the layout
+    /// scaled.
     const MIRX_TREE_WIDTH: u32 = 240;
 
     pub(crate) fn run() -> Result<(), String> {
@@ -2559,6 +2600,12 @@ mod windows_main {
                 }
                 Action::Drag { from, to } => {
                     drag_text(&app, *from, *to)?;
+                }
+                Action::DragTreebarSplitter(dx) => {
+                    drag_treebar_splitter(&app, *dx)?;
+                    app.wait_idle(config.wait_idle).map_err(|error| {
+                        format!("WAIT_IDLE after drag-treebar-splitter failed: {error}")
+                    })?;
                 }
                 Action::Colors(pairs) => {
                     set_colors(&app, &config, pairs)?;
@@ -3354,6 +3401,28 @@ mod windows_main {
             as HWND;
         send_mouse(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, from)?;
         send_mouse(hwnd, WM_MOUSEMOVE, MK_LBUTTON, to)
+    }
+
+    /// Presses the left button in the middle of the treebar's splitter band,
+    /// moves `dx` across and releases it there, as the user drags it.
+    fn drag_treebar_splitter(app: &MirxApp, dx: i32) -> Result<(), String> {
+        let layout = app
+            .dump_ui_state()
+            .map_err(|error| format!("DUMP_UI_STATE before drag-treebar-splitter failed: {error}"))?
+            .frame_layout;
+        let tree = layout
+            .treebar
+            .ok_or("drag-treebar-splitter: the treebar is hidden")?;
+        // The band is the gap between the treebar and the MDI client.
+        let from = (
+            (tree.x + tree.width + layout.mdi_client.x) / 2,
+            tree.y + tree.height / 2,
+        );
+        let to = (from.0 + dx, from.1);
+        let frame = app.automation_frame_hwnd() as HWND;
+        send_mouse(frame, WM_LBUTTONDOWN, MK_LBUTTON, from)?;
+        send_mouse(frame, WM_MOUSEMOVE, MK_LBUTTON, to)?;
+        send_mouse(frame, WM_LBUTTONUP, 0, to)
     }
 
     /// Sends a mouse message to `hwnd` and waits for it to be handled.

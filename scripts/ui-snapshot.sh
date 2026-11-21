@@ -1694,6 +1694,19 @@ configure_case_expectations() {
         --expect-no-navigation-text 'failed local echo'
       )
       ;;
+    treebar-resized)
+      expect_selected='!dense:example'
+      expect_active_view='room:!dense:example'
+      # The dense fixture with the treebar's splitter dragged right: the
+      # long thread label shows whole, without a horizontal scrollbar.
+      ordered_actions=(drag-treebar-splitter:280)
+      room_expect_args=(
+        --expect-room '!dense:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!dense:example::* Now talking in Dense (!dense:example)'
+      )
+      ;;
     dense-timeline-log)
       expect_selected='!dense:example'
       expect_active_view='room:!dense:example'

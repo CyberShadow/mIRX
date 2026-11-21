@@ -238,6 +238,7 @@ mod save_buffer;
 mod self_test;
 mod send_file;
 mod settings;
+mod splitter;
 mod status_log;
 mod switchbar;
 #[cfg(test)]
@@ -540,8 +541,6 @@ const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
 /// A connect retry is due (`reconnect`).
 const RECONNECT_TIMER_ID: usize = 2;
-/// At 96 dpi.
-const TREE_WIDTH: i32 = 240;
 // The timeline's lengths at 96 dpi; `TimelineMetrics` scales them.
 const TIMELINE_LEFT_PADDING: i32 = 8;
 const TIMELINE_RIGHT_PADDING: i32 = 8;
@@ -785,6 +784,8 @@ struct WindowState {
     reconnect: connection::Reconnect,
     /// How often the refresh path rebuilt, wrapped and redrew, for tests.
     refresh_counters: RefreshCounters,
+    /// The treebar splitter's drag while the frame has the mouse for it.
+    treebar_drag: Option<splitter::TreebarDrag>,
 }
 
 /// Where Status lines get their arrival time. Render-state snapshots must not
@@ -1024,6 +1025,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
         refresh_counters: RefreshCounters::default(),
+        treebar_drag: None,
     });
 
     let hwnd = create_main_window(instance, state, frame_size_for_command(&command))?;

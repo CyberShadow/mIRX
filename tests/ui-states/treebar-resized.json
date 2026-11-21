@@ -1,0 +1,320 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!dense:example",
+        "display_name": "Dense", "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!dense:example",
+      "activity_id": "event:$dense-text-1",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$dense-text-1",
+        "transaction_id": null,
+        "sender": { "user_id": "@dense.sender.with.a.very.long.mxid:example.org", "display_name": null, "display_name_ambiguous": false },
+        "presentation": "text",
+        "body": "dense text row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!dense:example",
+      "activity_id": "event:$dense-notice-1",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$dense-notice-1",
+        "transaction_id": null,
+        "sender": { "user_id": "@system:example", "display_name": "Server", "display_name_ambiguous": false },
+        "presentation": "notice",
+        "body": "dense notice row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!dense:example",
+      "activity_id": "event:$dense-emote-1",
+      "timestamp_ms": 1700000120000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$dense-emote-1",
+        "transaction_id": null,
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
+        "presentation": "emote",
+        "body": "dense emote row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!dense:example",
+      "activity_id": "state:$dense-topic-1",
+      "timestamp_ms": 1700000180000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$dense-topic-1",
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
+        "content": {
+          "type": "topic",
+          "topic": "dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!dense:example",
+      "activity_id": "state:$dense-member-1",
+      "timestamp_ms": 1700000240000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$dense-member-1",
+        "sender": { "user_id": "@dense-member:example", "display_name": "Dense Member Alpha Beta Gamma Delta", "display_name_ambiguous": false },
+        "content": {
+          "type": "member",
+          "change": { "type": "joined" },
+          "target": { "user_id": "@dense-member:example", "display_name": "Dense Member Alpha Beta Gamma Delta", "display_name_ambiguous": false },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!dense:example",
+      "activity_id": "state:$dense-member-2",
+      "timestamp_ms": 1700000270000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$dense-member-2",
+        "sender": { "user_id": "@dense-leaver:example", "display_name": null, "display_name_ambiguous": false },
+        "content": {
+          "type": "member",
+          "change": { "type": "left" },
+          "target": { "user_id": "@dense-leaver:example", "display_name": null, "display_name_ambiguous": false },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!dense:example",
+      "activity_id": "event:$dense-audio-1",
+      "timestamp_ms": 1700000300000,
+      "highlight": false,
+      "kind": {
+        "type": "audio",
+        "event_id": "$dense-audio-1",
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
+        "body": "voice-note.ogg",
+        "filename": "voice-note.ogg",
+        "source": {
+          "type": "plain",
+          "url": "mxc://example.org/audio"
+        },
+        "info": {
+          "mimetype": "audio/ogg",
+          "size": 23456,
+          "duration_ms": 12000
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!dense:example",
+      "activity_id": "event:$dense-unsupported-1",
+      "timestamp_ms": 1700000330000,
+      "highlight": false,
+      "kind": {
+        "type": "unsupported_message",
+        "event_id": "$dense-unsupported-1",
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
+        "msgtype": "com.example.custom",
+        "body": "dense custom payload alpha beta gamma delta epsilon zeta"
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!dense:example",
+      "activity_id": "txn:dense-pending-1",
+      "timestamp_ms": 1700000360000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": null,
+        "transaction_id": "dense-pending-1",
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
+        "presentation": "text",
+        "body": "dense pending row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "pending"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!dense:example",
+      "activity_id": "txn:dense-failed-1",
+      "timestamp_ms": 1700000420000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": null,
+        "transaction_id": "dense-failed-1",
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
+        "presentation": "text",
+        "body": "dense failed row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "pending"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!dense:example",
+      "target": {
+        "type": "transaction",
+        "transaction_id": "dense-failed-1"
+      },
+      "kind": {
+        "type": "message_failed",
+        "message": "send failed",
+        "recoverable": false
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!dense:example",
+      "activity_id": "event:$dense-image-1",
+      "timestamp_ms": 1700000480000,
+      "highlight": false,
+      "kind": {
+        "type": "image",
+        "event_id": "$dense-image-1",
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
+        "body": "dense-diagram-alpha-beta-gamma-delta.png",
+        "filename": "dense-diagram-alpha-beta-gamma-delta.png",
+        "source": {
+          "type": "plain",
+          "url": "mxc://example.org/dense-diagram"
+        },
+        "info": {
+          "mimetype": "image/png",
+          "size": 12345,
+          "width": 640,
+          "height": 480,
+          "is_animated": false
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!dense:example",
+      "activity_id": "event:$dense-thread-root-1",
+      "timestamp_ms": 1700000540000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$dense-thread-root-1",
+        "transaction_id": null,
+        "sender": { "user_id": "@bob:example", "display_name": "Bob", "display_name_ambiguous": false },
+        "presentation": "text",
+        "body": "dense thread root alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!dense:example",
+      "activity_id": "event:$dense-thread-reply-1",
+      "timestamp_ms": 1700000600000,
+      "highlight": false,
+      "relation": {
+        "type": "thread",
+        "thread_root_event_id": "$dense-thread-root-1",
+        "in_reply_to_event_id": "$dense-thread-root-1",
+        "is_falling_back": false
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$dense-thread-reply-1",
+        "transaction_id": null,
+        "sender": { "user_id": "@carol:example", "display_name": "Carol", "display_name_ambiguous": false },
+        "presentation": "text",
+        "body": "dense threaded reply alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  }
+]

@@ -882,6 +882,7 @@ pub(super) fn test_state() -> WindowState {
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
         refresh_counters: RefreshCounters::default(),
+        treebar_drag: None,
     }
 }
 

@@ -47,6 +47,14 @@ impl Dpi {
         i32::try_from(scaled).expect("a scaled layout length fits i32")
     }
 
+    /// The 96-dpi length of `physical` pixels at this DPI, rounded to the
+    /// nearest: `px`'s inverse, for a length the user set by dragging.
+    pub(super) fn logical(self, physical: i32) -> i32 {
+        assert!(physical >= 0, "layout lengths are not negative");
+        let logical = (i64::from(physical) * 96 + i64::from(self.0 / 2)) / i64::from(self.0);
+        i32::try_from(logical).expect("a logical layout length fits i32")
+    }
+
     /// The character height of a `points` font, rounded to the nearest
     /// pixel.
     pub(super) fn points_to_px(self, points: i32) -> i32 {
@@ -74,6 +82,24 @@ mod tests {
             assert_eq!(Dpi::new(dpi).px(240), tree, "px(240) at {dpi}");
             assert_eq!(Dpi::new(dpi).px(11), eleven, "px(11) at {dpi}");
         }
+    }
+
+    #[test]
+    fn logical_inverts_px_and_rounds_to_nearest() {
+        for dpi in [96, 120, 144, 192] {
+            let dpi = Dpi::new(dpi);
+            for logical in 40..=800 {
+                assert_eq!(
+                    dpi.logical(dpi.px(logical)),
+                    logical,
+                    "{logical} at {dpi:?}"
+                );
+            }
+        }
+        // 361 px at 144 dpi is 240.67 logical px; 362 is 241.33.
+        assert_eq!(Dpi::new(144).logical(361), 241);
+        assert_eq!(Dpi::new(144).logical(362), 241);
+        assert_eq!(Dpi::new(120).logical(301), 241);
     }
 
     #[test]
