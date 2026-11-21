@@ -148,6 +148,14 @@ pub(super) unsafe fn run_slash_command(
             enqueue_command(state, Command::FetchUserProfile(user_id.clone()))?;
             Ok(Some(format!("whois requested: {user_id}")))
         }
+        SlashCommand::Away { message } => {
+            let status = match &message {
+                Some(_) => "away submitted",
+                None => "back submitted",
+            };
+            enqueue_command(state_mut(hwnd), Command::SetAway(message))?;
+            Ok(Some(status.to_owned()))
+        }
         SlashCommand::Devices { target } => {
             let state = state_mut(hwnd);
             let user_id = match target {

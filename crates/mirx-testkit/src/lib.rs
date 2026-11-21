@@ -411,6 +411,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_profile_commands: Vec<SubmittedProfileCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_away_commands: Vec<SubmittedAwayCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_user_commands: Vec<SubmittedUserCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_direct_room_commands: Vec<SubmittedDirectRoomCommand>,
@@ -513,6 +515,13 @@ pub enum MemberPowerRole {
 #[serde(deny_unknown_fields)]
 pub struct SubmittedProfileCommand {
     pub display_name: String,
+}
+
+/// `/away` and `/back`: the away message, `None` for back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedAwayCommand {
+    pub message: Option<String>,
 }
 
 /// A request about another user (`/ignore`, `/unignore`, `/whois`,

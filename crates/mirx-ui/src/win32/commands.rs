@@ -63,6 +63,11 @@ pub(super) enum SlashCommand {
     Whois {
         nick: String,
     },
+    /// `/away <message>`, and `/away` or `/back` (`None`): mark yourself
+    /// away or back.
+    Away {
+        message: Option<String>,
+    },
     /// `/devices [nick]`: without a nick, your own sessions.
     Devices {
         target: Option<String>,
@@ -287,6 +292,7 @@ impl SlashCommand {
             Self::Msg { .. } => "msg",
             Self::Names { .. } => "names",
             Self::Whois { .. } => "whois",
+            Self::Away { .. } => "away",
             Self::Devices { .. } | Self::DevicesDelete { .. } | Self::DevicesRename { .. } => {
                 "devices"
             }
@@ -375,6 +381,16 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "accept",
         usage: "[room]",
         summary: "accept a room invite",
+    },
+    CommandSpec {
+        name: "away",
+        usage: "[message]",
+        summary: "mark yourself away, or back without a message",
+    },
+    CommandSpec {
+        name: "back",
+        usage: "",
+        summary: "mark yourself back",
     },
     CommandSpec {
         name: "ban",
@@ -741,6 +757,10 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         "whois" => Ok(SlashCommand::Whois {
             nick: single_word(&name, argument)?,
         }),
+        "away" => Ok(SlashCommand::Away {
+            message: optional(argument),
+        }),
+        "back" => no_parameters(SlashCommand::Away { message: None }),
         "devices" => parse_devices(argument),
         "identity" => parse_identity(argument),
         "ignore" if argument.is_empty() => Ok(SlashCommand::Ignore { target: None }),
@@ -2105,6 +2125,8 @@ mod tests {
             "/notice x t",
             "/names",
             "/whois x",
+            "/away x",
+            "/back",
             "/close",
             "/exit",
             "/kick x",
@@ -2258,7 +2280,7 @@ mod tests {
         let lines = help_lines(None).unwrap();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with(
-            "* Commands: /accept /ban /clear /close /create /deop /devices /devoice /e2ee"
+            "* Commands: /accept /away /back /ban /clear /close /create /deop /devices /devoice /e2ee"
         ));
         assert!(lines[0].contains(" /help /identity /ignore "));
         assert!(lines[0].contains(" /reply /savebuf /sendfile "));
@@ -2780,6 +2802,19 @@ mod tests {
             assert_eq!(parse(&format!("/{name}")), insufficient(name), "{name}");
         }
         assert_eq!(parse("/op Bob Carol"), error("op", "too many parameters"));
+    }
+
+    #[test]
+    fn parse_accepts_away_and_back() {
+        assert_eq!(parse("/away"), Ok(SlashCommand::Away { message: None }));
+        assert_eq!(
+            parse("/away  gone fishing "),
+            Ok(SlashCommand::Away {
+                message: Some("gone fishing".to_owned()),
+            })
+        );
+        assert_eq!(parse("/BACK"), Ok(SlashCommand::Away { message: None }));
+        assert_eq!(parse("/back x"), error("back", "takes no parameters"));
     }
 
     #[test]

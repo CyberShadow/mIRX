@@ -394,6 +394,17 @@ pub(super) const COMMANDS_MENU: &[CommandsMenuItem] = &[
         command: "whois",
         prompt: Some("Nick or user ID"),
     },
+    // `&B` is Ban's.
+    CommandsMenuItem {
+        label: "Set &Away...",
+        command: "away",
+        prompt: Some("Away message (blank: back)"),
+    },
+    CommandsMenuItem {
+        label: "Set Ba&ck",
+        command: "back",
+        prompt: None,
+    },
     CommandsMenuItem {
         label: "&Invite user...",
         command: "invite",
@@ -776,7 +787,17 @@ mod tests {
         assert_eq!(commands_menu_line(part, "ignored"), "/part");
         assert_eq!(commands_menu_title(join), "Join room");
         assert_eq!(commands_menu_title(list), "List rooms");
-        assert_eq!(commands_menu_title(&COMMANDS_MENU[8]), "Change nick");
+        assert_eq!(commands_menu_title(&COMMANDS_MENU[10]), "Change nick");
+        let away = &COMMANDS_MENU[5];
+        let back = &COMMANDS_MENU[6];
+        assert_eq!(commands_menu_title(away), "Set Away");
+        assert_eq!(
+            commands_menu_line(away, " gone fishing "),
+            "/away gone fishing"
+        );
+        // A blank message is back, as `/away` alone is.
+        assert_eq!(commands_menu_line(away, "  "), "/away");
+        assert_eq!(commands_menu_line(back, "ignored"), "/back");
         // A blank match lists every room.
         assert_eq!(commands_menu_line(list, "  "), "/list");
         assert_eq!(commands_menu_line(list, " rust "), "/list rust");

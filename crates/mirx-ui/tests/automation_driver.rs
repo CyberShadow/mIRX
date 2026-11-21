@@ -41,21 +41,21 @@ use mirx_testkit::{
     RoomMediaSource, RoomMemberChange, RoomMessageActivity, RoomMessageActivityLine,
     RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SessionAuth, ShownTip, SpaceChild,
-    StoredSession, SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedFileCommand,
-    SubmittedHistoryCommand, SubmittedIdentityReset, SubmittedMemberModerationCommand,
-    SubmittedMembershipCommand, SubmittedMessageCommand, SubmittedNotificationCommand,
-    SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
-    SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
-    SubmittedReplyThreadTarget, SubmittedRoomKeyTransfer, SubmittedRoomListRequest,
-    SubmittedRoomTopicCommand, SubmittedSessionCommand, SubmittedSetupRecoveryCommand,
-    SubmittedUserCommand, SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem,
-    TestkitError, UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
-    UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
-    UiFindState, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
-    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
-    UiTimelineLink, UiTimestamp, UiTipsOptions, UiTrayOptions, UnsupportedRoomMessageActivity,
-    UserCommandAction, Verification, VerificationActionKind, VerificationState, ViewActivityLevel,
-    ViewIdentity,
+    StoredSession, SubmittedAwayCommand, SubmittedDirectRoomCommand, SubmittedEditCommand,
+    SubmittedFileCommand, SubmittedHistoryCommand, SubmittedIdentityReset,
+    SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedMessageCommand,
+    SubmittedNotificationCommand, SubmittedPowerLevelCommand, SubmittedProfileCommand,
+    SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
+    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomKeyTransfer,
+    SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSessionCommand,
+    SubmittedSetupRecoveryCommand, SubmittedUserCommand, SubmittedVerificationAction,
+    SubmittedVerificationRequest, SwitchbarItem, TestkitError, UiActiveTimeline, UiActivityColors,
+    UiColorCodePart, UiColorItem, UiColorsDialog, UiComposeTarget, UiComposeTargetKind,
+    UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState, UiLoggingOptions,
+    UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRoomHistoryBackfillState,
+    UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
+    UiTipsOptions, UiTrayOptions, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
+    VerificationActionKind, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -3227,7 +3227,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 73);
+    assert_eq!(version.protocol_version, 74);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -16735,6 +16735,8 @@ fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
                 ("&Part room", true),
                 ("&Query user...", true),
                 ("&Whois user...", true),
+                ("Set &Away...", true),
+                ("Set Ba&ck", true),
                 ("&Invite user...", true),
                 ("&Kick user...", true),
                 ("&Ban user...", true),
@@ -20142,6 +20144,85 @@ fn slash_whois_prints_server_profile() -> Result<(), Box<dyn std::error::Error>>
         find_view(&ui_state, &ViewIdentity::Status),
         "Stranger"
     ));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn slash_away_marks_away_and_back() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+
+    type_commands(&app, &["/away lunch", "/back", "/back x"])?;
+    // The automation core, which is not signed in, refuses them; the
+    // AwayChanged events below stand in for the server's answers.
+    assert_eq!(
+        app.dump_model()?.submitted_away_commands,
+        vec![
+            SubmittedAwayCommand {
+                message: Some("lunch".to_owned()),
+            },
+            SubmittedAwayCommand { message: None },
+        ]
+    );
+    let view = find_view(&app.dump_ui_state()?, &beta).clone();
+    assert_eq!(
+        view_lines_containing(&view, "* /away: ").len(),
+        2,
+        "{:?}",
+        view.lines
+    );
+    assert!(only_view_line_containing(&view, "* /back:").ends_with("* /back: takes no parameters"));
+
+    let changed = |message: Option<&str>, seen_as| {
+        Event::AwayChanged(mirx_core::AwayChanged {
+            message: message.map(str::to_owned),
+            seen_as,
+        })
+    };
+    app.append_synthetic_events(&serde_json::to_string(&vec![
+        changed(Some("lunch"), mirx_core::PresenceKind::Unavailable),
+        changed(Some("x"), mirx_core::PresenceKind::Offline),
+        changed(None, mirx_core::PresenceKind::Online),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    let view = find_view(&ui_state, &beta);
+    let answers: Vec<_> = view
+        .lines
+        .iter()
+        .filter(|line| line.contains("marked as being away") || line.contains("Others see"))
+        .map(|line| {
+            line.split_once("] ")
+                .map_or(line.as_str(), |(_, text)| text)
+        })
+        .collect();
+    assert_eq!(
+        answers,
+        [
+            "* You have been marked as being away",
+            "* You have been marked as being away",
+            "* Others see you as offline: your server does not share presence",
+            "* You are no longer marked as being away",
+        ]
+    );
+    assert_eq!(
+        ui_state.status_bar.text.split(" | ").next(),
+        Some("back"),
+        "{}",
+        ui_state.status_bar.text
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

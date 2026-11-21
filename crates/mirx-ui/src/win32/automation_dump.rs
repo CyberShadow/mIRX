@@ -811,6 +811,19 @@ fn submitted_profile_commands_from_state(state: &WindowState) -> Vec<DumpSubmitt
         .collect()
 }
 
+fn submitted_away_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedAwayCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(|command| match command {
+            Command::SetAway(message) => Some(DumpSubmittedAwayCommand {
+                message: message.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 fn submitted_user_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedUserCommand> {
     state
         .recorded_commands
@@ -1261,6 +1274,7 @@ pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
         ),
         submitted_power_level_commands: submitted_power_level_commands_from_state(state),
         submitted_profile_commands: submitted_profile_commands_from_state(state),
+        submitted_away_commands: submitted_away_commands_from_state(state),
         submitted_user_commands: submitted_user_commands_from_state(state),
         submitted_direct_room_commands: submitted_direct_room_commands_from_state(state),
         submitted_room_topic_commands: submitted_room_topic_commands_from_state(state),
