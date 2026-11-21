@@ -405,6 +405,8 @@ fn write_state_file(events: &[Event]) -> Result<PathBuf, Box<dyn std::error::Err
 struct MockBackfillHomeserver {
     base_url: String,
     faults: Arc<MockFaults>,
+    /// The bodies of the `read_markers` requests, in arrival order.
+    read_markers: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
 /// What the mock homeserver fails, as the network would: a failed request
@@ -423,6 +425,25 @@ struct MockFaults {
 }
 
 impl MockBackfillHomeserver {
+    /// Waits until the mock got `count` `read_markers` requests; their
+    /// bodies.
+    fn wait_for_read_markers(
+        &self,
+        count: usize,
+    ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let bodies = self.read_markers.lock().expect("the read markers").clone();
+            if bodies.len() >= count {
+                return Ok(bodies);
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("the mock got {bodies:?}, not {count} read markers").into());
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
+    }
+
     fn held(&self) -> usize {
         self.faults.held.lock().expect("the held requests").len()
     }
@@ -483,19 +504,46 @@ fn spawn_mock_homeserver(
     messages: MockMessages,
     timeline_events: Vec<serde_json::Value>,
 ) -> Result<MockBackfillHomeserver, Box<dyn std::error::Error>> {
-    spawn_mock_homeserver_with_auth(MockAuth::Password, messages, timeline_events)
+    spawn_mock_homeserver_with_auth(MockAuth::Password, messages, timeline_events, None)
+}
+
+/// `spawn_mock_homeserver` whose `!beta:example` has its read marker
+/// (`m.fully_read` room account data) on `fully_read`. Every sync says so:
+/// a marker the client moves never comes back moved.
+fn spawn_mock_homeserver_with_read_marker(
+    timeline_events: Vec<serde_json::Value>,
+    fully_read: &str,
+) -> Result<MockBackfillHomeserver, Box<dyn std::error::Error>> {
+    spawn_mock_homeserver_with_auth(
+        MockAuth::Password,
+        MockMessages::Hang,
+        timeline_events,
+        Some(fully_read.to_owned()),
+    )
 }
 
 fn spawn_mock_homeserver_with_auth(
     auth: MockAuth,
     messages: MockMessages,
     timeline_events: Vec<serde_json::Value>,
+    fully_read: Option<String>,
 ) -> Result<MockBackfillHomeserver, Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
     let issuer = format!("http://{address}/");
     let faults = Arc::new(MockFaults::default());
     let mock_faults = Arc::clone(&faults);
+    let read_markers = Arc::new(Mutex::new(Vec::new()));
+    let mock_read_markers = Arc::clone(&read_markers);
+    let room_account_data = fully_read
+        .into_iter()
+        .map(|event_id| {
+            serde_json::json!({
+                "type": "m.fully_read",
+                "content": { "event_id": event_id }
+            })
+        })
+        .collect::<Vec<_>>();
     std::thread::spawn(move || {
         let alice_member = serde_json::json!({
             "content": {
@@ -725,7 +773,7 @@ fn spawn_mock_homeserver_with_auth(
                                         "events": []
                                     },
                                     "account_data": {
-                                        "events": []
+                                        "events": room_account_data
                                     },
                                     "unread_notifications": {
                                         "notification_count": 0,
@@ -736,6 +784,20 @@ fn spawn_mock_homeserver_with_auth(
                         }
                     }),
                 );
+                continue;
+            }
+
+            // The read receipt and the read marker; the sync body never
+            // echoes them.
+            if path.ends_with("/read_markers") {
+                let body = &request[request
+                    .find("\r\n\r\n")
+                    .map_or(request.len(), |end| end + 4)..];
+                mock_read_markers
+                    .lock()
+                    .expect("the read markers")
+                    .push(serde_json::from_str(body).expect("a read_markers JSON body"));
+                respond_json(&mut stream, 200, &serde_json::json!({}));
                 continue;
             }
 
@@ -944,6 +1006,7 @@ fn spawn_mock_homeserver_with_auth(
     Ok(MockBackfillHomeserver {
         base_url: format!("http://{address}"),
         faults,
+        read_markers,
     })
 }
 
@@ -3551,6 +3614,129 @@ fn activity_colours_come_back_after_a_restart() -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+/// Bob's lines in Beta, `$bob-1`.. a second apart.
+fn bob_lines(count: u64) -> Vec<serde_json::Value> {
+    (1..=count)
+        .map(|index| {
+            serde_json::json!({
+                "content": { "msgtype": "m.text", "body": format!("line {index}") },
+                "event_id": format!("$bob-{index}"),
+                "origin_server_ts": 1700000000010u64 + index * 1000,
+                "sender": "@bob:example",
+                "type": "m.room.message"
+            })
+        })
+        .collect()
+}
+
+/// Waits until Beta's window shows its line marker; its lines.
+fn wait_for_line_marker(app: &MirxApp) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let beta = room_identity("!beta:example");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let ui_state = app.dump_ui_state()?;
+        let lines = find_view(&ui_state, &beta).lines.clone();
+        if lines.iter().any(String::is_empty) {
+            return Ok(lines);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("Beta shows no line marker: {lines:?}").into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// The server's read marker is the line marker: Beta's window shows it
+/// right below the line it names.
+#[test]
+fn automation_driver_line_marker_from_the_server() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let server = spawn_mock_homeserver_with_read_marker(bob_lines(4), "$bob-2")?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    let lines = wait_for_line_marker(&app)?;
+    let marker = lines.iter().position(String::is_empty).expect("a marker");
+    assert!(lines[marker - 1].ends_with("<Bob> line 2"), "{lines:?}");
+    assert!(lines[marker + 1].ends_with("<Bob> line 3"), "{lines:?}");
+    assert_eq!(
+        lines.iter().filter(|line| line.is_empty()).count(),
+        1,
+        "{lines:?}"
+    );
+
+    // The window as it shows: the marker's line is a rule in its colour.
+    app.select_navigation_view(&room_identity("!beta:example"))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    let timeline = ui_state.active_timeline.expect("Beta has a timeline");
+    let rule = timeline
+        .visible_lines
+        .iter()
+        .find(|line| line.kind == UiTimelineLineKind::LineMarker)
+        .expect("the marker is on screen");
+    assert_eq!((rule.text.as_str(), rule.event_id.as_deref()), ("", None));
+    assert_eq!(rule.color, "#ff0000");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Activating a window sends the read receipt alone: Element's "new
+/// messages" line, at the read marker, stays. Leaving the window after its
+/// marker was on screen moves the read marker to its last line.
+#[test]
+fn automation_driver_leaving_a_room_moves_the_read_marker() -> Result<(), Box<dyn std::error::Error>>
+{
+    let local_app_data = unique_local_app_data_path();
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let server = spawn_mock_homeserver_with_read_marker(bob_lines(4), "$bob-2")?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    wait_for_line_marker(&app)?;
+    let beta = room_identity("!beta:example");
+    assert_eq!(app.dump_ui_state()?.mdi.active, ViewIdentity::Status);
+
+    app.select_navigation_view(&beta)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let receipts = server.read_markers.lock().unwrap().clone();
+    assert!(
+        receipts
+            .iter()
+            .all(|body| body.get("m.fully_read").is_none()),
+        "{receipts:?}"
+    );
+    app.select_navigation_view(&ViewIdentity::Status)?;
+    let bodies = server.wait_for_read_markers(receipts.len() + 1)?;
+    assert_eq!(
+        bodies[receipts.len()..],
+        [serde_json::json!({ "m.fully_read": "$bob-4" })]
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        server.read_markers.lock().unwrap().len(),
+        receipts.len() + 1
+    );
+    assert_eq!(app.dump_model()?.last_error, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 #[test]
 fn startup_with_connect_on_startup_off_restores_without_syncing()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -4418,7 +4604,8 @@ fn browse_to_redirect(sign_in: &str, query: &str) -> Result<String, Box<dyn std:
 fn select_server_browser_sign_in_with_oauth_restores_after_restart()
 -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    let server = spawn_mock_homeserver_with_auth(MockAuth::OAuth, MockMessages::Hang, vec![])?;
+    let server =
+        spawn_mock_homeserver_with_auth(MockAuth::OAuth, MockMessages::Hang, vec![], None)?;
     let app = launch_automation_app(&local_app_data)?;
 
     let sign_in = start_browser_sign_in(&app, &server.base_url)?;
@@ -4501,7 +4688,8 @@ fn select_server_browser_sign_in_with_oauth_restores_after_restart()
 #[test]
 fn file_disconnect_cancels_a_browser_sign_in() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    let server = spawn_mock_homeserver_with_auth(MockAuth::OAuth, MockMessages::Hang, vec![])?;
+    let server =
+        spawn_mock_homeserver_with_auth(MockAuth::OAuth, MockMessages::Hang, vec![], None)?;
     let app = launch_automation_app(&local_app_data)?;
 
     let sign_in = start_browser_sign_in(&app, &server.base_url)?;

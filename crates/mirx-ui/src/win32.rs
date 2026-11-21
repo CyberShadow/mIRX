@@ -35,12 +35,12 @@ use mirx_core::{
     RoomMessageSendState, RoomNotificationMode, RoomReadState, RoomRedactedActivity,
     RoomStateNoticeContent, RoomSummary, RoomTyping, RoomUserProfile, RoomVideoInfo,
     SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
-    SendReactionRequest, SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
-    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    SignOutDeviceRequest, StoredSession, TextStyleSpan, UnbanRoomMemberRequest, UserDevices,
-    UserLinkSpan, UserProfile, VerificationDirection, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, login_method, login_server,
-    start,
+    SendReactionRequest, SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest,
+    SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
+    SetupE2eeRecoveryRequest, SignOutDeviceRequest, StoredSession, TextStyleSpan,
+    UnbanRoomMemberRequest, UserDevices, UserLinkSpan, UserProfile, VerificationDirection,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, login_method, login_server, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -218,6 +218,7 @@ mod identity;
 mod ignore;
 mod images;
 mod line_edits;
+mod line_marker;
 mod logging;
 mod mdi;
 mod menus;
@@ -319,7 +320,7 @@ use core_events::apply_core_event;
 use core_events::{
     apply_event_load, apply_events_and_refresh, clear_view_activity_marker,
     drain_core_events_and_refresh, handle_core_events, handle_view_activation, operation_name,
-    resolve_timeline_room_id,
+    resolve_timeline_room_id, submit_set_read_marker,
 };
 #[cfg(test)]
 use dialogs::{

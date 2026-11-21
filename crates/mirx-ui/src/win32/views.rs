@@ -1399,16 +1399,24 @@ unsafe fn apply_view_activation_state(
     handle_view_activation(state_mut(hwnd), view_id)?;
 
     let previous_active = state_ref(hwnd).active_view.clone();
-    let newly_active = {
+    let newly_active = previous_active != *view_id;
+    // The window left, if it is still there: closing the active window
+    // left it already, and a window whose room went has no marker to move.
+    if newly_active && state_ref(hwnd).views.contains_key(&previous_active) {
+        line_marker::leave_window(hwnd, &previous_active)?;
+    }
+    {
         let state = state_mut(hwnd);
-        let newly_active = previous_active != *view_id;
         if newly_active {
             state.selected_timeline_event = None;
             hide_color_index(state);
         }
         state.active_view = view_id.clone();
-        newly_active
-    };
+    }
+    if newly_active {
+        // Before the refresh below repaints it.
+        line_marker::window_activated(hwnd, view_id);
+    }
 
     refresh_tree_activity_colors(hwnd)?;
     if newly_active {

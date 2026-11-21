@@ -1006,6 +1006,28 @@ fn submit_mark_room_read(
     Ok(())
 }
 
+/// Moves the room's read marker to `event_id`; the server's echo moves
+/// the line marker.
+pub(super) fn submit_set_read_marker(
+    state: &mut WindowState,
+    room_id: &str,
+    event_id: String,
+) -> Result<(), String> {
+    let command = Command::SetReadMarker(SetReadMarkerRequest {
+        room_id: room_id.to_owned(),
+        event_id,
+    });
+    let Some(sender) = state.command_sender.as_ref() else {
+        return Ok(());
+    };
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue set read marker command: {err}"))?;
+    #[cfg(test)]
+    state.recorded_commands.push(command);
+    Ok(())
+}
+
 pub(super) fn clear_view_activity_marker(
     state: &mut WindowState,
     view_id: &ViewId,
@@ -1020,6 +1042,10 @@ pub(super) fn clear_view_activity_marker(
     (cleared_view_activity, read_target)
 }
 
+/// A window becomes active: its activity clears, and its newest unread
+/// line goes to the server as the read receipt (`MarkRoomRead`), which
+/// clears the room's unread counts. The read marker stays: it moves when
+/// the user leaves the window (`line_marker::leave_window`).
 pub(super) fn handle_view_activation(
     state: &mut WindowState,
     view_id: &ViewId,

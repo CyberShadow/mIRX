@@ -1,0 +1,287 @@
+//! mIRC's line marker on the room's Matrix read marker (`m.fully_read`):
+//! a rule below the last line the user read, which the server keeps for
+//! all their clients.
+//!
+//! As in mIRC, the marker moves when the user leaves a window, and only
+//! once they saw it: "The line marker is only updated after you have
+//! scrolled back to view it." It moves to the window's last line, by a
+//! request to the server, whose echo moves the rule; mirx keeps no marker
+//! of its own.
+
+use super::*;
+
+/// Where the read marker moves when the user leaves a room window: its
+/// last line `last_line_event`, unless the marker is there already, or the
+/// window showed its marker (`marker_row_shown`) and the user never saw it
+/// (`marker_seen`). A window without a marker row has nothing to see: its
+/// marker is not set, or on a line the window does not show.
+pub(super) fn read_marker_move<'a>(
+    server_marker: Option<&str>,
+    last_line_event: Option<&'a str>,
+    marker_row_shown: bool,
+    marker_seen: bool,
+) -> Option<&'a str> {
+    let last_line_event = last_line_event?;
+    (server_marker != Some(last_line_event) && (marker_seen || !marker_row_shown))
+        .then_some(last_line_event)
+}
+
+/// The newest line of a room window that the read marker can name: the
+/// last activity with a read target, which pending sends and echo lines
+/// are not. A room window shows every activity of its room.
+fn last_line_event(room_view: &RoomViewModel) -> Option<&str> {
+    room_view
+        .activities
+        .iter()
+        .rev()
+        .find_map(read_target_for_room_activity)
+}
+
+/// The user leaves `view_id`'s window: another window is activated, or
+/// the active window closes. A room window whose marker was seen moves the
+/// room's read marker to its last line, while mirx is connected: the move
+/// shows only once the next sync echoes it, and offline the request could
+/// only fail, with an error about something the user did not ask for. The
+/// marker then stays where it was.
+pub(super) unsafe fn leave_window(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
+    let ViewId::Room(room_id) = view_id else {
+        return Ok(());
+    };
+    let state = state_ref(hwnd);
+    if state.model.connection != ConnectionState::Syncing {
+        return Ok(());
+    }
+    let Some(room_view) = state.model.room_views.get(room_id) else {
+        return Ok(());
+    };
+    let timeline = timeline_state_ref(view_timeline(view_id, state.views[view_id].content));
+    let marker_row_shown = timeline
+        .source_rows
+        .iter()
+        .any(|row| row.kind == TimelineRowKind::LineMarker);
+    let server_marker = state
+        .model
+        .room_read_states
+        .get(room_id)
+        .and_then(|read_state| read_state.fully_read_event_id.as_deref());
+    let Some(event_id) = read_marker_move(
+        server_marker,
+        last_line_event(room_view),
+        marker_row_shown,
+        timeline.line_marker_seen,
+    )
+    .map(str::to_owned) else {
+        return Ok(());
+    };
+    let room_id = room_id.clone();
+    submit_set_read_marker(state_mut(hwnd), &room_id, event_id)
+}
+
+/// `view_id`'s window becomes the active one: its marker is not seen yet.
+/// The refresh that follows repaints it, and a marker on screen is seen
+/// then.
+pub(super) unsafe fn window_activated(hwnd: HWND, view_id: &ViewId) {
+    if let ViewId::Room(_) = view_id {
+        let state = state_ref(hwnd);
+        timeline_state_mut(view_timeline(view_id, state.views[view_id].content)).line_marker_seen =
+            false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_fixtures::*;
+    use super::*;
+
+    #[test]
+    fn the_last_line_is_the_newest_sent_one() {
+        let mut room_view = RoomViewModel::default();
+        assert_eq!(last_line_event(&room_view), None);
+        for (event_id, timestamp_ms) in [("$a", 1_699_999_000_000), ("$b", 1_699_999_001_000)] {
+            room_view.apply_activity(sent_message_activity(
+                "!ops:example",
+                event_id,
+                None,
+                "hi",
+                timestamp_ms,
+            ));
+        }
+        room_view.apply_activity(pending_message_activity("!ops:example", "txn1", "sending"));
+        assert_eq!(
+            room_view
+                .activities
+                .last()
+                .map(|activity| activity.activity_id.as_str()),
+            Some("txn:txn1")
+        );
+        assert_eq!(last_line_event(&room_view), Some("$b"));
+    }
+
+    /// A frame showing Ops, 40 lines `$m0`..`$m39` with the read marker
+    /// on `fully_read`, and a query with Bob; connected, with a sender
+    /// whose commands wait.
+    unsafe fn with_marker_frame(fully_read: Option<&str>, test: impl FnOnce(HWND)) {
+        with_test_frame(600, 400, |hwnd| {
+            let (sender, commands) = inert_command_sender();
+            std::mem::forget(commands);
+            let state = state_mut(hwnd);
+            state.command_sender = Some(sender);
+            state.model.connection = ConnectionState::Syncing;
+            let mut query = room("!bob:example", "Bob", false);
+            query.is_direct = true;
+            state.model.rooms = vec![room("!ops:example", "Ops", false), query];
+            sync_views_and_tree(hwnd).unwrap();
+            let mut events = (0..40)
+                .map(|index| {
+                    timeline_with_transaction_id(
+                        "!ops:example",
+                        &format!("$m{index}"),
+                        None,
+                        &format!("line {index}"),
+                        1_700_000_000_000 + index * 1_000,
+                    )
+                })
+                .collect::<Vec<_>>();
+            events.push(timeline_with_transaction_id(
+                "!bob:example",
+                "$q0",
+                None,
+                "hi",
+                1_700_000_000_000,
+            ));
+            for room_id in ["!ops:example", "!bob:example"] {
+                events.push(room_read_state(room_id, None, fully_read, false, 0, 0, 0));
+            }
+            apply_events_and_refresh(hwnd, events).unwrap();
+            activate_view(hwnd, &room_view_id("!ops:example"), None).unwrap();
+            test(hwnd);
+        });
+    }
+
+    fn read_marker_moves(state: &WindowState) -> Vec<(String, String)> {
+        state
+            .recorded_commands
+            .iter()
+            .filter_map(|command| match command {
+                Command::SetReadMarker(request) => {
+                    Some((request.room_id.clone(), request.event_id.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    unsafe fn ops_timeline(hwnd: HWND) -> HWND {
+        let view_id = room_view_id("!ops:example");
+        view_timeline(&view_id, state_ref(hwnd).views[&view_id].content)
+    }
+
+    fn moved_to(event_id: &str) -> Vec<(String, String)> {
+        vec![("!ops:example".to_owned(), event_id.to_owned())]
+    }
+
+    #[test]
+    fn leaving_a_window_whose_marker_was_seen_moves_it_to_the_last_line() {
+        unsafe {
+            with_marker_frame(Some("$m1"), |hwnd| {
+                let timeline = ops_timeline(hwnd);
+                SendMessageW(timeline, WM_PAINT, 0, 0);
+                assert!(!timeline_state_ref(timeline).line_marker_seen);
+                // At the end, the marker far above was never on screen.
+                activate_view(hwnd, &ViewId::Status, None).unwrap();
+                assert_eq!(read_marker_moves(state_ref(hwnd)), Vec::new());
+
+                activate_view(hwnd, &room_view_id("!ops:example"), None).unwrap();
+                SendMessageW(timeline, WM_VSCROLL, SB_TOP as WPARAM, 0);
+                SendMessageW(timeline, WM_PAINT, 0, 0);
+                assert!(timeline_state_ref(timeline).line_marker_seen);
+                // Back at the end: seen is seen.
+                SendMessageW(timeline, WM_VSCROLL, SB_BOTTOM as WPARAM, 0);
+                SendMessageW(timeline, WM_PAINT, 0, 0);
+                activate_view(hwnd, &ViewId::Status, None).unwrap();
+                assert_eq!(read_marker_moves(state_ref(hwnd)), moved_to("$m39"));
+
+                // The echo has not come: the next activation starts unseen.
+                activate_view(hwnd, &room_view_id("!ops:example"), None).unwrap();
+                assert!(!timeline_state_ref(timeline).line_marker_seen);
+            });
+        }
+    }
+
+    #[test]
+    fn a_window_without_a_marker_row_moves_it_and_one_at_the_end_does_not() {
+        unsafe {
+            with_marker_frame(None, |hwnd| {
+                activate_view(hwnd, &ViewId::Status, None).unwrap();
+                assert_eq!(read_marker_moves(state_ref(hwnd)), moved_to("$m39"));
+            });
+            // On a line the window does not show.
+            with_marker_frame(Some("$elsewhere"), |hwnd| {
+                activate_view(hwnd, &ViewId::Status, None).unwrap();
+                assert_eq!(read_marker_moves(state_ref(hwnd)), moved_to("$m39"));
+            });
+            with_marker_frame(Some("$m39"), |hwnd| {
+                activate_view(hwnd, &ViewId::Status, None).unwrap();
+                assert_eq!(read_marker_moves(state_ref(hwnd)), Vec::new());
+            });
+        }
+    }
+
+    #[test]
+    fn only_leaving_a_connected_room_window_moves_the_marker() {
+        unsafe {
+            with_marker_frame(None, |hwnd| {
+                // Activating the active window again leaves nothing.
+                activate_view(hwnd, &room_view_id("!ops:example"), None).unwrap();
+                assert_eq!(read_marker_moves(state_ref(hwnd)), Vec::new());
+                // Status has no marker.
+                activate_view(hwnd, &ViewId::Status, None).unwrap();
+                activate_view(hwnd, &room_view_id("!ops:example"), None).unwrap();
+                assert_eq!(read_marker_moves(state_ref(hwnd)), moved_to("$m39"));
+                // Offline the request could only fail.
+                state_mut(hwnd).model.connection = ConnectionState::SignedIn;
+                activate_view(hwnd, &ViewId::Status, None).unwrap();
+                assert_eq!(read_marker_moves(state_ref(hwnd)), moved_to("$m39"));
+            });
+        }
+    }
+
+    #[test]
+    fn closing_the_active_query_moves_its_marker_once() {
+        unsafe {
+            with_marker_frame(None, |hwnd| {
+                let bob = room_view_id("!bob:example");
+                activate_view(hwnd, &bob, None).unwrap();
+                state_mut(hwnd).recorded_commands.clear();
+                let child = state_ref(hwnd).views[&bob].child;
+                SendMessageW(child, WM_CLOSE, 0, 0);
+                assert!(!state_ref(hwnd).views.contains_key(&bob));
+                // Whatever the next window is, the closed one left once.
+                activate_view(hwnd, &ViewId::Status, None).unwrap();
+                let moves = read_marker_moves(state_ref(hwnd))
+                    .into_iter()
+                    .filter(|(room_id, _)| room_id == "!bob:example")
+                    .collect::<Vec<_>>();
+                assert_eq!(moves, vec![("!bob:example".to_owned(), "$q0".to_owned())]);
+            });
+        }
+    }
+
+    #[test]
+    fn the_marker_moves_to_the_last_line_once_seen() {
+        let last = Some("$last");
+        // Seen: it moves.
+        assert_eq!(read_marker_move(Some("$old"), last, true, true), last);
+        // Shown and never seen: it stays, however much is below it.
+        assert_eq!(read_marker_move(Some("$old"), last, true, false), None);
+        // No marker row to see (none set, or on a line not shown).
+        assert_eq!(read_marker_move(None, last, false, false), last);
+        assert_eq!(read_marker_move(Some("$unshown"), last, false, false), last);
+        // Already there.
+        assert_eq!(read_marker_move(last, last, false, true), None);
+        assert_eq!(read_marker_move(last, last, false, false), None);
+        // A window without a line the marker can name.
+        assert_eq!(read_marker_move(Some("$old"), None, true, true), None);
+        assert_eq!(read_marker_move(None, None, false, false), None);
+    }
+}
