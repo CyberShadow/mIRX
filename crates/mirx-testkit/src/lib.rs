@@ -443,6 +443,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_identity_reset_commands: Vec<SubmittedIdentityReset>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_session_commands: Vec<SubmittedSessionCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_room_list_requests: Vec<SubmittedRoomListRequest>,
     /// The web links handed to the shell, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -683,6 +685,20 @@ pub struct SubmittedSetupRecoveryCommand {
 pub enum SubmittedIdentityReset {
     Reset { password_redacted: bool },
     Cancel,
+}
+
+/// A `/devices delete` or `/devices rename`; never the password.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SubmittedSessionCommand {
+    SignOut {
+        device_id: String,
+        password_redacted: bool,
+    },
+    Rename {
+        device_id: String,
+        display_name: String,
+    },
 }
 
 /// A room member whose identity changed since this session accepted or
@@ -2142,6 +2158,9 @@ pub enum AutomationDialog {
     ResetE2ee,
     /// The active window's close box, which asks before leaving a room.
     CloseActiveView,
+    /// Return in the active window's editbox, for a typed command that
+    /// opens a dialog (`/devices delete <session>`); fails on an empty one.
+    ComposeReturn,
 }
 
 /// A top-level window open over the mirx frame: a dialog or message box.

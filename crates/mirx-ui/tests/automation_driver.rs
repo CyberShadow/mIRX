@@ -46,9 +46,9 @@ use mirx_testkit::{
     SubmittedNotificationCommand, SubmittedPowerLevelCommand, SubmittedProfileCommand,
     SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
     SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomListRequest,
-    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SubmittedUserCommand,
-    SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem, TestkitError,
-    UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
+    SubmittedRoomTopicCommand, SubmittedSessionCommand, SubmittedSetupRecoveryCommand,
+    SubmittedUserCommand, SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem,
+    TestkitError, UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
     UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
     UiFindState, UiLoggingOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
     UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
@@ -72,7 +72,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_RIGHT, VK_SHIFT, VK_TAB, VK_X,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BM_CLICK, BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, EnumThreadWindows,
+    BM_CLICK, BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, DM_GETDEFID, EnumThreadWindows,
     FindWindowExW, FindWindowW, GCL_STYLE, GUITHREADINFO, GW_OWNER, GWL_STYLE, GetClassLongPtrW,
     GetClassNameW, GetClientRect, GetDlgCtrlID, GetDlgItem, GetForegroundWindow, GetGUIThreadInfo,
     GetLastActivePopup, GetScrollInfo, GetWindow, GetWindowLongPtrW, GetWindowRect,
@@ -3054,7 +3054,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 63);
+    assert_eq!(version.protocol_version, 64);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -4889,6 +4889,248 @@ fn click_reset(app: &MirxApp, dialog: HWND) -> Result<(), Box<dyn std::error::Er
     );
     wait_for_window_gone(dialog, "Reset E2EE Identity dialog")?;
     app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+/// The Sign Out Session dialog's buttons.
+const SIGN_OUT_SESSION_DIALOG_SIGN_OUT_ID: usize = 5020;
+const SIGN_OUT_SESSION_DIALOG_CANCEL_ID: usize = 5021;
+
+/// Types `/devices delete <device_id>` and presses Return, which opens the
+/// Sign Out Session dialog; returns it.
+fn open_sign_out_session_dialog(
+    app: &MirxApp,
+    device_id: &str,
+) -> Result<HWND, Box<dyn std::error::Error>> {
+    app.set_compose_text(&format!("/devices delete {device_id}"))?;
+    app.open_dialog(AutomationDialog::ComposeReturn)?;
+    let dialog = app.wait_for_modal_dialog(Duration::from_secs(5))?;
+    assert_eq!(
+        (dialog.class.as_str(), dialog.title.as_str()),
+        ("mirxWin32SignOutSessionDialog", "Sign Out Session")
+    );
+    let dialog = dialog.hwnd as HWND;
+    // Enter typed after the password must not sign anything out.
+    let default = unsafe { SendMessageW(dialog, DM_GETDEFID, 0, 0) };
+    assert_eq!(default as usize & 0xffff, SIGN_OUT_SESSION_DIALOG_CANCEL_ID);
+    Ok(dialog)
+}
+
+#[test]
+fn automation_driver_devices_delete_dialog_submits_the_password_redacted()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_signed_in_member_app(&local_app_data)?;
+    let password = "sample account password";
+
+    let dialog = open_sign_out_session_dialog(&app, "PH0NE")?;
+    let edit = unsafe { GetDlgItem(dialog, RESET_E2EE_DIALOG_PASSWORD_ID) };
+    assert!(!edit.is_null(), "a password session is asked its password");
+    let wide = wide_null(password);
+    assert_ne!(unsafe { SetWindowTextW(edit, wide.as_ptr()) }, 0);
+    assert_ne!(
+        unsafe {
+            PostMessageW(
+                dialog,
+                WM_COMMAND,
+                SIGN_OUT_SESSION_DIALOG_SIGN_OUT_ID as WPARAM,
+                0,
+            )
+        },
+        0
+    );
+    wait_for_window_gone(dialog, "Sign Out Session dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_session_commands,
+        vec![SubmittedSessionCommand::SignOut {
+            device_id: "PH0NE".to_owned(),
+            password_redacted: true,
+        }]
+    );
+    assert!(!serde_json::to_string(&model)?.contains(password));
+    let ui_state = app.dump_ui_state()?;
+    assert!(!serde_json::to_string(&ui_state)?.contains(password));
+    assert_eq!(app.compose_text()?, "");
+    // The automation core is not signed in: its refusal is in by now.
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
+    assert!(
+        view_contains(
+            beta,
+            "* /devices: signing out a session requires an authenticated session"
+        ),
+        "{:?}",
+        beta.lines
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_devices_delete_dialog_cancel_sends_nothing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_signed_in_member_app(&local_app_data)?;
+
+    let dialog = open_sign_out_session_dialog(&app, "PH0NE")?;
+    assert_ne!(
+        unsafe {
+            PostMessageW(
+                dialog,
+                WM_COMMAND,
+                SIGN_OUT_SESSION_DIALOG_CANCEL_ID as WPARAM,
+                0,
+            )
+        },
+        0
+    );
+    wait_for_window_gone(dialog, "Sign Out Session dialog")?;
+    // Esc too.
+    let dialog = open_sign_out_session_dialog(&app, "PH0NE")?;
+    close_dialog(&app, dialog)?;
+
+    assert!(app.dump_model()?.submitted_session_commands.is_empty());
+    // An empty editbox has no command to run.
+    assert!(app.open_dialog(AutomationDialog::ComposeReturn).is_err());
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_devices_delete_of_a_browser_session_opens_no_dialog()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let app = launch_app(&exe_path, &[OsString::from("--automation")])?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let mut session = core_stored_session();
+    session.auth = CoreSessionAuth::OAuth {
+        client_id: "client".to_owned(),
+    };
+    let mut events = base_events();
+    events.insert(
+        1,
+        Event::LoggedIn {
+            session,
+            homeserver_url: "https://matrix.example/".to_owned(),
+        },
+    );
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.select_view(room_identity("!beta:example"))?;
+
+    type_commands(&app, &["/devices delete PH0NE"])?;
+    assert!(
+        app.wait_for_modal_dialog(Duration::from_millis(500))
+            .is_err()
+    );
+    assert_eq!(
+        app.dump_model()?.submitted_session_commands,
+        vec![SubmittedSessionCommand::SignOut {
+            device_id: "PH0NE".to_owned(),
+            password_redacted: false,
+        }]
+    );
+    let ui_state = app.dump_ui_state()?;
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
+    assert!(
+        view_contains(
+            beta,
+            "* /devices: signing out a session requires an authenticated session"
+        ),
+        "{:?}",
+        beta.lines
+    );
+    Ok(())
+}
+
+#[test]
+fn automation_driver_devices_rename_submits() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_signed_in_member_app(&local_app_data)?;
+
+    type_commands(
+        &app,
+        &[
+            "/devices rename PH0NE  Work phone ",
+            "/devices rename PH0NE",
+            "/devices delete",
+            "/devices delete PH0NE L4PT0P",
+        ],
+    )?;
+    assert_eq!(
+        app.dump_model()?.submitted_session_commands,
+        vec![SubmittedSessionCommand::Rename {
+            device_id: "PH0NE".to_owned(),
+            display_name: "Work phone".to_owned(),
+        }]
+    );
+    let ui_state = app.dump_ui_state()?;
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
+    for line in [
+        "* /devices: usage: /devices rename <session> <name>",
+        "* /devices: usage: /devices delete <session>",
+        "* /devices: renaming a session requires an authenticated session",
+    ] {
+        assert!(view_contains(beta, line), "{line}: {:?}", beta.lines);
+    }
+    assert_eq!(
+        view_lines_containing(beta, "* /devices: usage: /devices delete <session>").len(),
+        2
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_device_answers_print_in_the_active_window()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_signed_in_member_app(&local_app_data)?;
+    let url = "https://account.example/?action=org.matrix.session_end&device_id=PH0NE";
+    let events = [
+        Event::DeviceSignedOut("L4PT0P".to_owned()),
+        Event::DeviceRenamed {
+            device_id: "PH0NE".to_owned(),
+            display_name: "Work phone".to_owned(),
+        },
+        Event::DeviceSignOutApproval {
+            device_id: "PH0NE".to_owned(),
+            url: url.to_owned(),
+        },
+    ];
+    app.append_synthetic_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
+    let expected = [
+        "* Session L4PT0P signed out".to_owned(),
+        "* Session PH0NE renamed \"Work phone\"".to_owned(),
+        "* To sign out PH0NE, confirm on the page your browser opened; /devices lists your \
+         sessions afterwards"
+            .to_owned(),
+        format!("* If no browser opened, go to {url}"),
+        // Wine has no browser to open.
+        format!("* Unable to open {url}: "),
+    ];
+    let tail = &beta.lines[beta.lines.len() - expected.len()..];
+    for (line, expected) in tail.iter().zip(&expected) {
+        // Past the timestamp.
+        assert!(line.contains(expected.as_str()), "{expected}: {tail:?}");
+    }
+    // Appended events are live: the approval opens the account page.
+    assert_eq!(app.dump_model()?.opened_links, [url]);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 

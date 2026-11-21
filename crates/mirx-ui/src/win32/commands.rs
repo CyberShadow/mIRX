@@ -67,6 +67,15 @@ pub(super) enum SlashCommand {
     Devices {
         target: Option<String>,
     },
+    /// `/devices delete <session>`: sign out another of your sessions.
+    DevicesDelete {
+        device_id: String,
+    },
+    /// `/devices rename <session> <name>`: rename one of your sessions.
+    DevicesRename {
+        device_id: String,
+        display_name: String,
+    },
     /// `/identity accept <nick>`: accept a user's changed identity.
     IdentityAccept {
         target: String,
@@ -259,7 +268,9 @@ impl SlashCommand {
             Self::Msg { .. } => "msg",
             Self::Names { .. } => "names",
             Self::Whois { .. } => "whois",
-            Self::Devices { .. } => "devices",
+            Self::Devices { .. } | Self::DevicesDelete { .. } | Self::DevicesRename { .. } => {
+                "devices"
+            }
             Self::IdentityAccept { .. } => "identity",
             Self::Ignore { .. } => "ignore",
             Self::Unignore { .. } => "unignore",
@@ -372,8 +383,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "devices",
-        usage: "[nick]",
-        summary: "list a user's sessions and whether they are verified",
+        usage: "[nick] | delete <session> | rename <session> <name>",
+        summary: "list a user's sessions, or sign out or rename yours",
     },
     CommandSpec {
         name: "devoice",
@@ -700,10 +711,7 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         "whois" => Ok(SlashCommand::Whois {
             nick: single_word(&name, argument)?,
         }),
-        "devices" if argument.is_empty() => Ok(SlashCommand::Devices { target: None }),
-        "devices" => Ok(SlashCommand::Devices {
-            target: Some(single_word(&name, argument)?),
-        }),
+        "devices" => parse_devices(argument),
         "identity" => parse_identity(argument),
         "ignore" if argument.is_empty() => Ok(SlashCommand::Ignore { target: None }),
         "ignore" => Ok(SlashCommand::Ignore {
@@ -928,6 +936,35 @@ fn single_word(name: &str, argument: &str) -> Result<String, CommandError> {
         return Err(CommandError::new(name, "too many parameters"));
     }
     Ok(word.to_owned())
+}
+
+/// `[nick]`, `delete <session>` or `rename <session> <name>`. A nick
+/// named `delete` or `rename` is given by its full ID, as for `/verify`.
+fn parse_devices(argument: &str) -> Result<SlashCommand, CommandError> {
+    let (action, rest) = split_word(argument);
+    let (device_id, more) = split_word(rest);
+    match action.to_ascii_lowercase().as_str() {
+        "" => Ok(SlashCommand::Devices { target: None }),
+        "delete" if device_id.is_empty() || !more.is_empty() => Err(CommandError::new(
+            "devices",
+            "usage: /devices delete <session>",
+        )),
+        "delete" => Ok(SlashCommand::DevicesDelete {
+            device_id: device_id.to_owned(),
+        }),
+        // `more` is the name, spaces and all.
+        "rename" if more.is_empty() => Err(CommandError::new(
+            "devices",
+            "usage: /devices rename <session> <name>",
+        )),
+        "rename" => Ok(SlashCommand::DevicesRename {
+            device_id: device_id.to_owned(),
+            display_name: more.to_owned(),
+        }),
+        _ => Ok(SlashCommand::Devices {
+            target: Some(single_word("devices", argument)?),
+        }),
+    }
 }
 
 /// `accept <nick>`, the one action yet.
@@ -1241,6 +1278,22 @@ pub(super) fn whois_lines(
     lines.push(format!("* {nick} using {server}"));
     lines.push(format!("* {nick} End of /WHOIS list"));
     lines
+}
+
+/// The answers to `/devices delete` and `/devices rename`.
+pub(super) fn device_signed_out_line(device_id: &str) -> String {
+    format!("* Session {device_id} signed out")
+}
+
+pub(super) fn device_sign_out_approval_line(device_id: &str) -> String {
+    format!(
+        "* To sign out {device_id}, confirm on the page your browser opened; /devices lists \
+         your sessions afterwards"
+    )
+}
+
+pub(super) fn device_renamed_line(device_id: &str, display_name: &str) -> String {
+    format!("* Session {device_id} renamed \"{display_name}\"")
 }
 
 /// `/devices`: the user's sessions, `/whois`-style. Another user's list
@@ -2183,6 +2236,43 @@ mod tests {
             parse("/devices Bob DEV1"),
             error("devices", "too many parameters")
         );
+        assert_eq!(
+            parse("/devices @delete:example"),
+            Ok(SlashCommand::Devices {
+                target: Some("@delete:example".to_owned()),
+            })
+        );
+        assert_eq!(
+            parse("/devices DELETE  PH0NE "),
+            Ok(SlashCommand::DevicesDelete {
+                device_id: "PH0NE".to_owned(),
+            })
+        );
+        for input in ["/devices delete", "/devices delete PH0NE L4PT0P"] {
+            assert_eq!(
+                parse(input),
+                error("devices", "usage: /devices delete <session>"),
+                "{input}"
+            );
+        }
+        assert_eq!(
+            parse("/devices rename PH0NE  Work  phone "),
+            Ok(SlashCommand::DevicesRename {
+                device_id: "PH0NE".to_owned(),
+                display_name: "Work  phone".to_owned(),
+            })
+        );
+        for input in [
+            "/devices rename",
+            "/devices rename PH0NE",
+            "/devices rename PH0NE  ",
+        ] {
+            assert_eq!(
+                parse(input),
+                error("devices", "usage: /devices rename <session> <name>"),
+                "{input}"
+            );
+        }
         assert_eq!(
             parse("/IDENTITY Accept  Bob "),
             Ok(SlashCommand::IdentityAccept {

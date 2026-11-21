@@ -47,7 +47,9 @@ pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> 
             command: "unignore",
         },
         Operation::FetchUserProfile => ErrorDestination::ActiveWindow { command: "whois" },
-        Operation::ListUserDevices => ErrorDestination::ActiveWindow { command: "devices" },
+        Operation::ListUserDevices | Operation::SignOutDevice | Operation::RenameDevice => {
+            ErrorDestination::ActiveWindow { command: "devices" }
+        }
         Operation::AcceptUserIdentity => ErrorDestination::ActiveWindow {
             command: "identity",
         },
@@ -183,6 +185,8 @@ mod tests {
             (Operation::UnignoreUser, "unignore"),
             (Operation::FetchUserProfile, "whois"),
             (Operation::ListUserDevices, "devices"),
+            (Operation::SignOutDevice, "devices"),
+            (Operation::RenameDevice, "devices"),
             (Operation::AcceptUserIdentity, "identity"),
             (Operation::RequestVerification, "verify"),
         ] {

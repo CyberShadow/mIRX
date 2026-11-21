@@ -584,6 +584,30 @@ pub(super) fn apply_core_event(
             let nick = known_nick(&state.model, &user_id).unwrap_or(user_id);
             echo_lines_in_active_view(state, [identity::accepted_line(&nick)]);
         }
+        Event::DeviceSignedOut(device_id) => {
+            echo_lines_in_active_view(state, [commands::device_signed_out_line(&device_id)]);
+            state.model.status = "session signed out".to_owned();
+        }
+        Event::DeviceSignOutApproval { device_id, url } => {
+            echo_lines_in_active_view(
+                state,
+                [
+                    commands::device_sign_out_approval_line(&device_id),
+                    format!("* {}", status_log::sign_in_address(&url)),
+                ],
+            );
+            state.model.status = "waiting for session sign-out".to_owned();
+        }
+        Event::DeviceRenamed {
+            device_id,
+            display_name,
+        } => {
+            echo_lines_in_active_view(
+                state,
+                [commands::device_renamed_line(&device_id, &display_name)],
+            );
+            state.model.status = "session renamed".to_owned();
+        }
         Event::E2eeStatus(status) => {
             for (kind, line) in status_log::e2ee_status(&status) {
                 log_status(state, kind, line);
@@ -838,7 +862,9 @@ pub(super) unsafe fn apply_events_and_refresh(
         backfill_result |= backfilled_room_id.is_some();
         // A replayed event load opens nothing, and reconnects nowhere.
         let browser_url = match &event {
-            Event::SignInUrl { url } | Event::E2eeIdentityResetApproval { url }
+            Event::SignInUrl { url }
+            | Event::E2eeIdentityResetApproval { url }
+            | Event::DeviceSignOutApproval { url, .. }
                 if !state.synthetic_load_in_progress =>
             {
                 Some(url.clone())
@@ -1063,6 +1089,8 @@ pub(super) fn operation_name(operation: Operation) -> &'static str {
         Operation::FetchUserProfile => "fetch user profile",
         Operation::ListUserDevices => "list devices",
         Operation::AcceptUserIdentity => "accept identity",
+        Operation::SignOutDevice => "session sign-out",
+        Operation::RenameDevice => "session rename",
         Operation::SendMessage => "send text",
         Operation::SendFile => "send file",
         Operation::EditMessage => "edit message",
@@ -1235,6 +1263,80 @@ mod tests {
                             StatusLineKind::Info,
                             format!("* If no browser opened, go to {RESET_APPROVAL_URL}")
                         ),
+                    ]
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn session_answers_print_in_the_active_window_and_open_the_account_page() {
+        const ACCOUNT_URL: &str =
+            "https://account.example/?action=org.matrix.session_end&device_id=PH0NE";
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                apply_event_load(
+                    hwnd,
+                    vec![
+                        Event::Started,
+                        Event::DeviceSignOutApproval {
+                            device_id: "PH0NE".to_owned(),
+                            url: ACCOUNT_URL.to_owned(),
+                        },
+                    ],
+                )
+                .unwrap();
+                // A replayed load opens nothing.
+                assert_eq!(state_ref(hwnd).opened_links, Vec::<String>::new());
+                assert_eq!(state_ref(hwnd).model.status, "waiting for session sign-out");
+
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![
+                        Event::DeviceSignedOut("L4PT0P".to_owned()),
+                        Event::DeviceRenamed {
+                            device_id: "PH0NE".to_owned(),
+                            display_name: "Work phone".to_owned(),
+                        },
+                        Event::DeviceSignOutApproval {
+                            device_id: "PH0NE".to_owned(),
+                            url: ACCOUNT_URL.to_owned(),
+                        },
+                    ],
+                )
+                .unwrap();
+                let state = state_ref(hwnd);
+                assert_eq!(state.active_view, ViewId::Status);
+                assert_eq!(state.opened_links, vec![ACCOUNT_URL.to_owned()]);
+                let approval = [
+                    "* To sign out PH0NE, confirm on the page your browser opened; /devices \
+                     lists your sessions afterwards"
+                        .to_owned(),
+                    format!("* If no browser opened, go to {ACCOUNT_URL}"),
+                ];
+                let lines: Vec<_> = status_lines_with_kinds(state)
+                    .into_iter()
+                    .map(|(kind, text)| {
+                        assert_eq!(kind, StatusLineKind::Info, "{text}");
+                        text
+                    })
+                    .collect();
+                let load = lines
+                    .iter()
+                    .position(|line| *line == approval[0])
+                    .expect("the replayed approval's lines");
+                assert_eq!(lines[load + 1], approval[1]);
+                let answers = lines
+                    .iter()
+                    .position(|line| line == "* Session L4PT0P signed out")
+                    .expect("the sign-out's line");
+                assert_eq!(
+                    lines[answers..answers + 4],
+                    [
+                        "* Session L4PT0P signed out".to_owned(),
+                        "* Session PH0NE renamed \"Work phone\"".to_owned(),
+                        approval[0].clone(),
+                        approval[1].clone(),
                     ]
                 );
             });

@@ -132,6 +132,31 @@ pub(super) unsafe fn run_slash_command(
             enqueue_command(state, Command::ListUserDevices(user_id.clone()))?;
             Ok(Some(format!("devices requested: {user_id}")))
         }
+        SlashCommand::DevicesDelete { device_id } => {
+            let auth = match &state_ref(hwnd).model.own_account {
+                Some(account) => account.auth.clone(),
+                None => return Err("not connected to server".to_owned()),
+            };
+            let password = match auth {
+                // The account page confirms it, on its own.
+                SessionAuth::OAuth { .. } => None,
+                SessionAuth::Matrix => match show_sign_out_session_dialog(hwnd, &device_id)? {
+                    Some(form) => form.password,
+                    None => return Ok(None),
+                },
+            };
+            let status = format!("session sign-out submitted: {device_id}");
+            submit_device_sign_out(state_mut(hwnd), device_id, password)?;
+            Ok(Some(status))
+        }
+        SlashCommand::DevicesRename {
+            device_id,
+            display_name,
+        } => {
+            let status = format!("session rename submitted: {device_id}");
+            submit_device_rename(state_mut(hwnd), device_id, display_name)?;
+            Ok(Some(status))
+        }
         SlashCommand::IdentityAccept { target } => {
             let state = state_mut(hwnd);
             let user_id = commands::resolve_user(all_room_members(&state.model), &target)?.user_id;

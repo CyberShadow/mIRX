@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 63;
+pub(crate) const PROTOCOL_VERSION: u32 = 64;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -709,6 +709,9 @@ pub(crate) enum AutomationDialog {
     ResetE2ee,
     /// The active window's close box, which asks before leaving a room.
     CloseActiveView,
+    /// Return in the active window's editbox, for a typed command that
+    /// opens a dialog (`/devices delete <session>`); fails on an empty one.
+    ComposeReturn,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1894,6 +1897,8 @@ pub(crate) struct DumpModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_identity_reset_commands: Vec<DumpSubmittedIdentityReset>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_session_commands: Vec<DumpSubmittedSessionCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_room_list_requests: Vec<DumpSubmittedRoomListRequest>,
     /// The web links handed to the shell, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2136,6 +2141,20 @@ pub(crate) struct DumpSubmittedSetupRecoveryCommand {
 pub(crate) enum DumpSubmittedIdentityReset {
     Reset { password_redacted: bool },
     Cancel,
+}
+
+/// A `/devices delete` or `/devices rename`; never the password.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum DumpSubmittedSessionCommand {
+    SignOut {
+        device_id: String,
+        password_redacted: bool,
+    },
+    Rename {
+        device_id: String,
+        display_name: String,
+    },
 }
 
 /// A room member whose identity changed since this session accepted or
@@ -2507,6 +2526,8 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::FetchUserProfile => "fetch_user_profile",
         Operation::ListUserDevices => "list_user_devices",
         Operation::AcceptUserIdentity => "accept_user_identity",
+        Operation::SignOutDevice => "sign_out_device",
+        Operation::RenameDevice => "rename_device",
         Operation::SendMessage => "send_text",
         Operation::SendFile => "send_file",
         Operation::EditMessage => "edit_message",
@@ -3630,6 +3651,10 @@ mod tests {
                 {"action":"reset","password_redacted":true},
                 {"action":"cancel"}
             ],
+            "submitted_session_commands":[
+                {"action":"sign_out","device_id":"PH0NE","password_redacted":true},
+                {"action":"rename","device_id":"PH0NE","display_name":"Work phone"}
+            ],
             "last_error":null,
             "selected_room":null
         });
@@ -3643,9 +3668,35 @@ mod tests {
                 super::DumpSubmittedIdentityReset::Cancel,
             ]
         );
+        assert_eq!(
+            model.submitted_session_commands,
+            vec![
+                super::DumpSubmittedSessionCommand::SignOut {
+                    device_id: "PH0NE".to_owned(),
+                    password_redacted: true,
+                },
+                super::DumpSubmittedSessionCommand::Rename {
+                    device_id: "PH0NE".to_owned(),
+                    display_name: "Work phone".to_owned(),
+                },
+            ]
+        );
         assert_eq!(serde_json::to_value(&model).unwrap(), dump);
 
         let testkit_model = serde_json::from_value::<mirx_testkit::Model>(dump).unwrap();
+        assert_eq!(
+            testkit_model.submitted_session_commands,
+            vec![
+                mirx_testkit::SubmittedSessionCommand::SignOut {
+                    device_id: "PH0NE".to_owned(),
+                    password_redacted: true,
+                },
+                mirx_testkit::SubmittedSessionCommand::Rename {
+                    device_id: "PH0NE".to_owned(),
+                    display_name: "Work phone".to_owned(),
+                },
+            ]
+        );
         assert_eq!(
             testkit_model.identity_warnings,
             vec![
@@ -3719,8 +3770,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_63() {
-        assert_eq!(PROTOCOL_VERSION, 63);
+    fn protocol_version_is_64() {
+        assert_eq!(PROTOCOL_VERSION, 64);
     }
 
     #[test]
@@ -5103,6 +5154,7 @@ mod tests {
             ("setup_e2ee_recovery", AutomationDialog::SetupE2eeRecovery),
             ("reset_e2ee", AutomationDialog::ResetE2ee),
             ("close_active_view", AutomationDialog::CloseActiveView),
+            ("compose_return", AutomationDialog::ComposeReturn),
         ] {
             assert_eq!(
                 parse_command_request(
@@ -5745,7 +5797,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":63,
+                    "protocol_version":64,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5822,6 +5874,7 @@ mod tests {
                     submitted_verification_requests: Vec::new(),
                     identity_warnings: Vec::new(),
                     submitted_identity_reset_commands: Vec::new(),
+                    submitted_session_commands: Vec::new(),
                     submitted_recovery_commands: Vec::new(),
                     submitted_setup_recovery_commands: Vec::new(),
                     submitted_room_list_requests: Vec::new(),
@@ -6756,6 +6809,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -6855,6 +6909,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: vec![DumpSubmittedSetupRecoveryCommand {
                 passphrase_redacted: true,
@@ -6921,6 +6976,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -6995,6 +7051,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -7096,6 +7153,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -7204,6 +7262,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -7316,6 +7375,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -7456,6 +7516,7 @@ mod tests {
             submitted_verification_requests: Vec::new(),
             identity_warnings: Vec::new(),
             submitted_identity_reset_commands: Vec::new(),
+            submitted_session_commands: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
@@ -7540,6 +7601,7 @@ mod tests {
                 submitted_verification_requests: Vec::new(),
                 identity_warnings: Vec::new(),
                 submitted_identity_reset_commands: Vec::new(),
+                submitted_session_commands: Vec::new(),
                 submitted_recovery_commands: Vec::new(),
                 submitted_setup_recovery_commands: Vec::new(),
                 submitted_room_list_requests: Vec::new(),

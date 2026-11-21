@@ -1221,6 +1221,26 @@ pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_recovery_commands: submitted_recovery_commands_from_state(state),
         submitted_setup_recovery_commands: submitted_setup_recovery_commands_from_state(state),
         submitted_identity_reset_commands: submitted_identity_reset_commands_from_state(state),
+        submitted_session_commands: state
+            .submitted_session_commands
+            .iter()
+            .map(|command| match command.clone() {
+                SubmittedSessionCommand::SignOut {
+                    device_id,
+                    password_redacted,
+                } => DumpSubmittedSessionCommand::SignOut {
+                    device_id,
+                    password_redacted,
+                },
+                SubmittedSessionCommand::Rename {
+                    device_id,
+                    display_name,
+                } => DumpSubmittedSessionCommand::Rename {
+                    device_id,
+                    display_name,
+                },
+            })
+            .collect(),
         submitted_room_list_requests: submitted_room_list_requests_from_state(state),
         opened_links: state.opened_links.clone(),
         shown_tips: dump_shown_tips(state),

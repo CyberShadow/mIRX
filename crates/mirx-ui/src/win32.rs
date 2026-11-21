@@ -24,10 +24,10 @@ use mirx_core::{
     HighlightWord, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
     LeaveRoomRequest, LoginMethod, LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation,
     PublicRoomsPage, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
-    RejectRoomInviteRequest, RequestVerificationRequest, ResetE2eeIdentityRequest,
-    RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioInfo,
-    RoomEventFetch, RoomEventFetchResult, RoomFileInfo, RoomHistoryBackfill,
+    RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
+    ResetE2eeIdentityRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
+    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
+    RoomAudioInfo, RoomEventFetch, RoomEventFetchResult, RoomFileInfo, RoomHistoryBackfill,
     RoomHistoryBackfillEvent, RoomImageInfo, RoomMedia, RoomMediaFormat, RoomMediaKind,
     RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomReadState,
@@ -35,10 +35,10 @@ use mirx_core::{
     RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
     SendMessageThreadTarget, SendReactionRequest, SessionAuth, SetDisplayNameRequest,
     SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
-    SetupE2eeRecoveryRequest, StoredSession, TextStyleSpan, UnbanRoomMemberRequest, UserDevices,
-    UserLinkSpan, UserProfile, VerificationDirection, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, login_method, login_server,
-    start,
+    SetupE2eeRecoveryRequest, SignOutDeviceRequest, StoredSession, TextStyleSpan,
+    UnbanRoomMemberRequest, UserDevices, UserLinkSpan, UserProfile, VerificationDirection,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, login_method, login_server, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -161,7 +161,8 @@ use crate::{
         DumpSubmittedPowerLevelCommand, DumpSubmittedProfileCommand, DumpSubmittedReactionCommand,
         DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
         DumpSubmittedReplyThreadTarget, DumpSubmittedRoomListRequest,
-        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand, DumpSubmittedUserCommand,
+        DumpSubmittedRoomTopicCommand, DumpSubmittedSessionCommand,
+        DumpSubmittedSetupRecoveryCommand, DumpSubmittedUserCommand,
         DumpSubmittedVerificationAction, DumpSubmittedVerificationRequest, DumpUserCommandAction,
         DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
         FindActiveViewResponse, GetVersionResponse, IdleProbe, LifecycleState, ListRoomsResponse,
@@ -248,11 +249,12 @@ mod views;
 mod window_data;
 
 use account::{
-    CRASH_LOG_FILE_NAME, PROFILE_SUBDIR, SubmittedIdentityReset, delete_saved_session,
-    load_or_create_store_passphrase, profile_dir, save_session, session_path,
-    submit_cancel_identity_reset, submit_identity_reset, submit_login, submit_logout,
-    submit_recover_e2ee, submit_restore_saved_session, submit_restore_session,
-    submit_setup_e2ee_recovery, submit_start_sync,
+    CRASH_LOG_FILE_NAME, PROFILE_SUBDIR, SubmittedIdentityReset, SubmittedSessionCommand,
+    delete_saved_session, load_or_create_store_passphrase, profile_dir, save_session, session_path,
+    submit_cancel_identity_reset, submit_device_rename, submit_device_sign_out,
+    submit_identity_reset, submit_login, submit_logout, submit_recover_e2ee,
+    submit_restore_saved_session, submit_restore_session, submit_setup_e2ee_recovery,
+    submit_start_sync,
 };
 #[cfg(test)]
 use account::{SAVED_SESSION_VERSION, SESSION_FILE_NAME, SavedSession, load_saved_session};
@@ -316,7 +318,7 @@ use dialogs::{
     SubmittedSetupE2eeRecovery, create_child_window, pack_size_lparam, register_dialog_classes,
     run_colors_dialog, run_modal_dialog, run_options_dialog, show_about_dialog,
     show_e2ee_recovery_key, show_login_dialog, show_recover_e2ee_dialog, show_reset_e2ee_dialog,
-    show_setup_e2ee_dialog, show_single_field_dialog,
+    show_setup_e2ee_dialog, show_sign_out_session_dialog, show_single_field_dialog,
 };
 use echo::{EchoLine, EchoLog};
 use errors::{ErrorDestination, error_destination};
@@ -746,6 +748,7 @@ struct WindowState {
     opened_links: Vec<String>,
     submitted_setup_e2ee_recovery: Vec<SubmittedSetupE2eeRecovery>,
     submitted_identity_resets: Vec<SubmittedIdentityReset>,
+    submitted_session_commands: Vec<SubmittedSessionCommand>,
     pending_attachment_saves: BTreeMap<String, PendingAttachmentSave>,
     last_attachment_save: Option<AttachmentSaveResult>,
     /// The Options dialog while it is open, for the automation dump.
@@ -986,6 +989,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         opened_links: Vec::new(),
         submitted_setup_e2ee_recovery: Vec::new(),
         submitted_identity_resets: Vec::new(),
+        submitted_session_commands: Vec::new(),
         pending_attachment_saves: BTreeMap::new(),
         last_attachment_save: None,
         options_dialog: None,

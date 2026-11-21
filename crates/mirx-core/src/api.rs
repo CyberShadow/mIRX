@@ -59,6 +59,13 @@ pub enum Command {
     /// pins the current one. Answered by `UserIdentityAccepted`; the room
     /// identity streams then report the user `Pinned`.
     AcceptUserIdentity(String),
+    /// Signs out another of your sessions. Answered by `DeviceSignedOut`,
+    /// by `DeviceSignOutApproval` when the server signs sessions out on
+    /// its account page, or by an error. See `SignOutDeviceRequest`.
+    SignOutDevice(SignOutDeviceRequest),
+    /// Renames one of your sessions, this one too. Answered by
+    /// `DeviceRenamed`, or by an error.
+    RenameDevice(RenameDeviceRequest),
     SendMessage(SendMessageRequest),
     SendFile(SendFileRequest),
     EditMessage(EditMessageRequest),
@@ -516,6 +523,35 @@ impl fmt::Debug for ResetE2eeIdentityRequest {
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .finish()
     }
+}
+
+/// The core refuses this session (File > Log Out signs it out) and a
+/// session the account does not have, before it asks the server to sign
+/// anything out.
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignOutDeviceRequest {
+    pub device_id: String,
+    /// The account password, for a server that confirms the sign-out with
+    /// it (user-interactive auth). `None` for an OAuth 2.0 session, whose
+    /// account page confirms it instead.
+    pub password: Option<String>,
+}
+
+impl fmt::Debug for SignOutDeviceRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SignOutDeviceRequest")
+            .field("device_id", &self.device_id)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenameDeviceRequest {
+    pub device_id: String,
+    pub display_name: String,
 }
 
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1872,6 +1908,8 @@ pub enum Operation {
     FetchUserProfile,
     ListUserDevices,
     AcceptUserIdentity,
+    SignOutDevice,
+    RenameDevice,
     SendMessage,
     SendFile,
     EditMessage,
@@ -1974,6 +2012,20 @@ pub enum Event {
     RoomIdentityChanges(RoomIdentityChanges),
     /// The answer to `AcceptUserIdentity`.
     UserIdentityAccepted(String),
+    /// The answer to `SignOutDevice`: the server signed the session out.
+    DeviceSignedOut(String),
+    /// The answer to `SignOutDevice` from an OAuth 2.0 session: the session
+    /// is signed out on this account page, once the user confirms there.
+    /// The core is not told when that happens; `/devices` shows it.
+    DeviceSignOutApproval {
+        device_id: String,
+        url: String,
+    },
+    /// The answer to `RenameDevice`.
+    DeviceRenamed {
+        device_id: String,
+        display_name: String,
+    },
     E2eeStatus(E2eeStatus),
     E2eeRecoverySetupSucceeded(E2eeRecoverySetupSucceeded),
     E2eeRecoverySucceeded(E2eeRecoverySucceeded),
@@ -2011,6 +2063,36 @@ mod tests {
 
     fn span(start: usize, end: usize, style: TextStyle) -> TextStyleSpan {
         TextStyleSpan { start, end, style }
+    }
+
+    #[test]
+    fn sign_out_requests_redact_the_password() {
+        let request = SignOutDeviceRequest {
+            device_id: "PH0NE".to_owned(),
+            password: Some("hunter2".to_owned()),
+        };
+        let debug = format!("{:?}", Command::SignOutDevice(request.clone()));
+        assert!(!debug.contains("hunter2"), "{debug}");
+        assert_eq!(
+            debug,
+            r#"SignOutDevice(SignOutDeviceRequest { device_id: "PH0NE", password: Some("<redacted>") })"#
+        );
+        assert!(
+            serde_json::from_value::<SignOutDeviceRequest>(serde_json::json!({
+                "device_id": "PH0NE",
+                "password": null,
+                "extra": true,
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<RenameDeviceRequest>(serde_json::json!({
+                "device_id": "PH0NE",
+                "display_name": "Phone",
+                "extra": true,
+            }))
+            .is_err()
+        );
     }
 
     #[test]

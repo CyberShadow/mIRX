@@ -11,21 +11,22 @@ use mirx_core::{
     LeaveRoomRequest, ListPublicRoomsRequest, LoginMethod, LoginRequest, MarkRoomReadRequest,
     MemberPowerRole, Operation, PublicRoom, PublicRoomsPage, PublicRoomsResult,
     ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest,
-    RedactEventRequest, RejectRoomInviteRequest, RequestVerificationRequest, RoomActivity,
-    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-    RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
-    RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
-    RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
-    RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
-    RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomSummary, RoomTagSummary, RoomTyping, RoomUserProfile, SendFileRequest, SendMessageRequest,
-    SendReactionRequest, SessionAuth, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
-    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
-    UnsupportedRoomMessageActivity, UserDevices, UserIdentityState, UserProfile,
-    VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start, validate_highlight_word,
+    RedactEventRequest, RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
+    RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
+    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat,
+    RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank, RoomMemberSummary,
+    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomNotificationMode, RoomReadState, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
+    RoomUserProfile, SendFileRequest, SendMessageRequest, SendReactionRequest, SessionAuth,
+    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
+    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SignOutDeviceRequest, SpaceChildSummary,
+    StoredSession, SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity,
+    UserDevices, UserIdentityState, UserProfile, VerificationDecimals, VerificationDirection,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start, validate_highlight_word,
 };
 use tempfile::TempDir;
 
@@ -158,6 +159,8 @@ fn error_room_id(command: &Command) -> Option<&str> {
         | Command::FetchUserProfile(_)
         | Command::ListUserDevices(_)
         | Command::AcceptUserIdentity(_)
+        | Command::SignOutDevice(_)
+        | Command::RenameDevice(_)
         | Command::ListPublicRooms(_)
         | Command::RefreshE2eeStatus
         | Command::SetupE2eeRecovery(_)
@@ -822,6 +825,26 @@ fn list_user_devices_before_login_emits_list_error() {
         Command::ListUserDevices("@alice:example.org".to_owned()),
         Operation::ListUserDevices,
         "listing devices requires an authenticated session",
+    );
+}
+
+#[test]
+fn session_commands_before_login_emit_their_errors() {
+    assert_invalid_authenticated_command(
+        Command::SignOutDevice(SignOutDeviceRequest {
+            device_id: "PH0NE".to_owned(),
+            password: Some("hunter2".to_owned()),
+        }),
+        Operation::SignOutDevice,
+        "signing out a session requires an authenticated session",
+    );
+    assert_invalid_authenticated_command(
+        Command::RenameDevice(RenameDeviceRequest {
+            device_id: "PH0NE".to_owned(),
+            display_name: "Phone".to_owned(),
+        }),
+        Operation::RenameDevice,
+        "renaming a session requires an authenticated session",
     );
 }
 

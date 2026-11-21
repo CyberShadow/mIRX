@@ -908,6 +908,8 @@ pub(super) enum DialogGesture {
     MenuCommand(usize),
     /// The active window's close box.
     CloseActiveView,
+    /// Return in the active window's editbox.
+    ComposeReturn,
 }
 
 pub(super) fn dialog_gesture(dialog: AutomationDialog) -> DialogGesture {
@@ -924,6 +926,7 @@ pub(super) fn dialog_gesture(dialog: AutomationDialog) -> DialogGesture {
         }
         AutomationDialog::ResetE2ee => DialogGesture::MenuCommand(MENU_ID_RESET_E2EE),
         AutomationDialog::CloseActiveView => DialogGesture::CloseActiveView,
+        AutomationDialog::ComposeReturn => DialogGesture::ComposeReturn,
     }
 }
 
@@ -960,6 +963,16 @@ pub(super) unsafe fn open_dialog_for_automation(
                 .expect("the active view has a window")
                 .child;
             (child, WM_SYSCOMMAND, SC_CLOSE as usize)
+        }
+        DialogGesture::ComposeReturn => {
+            let edit = compose_edit(hwnd);
+            if read_window_text(edit).is_empty() {
+                return Err((
+                    "empty_compose",
+                    "the active window's editbox is empty".to_owned(),
+                ));
+            }
+            (edit, WM_KEYDOWN, VK_RETURN_KEY)
         }
     };
     if PostMessageW(target, message, wparam, 0) == 0 {
@@ -1350,6 +1363,10 @@ mod tests {
             (
                 AutomationDialog::CloseActiveView,
                 DialogGesture::CloseActiveView,
+            ),
+            (
+                AutomationDialog::ComposeReturn,
+                DialogGesture::ComposeReturn,
             ),
         ] {
             assert_eq!(dialog_gesture(dialog), gesture, "{dialog:?}");

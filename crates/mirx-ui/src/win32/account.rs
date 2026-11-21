@@ -491,14 +491,74 @@ fn send_identity_reset_command(
     command: Command,
     submitted: SubmittedIdentityReset,
 ) -> Result<(), String> {
+    send_unrecorded_command(state, command)?;
+    state.submitted_identity_resets.push(submitted);
+    Ok(())
+}
+
+/// What `/devices delete` and `/devices rename` asked the core; never the
+/// password.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum SubmittedSessionCommand {
+    SignOut {
+        device_id: String,
+        password_redacted: bool,
+    },
+    Rename {
+        device_id: String,
+        display_name: String,
+    },
+}
+
+pub(super) fn submit_device_sign_out(
+    state: &mut WindowState,
+    device_id: String,
+    password: Option<String>,
+) -> Result<(), String> {
+    let submitted = SubmittedSessionCommand::SignOut {
+        device_id: device_id.clone(),
+        password_redacted: password.is_some(),
+    };
+    send_unrecorded_command(
+        state,
+        Command::SignOutDevice(SignOutDeviceRequest {
+            device_id,
+            password,
+        }),
+    )?;
+    state.submitted_session_commands.push(submitted);
+    Ok(())
+}
+
+pub(super) fn submit_device_rename(
+    state: &mut WindowState,
+    device_id: String,
+    display_name: String,
+) -> Result<(), String> {
+    let submitted = SubmittedSessionCommand::Rename {
+        device_id: device_id.clone(),
+        display_name: display_name.clone(),
+    };
+    enqueue_command(
+        state,
+        Command::RenameDevice(RenameDeviceRequest {
+            device_id,
+            display_name,
+        }),
+    )?;
+    state.submitted_session_commands.push(submitted);
+    Ok(())
+}
+
+/// Sends a command that may carry the account password past
+/// `recorded_commands`, which would keep it.
+fn send_unrecorded_command(state: &mut WindowState, command: Command) -> Result<(), String> {
     state
         .command_sender
         .as_ref()
         .ok_or_else(|| "core command sender is not available".to_owned())?
         .send(command)
-        .map_err(|err| format!("failed to enqueue e2ee identity reset command: {err}"))?;
-    state.submitted_identity_resets.push(submitted);
-    Ok(())
+        .map_err(|err| format!("failed to enqueue command: {err}"))
 }
 
 #[cfg(test)]
@@ -618,6 +678,51 @@ mod tests {
             ]
         );
         assert!(state.recorded_commands.is_empty());
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn session_commands_enqueue_and_record_no_password() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+
+        submit_device_sign_out(&mut state, "PH0NE".to_owned(), Some("hunter2".to_owned())).unwrap();
+        submit_device_sign_out(&mut state, "L4PT0P".to_owned(), None).unwrap();
+        submit_device_rename(&mut state, "PH0NE".to_owned(), "Work phone".to_owned()).unwrap();
+
+        assert_eq!(
+            state.submitted_session_commands,
+            vec![
+                SubmittedSessionCommand::SignOut {
+                    device_id: "PH0NE".to_owned(),
+                    password_redacted: true
+                },
+                SubmittedSessionCommand::SignOut {
+                    device_id: "L4PT0P".to_owned(),
+                    password_redacted: false
+                },
+                SubmittedSessionCommand::Rename {
+                    device_id: "PH0NE".to_owned(),
+                    display_name: "Work phone".to_owned(),
+                },
+            ]
+        );
+        // Only the rename, which carries no password.
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::RenameDevice(RenameDeviceRequest {
+                device_id: "PH0NE".to_owned(),
+                display_name: "Work phone".to_owned(),
+            })]
+        );
+        // The core was sent all three.
+        assert_eq!(handle.command_sender().sent(), 3);
 
         handle
             .command_sender()

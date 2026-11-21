@@ -23,11 +23,12 @@ use crate::api::{
     E2eeRecoveryOperation, E2eeRecoverySetupSucceeded, E2eeRecoverySucceeded, EditMessageRequest,
     Event, HighlightWord, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
     LeaveRoomRequest, LoginMethod, LoginRequest, MarkRoomReadRequest, Operation,
-    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RequestVerificationRequest,
-    ResetE2eeIdentityRequest, RestoreSessionRequest, RoomJoined, RoomMembers, RoomMembership,
-    RoomReadState, RoomSummary, SendReactionRequest, SetDisplayNameRequest,
-    SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
-    SetupE2eeRecoveryRequest, SyncStopReason, UnbanRoomMemberRequest, VerificationFlowId,
+    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RenameDeviceRequest,
+    RequestVerificationRequest, ResetE2eeIdentityRequest, RestoreSessionRequest, RoomJoined,
+    RoomMembers, RoomMembership, RoomReadState, RoomSummary, SendReactionRequest,
+    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
+    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SignOutDeviceRequest, SyncStopReason,
+    UnbanRoomMemberRequest, VerificationFlowId,
 };
 use crate::loopback::{self, LoopbackListener, LoopbackRedirect};
 use crate::matrix::{
@@ -352,6 +353,8 @@ async fn handle_command(
         Command::AcceptUserIdentity(user_id) => {
             handle_accept_user_identity(event_tx, state, user_id).await
         }
+        Command::SignOutDevice(request) => handle_sign_out_device(event_tx, state, request).await,
+        Command::RenameDevice(request) => handle_rename_device(event_tx, state, request).await,
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
         Command::SendFile(request) => handle_send_file(event_tx, state, request).await,
         Command::EditMessage(request) => handle_edit_message(event_tx, state, request).await,
@@ -1607,6 +1610,65 @@ async fn handle_list_user_devices(
     match matrix::list_user_devices(client, &user_id).await {
         Ok(devices) => emit_event(event_tx, Event::UserDevices(devices)),
         Err(err) => emit_matrix_error(event_tx, Operation::ListUserDevices, err),
+    }
+
+    false
+}
+
+async fn handle_sign_out_device(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: SignOutDeviceRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::SignOutDevice,
+            "signing out a session requires an authenticated session",
+        );
+        return false;
+    };
+
+    match matrix::sign_out_device(client, &request.device_id, request.password).await {
+        Ok(matrix::SignOutOutcome::SignedOut) => {
+            emit_event(event_tx, Event::DeviceSignedOut(request.device_id))
+        }
+        Ok(matrix::SignOutOutcome::Approval { url }) => emit_event(
+            event_tx,
+            Event::DeviceSignOutApproval {
+                device_id: request.device_id,
+                url,
+            },
+        ),
+        Err(err) => emit_matrix_error(event_tx, Operation::SignOutDevice, err),
+    }
+
+    false
+}
+
+async fn handle_rename_device(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: RenameDeviceRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::RenameDevice,
+            "renaming a session requires an authenticated session",
+        );
+        return false;
+    };
+
+    match matrix::rename_device(client, &request.device_id, &request.display_name).await {
+        Ok(()) => emit_event(
+            event_tx,
+            Event::DeviceRenamed {
+                device_id: request.device_id,
+                display_name: request.display_name,
+            },
+        ),
+        Err(err) => emit_matrix_error(event_tx, Operation::RenameDevice, err),
     }
 
     false

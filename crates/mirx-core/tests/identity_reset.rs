@@ -7,140 +7,22 @@
 //! server's crypto preset keeps the keys it is given; the mocks of each
 //! test answer the reset's cross-signing upload before it.
 
+mod common;
+
 use std::time::{Duration, Instant};
 
-use matrix_sdk::ruma::{owned_device_id, owned_user_id};
+use common::{Harness, password_flow, uiaa};
 use matrix_sdk::test_utils::mocks::MatrixMockServer;
 use mirx_core::{
-    Command, CoreConfig, CoreErrorEvent, CoreHandle, E2eeIdentityResetOutcome, Event, Operation,
-    ResetE2eeIdentityRequest, RestoreSessionRequest, SessionAuth, StoredSession, start,
+    Command, CoreErrorEvent, E2eeIdentityResetOutcome, Event, Operation, ResetE2eeIdentityRequest,
 };
 use serde_json::json;
-use tempfile::TempDir;
 use wiremock::matchers::{body_partial_json, method, path_regex};
 use wiremock::{Mock, ResponseTemplate};
 
-const EVENT_TIMEOUT: Duration = Duration::from_secs(20);
-
 const UPLOAD: &str = r"^/_matrix/client/.*/keys/device_signing/upload$";
 
-struct Harness {
-    runtime: tokio::runtime::Runtime,
-    server: MatrixMockServer,
-    core: CoreHandle,
-    _profile: TempDir,
-}
-
 impl Harness {
-    /// The core, restored into a password session of `@alice:example.org`
-    /// whose identity another of her sessions set up.
-    fn restored() -> Self {
-        Self::restored_with(SessionAuth::Matrix)
-    }
-
-    /// The same, signed in through OAuth 2.0.
-    fn restored_oauth() -> Self {
-        Self::restored_with(SessionAuth::OAuth {
-            client_id: "restored-client".to_owned(),
-        })
-    }
-
-    fn restored_with(auth: SessionAuth) -> Self {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("build tokio runtime");
-        let alice = owned_user_id!("@alice:example.org");
-        let (server, access_token) = runtime.block_on(async {
-            let server = MatrixMockServer::new().await;
-            server.mock_crypto_endpoints_preset().await;
-            let other_session = server
-                .client_builder_for_crypto_end_to_end(&alice, &owned_device_id!("L0ST"))
-                .build()
-                .await;
-            other_session
-                .encryption()
-                .bootstrap_cross_signing(None)
-                .await
-                .expect("set up the identity");
-            // The crypto preset knows the session by its token: the next
-            // one it hands out.
-            drop(server.client_builder_for_crypto_end_to_end(&alice, &owned_device_id!("MIRX")));
-            server.mock_versions().ok().mount().await;
-            server.oauth().mock_server_metadata().ok().mount().await;
-            server
-                .mock_sync()
-                .expect_any_access_token()
-                .ok(|_| {})
-                .mount()
-                .await;
-            mount_account_data_and_backups(&server).await;
-            (server, "TOKEN_1".to_owned())
-        });
-        let profile = TempDir::new().expect("temporary profile directory");
-        let core = start(CoreConfig {
-            profile_dir: profile.path().join("profile"),
-            store_passphrase: "test-store-passphrase".to_owned(),
-        })
-        .expect("start core");
-        let harness = Self {
-            runtime,
-            server,
-            core,
-            _profile: profile,
-        };
-        harness.wait_for("Started", |event| *event == Event::Started);
-        harness.send(Command::RestoreSession(RestoreSessionRequest {
-            homeserver_url: harness.server.uri(),
-            session: StoredSession {
-                user_id: alice.to_string(),
-                device_id: "MIRX".to_owned(),
-                access_token,
-                refresh_token: matches!(auth, SessionAuth::OAuth { .. })
-                    .then(|| "REFRESH".to_owned()),
-                auth,
-            },
-            start_sync: false,
-        }));
-        harness.wait_for("RestoredSession", |event| *event == Event::RestoredSession);
-        harness.wait_for("the session's E2EE status", |event| {
-            matches!(event, Event::E2eeStatus(_))
-        });
-        harness
-    }
-
-    fn send(&self, command: Command) {
-        self.core
-            .command_sender()
-            .send(command)
-            .expect("send command");
-    }
-
-    /// Every event up to and including the first that `matches`.
-    fn events_until(&self, what: &str, matches: impl Fn(&Event) -> bool) -> Vec<Event> {
-        let deadline = Instant::now() + EVENT_TIMEOUT;
-        let mut events = Vec::new();
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            match self.core.events().recv_timeout(left) {
-                Ok(event) => {
-                    let done = matches(&event);
-                    events.push(event);
-                    if done {
-                        return events;
-                    }
-                }
-                Err(err) => panic!("no {what} ({err}) after {events:#?}"),
-            }
-        }
-    }
-
-    fn wait_for(&self, what: &str, matches: impl Fn(&Event) -> bool) -> Event {
-        self.events_until(what, matches)
-            .pop()
-            .expect("the matching event")
-    }
-
     fn reset(&self, password: Option<&str>) {
         self.send(Command::ResetE2eeIdentity(ResetE2eeIdentityRequest {
             password: password.map(str::to_owned),
@@ -156,10 +38,6 @@ impl Harness {
             }),
         );
         events
-    }
-
-    fn mount(&self, mock: Mock) {
-        self.runtime.block_on(mock.mount(self.server.server()));
     }
 
     /// How many cross-signing uploads the server got.
@@ -193,14 +71,6 @@ impl Harness {
                 .count()
         })
     }
-
-    fn shut_down(self) {
-        self.send(Command::Shutdown);
-        self.wait_for("Stopped", |event| *event == Event::Stopped);
-        self.core.join().expect("join core");
-        // The mocks' expectations are checked as the server drops.
-        self.runtime.block_on(async move { drop(self.server) });
-    }
 }
 
 fn is_reset_answer(event: &Event) -> bool {
@@ -212,50 +82,6 @@ fn is_reset_answer(event: &Event) -> bool {
                 ..
             })
     )
-}
-
-/// What a reset and the SDK's backup handling ask besides the keys: the
-/// account data it writes and reads, and a server without a key backup
-/// until one is created.
-async fn mount_account_data_and_backups(server: &MatrixMockServer) {
-    Mock::given(method("PUT"))
-        .and(path_regex(r"^/_matrix/client/.*/user/.*/account_data/.*"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
-        .mount(server.server())
-        .await;
-    Mock::given(method("GET"))
-        .and(path_regex(r"^/_matrix/client/.*/user/.*/account_data/.*"))
-        .respond_with(ResponseTemplate::new(404).set_body_json(json!({
-            "errcode": "M_NOT_FOUND",
-            "error": "Account data not found",
-        })))
-        .mount(server.server())
-        .await;
-    Mock::given(method("GET"))
-        .and(path_regex(r"^/_matrix/client/.*/room_keys/version$"))
-        .respond_with(ResponseTemplate::new(404).set_body_json(json!({
-            "errcode": "M_NOT_FOUND",
-            "error": "No current backup version",
-        })))
-        .mount(server.server())
-        .await;
-    Mock::given(method("POST"))
-        .and(path_regex(r"^/_matrix/client/.*/room_keys/version$"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "version": "1" })))
-        .mount(server.server())
-        .await;
-}
-
-fn uiaa(flows: serde_json::Value) -> ResponseTemplate {
-    ResponseTemplate::new(401).set_body_json(json!({
-        "flows": flows,
-        "params": {},
-        "session": "oFIJVvtEOCKmRUTYKTYIIPHL",
-    }))
-}
-
-fn password_flow() -> serde_json::Value {
-    json!([{ "stages": ["m.login.password"] }])
 }
 
 /// Answers the reset's cross-signing upload ahead of the crypto preset.

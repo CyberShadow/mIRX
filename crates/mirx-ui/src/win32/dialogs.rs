@@ -21,6 +21,7 @@ const LOGIN_DIALOG_CLASS_NAME: &str = "mirxWin32LoginDialog";
 const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32RecoverE2eeDialog";
 const SETUP_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32SetupE2eeDialog";
 const RESET_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32ResetE2eeDialog";
+const SIGN_OUT_SESSION_DIALOG_CLASS_NAME: &str = "mirxWin32SignOutSessionDialog";
 const RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME: &str = "mirxWin32RecoveryKeyHandoffDialog";
 pub(super) const SINGLE_FIELD_DIALOG_CLASS_NAME: &str = "mirxWin32SingleFieldDialog";
 pub(super) const ABOUT_DIALOG_CLASS_NAME: &str = "mirxWin32AboutDialog";
@@ -181,7 +182,7 @@ pub(super) struct SingleFieldDialogState {
 }
 
 /// Every mirx dialog's class and window procedure.
-const DIALOG_CLASSES: [(&str, WNDPROC); 9] = [
+const DIALOG_CLASSES: [(&str, WNDPROC); 10] = [
     (LOGIN_DIALOG_CLASS_NAME, Some(login_dialog_window_proc)),
     (
         RECOVER_E2EE_DIALOG_CLASS_NAME,
@@ -193,6 +194,10 @@ const DIALOG_CLASSES: [(&str, WNDPROC); 9] = [
     ),
     (
         RESET_E2EE_DIALOG_CLASS_NAME,
+        Some(confirm_dialog_window_proc),
+    ),
+    (
+        SIGN_OUT_SESSION_DIALOG_CLASS_NAME,
         Some(confirm_dialog_window_proc),
     ),
     (
@@ -1081,6 +1086,28 @@ pub(super) unsafe fn show_reset_e2ee_dialog(
     show_confirm_dialog(owner, &reset_e2ee_confirmation(auth))
 }
 
+/// The Sign Out Session confirmation of a password session; an OAuth 2.0
+/// session's account page confirms a sign-out itself.
+fn sign_out_session_confirmation(device_id: &str) -> ConfirmDialog {
+    ConfirmDialog {
+        class_name: SIGN_OUT_SESSION_DIALOG_CLASS_NAME,
+        title: "Sign Out Session",
+        warning: format!(
+            "Sign out session {device_id}? It will no longer be able to read or send \
+             messages. Room keys only it holds are lost unless your key backup has them."
+        ),
+        confirm_label: "&Sign Out",
+        confirm_with: ConfirmWith::Password,
+    }
+}
+
+pub(super) unsafe fn show_sign_out_session_dialog(
+    owner: HWND,
+    device_id: &str,
+) -> Result<Option<ConfirmForm>, String> {
+    show_confirm_dialog(owner, &sign_out_session_confirmation(device_id))
+}
+
 /// One labelled field with OK and Cancel: the Commands menu's prompts and
 /// Find.
 unsafe fn create_single_field_dialog(
@@ -1471,7 +1498,35 @@ mod tests {
         _time: u32,
     ) {
         KillTimer(frame, timer);
-        let dialog = owned_dialog(frame, RESET_E2EE_DIALOG_CLASS_NAME);
+        press_enter_in_password(owned_dialog(frame, RESET_E2EE_DIALOG_CLASS_NAME));
+    }
+
+    /// The same in the Sign Out Session dialog.
+    unsafe extern "system" fn press_enter_in_sign_out_password(
+        frame: HWND,
+        _message: u32,
+        timer: usize,
+        _time: u32,
+    ) {
+        KillTimer(frame, timer);
+        press_enter_in_password(owned_dialog(frame, SIGN_OUT_SESSION_DIALOG_CLASS_NAME));
+    }
+
+    /// Types `p` into the Sign Out Session dialog's password, then clicks
+    /// Sign Out.
+    unsafe extern "system" fn click_sign_out_after_a_password(
+        frame: HWND,
+        _message: u32,
+        timer: usize,
+        _time: u32,
+    ) {
+        KillTimer(frame, timer);
+        let dialog = owned_dialog(frame, SIGN_OUT_SESSION_DIALOG_CLASS_NAME);
+        set_window_text(GetDlgItem(dialog, CONFIRM_DIALOG_PASSWORD_ID.into()), "p");
+        PostMessageW(dialog, WM_COMMAND, CONFIRM_DIALOG_CONFIRM_ID, 0);
+    }
+
+    unsafe fn press_enter_in_password(dialog: HWND) {
         let edit = GetDlgItem(dialog, CONFIRM_DIALOG_PASSWORD_ID.into());
         PostMessageW(edit, WM_CHAR, 'p' as WPARAM, 0);
         PostMessageW(edit, WM_KEYDOWN, VK_RETURN_KEY, 0);
@@ -1525,6 +1580,52 @@ mod tests {
                     Some(ConfirmForm { password: None })
                 );
                 assert_ne!(IsWindowEnabled(hwnd), 0, "closing it enables the frame");
+            });
+        }
+    }
+
+    /// Enter presses Cancel, the default; the password goes with a click on
+    /// Sign Out; the field is empty afterwards either way.
+    #[test]
+    fn the_sign_out_dialog_signs_out_only_from_its_button() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                register_dialog_classes(GetModuleHandleW(null())).unwrap();
+                SetTimer(hwnd, 1, 0, Some(press_enter_in_sign_out_password));
+                assert_eq!(show_sign_out_session_dialog(hwnd, "PH0NE").unwrap(), None);
+                SetTimer(hwnd, 1, 0, Some(click_sign_out_after_a_password));
+                assert_eq!(
+                    show_sign_out_session_dialog(hwnd, "PH0NE").unwrap(),
+                    Some(ConfirmForm {
+                        password: Some("p".to_owned())
+                    })
+                );
+                assert_ne!(IsWindowEnabled(hwnd), 0, "closing it enables the frame");
+            });
+        }
+    }
+
+    #[test]
+    fn a_confirmation_clears_its_password_and_defaults_to_cancel() {
+        unsafe {
+            with_test_frame(600, 400, |frame| {
+                register_dialog_classes(GetModuleHandleW(null())).unwrap();
+                let dialog = create_confirm_dialog(
+                    frame,
+                    &sign_out_session_confirmation("PH0NE"),
+                    Arc::default(),
+                )
+                .unwrap();
+                assert_eq!(
+                    SendMessageW(dialog, DM_GETDEFID, 0, 0),
+                    default_button(CONFIRM_DIALOG_CANCEL_ID)
+                );
+                let edit = GetDlgItem(dialog, CONFIRM_DIALOG_PASSWORD_ID.into());
+                set_window_text(edit, "hunter2");
+                // What every way of closing it does first.
+                clear_confirm_dialog_password(dialog);
+                assert_eq!(read_window_text(edit), "");
+                DestroyWindow(dialog);
             });
         }
     }
@@ -1623,6 +1724,12 @@ mod tests {
                         &reset_e2ee_confirmation(&SessionAuth::OAuth {
                             client_id: "client".to_owned(),
                         }),
+                        Arc::default(),
+                    )
+                    .unwrap(),
+                    create_confirm_dialog(
+                        frame,
+                        &sign_out_session_confirmation("PH0NE"),
                         Arc::default(),
                     )
                     .unwrap(),

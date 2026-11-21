@@ -16,7 +16,7 @@ use matrix_sdk::{
         AttachmentConfig, AttachmentInfo, BaseAudioInfo, BaseFileInfo, BaseImageInfo, BaseVideoInfo,
     },
     authentication::{
-        AuthSession,
+        AuthApi, AuthSession,
         matrix::MatrixSession,
         oauth::{
             ClientId, ClientRegistrationData, OAuthSession, UserSession,
@@ -51,6 +51,9 @@ use matrix_sdk::{
         DeviceId, EventId, Int, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId,
         OwnedRoomAliasId, OwnedRoomId, OwnedUserId, RoomId, RoomOrAliasId, ServerName, UInt,
         UserId,
+        api::client::discovery::get_authorization_server_metadata::v1::{
+            AccountManagementActionData, DeviceDeleteData,
+        },
         api::client::profile::DisplayName as DisplayNameField,
         api::client::push::{delete_pushrule, set_pushrule, set_pushrule_enabled},
         api::client::session::get_login_types::v3::LoginType,
@@ -1476,6 +1479,136 @@ pub(crate) fn uiaa_refusal(info: &uiaa::UiaaInfo) -> Option<&str> {
     info.auth_error
         .as_ref()
         .map(|refusal| refusal.message.as_str())
+}
+
+/// What signing out another of your sessions came to.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SignOutOutcome {
+    SignedOut,
+    /// An OAuth 2.0 server signs sessions out on its account page: this
+    /// page, which the user confirms the sign-out on.
+    Approval {
+        url: String,
+    },
+}
+
+/// Signs out another of your sessions. A password session answers the
+/// server's user-interactive auth with `password`: the first, unanswered
+/// request is the standard probe, which signs nothing out unless the
+/// server asks for no confirmation. An OAuth 2.0 session gets the account
+/// page that signs it out instead.
+pub(crate) async fn sign_out_device(
+    client: &Client,
+    device_id: &str,
+    password: Option<String>,
+) -> Result<SignOutOutcome, MatrixCoreError> {
+    let auth_api = client
+        .auth_api()
+        .expect("signing out a session runs signed in");
+    if matches!((&auth_api, &password), (AuthApi::OAuth(_), Some(_))) {
+        return Err(MatrixCoreError::new(
+            "your server signs sessions out in the browser, not with a password",
+        ));
+    }
+    let device_id = other_own_device(client, device_id).await?;
+    let failed =
+        |why: &dyn Display| MatrixCoreError::new(format!("failed to sign out {device_id}: {why}"));
+    match auth_api {
+        AuthApi::OAuth(oauth) => {
+            let metadata = oauth
+                .cached_server_metadata()
+                .await
+                .map_err(|err| failed(&err))?;
+            let url = metadata
+                .account_management_url_with_action(AccountManagementActionData::DeviceDelete(
+                    DeviceDeleteData::new(&device_id),
+                ))
+                .ok_or_else(|| {
+                    failed(&"your server has no account page to sign sessions out on")
+                })?;
+            Ok(SignOutOutcome::Approval {
+                url: url.to_string(),
+            })
+        }
+        AuthApi::Matrix(_) => {
+            let devices = [device_id.clone()];
+            let session = match client.delete_devices(&devices, None).await {
+                // The server asked for no confirmation.
+                Ok(_) => return Ok(SignOutOutcome::SignedOut),
+                Err(err) => match err.as_uiaa_response() {
+                    Some(info) => {
+                        password_uiaa_session(info).map_err(|refusal| failed(&refusal))?
+                    }
+                    None => return Err(failed(&err)),
+                },
+            };
+            let password = password
+                .ok_or_else(|| failed(&"signing out a session needs your account password"))?;
+            client
+                .delete_devices(&devices, Some(password_auth(client, session, password)))
+                .await
+                .map_err(|err| match err.as_uiaa_response().and_then(uiaa_refusal) {
+                    Some(refusal) => failed(&refusal),
+                    None => failed(&err),
+                })?;
+            Ok(SignOutOutcome::SignedOut)
+        }
+        // `AuthApi` is non-exhaustive; mirx signs in with these two only.
+        api => panic!("a session signed in with {api:?}"),
+    }
+}
+
+/// Another of your sessions, which the server has. Signing this one out
+/// would end mirx's own session (File > Log Out does that); and a server
+/// may "sign out" an ID the account never had without a word (Synapse
+/// does), so it is looked up first.
+async fn other_own_device(
+    client: &Client,
+    device_id: &str,
+) -> Result<OwnedDeviceId, MatrixCoreError> {
+    let device_id = OwnedDeviceId::from(device_id);
+    if client.device_id() == Some(&*device_id) {
+        return Err(MatrixCoreError::new(format!(
+            "{device_id} is this session; File > Log Out signs it out"
+        )));
+    }
+    let exists = client
+        .device_exists(device_id.clone())
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to look up {device_id}: {err}")))?;
+    if !exists {
+        return Err(no_such_session(&device_id));
+    }
+    Ok(device_id)
+}
+
+fn no_such_session(device_id: &DeviceId) -> MatrixCoreError {
+    MatrixCoreError::new(format!(
+        "you have no session {device_id}; /devices lists yours"
+    ))
+}
+
+/// Renames one of your sessions, this one too. The server answers an ID
+/// the account does not have with 404.
+pub(crate) async fn rename_device(
+    client: &Client,
+    device_id: &str,
+    display_name: &str,
+) -> Result<(), MatrixCoreError> {
+    let device_id = OwnedDeviceId::from(device_id);
+    match client.rename_device(&device_id, display_name).await {
+        Ok(_) => Ok(()),
+        Err(err)
+            if err
+                .as_client_api_error()
+                .is_some_and(|error| error.status_code == 404) =>
+        {
+            Err(no_such_session(&device_id))
+        }
+        Err(err) => Err(MatrixCoreError::new(format!(
+            "failed to rename {device_id}: {err}"
+        ))),
+    }
 }
 
 /// Reads your identity back from the server after a reset that did not
