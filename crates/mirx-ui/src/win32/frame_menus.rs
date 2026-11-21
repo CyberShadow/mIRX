@@ -1079,7 +1079,7 @@ unsafe fn timeline_event_context_lparam_for_automation(
                 == Some(event_id)
         })
         .ok_or_else(|| format!("unknown_event: {event_id}"))?;
-    let y = state.vertical_padding
+    let y = state.metrics.vertical_padding
         + (line_index.saturating_sub(state.top_line) as i32 * state.line_height)
         + state.line_height / 2;
     let mut point = POINT { x: 1, y };

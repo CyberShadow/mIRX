@@ -20,8 +20,6 @@ use super::text_selection::{
 
 const WM_TIMELINE_GET_TOP_LINE: u32 = WM_APP + 100;
 
-const TIMELINE_VERTICAL_PADDING: i32 = 6;
-
 pub(super) struct TimelineState {
     pub(super) source_rows: Vec<TimelineRow>,
     rendered_text: String,
@@ -34,7 +32,8 @@ pub(super) struct TimelineState {
     pub(super) font: HFONT,
     /// The height of a line in `font`.
     pub(super) line_height: i32,
-    pub(super) vertical_padding: i32,
+    /// The paddings and image slots at the window's DPI.
+    pub(super) metrics: TimelineMetrics,
     /// The wraps of `source_rows`' log rows, at the current width and font.
     pub(super) wrap_cache: WrapCache,
     /// The wheel's turn since its last whole notch, for wheels that report
@@ -49,7 +48,7 @@ pub(super) struct TimelineState {
 }
 
 impl TimelineState {
-    fn new(line_height: i32) -> Self {
+    fn new(line_height: i32, metrics: TimelineMetrics) -> Self {
         Self {
             source_rows: Vec::new(),
             rendered_text: String::new(),
@@ -59,7 +58,7 @@ impl TimelineState {
             top_line: 0,
             font: null_mut(),
             line_height,
-            vertical_padding: TIMELINE_VERTICAL_PADDING,
+            metrics,
             wrap_cache: WrapCache::default(),
             wheel_remainder: 0,
             laid_out_visible_rows: 1,
@@ -116,7 +115,8 @@ unsafe extern "system" fn timeline_window_proc(
     match message {
         WM_CREATE => {
             let line_height = font_line_height(null_mut());
-            window_data::adopt(hwnd, TimelineState::new(line_height));
+            let metrics = TimelineMetrics::at(Dpi::of_window(hwnd));
+            window_data::adopt(hwnd, TimelineState::new(line_height, metrics));
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
         WM_SETFONT => {
@@ -325,7 +325,8 @@ pub(super) unsafe fn timeline_line_geometry(hwnd: HWND) -> LineGeometry {
         top_line: state.top_line,
         visible_rows: timeline_visible_rows(hwnd),
         line_height: state.line_height,
-        vertical_padding: state.vertical_padding,
+        vertical_padding: state.metrics.vertical_padding,
+        left_padding: state.metrics.left_padding,
     }
 }
 
@@ -456,7 +457,7 @@ unsafe fn select_timeline_row(hwnd: HWND, lparam: LPARAM) {
 unsafe fn timeline_source_row_index_at_client_y(hwnd: HWND, y: i32) -> Option<usize> {
     let state = timeline_state_ref(hwnd);
     let line_index = y
-        .checked_sub(state.vertical_padding)
+        .checked_sub(state.metrics.vertical_padding)
         .filter(|offset| *offset >= 0)
         .map(|offset| state.top_line + (offset / state.line_height) as usize);
     line_index
@@ -557,7 +558,7 @@ pub(super) unsafe fn timeline_visible_rows(hwnd: HWND) -> usize {
     let mut rect = RECT::default();
     GetClientRect(hwnd, &mut rect);
     let client_height = rect.bottom - rect.top;
-    let usable_height = (client_height - state.vertical_padding * 2).max(state.line_height);
+    let usable_height = (client_height - state.metrics.vertical_padding * 2).max(state.line_height);
     (usable_height / state.line_height).max(1) as usize
 }
 

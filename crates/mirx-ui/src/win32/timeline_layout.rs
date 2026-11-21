@@ -36,10 +36,43 @@ pub(super) enum TimelinePaintLineVisual {
     ImageSlot,
 }
 
-/// The width available to timeline text, never less than one pixel so
-/// wrapping always makes progress in a collapsed view.
-fn timeline_text_width(client_width: i32) -> i32 {
-    (client_width - TIMELINE_LEFT_PADDING - TIMELINE_RIGHT_PADDING).max(1)
+/// The timeline's lengths at its window's DPI, in pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TimelineMetrics {
+    /// Between the client's left edge and the text.
+    pub(super) left_padding: i32,
+    pub(super) right_padding: i32,
+    /// Above the first line.
+    pub(super) vertical_padding: i32,
+    /// The box a thumbnail is drawn in.
+    thumbnail_width: i32,
+    thumbnail_height: i32,
+    /// Space around a thumbnail inside its slot, over the slot's lines.
+    image_slot_padding: i32,
+    /// Between the text's left edge and the thumbnail.
+    image_left_indent: i32,
+    image_placeholder_inset: i32,
+}
+
+impl TimelineMetrics {
+    pub(super) fn at(dpi: Dpi) -> Self {
+        Self {
+            left_padding: dpi.px(TIMELINE_LEFT_PADDING),
+            right_padding: dpi.px(TIMELINE_RIGHT_PADDING),
+            vertical_padding: dpi.px(TIMELINE_VERTICAL_PADDING),
+            thumbnail_width: dpi.px(TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH),
+            thumbnail_height: dpi.px(TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT),
+            image_slot_padding: dpi.px(TIMELINE_IMAGE_SLOT_PADDING),
+            image_left_indent: dpi.px(TIMELINE_IMAGE_LEFT_INDENT),
+            image_placeholder_inset: dpi.px(TIMELINE_IMAGE_PLACEHOLDER_INSET),
+        }
+    }
+
+    /// The width available to timeline text, never less than one pixel so
+    /// wrapping always makes progress in a collapsed view.
+    fn text_width(&self, client_width: i32) -> i32 {
+        (client_width - self.left_padding - self.right_padding).max(1)
+    }
 }
 
 pub(super) fn plain_timeline_paint_lines(lines: &[String]) -> Vec<TimelinePaintLine> {
@@ -286,13 +319,14 @@ fn timeline_row_paint_lines_with_measure<Measure>(
     rows: &[TimelineRow],
     client_width: i32,
     line_height: i32,
+    metrics: &TimelineMetrics,
     cache: &mut WrapCache,
     measure: &Measure,
 ) -> (Vec<TimelinePaintLine>, usize)
 where
     Measure: Fn(&str) -> i32,
 {
-    let (wraps, wrapped) = cache.rewrap(rows, timeline_text_width(client_width), measure);
+    let (wraps, wrapped) = cache.rewrap(rows, metrics.text_width(client_width), measure);
     let mut paint_lines = Vec::new();
     for (source_row_index, (row, wrap)) in rows.iter().zip(wraps).enumerate() {
         let segments = match wrap {
@@ -317,7 +351,7 @@ where
             });
         }
         if let Some(image_state) = &row.image_state {
-            for image_slot_index in 0..image_slot_lines(line_height) {
+            for image_slot_index in 0..image_slot_lines(line_height, metrics) {
                 paint_lines.push(TimelinePaintLine {
                     kind: row.kind.clone(),
                     visual: TimelinePaintLineVisual::ImageSlot,
@@ -354,6 +388,7 @@ pub(super) unsafe fn timeline_row_paint_lines(
         rows,
         client_width,
         state.line_height,
+        &state.metrics,
         &mut state.wrap_cache,
         &|text| unsafe { glyphs.measure(hdc, text) },
     );
@@ -413,7 +448,7 @@ pub(super) unsafe fn paint_timeline(hwnd: HWND) {
         .take(visible_rows)
         .enumerate()
     {
-        let line_y = state.vertical_padding + row as i32 * state.line_height;
+        let line_y = state.metrics.vertical_padding + row as i32 * state.line_height;
         if line.source_row_index.is_some_and(|index| {
             timeline_row_is_selected(
                 state.source_rows[index].event_id.as_deref(),
@@ -453,11 +488,11 @@ pub(super) unsafe fn paint_timeline(hwnd: HWND) {
                 styles,
                 range,
             } => {
-                let left = TIMELINE_LEFT_PADDING + indent;
+                let left = state.metrics.left_padding + indent;
                 let rect = RECT {
                     left,
                     top: line_y,
-                    right: (client_rect.right - TIMELINE_RIGHT_PADDING).max(left + 1),
+                    right: (client_rect.right - state.metrics.right_padding).max(left + 1),
                     bottom: line_y + state.line_height,
                 };
                 paint_styled_text(
@@ -653,24 +688,29 @@ pub(super) fn activity_level_color(level: ViewActivityLevel, colors: &ActivityCo
 
 /// How many lines an image's slot takes: enough for the thumbnail and its
 /// padding.
-fn image_slot_lines(line_height: i32) -> usize {
-    let slot_height = TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT + TIMELINE_IMAGE_SLOT_PADDING;
+fn image_slot_lines(line_height: i32, metrics: &TimelineMetrics) -> usize {
+    let slot_height = metrics.thumbnail_height + metrics.image_slot_padding;
     let line_height = u32::try_from(line_height).expect("a line height is positive");
     (slot_height as u32).div_ceil(line_height) as usize
 }
 
 /// The thumbnail's rect, centred in its slot, from the slot line at
 /// `line_y` that is the slot's `image_slot_index`th.
-fn timeline_image_slot_rect(line_y: i32, image_slot_index: usize, line_height: i32) -> RECT {
-    let slot_height = image_slot_lines(line_height) as i32 * line_height;
-    let top = line_y + (slot_height - TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT) / 2
+fn timeline_image_slot_rect(
+    line_y: i32,
+    image_slot_index: usize,
+    line_height: i32,
+    metrics: &TimelineMetrics,
+) -> RECT {
+    let slot_height = image_slot_lines(line_height, metrics) as i32 * line_height;
+    let top = line_y + (slot_height - metrics.thumbnail_height) / 2
         - image_slot_index as i32 * line_height;
-    let left = TIMELINE_LEFT_PADDING + TIMELINE_IMAGE_LEFT_INDENT;
+    let left = metrics.left_padding + metrics.image_left_indent;
     RECT {
         left,
         top,
-        right: left + TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH,
-        bottom: top + TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT,
+        right: left + metrics.thumbnail_width,
+        bottom: top + metrics.thumbnail_height,
     }
 }
 
@@ -681,20 +721,18 @@ unsafe fn paint_timeline_image_slot(
     image_slot_index: usize,
     image_state: &TimelineImageState,
 ) {
-    let rect = timeline_image_slot_rect(
-        line_y,
-        image_slot_index,
-        timeline_state_ref(hwnd).line_height,
-    );
+    let state = timeline_state_ref(hwnd);
+    let metrics = &state.metrics;
+    let rect = timeline_image_slot_rect(line_y, image_slot_index, state.line_height, metrics);
     match image_state {
         TimelineImageState::Pending => {
-            paint_timeline_image_placeholder(hdc, &rect, "loading image...");
+            paint_timeline_image_placeholder(hdc, &rect, metrics, "loading image...");
         }
         TimelineImageState::Loaded { key, width, height } => {
-            paint_timeline_loaded_image(hwnd, hdc, &rect, key, *width, *height);
+            paint_timeline_loaded_image(hwnd, hdc, &rect, metrics, key, *width, *height);
         }
         TimelineImageState::Failed { .. } => {
-            paint_timeline_image_placeholder(hdc, &rect, "image unavailable");
+            paint_timeline_image_placeholder(hdc, &rect, metrics, "image unavailable");
         }
     }
 }
@@ -702,6 +740,7 @@ unsafe fn paint_timeline_image_slot(
 unsafe fn paint_timeline_image_placeholder(
     hdc: windows_sys::Win32::Graphics::Gdi::HDC,
     rect: &RECT,
+    metrics: &TimelineMetrics,
     message: &str,
 ) {
     let border = CreateSolidBrush(rgb(0x7A, 0x7A, 0x7A));
@@ -713,8 +752,8 @@ unsafe fn paint_timeline_image_placeholder(
     SetTextColor(hdc, rgb(0x5E, 0x5E, 0x5E));
     TextOutW(
         hdc,
-        rect.left + 8,
-        rect.top + 8,
+        rect.left + metrics.image_placeholder_inset,
+        rect.top + metrics.image_placeholder_inset,
         text.as_ptr(),
         text.len() as i32 - 1,
     );
@@ -724,23 +763,31 @@ unsafe fn paint_timeline_loaded_image(
     hwnd: HWND,
     hdc: windows_sys::Win32::Graphics::Gdi::HDC,
     rect: &RECT,
+    metrics: &TimelineMetrics,
     key: &str,
     width: u32,
     height: u32,
 ) {
     let window_state = state_ref(frame_window_for(hwnd));
     let Some(image) = window_state.decoded_images.get(key) else {
-        paint_timeline_image_placeholder(hdc, rect, "image unavailable");
+        paint_timeline_image_placeholder(hdc, rect, metrics, "image unavailable");
         return;
     };
+    // An image's pixels are 96-dpi pixels, as a browser shows them: at a
+    // higher DPI it is drawn larger, up to the box.
+    let dpi = Dpi::of_window(hwnd);
+    let natural = |length: u32| {
+        let length = i32::try_from(length).expect("a decoded image's size fits i32");
+        u32::try_from(dpi.px(length)).expect("a scaled length is not negative")
+    };
     let (draw_width, draw_height) = scaled_thumbnail_dimensions(
-        width,
-        height,
-        TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH,
-        TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT,
+        natural(width),
+        natural(height),
+        metrics.thumbnail_width,
+        metrics.thumbnail_height,
     );
-    let draw_x = rect.left + (TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH - draw_width) / 2;
-    let draw_y = rect.top + (TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT - draw_height) / 2;
+    let draw_x = rect.left + (metrics.thumbnail_width - draw_width) / 2;
+    let draw_y = rect.top + (metrics.thumbnail_height - draw_height) / 2;
 
     let border = CreateSolidBrush(rgb(0x7A, 0x7A, 0x7A));
     if !border.is_null() {
@@ -750,13 +797,13 @@ unsafe fn paint_timeline_loaded_image(
 
     let mut graphics = null_mut::<GpGraphics>();
     if GdipCreateFromHDC(hdc, &mut graphics) != 0 {
-        paint_timeline_image_placeholder(hdc, rect, "image unavailable");
+        paint_timeline_image_placeholder(hdc, rect, metrics, "image unavailable");
         return;
     }
     let status = GdipDrawImageRectI(graphics, image.raw, draw_x, draw_y, draw_width, draw_height);
     GdipDeleteGraphics(graphics);
     if status != 0 {
-        paint_timeline_image_placeholder(hdc, rect, "image unavailable");
+        paint_timeline_image_placeholder(hdc, rect, metrics, "image unavailable");
     }
 }
 
@@ -788,6 +835,47 @@ mod tests {
         text.chars().count() as i32
     }
 
+    const STANDARD: TimelineMetrics = TimelineMetrics {
+        left_padding: 8,
+        right_padding: 8,
+        vertical_padding: 6,
+        thumbnail_width: 160,
+        thumbnail_height: 120,
+        image_slot_padding: 20,
+        image_left_indent: 24,
+        image_placeholder_inset: 8,
+    };
+
+    #[test]
+    fn metrics_at_96_dpi_are_the_layout_constants() {
+        assert_eq!(TimelineMetrics::at(Dpi::STANDARD), STANDARD);
+    }
+
+    #[test]
+    fn metrics_scale_with_the_dpi() {
+        let metrics = TimelineMetrics::at(Dpi::new(144));
+        assert_eq!(
+            metrics,
+            TimelineMetrics {
+                left_padding: 12,
+                right_padding: 12,
+                vertical_padding: 9,
+                thumbnail_width: 240,
+                thumbnail_height: 180,
+                image_slot_padding: 30,
+                image_left_indent: 36,
+                image_placeholder_inset: 12,
+            }
+        );
+        // (180 + 30) / 15, rounded up.
+        assert_eq!(image_slot_lines(15, &metrics), 14);
+        let rect = timeline_image_slot_rect(0, 0, 15, &metrics);
+        assert_eq!(
+            (rect.left, rect.right - rect.left, rect.bottom - rect.top),
+            (48, 240, 180)
+        );
+    }
+
     /// The paint lines of `rows` laid out with an empty wrap cache.
     fn fresh_paint_lines(
         rows: &[TimelineRow],
@@ -799,6 +887,7 @@ mod tests {
             rows,
             client_width,
             line_height,
+            &STANDARD,
             &mut WrapCache::default(),
             &measure,
         )
@@ -917,7 +1006,7 @@ mod tests {
                 .iter()
                 .filter(|line| line.image_slot_index.is_some())
                 .count(),
-            image_slot_lines(20)
+            image_slot_lines(20, &STANDARD)
         );
         assert_eq!(clamped_timeline_top_line(6, paint_lines.len(), 3), 6);
     }
@@ -983,16 +1072,16 @@ mod tests {
 
     #[test]
     fn image_slots_take_enough_lines_for_the_thumbnail() {
-        assert_eq!(image_slot_lines(20), 7);
-        assert_eq!(image_slot_lines(15), 10);
-        assert_eq!(image_slot_lines(140), 1);
-        assert_eq!(timeline_image_slot_rect(100, 0, 20).top, 110);
-        assert_eq!(timeline_image_slot_rect(115, 1, 15).top, 115);
+        assert_eq!(image_slot_lines(20, &STANDARD), 7);
+        assert_eq!(image_slot_lines(15, &STANDARD), 10);
+        assert_eq!(image_slot_lines(140, &STANDARD), 1);
+        assert_eq!(timeline_image_slot_rect(100, 0, 20, &STANDARD).top, 110);
+        assert_eq!(timeline_image_slot_rect(115, 1, 15, &STANDARD).top, 115);
     }
 
     /// A client width whose text area is `text_width` pixels wide.
     fn client_width_for_text(text_width: i32) -> i32 {
-        TIMELINE_LEFT_PADDING + text_width + TIMELINE_RIGHT_PADDING
+        STANDARD.left_padding + text_width + STANDARD.right_padding
     }
 
     #[test]
@@ -1304,6 +1393,7 @@ mod tests {
             rows,
             client_width_for_text(text_width),
             20,
+            &STANDARD,
             cache,
             &measure_ascii_width,
         )
@@ -1352,6 +1442,7 @@ mod tests {
             &rows,
             client_width_for_text(4),
             20,
+            &STANDARD,
             &mut cache,
             &measure_ascii_width,
         )
@@ -1385,7 +1476,7 @@ mod tests {
             caption_lines.len() > 1,
             "caption should wrap before image slots"
         );
-        assert_eq!(slot_lines.len(), image_slot_lines(20),);
+        assert_eq!(slot_lines.len(), image_slot_lines(20, &STANDARD),);
         assert!(
             slot_lines
                 .iter()

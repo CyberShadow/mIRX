@@ -94,12 +94,15 @@ pub(super) unsafe fn font_line_height(font: HFONT) -> i32 {
     metrics.tmHeight + metrics.tmExternalLeading
 }
 
-/// `WM_SETFONT`: lines are as tall as the font's, so the rows rewrap.
+/// `WM_SETFONT`: lines are as tall as the font's, so the rows rewrap. The
+/// font comes for the window's DPI, and so do the metrics.
 pub(super) unsafe fn set_timeline_font(hwnd: HWND, font: HFONT) {
     {
+        let metrics = TimelineMetrics::at(Dpi::of_window(hwnd));
         let state = timeline_state_mut(hwnd);
         state.font = font;
         state.line_height = font_line_height(font);
+        state.metrics = metrics;
         state.wrap_cache.clear();
     }
     relayout_timeline(hwnd);

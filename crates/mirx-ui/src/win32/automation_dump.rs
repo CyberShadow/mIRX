@@ -463,12 +463,12 @@ unsafe fn dump_active_timeline(timeline: HWND, scheme: &ColorScheme) -> UiActive
                     .source_row_index
                     .and_then(|index| state.source_rows[index].event_id.clone()),
                 click_point: UiPoint {
-                    x: 8,
-                    y: state.vertical_padding
+                    x: state.metrics.left_padding,
+                    y: state.metrics.vertical_padding
                         + (line_index - state.top_line) as i32 * state.line_height
                         + state.line_height / 2,
                 },
-                text_left: TIMELINE_LEFT_PADDING + indent,
+                text_left: state.metrics.left_padding + indent,
                 links,
             }
         })

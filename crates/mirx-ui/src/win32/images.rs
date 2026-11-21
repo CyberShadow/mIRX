@@ -50,6 +50,12 @@ pub(super) fn initialize_gdiplus_state() -> (Option<GdiplusSession>, Option<Stri
     }
 }
 
+/// The thumbnail asked of the server: the timeline's 96-dpi box, whatever
+/// the DPI. It is also the media's storage key. A server answers with its
+/// nearest size at or above the request (Synapse's are 320x240 and larger
+/// for this), an encrypted thumbnail comes at its sender's size, and GDI+
+/// draws the decoded image into the box at the window's DPI, so asking for
+/// more at a higher DPI would gain nothing.
 pub(super) fn timeline_thumbnail_format() -> RoomMediaFormat {
     RoomMediaFormat::Thumbnail {
         width: TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH as u32,

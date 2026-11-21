@@ -445,8 +445,8 @@ use self_test::run_self_test;
 use settings::{Bar, FontSetting, SETTINGS_FILE_NAME, SettingsStore};
 use status_log::{StatusLineKind, StatusLog};
 use timeline_layout::{
-    TimelinePaintLine, TimelinePaintLineVisual, WrapCache, activity_level_color, paint_timeline,
-    plain_timeline_paint_lines, rendered_line_ranges, timeline_row_paint_lines,
+    TimelineMetrics, TimelinePaintLine, TimelinePaintLineVisual, WrapCache, activity_level_color,
+    paint_timeline, plain_timeline_paint_lines, rendered_line_ranges, timeline_row_paint_lines,
 };
 use timeline_rows::{
     TimelineImageState, TimelineMessageSendState, TimelineRow, TimelineRowIdentity,
@@ -535,13 +535,17 @@ const AUTO_CLOSE_DELAY_MS: u32 = 250;
 const RECONNECT_TIMER_ID: usize = 2;
 /// At 96 dpi.
 const TREE_WIDTH: i32 = 240;
+// The timeline's lengths at 96 dpi; `TimelineMetrics` scales them.
 const TIMELINE_LEFT_PADDING: i32 = 8;
 const TIMELINE_RIGHT_PADDING: i32 = 8;
+const TIMELINE_VERTICAL_PADDING: i32 = 6;
 const TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH: i32 = 160;
 const TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT: i32 = 120;
 /// Space around a thumbnail inside its slot, over the slot's lines.
 const TIMELINE_IMAGE_SLOT_PADDING: i32 = 20;
 const TIMELINE_IMAGE_LEFT_INDENT: i32 = 24;
+/// Where an image placeholder's text starts inside its box.
+const TIMELINE_IMAGE_PLACEHOLDER_INSET: i32 = 8;
 const TIMELINE_FIND_HIGHLIGHT_COLOR: u32 = 0x00f0f8d8;
 const TIMELINE_SELECTION_COLOR: u32 = 0x00f5e6cc;
 const DEFAULT_DEVICE_DISPLAY_NAME: &str = "mirx";

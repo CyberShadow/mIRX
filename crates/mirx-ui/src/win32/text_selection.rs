@@ -4,9 +4,9 @@
 
 use std::ops::Range;
 
+use super::TimelineRow;
 use super::mirc_format::mirc_input_from_styled;
 use super::timeline_layout::{TimelinePaintLine, TimelinePaintLineVisual, clip_styles};
-use super::{TIMELINE_LEFT_PADDING, TimelineRow};
 
 /// A place in a timeline's text: a byte offset, at a char boundary, in a
 /// row's `logical_text`. Ordered as the text reads.
@@ -23,6 +23,8 @@ pub(super) struct LineGeometry {
     pub(super) visible_rows: usize,
     pub(super) line_height: i32,
     pub(super) vertical_padding: i32,
+    /// Between the client's left edge and a line's text, before its indent.
+    pub(super) left_padding: i32,
 }
 
 /// A drag of the left button marking text, from `anchor` to `focus`.
@@ -155,7 +157,7 @@ pub(super) fn point_at(
     let offset = match place {
         Some(false) => range.start,
         Some(true) => range.end,
-        None => range.start + offset_at_x(text, x - TIMELINE_LEFT_PADDING - indent, measure),
+        None => range.start + offset_at_x(text, x - geometry.left_padding - indent, measure),
     };
     Some(TextPoint { row, offset })
 }
@@ -173,7 +175,7 @@ pub(super) fn exact_point_at(
         return None;
     };
     let (row, text, indent, range) = text_line(&lines[index])?;
-    let offset = char_at_x(text, x - TIMELINE_LEFT_PADDING - indent, measure)?;
+    let offset = char_at_x(text, x - geometry.left_padding - indent, measure)?;
     Some(TextPoint {
         row,
         offset: range.start + offset,
@@ -306,11 +308,12 @@ mod tests {
         visible_rows: 10,
         line_height: 15,
         vertical_padding: 6,
+        left_padding: 8,
     };
 
     /// The x of the left edge of character `n` of a line at `indent`.
     fn x_of(n: i32, indent: i32) -> i32 {
-        TIMELINE_LEFT_PADDING + indent + n * 10
+        GEOMETRY.left_padding + indent + n * 10
     }
 
     #[test]
