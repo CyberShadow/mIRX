@@ -4886,11 +4886,13 @@ fn select_server_refuses_a_bare_user_without_a_password() -> Result<(), Box<dyn 
     Ok(())
 }
 
+/// Waits for a window of `class_name` to show. A dialog exists before its
+/// controls do: it shows once they are there.
 fn wait_for_window(class_name: &[u16], what: &str) -> Result<HWND, Box<dyn std::error::Error>> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let window = unsafe { FindWindowW(class_name.as_ptr(), std::ptr::null()) };
-        if !window.is_null() {
+        if !window.is_null() && unsafe { IsWindowVisible(window) } != 0 {
             return Ok(window);
         }
         if Instant::now() >= deadline {
