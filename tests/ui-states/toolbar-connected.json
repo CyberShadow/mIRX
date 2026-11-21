@@ -1,0 +1,232 @@
+[
+  "Started",
+  {
+    "LoggedIn": {
+      "session": {
+        "user_id": "@me:example",
+        "device_id": "MIRXDEVICE",
+        "access_token": "fixture-access-token",
+        "refresh_token": null,
+        "auth": "Matrix"
+      },
+      "homeserver_url": "https://matrix.example/"
+    }
+  },
+  "SyncStarted",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!ops:example",
+        "display_name": "Ops", "topic": null,
+        "encrypted": true,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!lobby:example",
+        "display_name": "Lobby", "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!random:example",
+        "display_name": "Random", "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!lobby:example",
+      "activity_id": "event:$lobby-1",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$lobby-1",
+        "transaction_id": null,
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
+        "presentation": "text",
+        "body": "welcome to the lobby",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!lobby:example",
+      "activity_id": "event:$lobby-2",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$lobby-2",
+        "transaction_id": null,
+        "sender": { "user_id": "@bob:example", "display_name": "Bob", "display_name_ambiguous": false },
+        "presentation": "text",
+        "body": "build is green",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "state:$ops-topic-1",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$ops-topic-1",
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
+        "content": {
+          "type": "topic",
+          "topic": "incident review"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "state:$ops-member-1",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$ops-member-1",
+        "sender": { "user_id": "@carol:example", "display_name": "Carol", "display_name_ambiguous": false },
+        "content": {
+          "type": "member",
+          "change": { "type": "joined" },
+          "target": { "user_id": "@carol:example", "display_name": "Carol", "display_name_ambiguous": false },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$ops-1",
+      "timestamp_ms": 1700000120000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-1",
+        "transaction_id": null,
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
+        "presentation": "text",
+        "body": "ops topic: incident review",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$ops-2",
+      "timestamp_ms": 1700000180000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-2",
+        "transaction_id": null,
+        "sender": { "user_id": "@bob:example", "display_name": "Bob", "display_name_ambiguous": false },
+        "presentation": "text",
+        "body": "encryption enabled for ops",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$ops-3",
+      "timestamp_ms": 1700000240000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-3",
+        "transaction_id": null,
+        "sender": { "user_id": "@carol:example", "display_name": "Carol", "display_name_ambiguous": false },
+        "presentation": "text",
+        "body": "deploy window opens at 18:00 UTC",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!random:example",
+      "activity_id": "event:$random-1",
+      "timestamp_ms": 1700000300000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$random-1",
+        "transaction_id": null,
+        "sender": { "user_id": "@dave:example", "display_name": null, "display_name_ambiguous": false },
+        "presentation": "text",
+        "body": "random: lunch votes are in",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  }
+]

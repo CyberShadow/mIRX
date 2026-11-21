@@ -24,7 +24,8 @@ dpi144_prefix=
 # expectations, the default frame size (scaled, clamped to the screen) and
 # --expect-dpi 144.
 dpi144_cases=(multi-room image-message-loaded room-list-listing compose-color-index
-  dialog-options-display dialog-colors dialog-sign-out-session dialog-export-room-keys)
+  dialog-options-display dialog-colors dialog-sign-out-session dialog-export-room-keys
+  toolbar-connected)
 
 die() {
   echo "ui-snapshot: $*" >&2
@@ -977,6 +978,29 @@ configure_case_expectations() {
       navigation_forbid_args=(
         --expect-no-navigation-text 'flow-verify-request'
       )
+      # Never signed in: Connect starts the sign-in.
+      toolbar_button_expect_args=(
+        --expect-toolbar-button 'Connect::shown::enabled'
+        --expect-toolbar-button 'Disconnect::hidden::disabled'
+      )
+      ;;
+    toolbar-connected)
+      # The multi-room fixture signed in and syncing: the toolbar swaps
+      # Connect for Disconnect.
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      room_expect_args=(
+        --expect-room '!lobby:example'
+        --expect-room '!ops:example'
+        --expect-room '!random:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::[22:15] <Alice> ops topic: incident review'
+      )
+      toolbar_button_expect_args=(
+        --expect-toolbar-button 'Connect::hidden::disabled'
+        --expect-toolbar-button 'Disconnect::shown::enabled'
+      )
       ;;
     sign-in-browser)
       # A replayed load: the page is printed, not opened.
@@ -991,6 +1015,11 @@ configure_case_expectations() {
       )
       status_bar_expect_args=(
         --expect-status-bar 'waiting for browser sign-in'
+      )
+      # Disconnect cancels the sign-in.
+      toolbar_button_expect_args=(
+        --expect-toolbar-button 'Connect::hidden::disabled'
+        --expect-toolbar-button 'Disconnect::shown::enabled'
       )
       mdi_title_expect_args=(
         --expect-mdi-title 'status::Status'
