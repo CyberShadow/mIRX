@@ -127,32 +127,11 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
                 last_activity.room_id == room_id
                     && last_activity.transaction_id.as_deref() == Some(transaction_id.as_str())
             }
-            (
-                RoomActivityUpdateTarget::Event { event_id },
-                RoomActivityUpdateKind::MessageReplaced { .. },
-            ) => {
+            (RoomActivityUpdateTarget::Event { event_id }, _) => {
                 last_activity.room_id == room_id
                     && last_activity.event_id.as_deref() == Some(event_id.as_str())
             }
-            (
-                RoomActivityUpdateTarget::Event { event_id },
-                RoomActivityUpdateKind::ActivityRedacted { .. },
-            ) => {
-                last_activity.room_id == room_id
-                    && last_activity.event_id.as_deref() == Some(event_id.as_str())
-            }
-            (
-                RoomActivityUpdateTarget::Event { event_id },
-                RoomActivityUpdateKind::ReactionAdded { .. },
-            )
-            | (
-                RoomActivityUpdateTarget::Event { event_id },
-                RoomActivityUpdateKind::ReactionRemoved { .. },
-            ) => {
-                last_activity.room_id == room_id
-                    && last_activity.event_id.as_deref() == Some(event_id.as_str())
-            }
-            _ => false,
+            (RoomActivityUpdateTarget::Transaction { .. }, _) => false,
         });
     let applied = state
         .model
@@ -5792,6 +5771,90 @@ mod tests {
         );
         let view = &state.model.room_views["!ops:example"];
         assert_eq!(view.reactions_by_target["$secret"].len(), 1);
+    }
+
+    /// However a reaction came (live, in a history page, or decrypted
+    /// late), its redaction takes it back: the redaction names the reaction.
+    #[test]
+    fn a_redaction_of_a_shown_reaction_removes_it() {
+        let mut state = undecrypted_state();
+        apply_core_event(
+            &mut state,
+            decrypted("!ops:example", vec![decrypted_line(alices_secret("plan"))]),
+        )
+        .unwrap();
+        let reaction = |target: &str, reaction_event_id: &str| {
+            let Event::RoomActivityUpdate(update) = incoming_reaction_added(
+                "!ops:example",
+                target,
+                reaction_event_id,
+                "@bob:example",
+                "+1",
+                1_700_000_300_000,
+            ) else {
+                unreachable!()
+            };
+            update
+        };
+        apply_core_event(
+            &mut state,
+            Event::RoomActivityUpdate(reaction("$before", "$live")),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            room_history_backfill(
+                "!ops:example",
+                None,
+                vec![RoomHistoryBackfillEvent::ActivityUpdate(reaction(
+                    "$after", "$history",
+                ))],
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            decrypted(
+                "!ops:example",
+                vec![RoomHistoryBackfillEvent::ActivityUpdate(reaction(
+                    "$secret",
+                    "$decrypted",
+                ))],
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            state.model.room_views["!ops:example"]
+                .reactions_by_target
+                .len(),
+            3
+        );
+
+        for reaction_event_id in ["$live", "$history", "$decrypted"] {
+            apply_core_event(
+                &mut state,
+                incoming_redacted("!ops:example", reaction_event_id, "$taken-back"),
+            )
+            .unwrap();
+        }
+
+        let view = &state.model.room_views["!ops:example"];
+        assert!(
+            view.reactions_by_target.is_empty(),
+            "{:#?}",
+            view.reactions_by_target
+        );
+        let lines = ops_lines(&state);
+        assert!(
+            !lines.iter().any(|line| line.contains("reactions:")),
+            "{lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.ends_with("<@alice:example> plan")),
+            "{lines:#?}"
+        );
     }
 
     #[test]

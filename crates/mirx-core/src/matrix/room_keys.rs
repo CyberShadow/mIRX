@@ -1,7 +1,7 @@
 //! Messages that could not be decrypted when they arrived: their lines,
 //! their late decryption by the SDK's redecryptor, and room key files.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::pin::pin;
 
@@ -72,7 +72,6 @@ async fn undecrypted_sync_event(
         room,
         &event,
         &redaction_rules,
-        &mut BTreeMap::new(),
         &mut SenderProfileCache::new(room),
     )
     .await
@@ -142,7 +141,6 @@ async fn room_events_decrypted(
     decrypted.sort_by_key(|event| event.timestamp());
 
     let redaction_rules = room.clone_info().room_version_rules_or_default().redaction;
-    let mut reaction_index = BTreeMap::new();
     let mut senders = SenderProfileCache::new(&room);
     let mut events = Vec::with_capacity(decrypted.len());
     for event in &decrypted {
@@ -151,7 +149,6 @@ async fn room_events_decrypted(
                 &room,
                 event,
                 &redaction_rules,
-                &mut reaction_index,
                 &mut senders,
             )
             .await?,
@@ -270,7 +267,7 @@ mod tests {
     use crate::api::{
         BackfillRoomHistoryRequest, Event, HistoryFrom, ImportRoomKeysRequest,
         RetryDecryptionRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
-        RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomEventsDecrypted,
+        RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomEventsDecrypted,
         RoomHistoryBackfillEvent, RoomUnableToDecryptReason,
     };
     use crate::runtime::RoomSnapshots;
@@ -790,6 +787,72 @@ mod tests {
                 unreachable!();
             };
             assert_eq!(body, "fixed");
+        });
+    }
+
+    /// A reaction redacted before bob had its key is gone from his store:
+    /// the SDK's event cache replaced it with its redacted form, which
+    /// nothing decrypts. So the core need not remember redactions it could
+    /// not apply yet.
+    #[test]
+    fn a_reaction_redacted_before_its_key_comes_is_not_reported() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+            let typo = room
+                .alice_sends_first("$typo", "m.room.message", text("tpyo"))
+                .await;
+            let reaction = room
+                .alice_encrypts(
+                    "$r",
+                    "m.reaction",
+                    serde_json::json!({
+                        "m.relates_to": {
+                            "rel_type": "m.annotation",
+                            "event_id": "$typo",
+                            "key": "+1",
+                        },
+                    }),
+                )
+                .await;
+            let after = room
+                .alice_sends("$after", "m.room.message", text("after"))
+                .await;
+            room.bob_syncs(&[], &[&typo.event, &reaction, &after]).await;
+            room.drain();
+            // Room v10: `redacts` is top-level (and in content from v11).
+            let redaction: Raw<AnySyncTimelineEvent> = Raw::new(&serde_json::json!({
+                "type": "m.room.redaction",
+                "event_id": "$unreact",
+                "sender": room.alice.user_id().expect("alice is signed in"),
+                "origin_server_ts": matrix_sdk::ruma::MilliSecondsSinceUnixEpoch::now(),
+                "redacts": "$r",
+                "content": { "redacts": "$r" },
+            }))
+            .expect("a redaction")
+            .cast_unchecked();
+            room.bob_syncs(&[], &[&redaction]).await;
+            let redacted = room.drain();
+            assert!(
+                redacted.iter().any(|event| matches!(
+                    event,
+                    Event::RoomActivityUpdate(RoomActivityUpdate {
+                        target: RoomActivityUpdateTarget::Event { event_id },
+                        kind: RoomActivityUpdateKind::ActivityRedacted { .. },
+                        ..
+                    }) if event_id == "$r"
+                )),
+                "{redacted:#?}"
+            );
+
+            room.bob_syncs(&[&typo.room_key], &[]).await;
+
+            let (decrypted, _) = room.decrypted().await;
+            let lines = decrypted
+                .events
+                .iter()
+                .map(|event| decrypted_message(event).1)
+                .collect::<Vec<_>>();
+            assert_eq!(lines, ["tpyo", "after"], "{decrypted:#?}");
         });
     }
 

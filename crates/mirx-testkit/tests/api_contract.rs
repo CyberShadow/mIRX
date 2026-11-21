@@ -3060,15 +3060,14 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
             key: "+1".to_owned(),
         },
     };
-    let reaction_removed = RoomActivityUpdate {
+    // A redaction of a reaction names the reaction.
+    let reaction_redacted = RoomActivityUpdate {
         room_id: "!ops:example.org".to_owned(),
         target: RoomActivityUpdateTarget::Event {
-            event_id: "$original:example.org".to_owned(),
+            event_id: "$reaction:example.org".to_owned(),
         },
-        kind: RoomActivityUpdateKind::ReactionRemoved {
-            reaction_event_id: "$reaction:example.org".to_owned(),
+        kind: RoomActivityUpdateKind::ActivityRedacted {
             redaction_event_id: "$redaction:example.org".to_owned(),
-            key: "+1".to_owned(),
         },
     };
 
@@ -3137,17 +3136,15 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
             "key": "+1"
         }
     });
-    let reaction_removed_json = serde_json::json!({
+    let reaction_redacted_json = serde_json::json!({
         "room_id": "!ops:example.org",
         "target": {
             "type": "event",
-            "event_id": "$original:example.org"
+            "event_id": "$reaction:example.org"
         },
         "kind": {
-            "type": "reaction_removed",
-            "reaction_event_id": "$reaction:example.org",
-            "redaction_event_id": "$redaction:example.org",
-            "key": "+1"
+            "type": "activity_redacted",
+            "redaction_event_id": "$redaction:example.org"
         }
     });
 
@@ -3172,8 +3169,8 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
         reaction_added_json
     );
     assert_eq!(
-        serde_json::to_value(&reaction_removed).expect("serialize reaction removed update"),
-        reaction_removed_json
+        serde_json::to_value(&reaction_redacted).expect("serialize reaction redacted update"),
+        reaction_redacted_json
     );
 
     assert_eq!(
@@ -3252,17 +3249,15 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
         }
     );
     assert_eq!(
-        serde_json::from_value::<CoreRoomActivityUpdate>(reaction_removed_json.clone())
-            .expect("deserialize reaction removed update as core"),
+        serde_json::from_value::<CoreRoomActivityUpdate>(reaction_redacted_json.clone())
+            .expect("deserialize reaction redacted update as core"),
         CoreRoomActivityUpdate {
             room_id: "!ops:example.org".to_owned(),
             target: CoreRoomActivityUpdateTarget::Event {
-                event_id: "$original:example.org".to_owned(),
+                event_id: "$reaction:example.org".to_owned(),
             },
-            kind: CoreRoomActivityUpdateKind::ReactionRemoved {
-                reaction_event_id: "$reaction:example.org".to_owned(),
+            kind: CoreRoomActivityUpdateKind::ActivityRedacted {
                 redaction_event_id: "$redaction:example.org".to_owned(),
-                key: "+1".to_owned(),
             },
         }
     );
@@ -3295,21 +3290,6 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
         .expect("serialize reaction added update as core"),
         reaction_added_json.clone()
     );
-    assert_eq!(
-        serde_json::to_value(CoreRoomActivityUpdate {
-            room_id: "!ops:example.org".to_owned(),
-            target: CoreRoomActivityUpdateTarget::Event {
-                event_id: "$original:example.org".to_owned(),
-            },
-            kind: CoreRoomActivityUpdateKind::ReactionRemoved {
-                reaction_event_id: "$reaction:example.org".to_owned(),
-                redaction_event_id: "$redaction:example.org".to_owned(),
-                key: "+1".to_owned(),
-            },
-        })
-        .expect("serialize reaction removed update as core"),
-        reaction_removed_json.clone()
-    );
 
     assert_eq!(
         serde_json::from_value::<RoomActivityUpdate>(sent_json).expect("deserialize sent update"),
@@ -3336,9 +3316,9 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
         reaction_added
     );
     assert_eq!(
-        serde_json::from_value::<RoomActivityUpdate>(reaction_removed_json)
-            .expect("deserialize reaction removed update"),
-        reaction_removed
+        serde_json::from_value::<RoomActivityUpdate>(reaction_redacted_json)
+            .expect("deserialize reaction redacted update"),
+        reaction_redacted
     );
 }
 
@@ -3396,33 +3376,15 @@ fn room_activity_redaction_contract_shapes_reject_invalid_payloads() {
         .is_err(),
         "core reaction added kind must reject unknown fields"
     );
-    for missing_field_json in [
-        r#"{"type":"reaction_removed","redaction_event_id":"$redaction:example.org","key":"+1"}"#,
-        r#"{"type":"reaction_removed","reaction_event_id":"$reaction:example.org","key":"+1"}"#,
-        r#"{"type":"reaction_removed","reaction_event_id":"$reaction:example.org","redaction_event_id":"$redaction:example.org"}"#,
-    ] {
-        assert!(
-            serde_json::from_str::<RoomActivityUpdateKind>(missing_field_json).is_err(),
-            "reaction removed kind must reject payload missing a required field: {missing_field_json}"
-        );
-        assert!(
-            serde_json::from_str::<CoreRoomActivityUpdateKind>(missing_field_json).is_err(),
-            "core reaction removed kind must reject payload missing a required field: {missing_field_json}"
-        );
-    }
+    // A redaction of a reaction is an `activity_redacted` of the reaction.
+    let reaction_removed = r#"{"type":"reaction_removed","reaction_event_id":"$reaction:example.org","redaction_event_id":"$redaction:example.org","key":"+1"}"#;
     assert!(
-        serde_json::from_str::<RoomActivityUpdateKind>(
-            r#"{"type":"reaction_removed","reaction_event_id":"$reaction:example.org","redaction_event_id":"$redaction:example.org","key":"+1","unexpected":"value"}"#
-        )
-        .is_err(),
-        "reaction removed kind must reject unknown fields"
+        serde_json::from_str::<RoomActivityUpdateKind>(reaction_removed).is_err(),
+        "reaction removed kind is no update kind"
     );
     assert!(
-        serde_json::from_str::<CoreRoomActivityUpdateKind>(
-            r#"{"type":"reaction_removed","reaction_event_id":"$reaction:example.org","redaction_event_id":"$redaction:example.org","key":"+1","unexpected":"value"}"#
-        )
-        .is_err(),
-        "core reaction removed kind must reject unknown fields"
+        serde_json::from_str::<CoreRoomActivityUpdateKind>(reaction_removed).is_err(),
+        "core reaction removed kind is no update kind"
     );
     assert!(
         serde_json::from_str::<RoomActivityKind>(r#"{"type":"redacted"}"#).is_err(),

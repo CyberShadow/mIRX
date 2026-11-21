@@ -4,13 +4,11 @@
       "room_id": "!reactions:example",
       "target": {
         "type": "event",
-        "event_id": "$react-normal"
+        "event_id": "$reaction-plus-one-a"
       },
       "kind": {
-        "type": "reaction_removed",
-        "reaction_event_id": "$reaction-plus-one-a",
-        "redaction_event_id": "$redact-reaction-plus-one-a",
-        "key": "+1"
+        "type": "activity_redacted",
+        "redaction_event_id": "$redact-reaction-plus-one-a"
       }
     }
   },
@@ -19,13 +17,11 @@
       "room_id": "!reactions:example",
       "target": {
         "type": "event",
-        "event_id": "$react-normal"
+        "event_id": "$reaction-heart-a"
       },
       "kind": {
-        "type": "reaction_removed",
-        "reaction_event_id": "$reaction-heart-a",
-        "redaction_event_id": "$redact-reaction-heart-a",
-        "key": "heart"
+        "type": "activity_redacted",
+        "redaction_event_id": "$redact-reaction-heart-a"
       }
     }
   }

@@ -804,9 +804,12 @@ impl RoomViewModel {
         true
     }
 
-    pub(super) fn redact_activity(&mut self, target_event_id: &str) -> bool {
+    /// Redacts the event a redaction names, whatever the room shows it as:
+    /// a line (its reactions go with it) or a reaction. Whether the room
+    /// showed it.
+    fn redact_activity(&mut self, target_event_id: &str) -> bool {
         let Some(index) = self.find_activity_index_by_event_id(target_event_id) else {
-            return false;
+            return self.remove_reaction(target_event_id);
         };
         let activity_id = self.activities[index].activity_id.clone();
         self.remove_reactions_for_target(target_event_id);
@@ -849,24 +852,26 @@ impl RoomViewModel {
         true
     }
 
-    pub(super) fn remove_reaction(
-        &mut self,
-        target_event_id: &str,
-        reaction_event_id: &str,
-        key: &str,
-    ) -> bool {
-        let Some(reactions) = self.reactions_by_target.get_mut(target_event_id) else {
+    /// The line a shown reaction reacts to.
+    fn reaction_target(&self, reaction_event_id: &str) -> Option<&str> {
+        self.reactions_by_target
+            .iter()
+            .find(|(_, reactions)| reactions.contains_key(reaction_event_id))
+            .map(|(target_event_id, _)| target_event_id.as_str())
+    }
+
+    fn remove_reaction(&mut self, reaction_event_id: &str) -> bool {
+        let Some(target_event_id) = self.reaction_target(reaction_event_id).map(str::to_owned)
+        else {
             return false;
         };
-        let matches_key = reactions
-            .get(reaction_event_id)
-            .is_some_and(|entry| entry.key == key);
-        if !matches_key {
-            return false;
-        }
+        let reactions = self
+            .reactions_by_target
+            .get_mut(&target_event_id)
+            .expect("reaction_target found it");
         reactions.remove(reaction_event_id);
         if reactions.is_empty() {
-            self.reactions_by_target.remove(target_event_id);
+            self.reactions_by_target.remove(&target_event_id);
         }
         true
     }
@@ -1139,14 +1144,6 @@ impl RoomViewModel {
                 },
             ) => self.add_reaction(event_id, reaction_event_id, sender, *timestamp_ms, key),
             (
-                RoomActivityUpdateTarget::Event { event_id },
-                RoomActivityUpdateKind::ReactionRemoved {
-                    reaction_event_id,
-                    key,
-                    ..
-                },
-            ) => self.remove_reaction(event_id, reaction_event_id, key),
-            (
                 RoomActivityUpdateTarget::Event { .. },
                 RoomActivityUpdateKind::MessageSent { .. }
                 | RoomActivityUpdateKind::MessageFailed { .. },
@@ -1185,12 +1182,12 @@ impl RoomViewModel {
             (
                 RoomActivityUpdateTarget::Event { event_id },
                 RoomActivityUpdateKind::ActivityRedacted { .. },
-            ) => self
-                .find_activity_index_by_event_id(event_id)
-                .map(|_| ())
-                .ok_or_else(|| {
-                    "activity redaction requires an existing visible target event".to_owned()
-                }),
+            ) => (self.find_activity_index_by_event_id(event_id).is_some()
+                || self.reaction_target(event_id).is_some())
+            .then_some(())
+            .ok_or_else(|| {
+                "activity redaction requires an existing visible target event".to_owned()
+            }),
             (
                 RoomActivityUpdateTarget::Event { event_id },
                 RoomActivityUpdateKind::ReactionAdded { .. },
@@ -1203,22 +1200,6 @@ impl RoomViewModel {
                 }
                 Ok(())
             }
-            (
-                RoomActivityUpdateTarget::Event { event_id },
-                RoomActivityUpdateKind::ReactionRemoved {
-                    reaction_event_id,
-                    key,
-                    ..
-                },
-            ) => self
-                .reactions_by_target
-                .get(event_id)
-                .and_then(|reactions| reactions.get(reaction_event_id))
-                .filter(|entry| entry.key == *key)
-                .map(|_| ())
-                .ok_or_else(|| {
-                    "reaction removal requires a matching stored reaction event".to_owned()
-                }),
             (
                 RoomActivityUpdateTarget::Event { .. },
                 RoomActivityUpdateKind::MessageSent { .. },
@@ -1239,10 +1220,6 @@ impl RoomViewModel {
                 RoomActivityUpdateTarget::Transaction { .. },
                 RoomActivityUpdateKind::ReactionAdded { .. },
             ) => Err("reaction add requires an event target".to_owned()),
-            (
-                RoomActivityUpdateTarget::Transaction { .. },
-                RoomActivityUpdateKind::ReactionRemoved { .. },
-            ) => Err("reaction removal requires an event target".to_owned()),
         }
     }
 
@@ -1919,27 +1896,6 @@ mod tests {
     }
 
     #[test]
-    fn reaction_removed_synthetic_event_validation_rejects_transaction_target() {
-        assert_eq!(
-            validate_synthetic_room_activity_events(
-                &RoomViews::default(),
-                &[Event::RoomActivityUpdate(RoomActivityUpdate {
-                    room_id: "!ops:example".to_owned(),
-                    target: RoomActivityUpdateTarget::Transaction {
-                        transaction_id: "txn-1".to_owned(),
-                    },
-                    kind: RoomActivityUpdateKind::ReactionRemoved {
-                        reaction_event_id: "$reaction:example.org".to_owned(),
-                        redaction_event_id: "$redaction:example.org".to_owned(),
-                        key: "+1".to_owned(),
-                    },
-                })]
-            ),
-            Err("reaction removal requires an event target".to_owned())
-        );
-    }
-
-    #[test]
     fn thread_labels_use_observed_root_body_when_available_and_fall_back_to_root_event_id() {
         let mut room_view = RoomViewModel::default();
 
@@ -2582,6 +2538,44 @@ mod tests {
         assert!(trim(&mut room_view, 2, &BTreeSet::new()));
         assert_eq!(lines_of(&room_view), ["event:$m4", "event:$m5"]);
         assert!(room_view.threads.is_empty());
+    }
+
+    fn redaction_of(event_id: &str) -> RoomActivityUpdate {
+        let Event::RoomActivityUpdate(update) =
+            incoming_redacted("!ops:example", event_id, "$redaction")
+        else {
+            unreachable!()
+        };
+        update
+    }
+
+    #[test]
+    fn a_redaction_of_an_unknown_event_changes_nothing() {
+        let mut room_view = room_with_lines(2);
+        assert!(room_view.add_reaction("$m0", "$r0", "@bob:example", 1, "+1"));
+        let before = room_view.clone();
+
+        assert_eq!(
+            room_view.validate_update(&redaction_of("$elsewhere")),
+            Err("activity redaction requires an existing visible target event".to_owned())
+        );
+        assert!(!room_view.apply_update(&redaction_of("$elsewhere")));
+
+        assert_eq!(lines_of(&room_view), lines_of(&before));
+        assert_eq!(room_view.reactions_by_target, before.reactions_by_target);
+    }
+
+    #[test]
+    fn a_redaction_validates_against_a_shown_line_or_reaction() {
+        let mut room_view = room_with_lines(1);
+        assert!(room_view.add_reaction("$m0", "$r0", "@bob:example", 1, "+1"));
+        assert_eq!(room_view.validate_update(&redaction_of("$m0")), Ok(()));
+        assert_eq!(room_view.validate_update(&redaction_of("$r0")), Ok(()));
+
+        // A redacted line takes its reactions along.
+        assert!(room_view.apply_update(&redaction_of("$m0")));
+        assert!(room_view.reactions_by_target.is_empty());
+        assert!(room_view.validate_update(&redaction_of("$r0")).is_err());
     }
 
     #[test]

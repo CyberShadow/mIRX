@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 70;
+pub(crate) const PROTOCOL_VERSION: u32 = 71;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -3839,8 +3839,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_70() {
-        assert_eq!(PROTOCOL_VERSION, 70);
+    fn protocol_version_is_71() {
+        assert_eq!(PROTOCOL_VERSION, 71);
     }
 
     #[test]
@@ -5872,7 +5872,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":70,
+                    "protocol_version":71,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })

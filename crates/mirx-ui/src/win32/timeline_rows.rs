@@ -1051,26 +1051,6 @@ mod tests {
         );
     }
 
-    fn incoming_reaction_removed(
-        room_id: &str,
-        target_event_id: &str,
-        reaction_event_id: &str,
-        redaction_event_id: &str,
-        key: &str,
-    ) -> Event {
-        Event::RoomActivityUpdate(RoomActivityUpdate {
-            room_id: room_id.to_owned(),
-            target: RoomActivityUpdateTarget::Event {
-                event_id: target_event_id.to_owned(),
-            },
-            kind: RoomActivityUpdateKind::ReactionRemoved {
-                reaction_event_id: reaction_event_id.to_owned(),
-                redaction_event_id: redaction_event_id.to_owned(),
-                key: key.to_owned(),
-            },
-        })
-    }
-
     #[test]
     fn synced_room_summary_topic_seeds_updates_and_clears_room_context() {
         let mut state = test_state();
@@ -1617,7 +1597,7 @@ mod tests {
     }
 
     #[test]
-    fn reaction_removed_removes_only_matching_event_id_and_key() {
+    fn a_reaction_redaction_removes_only_that_reaction() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
 
@@ -1661,13 +1641,7 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            incoming_reaction_removed(
-                "!ops:example",
-                "$!ops:example:hello",
-                "$reaction-1",
-                "$redaction-wrong-key",
-                "heart",
-            ),
+            incoming_redacted("!ops:example", "$reaction-unknown", "$redaction-unknown"),
         )
         .unwrap();
         assert_eq!(
@@ -1682,13 +1656,7 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            incoming_reaction_removed(
-                "!ops:example",
-                "$!ops:example:hello",
-                "$reaction-1",
-                "$redaction-right",
-                "+1",
-            ),
+            incoming_redacted("!ops:example", "$reaction-1", "$redaction-right"),
         )
         .unwrap();
 

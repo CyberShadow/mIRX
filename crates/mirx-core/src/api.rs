@@ -1386,8 +1386,8 @@ pub struct RetryDecryptionRequest {
 /// Events of a room the core could not decrypt when they arrived and now
 /// could, because their keys came: each as backfill would map it, oldest
 /// first. An `Activity` is the line of the same event that could not be
-/// decrypted, which it replaces; an `ActivityUpdate` is a decrypted edit or
-/// reaction. An event can be reported again, decrypted all along, when the
+/// decrypted, which it replaces; an `ActivityUpdate` is what a decrypted
+/// event does to another: an edit, a reaction. An event can be reported again, decrypted all along, when the
 /// SDK refreshes its encryption info: replacing only lines that could not
 /// be decrypted and applying updates idempotently makes that a no-op.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1646,11 +1646,8 @@ pub enum RoomActivityUpdateKind {
         timestamp_ms: u64,
         key: String,
     },
-    ReactionRemoved {
-        reaction_event_id: String,
-        redaction_event_id: String,
-        key: String,
-    },
+    /// The target is the redacted event, whatever it is: a line, a
+    /// reaction, an edit. The UI knows what it shows it as.
     ActivityRedacted {
         redaction_event_id: String,
     },

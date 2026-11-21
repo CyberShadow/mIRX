@@ -2397,17 +2397,6 @@ async fn summarize_space_children(
         .collect())
 }
 
-#[derive(Default)]
-struct ReactionEventIndex {
-    live: BTreeMap<String, ReactionEventIndexEntry>,
-    pending_redactions: BTreeMap<String, String>,
-}
-
-struct ReactionEventIndexEntry {
-    target_event_id: String,
-    key: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PendingOutgoingKind {
     Message,
@@ -2521,35 +2510,14 @@ pub(crate) fn register_event_handlers(
         },
     );
 
-    let reaction_index = Arc::new(Mutex::new(ReactionEventIndex::default()));
-
+    // A redaction names an event; the UI knows what it shows that as (a
+    // line, a reaction).
     let redaction_events = events.clone();
-    let redaction_reaction_index = reaction_index.clone();
     client.add_event_handler(move |event: OriginalSyncRoomRedactionEvent, room: Room| {
         let events = redaction_events.clone();
-        let reaction_index = redaction_reaction_index.clone();
         async move {
             let rules = room.clone_info().room_version_rules_or_default().redaction;
             let redacted_event_id = event.redacts(&rules).to_string();
-            let mut reaction_index = reaction_index.lock().expect("lock reaction event index");
-            if let Some(entry) = reaction_index.live.remove(redacted_event_id.as_str()) {
-                emit_event(
-                    &events,
-                    Event::RoomActivityUpdate(
-                        room_activity_update_from_indexed_reaction_redaction(
-                            room.room_id().as_str(),
-                            redacted_event_id,
-                            &event,
-                            entry,
-                        ),
-                    ),
-                );
-                return;
-            }
-
-            reaction_index
-                .pending_redactions
-                .insert(redacted_event_id.clone(), event.event_id.to_string());
             emit_event(
                 &events,
                 Event::RoomActivityUpdate(room_activity_update_from_sync_redaction(
@@ -2562,29 +2530,9 @@ pub(crate) fn register_event_handlers(
     });
 
     let reaction_events = events.clone();
-    let reaction_event_index = reaction_index.clone();
     client.add_event_handler(move |event: OriginalSyncReactionEvent, room: Room| {
         let events = reaction_events.clone();
-        let reaction_index = reaction_event_index.clone();
         async move {
-            let reaction_event_id = event.event_id.to_string();
-            let mut reaction_index = reaction_index.lock().expect("lock reaction event index");
-            if reaction_index
-                .pending_redactions
-                .remove(reaction_event_id.as_str())
-                .is_some()
-            {
-                return;
-            }
-
-            reaction_index.live.insert(
-                reaction_event_id.clone(),
-                ReactionEventIndexEntry {
-                    target_event_id: event.content.relates_to.event_id.to_string(),
-                    key: event.content.relates_to.key.clone(),
-                },
-            );
-
             emit_event(
                 &events,
                 Event::RoomActivityUpdate(room_activity_update_from_sync_reaction(
@@ -2891,25 +2839,6 @@ fn room_activity_update_from_sync_reaction(
             sender: event.sender.to_string(),
             timestamp_ms: event.origin_server_ts.get().into(),
             key: event.content.relates_to.key.clone(),
-        },
-    }
-}
-
-fn room_activity_update_from_indexed_reaction_redaction(
-    room_id: &str,
-    reaction_event_id: String,
-    event: &OriginalSyncRoomRedactionEvent,
-    entry: ReactionEventIndexEntry,
-) -> RoomActivityUpdate {
-    RoomActivityUpdate {
-        room_id: room_id.to_owned(),
-        target: RoomActivityUpdateTarget::Event {
-            event_id: entry.target_event_id,
-        },
-        kind: RoomActivityUpdateKind::ReactionRemoved {
-            reaction_event_id,
-            redaction_event_id: event.event_id.to_string(),
-            key: entry.key,
         },
     }
 }
@@ -5151,7 +5080,6 @@ async fn room_history_backfill_events_from_timeline(
     chunk: Vec<TimelineEvent>,
     redaction_rules: matrix_sdk::ruma::room_version_rules::RedactionRules,
 ) -> Result<Vec<RoomHistoryBackfillEvent>, MatrixCoreError> {
-    let mut reaction_index = BTreeMap::new();
     let mut senders = SenderProfileCache::new(room);
     let mut events = Vec::with_capacity(chunk.len());
 
@@ -5161,7 +5089,6 @@ async fn room_history_backfill_events_from_timeline(
                 room,
                 &event,
                 &redaction_rules,
-                &mut reaction_index,
                 &mut senders,
             )
             .await?,
@@ -5243,7 +5170,6 @@ async fn room_history_backfill_event_from_timeline_event(
     room: &Room,
     event: &TimelineEvent,
     redaction_rules: &matrix_sdk::ruma::room_version_rules::RedactionRules,
-    reaction_index: &mut BTreeMap<String, ReactionEventIndexEntry>,
     senders: &mut SenderProfileCache<'_>,
 ) -> Result<Option<RoomHistoryBackfillEvent>, MatrixCoreError> {
     let room_id = room.room_id().as_str();
@@ -5287,13 +5213,6 @@ async fn room_history_backfill_event_from_timeline_event(
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncReactionEvent>() {
-        reaction_index.insert(
-            event.event_id.to_string(),
-            ReactionEventIndexEntry {
-                target_event_id: event.content.relates_to.event_id.to_string(),
-                key: event.content.relates_to.key.clone(),
-            },
-        );
         return Ok(Some(RoomHistoryBackfillEvent::ActivityUpdate(
             room_activity_update_from_sync_reaction(room_id, &event),
         )));
@@ -5301,17 +5220,6 @@ async fn room_history_backfill_event_from_timeline_event(
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomRedactionEvent>() {
         let redacted_event_id = event.redacts(redaction_rules).to_string();
-        if let Some(entry) = reaction_index.remove(redacted_event_id.as_str()) {
-            return Ok(Some(RoomHistoryBackfillEvent::ActivityUpdate(
-                room_activity_update_from_indexed_reaction_redaction(
-                    room_id,
-                    redacted_event_id,
-                    &event,
-                    entry,
-                ),
-            )));
-        }
-
         return Ok(Some(RoomHistoryBackfillEvent::ActivityUpdate(
             room_activity_update_from_sync_redaction(room_id, &event, redacted_event_id),
         )));
@@ -5451,7 +5359,6 @@ async fn fetch_room_event_activity(
         &room,
         &event,
         &redaction_rules,
-        &mut BTreeMap::new(),
         &mut SenderProfileCache::new(&room),
     )
     .await?
@@ -5503,23 +5410,22 @@ mod tests {
     use super::edit_message;
     use super::{
         LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, PowerLevelsChange,
-        ReactionEventIndex, ReactionEventIndexEntry, SenderProfileCache, activity_highlight,
-        add_highlight_word, attach_reply_relation, attach_thread_relation,
-        attach_thread_reply_relation, backfill_room_history, ban_room_member, cancelled_state,
-        content_type_for_file_name, create_room, direct_user_ids_by_room_from_content,
-        emit_member_snapshots_after_sync, fetch_room_event, fetch_room_media, fetch_user_profile,
-        highlight_word_actions, highlight_words_from_ruleset, ignore_user, ignored_users,
-        insert_pending_outgoing_kind, invite_room_member, joined_room_members,
-        joined_room_members_no_sync, joined_room_update_changes_members, kick_room_member,
-        list_public_rooms, map_cross_signing_status, map_decimals, map_e2ee_backup_state,
-        map_e2ee_recovery_state, map_emoji_array, map_emoji_short_auth_string, map_local_echo,
-        map_local_message_activity, map_send_queue_update, member_target_display_name,
+        SenderProfileCache, activity_highlight, add_highlight_word, attach_reply_relation,
+        attach_thread_relation, attach_thread_reply_relation, backfill_room_history,
+        ban_room_member, cancelled_state, content_type_for_file_name, create_room,
+        direct_user_ids_by_room_from_content, emit_member_snapshots_after_sync, fetch_room_event,
+        fetch_room_media, fetch_user_profile, highlight_word_actions, highlight_words_from_ruleset,
+        ignore_user, ignored_users, insert_pending_outgoing_kind, invite_room_member,
+        joined_room_members, joined_room_members_no_sync, joined_room_update_changes_members,
+        kick_room_member, list_public_rooms, map_cross_signing_status, map_decimals,
+        map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
+        map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
+        map_send_queue_update, member_target_display_name,
         message_presentation_and_text_from_serialized_event, outgoing_events_from_local_echo_event,
         own_room_user_profile, owned_event_id_from_str, power_levels_change,
         reaction_event_content, read_file_bytes, register_event_handlers, remove_highlight_word,
         restore_session, room_activity_from_sync_member, room_activity_from_sync_message,
-        room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
-        room_activity_update_from_sync_message_replacement,
+        room_activity_from_sync_topic, room_activity_update_from_sync_message_replacement,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_history_backfill_event_from_timeline_event,
         room_history_backfill_events_from_timeline, room_list_update_is_relevant,
@@ -6735,7 +6641,7 @@ mod tests {
         );
 
         assert_eq!(
-            backfill_event(&event, &RedactionRules::V1, &mut BTreeMap::new(),),
+            backfill_event(&event, &RedactionRules::V1),
             Some(RoomHistoryBackfillEvent::Activity(Box::new(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$encrypted1:example.org".to_owned(),
@@ -6785,7 +6691,7 @@ mod tests {
             serde_json::json!({ "m.in_reply_to": { "event_id": "$quoted:example.org" } }),
         );
         let Some(RoomHistoryBackfillEvent::Activity(activity)) =
-            backfill_event(&reply, &RedactionRules::V1, &mut BTreeMap::new())
+            backfill_event(&reply, &RedactionRules::V1)
         else {
             panic!("a reply that could not be decrypted is a line");
         };
@@ -6803,7 +6709,7 @@ mod tests {
             "m.in_reply_to": { "event_id": "$root:example.org" },
         }));
         let Some(RoomHistoryBackfillEvent::Activity(activity)) =
-            backfill_event(&thread, &RedactionRules::V1, &mut BTreeMap::new())
+            backfill_event(&thread, &RedactionRules::V1)
         else {
             panic!("a thread message that could not be decrypted is a line");
         };
@@ -6821,7 +6727,7 @@ mod tests {
             "event_id": "$referenced:example.org",
         }));
         let Some(RoomHistoryBackfillEvent::Activity(activity)) =
-            backfill_event(&reference, &RedactionRules::V1, &mut BTreeMap::new())
+            backfill_event(&reference, &RedactionRules::V1)
         else {
             panic!("a reference that could not be decrypted is a line");
         };
@@ -6840,7 +6746,7 @@ mod tests {
         ] {
             let event = megolm_utd_with_relation(relates_to.clone());
             assert_eq!(
-                backfill_event(&event, &RedactionRules::V1, &mut BTreeMap::new()),
+                backfill_event(&event, &RedactionRules::V1),
                 None,
                 "{relates_to}"
             );
@@ -7282,14 +7188,12 @@ mod tests {
     fn backfill_event(
         event: &TimelineEvent,
         redaction_rules: &RedactionRules,
-        reaction_index: &mut BTreeMap<String, ReactionEventIndexEntry>,
     ) -> Option<RoomHistoryBackfillEvent> {
         with_memberless_room(async |room| {
             room_history_backfill_event_from_timeline_event(
                 room,
                 event,
                 redaction_rules,
-                reaction_index,
                 &mut SenderProfileCache::new(room),
             )
             .await
@@ -8405,7 +8309,7 @@ mod tests {
             "origin_server_ts": 1700000000100u64
         }));
 
-        let mapped = backfill_event(&event, &RedactionRules::V1, &mut BTreeMap::new());
+        let mapped = backfill_event(&event, &RedactionRules::V1);
 
         assert_eq!(
             mapped,
@@ -8451,7 +8355,7 @@ mod tests {
             "origin_server_ts": 1700000001000u64
         }));
 
-        let mapped = backfill_event(&event, &RedactionRules::V1, &mut BTreeMap::new());
+        let mapped = backfill_event(&event, &RedactionRules::V1);
 
         assert_eq!(
             mapped,
@@ -8492,7 +8396,7 @@ mod tests {
             "origin_server_ts": 1700000001500u64
         }));
 
-        let mapped = backfill_event(&event, &RedactionRules::V1, &mut BTreeMap::new());
+        let mapped = backfill_event(&event, &RedactionRules::V1);
 
         assert_eq!(
             mapped,
@@ -8584,65 +8488,64 @@ mod tests {
         );
     }
 
+    /// A page's redaction of a reaction on the same page names the
+    /// reaction, like any redaction: the UI removes the reaction it shows.
     #[test]
-    fn reaction_redaction_maps_to_reaction_removed_when_indexed() {
-        let reaction_event: OriginalSyncReactionEvent = serde_json::from_value(serde_json::json!({
-            "type": "m.reaction",
-            "content": {
-                "m.relates_to": {
-                    "rel_type": "m.annotation",
-                    "event_id": "$original:example.org",
-                    "key": "heart"
-                }
-            },
-            "event_id": "$reaction:example.org",
-            "sender": "@alice:example.org",
-            "origin_server_ts": 1700000001501u64
-        }))
-        .expect("deserialize sync reaction event");
-        let redaction_event: OriginalSyncRoomRedactionEvent =
-            serde_json::from_value(serde_json::json!({
-                "type": "m.room.redaction",
-                "content": {},
-                "redacts": "$reaction:example.org",
-                "event_id": "$redaction:example.org",
-                "sender": "@bob:example.org",
-                "origin_server_ts": 1700000002003u64
-            }))
-            .expect("deserialize redaction event");
-
-        let mut index = ReactionEventIndex::default();
-        index.live.insert(
-            reaction_event.event_id.to_string(),
-            ReactionEventIndexEntry {
-                target_event_id: reaction_event.content.relates_to.event_id.to_string(),
-                key: reaction_event.content.relates_to.key.clone(),
-            },
+    fn room_backfill_redaction_of_a_reaction_names_the_reaction() {
+        let events = backfill_events(
+            vec![
+                timeline_event(serde_json::json!({
+                    "type": "m.room.redaction",
+                    "room_id": "!history:example.org",
+                    "content": {},
+                    "redacts": "$reaction:example.org",
+                    "event_id": "$redaction:example.org",
+                    "sender": "@alice:example.org",
+                    "origin_server_ts": 1700000002003u64
+                })),
+                timeline_event(serde_json::json!({
+                    "type": "m.reaction",
+                    "room_id": "!history:example.org",
+                    "content": {
+                        "m.relates_to": {
+                            "rel_type": "m.annotation",
+                            "event_id": "$original:example.org",
+                            "key": "heart"
+                        }
+                    },
+                    "event_id": "$reaction:example.org",
+                    "sender": "@alice:example.org",
+                    "origin_server_ts": 1700000001501u64
+                })),
+            ],
+            RedactionRules::V1,
         );
 
-        let reaction_event_id = redaction_event.redacts(&RedactionRules::V1).to_string();
-        let entry = index
-            .live
-            .remove(reaction_event_id.as_str())
-            .expect("reaction indexed");
         assert_eq!(
-            room_activity_update_from_indexed_reaction_redaction(
-                "!room:example.org",
-                reaction_event_id,
-                &redaction_event,
-                entry,
-            ),
-            RoomActivityUpdate {
-                room_id: "!room:example.org".to_owned(),
-                target: RoomActivityUpdateTarget::Event {
-                    event_id: "$original:example.org".to_owned(),
-                },
-                kind: RoomActivityUpdateKind::ReactionRemoved {
-                    reaction_event_id: "$reaction:example.org".to_owned(),
-                    redaction_event_id: "$redaction:example.org".to_owned(),
-                    key: "heart".to_owned(),
-                },
-            }
+            events,
+            vec![
+                RoomHistoryBackfillEvent::ActivityUpdate(RoomActivityUpdate {
+                    room_id: "!room:example.org".to_owned(),
+                    target: RoomActivityUpdateTarget::Event {
+                        event_id: "$original:example.org".to_owned(),
+                    },
+                    kind: RoomActivityUpdateKind::ReactionAdded {
+                        reaction_event_id: "$reaction:example.org".to_owned(),
+                        sender: "@alice:example.org".to_owned(),
+                        timestamp_ms: 1_700_000_001_501,
+                        key: "heart".to_owned(),
+                    },
+                }),
+                RoomHistoryBackfillEvent::ActivityUpdate(RoomActivityUpdate {
+                    room_id: "!room:example.org".to_owned(),
+                    target: RoomActivityUpdateTarget::Event {
+                        event_id: "$reaction:example.org".to_owned(),
+                    },
+                    kind: RoomActivityUpdateKind::ActivityRedacted {
+                        redaction_event_id: "$redaction:example.org".to_owned(),
+                    },
+                }),
+            ]
         );
     }
 
@@ -8677,72 +8580,7 @@ mod tests {
     }
 
     #[test]
-    fn reaction_redaction_before_reaction_suppresses_later_add() {
-        let redaction_event: OriginalSyncRoomRedactionEvent =
-            serde_json::from_value(serde_json::json!({
-                "type": "m.room.redaction",
-                "content": {},
-                "redacts": "$reaction:example.org",
-                "event_id": "$redaction:example.org",
-                "sender": "@bob:example.org",
-                "origin_server_ts": 1700000002004u64
-            }))
-            .expect("deserialize redaction event");
-        let reaction_event: OriginalSyncReactionEvent = serde_json::from_value(serde_json::json!({
-            "type": "m.reaction",
-            "content": {
-                "m.relates_to": {
-                    "rel_type": "m.annotation",
-                    "event_id": "$original:example.org",
-                    "key": "eyes"
-                }
-            },
-            "event_id": "$reaction:example.org",
-            "sender": "@alice:example.org",
-            "origin_server_ts": 1700000001502u64
-        }))
-        .expect("deserialize sync reaction event");
-
-        let mut index = ReactionEventIndex::default();
-        let redacted_event_id = redaction_event.redacts(&RedactionRules::V1).to_string();
-        index
-            .pending_redactions
-            .insert(redacted_event_id, redaction_event.event_id.to_string());
-
-        let reaction_event_id = reaction_event.event_id.to_string();
-        let update = if index
-            .pending_redactions
-            .remove(reaction_event_id.as_str())
-            .is_some()
-        {
-            None
-        } else {
-            index.live.insert(
-                reaction_event_id,
-                ReactionEventIndexEntry {
-                    target_event_id: reaction_event.content.relates_to.event_id.to_string(),
-                    key: reaction_event.content.relates_to.key.clone(),
-                },
-            );
-            Some(room_activity_update_from_sync_reaction(
-                "!room:example.org",
-                &reaction_event,
-            ))
-        };
-
-        assert_eq!(update, None);
-        assert!(
-            index.live.is_empty(),
-            "suppressed reaction must not be indexed"
-        );
-        assert!(
-            index.pending_redactions.is_empty(),
-            "pending redaction tombstone must be cleared when the reaction arrives"
-        );
-    }
-
-    #[test]
-    fn unknown_redaction_still_maps_to_activity_redacted() {
+    fn a_redaction_maps_to_activity_redacted_of_its_target() {
         let redaction_event: OriginalSyncRoomRedactionEvent =
             serde_json::from_value(serde_json::json!({
                 "type": "m.room.redaction",
