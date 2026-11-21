@@ -1,6 +1,8 @@
 //! The mIRC window model: every channel, query and status window is an MDI
 //! child holding its own content above its own editbox.
 
+use super::dpi::Dpi;
+
 /// A child control's rectangle in its MDI child's client coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ChildRect {
@@ -37,6 +39,7 @@ pub(super) fn child_layout(client_width: i32, client_height: i32, edit_height: i
     }
 }
 
+/// At 96 dpi.
 const MEMBER_LIST_WIDTH: i32 = 180;
 const MEMBER_LIST_GAP: i32 = 4;
 
@@ -51,11 +54,11 @@ pub(super) struct RoomContentLayout {
 
 /// mIRC always keeps the nick list in a channel window and shrinks the text
 /// area; in a narrow window the list takes at most a third.
-pub(super) fn room_content_layout(width: i32) -> RoomContentLayout {
-    let members_width = MEMBER_LIST_WIDTH.min(width / 3);
+pub(super) fn room_content_layout(width: i32, dpi: Dpi) -> RoomContentLayout {
+    let members_width = dpi.px(MEMBER_LIST_WIDTH).min(width / 3);
     let members_x = width - members_width;
     RoomContentLayout {
-        timeline_width: (members_x - MEMBER_LIST_GAP).max(0),
+        timeline_width: (members_x - dpi.px(MEMBER_LIST_GAP)).max(0),
         members_x,
         members_width,
     }
@@ -101,7 +104,7 @@ mod tests {
     #[test]
     fn room_content_layout_keeps_the_nick_list_at_every_width() {
         assert_eq!(
-            room_content_layout(800),
+            room_content_layout(800, Dpi::STANDARD),
             RoomContentLayout {
                 timeline_width: 616,
                 members_x: 620,
@@ -110,7 +113,7 @@ mod tests {
         );
         // A tiled window: the list shrinks to a third.
         assert_eq!(
-            room_content_layout(250),
+            room_content_layout(250, Dpi::STANDARD),
             RoomContentLayout {
                 timeline_width: 163,
                 members_x: 167,
@@ -118,11 +121,23 @@ mod tests {
             }
         );
         assert_eq!(
-            room_content_layout(0),
+            room_content_layout(0, Dpi::STANDARD),
             RoomContentLayout {
                 timeline_width: 0,
                 members_x: 0,
                 members_width: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn room_content_layout_scales_the_nick_list_with_the_dpi() {
+        assert_eq!(
+            room_content_layout(1200, Dpi::new(144)),
+            RoomContentLayout {
+                timeline_width: 924,
+                members_x: 930,
+                members_width: 270,
             }
         );
     }

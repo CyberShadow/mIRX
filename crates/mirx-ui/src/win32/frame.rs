@@ -1,6 +1,7 @@
 //! The frame window: its class, controls, layout, status bar and message
 //! loop.
 
+use super::settings::ButtonWidth;
 use super::*;
 
 const FRAME_CLASS_NAME: &str = "mirxWin32Frame";
@@ -304,7 +305,7 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     );
     set_switchbar_button_width(
         state.controls.switchbar,
-        state.settings.settings().switchbar.buttons.pixels(),
+        state.settings.settings().switchbar.buttons,
     );
     // One line per label, cut with "..." when it is wider than its button.
     SendMessageW(state.controls.switchbar, TB_SETMAXTEXTROWS, 1, 0);
@@ -413,8 +414,10 @@ pub(super) unsafe fn set_treebar_colors(tree: HWND, colors: &ColorScheme) {
     );
 }
 
-/// Gives every switchbar button `width` pixels, whatever its label.
-pub(super) unsafe fn set_switchbar_button_width(switchbar: HWND, width: i32) {
+/// Gives every switchbar button the setting's width, whatever its label.
+pub(super) unsafe fn set_switchbar_button_width(switchbar: HWND, setting: ButtonWidth) {
+    let dpi = Dpi::of_window(switchbar);
+    let width = dpi.px(setting.pixels());
     // The minimum and the maximum width.
     SendMessageW(
         switchbar,
@@ -426,7 +429,12 @@ pub(super) unsafe fn set_switchbar_button_width(switchbar: HWND, width: i32) {
     // pass the edge (comctl32's `TOOLBAR_WrapToolbar`), and the buttons have
     // no bitmap: a bitmap as wide as the button wraps the button itself, so
     // no row ends in a clipped button. 16 is the default bitmap height.
-    SendMessageW(switchbar, TB_SETBITMAPSIZE, 0, pack_size_lparam(width, 16));
+    SendMessageW(
+        switchbar,
+        TB_SETBITMAPSIZE,
+        0,
+        pack_size_lparam(width, dpi.px(16)),
+    );
 }
 
 pub(super) unsafe fn layout_controls(hwnd: HWND) {
@@ -450,8 +458,9 @@ pub(super) unsafe fn layout_controls(hwnd: HWND) {
     let (show_switchbar, show_treebar) = (settings.switchbar.show, settings.treebar.show);
     ShowWindow(state.controls.switchbar, show_or_hide(show_switchbar));
     ShowWindow(state.controls.tree, show_or_hide(show_treebar));
+    let dpi = Dpi::of_window(hwnd);
     let tree_width = if show_treebar {
-        TREE_WIDTH.min(width)
+        dpi.px(TREE_WIDTH).min(width)
     } else {
         0
     };
@@ -472,7 +481,7 @@ pub(super) unsafe fn layout_controls(hwnd: HWND) {
             .expect("a toolbar's row count is positive");
         let button_height =
             (SendMessageW(state.controls.switchbar, TB_GETBUTTONSIZE, 0, 0) as u32 >> 16) as i32;
-        switchbar::switchbar_height(rows, button_height).min(height)
+        switchbar::switchbar_height(rows, button_height, dpi).min(height)
     } else {
         0
     };
@@ -862,7 +871,11 @@ mod tests {
                 let bar = frame_child_layout(hwnd, switchbar);
                 assert_eq!(
                     bar.height,
-                    switchbar::switchbar_height(rows, switchbar_button_height(switchbar))
+                    switchbar::switchbar_height(
+                        rows,
+                        switchbar_button_height(switchbar),
+                        Dpi::of_window(hwnd)
+                    )
                 );
                 let mdi_client = frame_child_layout(hwnd, controls.mdi_client);
                 assert_eq!(mdi_client.y, bar.y + bar.height);
@@ -877,12 +890,12 @@ mod tests {
                     );
                     assert_eq!(
                         button.right - button.left,
-                        state_ref(hwnd)
+                        Dpi::of_window(hwnd).px(state_ref(hwnd)
                             .settings
                             .settings()
                             .switchbar
                             .buttons
-                            .pixels()
+                            .pixels())
                     );
                     assert!(button.right <= bar.width, "button {index} is clipped");
                 }
@@ -914,7 +927,10 @@ mod tests {
                 let switchbar = state_ref(hwnd).controls.switchbar;
                 assert_eq!(SendMessageW(switchbar, TB_GETROWS, 0, 0), 1);
                 let bar = frame_child_layout(hwnd, switchbar);
-                assert_eq!(bar.height, switchbar::SWITCHBAR_ROW_HEIGHT);
+                assert_eq!(
+                    bar.height,
+                    switchbar::switchbar_height(1, 0, Dpi::of_window(hwnd))
+                );
                 assert_eq!(
                     frame_child_layout(hwnd, state_ref(hwnd).controls.mdi_client).y,
                     bar.height

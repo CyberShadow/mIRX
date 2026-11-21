@@ -1259,10 +1259,7 @@ pub(super) unsafe fn run_options_dialog(hwnd: HWND) -> Result<(), String> {
         refresh_every_view_content(hwnd)?;
     }
     if new.switchbar.buttons != old.switchbar.buttons {
-        set_switchbar_button_width(
-            state_ref(hwnd).controls.switchbar,
-            new.switchbar.buttons.pixels(),
-        );
+        set_switchbar_button_width(state_ref(hwnd).controls.switchbar, new.switchbar.buttons);
         layout_controls(hwnd);
     }
     if new.switchbar.activity != old.switchbar.activity {

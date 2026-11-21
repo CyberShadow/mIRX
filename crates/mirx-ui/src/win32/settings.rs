@@ -287,7 +287,7 @@ pub(super) struct ButtonWidth(u16);
 impl ButtonWidth {
     const PIXELS: std::ops::RangeInclusive<u16> = 40..=400;
 
-    /// 40-400 pixels.
+    /// 40-400 pixels at 96 dpi; the switchbar scales them with its DPI.
     pub(super) fn new(pixels: u16) -> Result<Self, String> {
         if Self::PIXELS.contains(&pixels) {
             Ok(Self(pixels))

@@ -503,6 +503,7 @@ use window_buffer::trim_window_buffers;
 
 const TIMELINE_CLASS_NAME: &str = "mirxWin32Timeline";
 const FRAME_TITLE: &str = "mirx";
+/// At 96 dpi.
 const DEFAULT_FRAME_SIZE: FrameSize = FrameSize {
     width: 1024,
     height: 768,
@@ -532,6 +533,7 @@ const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
 /// A connect retry is due (`reconnect`).
 const RECONNECT_TIMER_ID: usize = 2;
+/// At 96 dpi.
 const TREE_WIDTH: i32 = 240;
 const TIMELINE_LEFT_PADDING: i32 = 8;
 const TIMELINE_RIGHT_PADDING: i32 = 8;
@@ -1187,10 +1189,35 @@ fn install_inert_command_sender(state: &mut WindowState) {
     state.inert_command_receiver = Some(receiver);
 }
 
+/// The frame's size: `--frame-size`, an exact geometry in physical pixels,
+/// or the default for the system.
 fn frame_size_for_command(command: &AppCommand) -> FrameSize {
-    match command {
-        AppCommand::Run(options) => options.frame_size.unwrap_or(DEFAULT_FRAME_SIZE),
-        AppCommand::SelfTest | AppCommand::AutoClose | AppCommand::Help => DEFAULT_FRAME_SIZE,
+    let explicit = match command {
+        AppCommand::Run(options) => options.frame_size,
+        AppCommand::SelfTest | AppCommand::AutoClose | AppCommand::Help => None,
+    };
+    explicit.unwrap_or_else(|| default_frame_size(Dpi::system(), primary_work_area()))
+}
+
+/// `DEFAULT_FRAME_SIZE` at `dpi`, but never larger than the screen's
+/// `work_area`: scaled, the default may not fit a small screen.
+fn default_frame_size(dpi: Dpi, work_area: FrameSize) -> FrameSize {
+    FrameSize {
+        width: dpi.px(DEFAULT_FRAME_SIZE.width).min(work_area.width),
+        height: dpi.px(DEFAULT_FRAME_SIZE.height).min(work_area.height),
+    }
+}
+
+/// The primary monitor's size without the taskbar.
+fn primary_work_area() -> FrameSize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETWORKAREA, SystemParametersInfoW};
+    let mut area = RECT::default();
+    let read =
+        unsafe { SystemParametersInfoW(SPI_GETWORKAREA, 0, (&mut area as *mut RECT).cast(), 0) };
+    assert!(read != 0, "SPI_GETWORKAREA must succeed");
+    FrameSize {
+        width: area.right - area.left,
+        height: area.bottom - area.top,
     }
 }
 
@@ -1371,6 +1398,10 @@ mod tests {
         }
     }
 
+    fn system_default_frame_size() -> FrameSize {
+        default_frame_size(Dpi::system(), primary_work_area())
+    }
+
     #[test]
     fn frame_size_defaults_for_run_command() {
         assert_eq!(
@@ -1379,7 +1410,24 @@ mod tests {
                 render_state: None,
                 frame_size: None,
             })),
-            DEFAULT_FRAME_SIZE
+            system_default_frame_size()
+        );
+    }
+
+    #[test]
+    fn default_frame_size_scales_and_fits_the_work_area() {
+        let size = |width, height| FrameSize { width, height };
+        assert_eq!(
+            default_frame_size(Dpi::STANDARD, size(1920, 1040)),
+            size(1024, 768)
+        );
+        assert_eq!(
+            default_frame_size(Dpi::new(144), size(1920, 1040)),
+            size(1536, 1040)
+        );
+        assert_eq!(
+            default_frame_size(Dpi::new(144), size(1280, 1024)),
+            size(1280, 1024)
         );
     }
 
@@ -1405,7 +1453,7 @@ mod tests {
     fn frame_size_defaults_for_self_test() {
         assert_eq!(
             frame_size_for_command(&AppCommand::SelfTest),
-            DEFAULT_FRAME_SIZE
+            system_default_frame_size()
         );
     }
 
@@ -1413,7 +1461,7 @@ mod tests {
     fn frame_size_defaults_for_auto_close() {
         assert_eq!(
             frame_size_for_command(&AppCommand::AutoClose),
-            DEFAULT_FRAME_SIZE
+            system_default_frame_size()
         );
     }
 

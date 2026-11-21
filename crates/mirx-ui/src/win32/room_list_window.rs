@@ -64,7 +64,7 @@ pub(super) unsafe fn start_room_list(hwnd: HWND, query: RoomListQuery) -> Result
     Ok("listing rooms".to_owned())
 }
 
-/// Column widths in pixels, for the frame's Fixedsys text.
+/// Column widths in pixels at 96 dpi, for the frame's Fixedsys text.
 const ROOM_LIST_COLUMN_WIDTHS: [i32; 4] = [240, 64, 200, 640];
 
 pub(super) unsafe fn add_room_list_columns(list: HWND) -> Result<(), String> {
@@ -74,6 +74,7 @@ pub(super) unsafe fn add_room_list_columns(list: HWND) -> Result<(), String> {
         LVS_EX_FULLROWSELECT as WPARAM,
         LVS_EX_FULLROWSELECT as LPARAM,
     );
+    let dpi = Dpi::of_window(list);
     for (index, column) in RoomListColumn::ALL.into_iter().enumerate() {
         let mut title = wide_null(column.title());
         let format = match column {
@@ -83,7 +84,7 @@ pub(super) unsafe fn add_room_list_columns(list: HWND) -> Result<(), String> {
         let lv_column = LVCOLUMNW {
             mask: LVCF_FMT | LVCF_TEXT | LVCF_WIDTH,
             fmt: format,
-            cx: ROOM_LIST_COLUMN_WIDTHS[index],
+            cx: dpi.px(ROOM_LIST_COLUMN_WIDTHS[index]),
             pszText: title.as_mut_ptr(),
             ..LVCOLUMNW::default()
         };

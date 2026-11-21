@@ -561,7 +561,7 @@ unsafe fn layout_room_content(hwnd: HWND) {
     let mut rect = RECT::default();
     GetClientRect(hwnd, &mut rect);
     let height = rect.bottom - rect.top;
-    let layout = mdi::room_content_layout(rect.right - rect.left);
+    let layout = mdi::room_content_layout(rect.right - rect.left, Dpi::of_window(hwnd));
     MoveWindow(state.timeline, 0, 0, layout.timeline_width, height, 1);
     MoveWindow(
         state.members,
