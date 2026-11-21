@@ -2560,7 +2560,8 @@ fn acknowledge_recovery_key_handoff(app: &MirxApp) -> Result<(), Box<dyn std::er
     let deadline = Instant::now() + Duration::from_secs(5);
     let dialog = loop {
         let dialog = unsafe { recovery_key_handoff_dialog_hwnd(frame, class_name_wide.as_ptr()) };
-        if !dialog.is_null() {
+        // It exists before its controls do; it shows once they are there.
+        if !dialog.is_null() && unsafe { IsWindowVisible(dialog) } != 0 {
             break dialog;
         }
         if Instant::now() >= deadline {
@@ -2625,7 +2626,8 @@ fn submit_recover_e2ee_menu_dialog(
     let deadline = Instant::now() + Duration::from_secs(5);
     let dialog = loop {
         let dialog = unsafe { recover_e2ee_dialog_hwnd(frame, class_name.as_ptr()) };
-        if !dialog.is_null() {
+        // It exists before its controls do; it shows once they are there.
+        if !dialog.is_null() && unsafe { IsWindowVisible(dialog) } != 0 {
             break dialog;
         }
         if Instant::now() >= deadline {
@@ -2683,18 +2685,10 @@ fn submit_setup_e2ee_recovery_menu_dialog(
         );
     });
 
-    let class_name = wide_null("mirxWin32SetupE2eeDialog");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let dialog = loop {
-        let dialog = unsafe { FindWindowW(class_name.as_ptr(), std::ptr::null()) };
-        if !dialog.is_null() {
-            break dialog;
-        }
-        if Instant::now() >= deadline {
-            panic!("Set Up E2EE Recovery dialog did not appear within five seconds");
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    };
+    let dialog = wait_for_window(
+        &wide_null("mirxWin32SetupE2eeDialog"),
+        "Set Up E2EE Recovery dialog",
+    )?;
 
     let passphrase_edit = unsafe { GetDlgItem(dialog, SETUP_E2EE_DIALOG_PASSPHRASE_ID) };
     assert!(
