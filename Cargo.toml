@@ -4,6 +4,8 @@ members = [
     "crates/mirx-testkit",
     "crates/mirx-ui",
 ]
+# Third-party sources patched in below: built, but not linted or tested.
+exclude = ["vendor"]
 resolver = "2"
 
 [workspace.package]
@@ -28,3 +30,8 @@ opt-level = 3
 
 [profile.dev.package.sha2]
 opt-level = 3
+
+# A local copy of matrix-sdk 0.18.0 with a fix the next release will have:
+# see vendor/matrix-sdk-0.18.0/VENDORED.md.
+[patch.crates-io]
+matrix-sdk = { path = "vendor/matrix-sdk-0.18.0" }
