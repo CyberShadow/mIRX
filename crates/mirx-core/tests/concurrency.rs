@@ -407,6 +407,80 @@ fn logout_cancels_hung_work_and_acks_it() {
     harness.join_stopped();
 }
 
+/// What comes for the session while its logout waits for the server goes
+/// with it, as its jobs do: an automatic read receipt sent just before the
+/// answer is no error after it.
+#[test]
+fn a_logout_drops_the_commands_that_came_for_its_session() {
+    let harness = Harness::restored_in_rooms(&[ROOM], &[]);
+    harness.mount(
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/_matrix/client/v3/logout$"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({}))
+                    .set_delay(Duration::from_millis(300)),
+            ),
+    );
+    let mut seen = Seen::new(&harness);
+
+    harness.send(common::log_out_anyway());
+    harness.wait_for_requests("POST", "/logout", 1);
+    harness.send(Command::MarkRoomRead(mirx_core::MarkRoomReadRequest {
+        room_id: ROOM.to_owned(),
+        event_id: "$alice-join".to_owned(),
+    }));
+    harness.send(Command::StartSync);
+    seen.until("LoggedOut", |event| *event == Event::LoggedOut);
+    seen.until_acks(3);
+
+    let events = seen.shut_down();
+    assert!(
+        !events.iter().any(|event| matches!(event, Event::Error(_))),
+        "{events:#?}"
+    );
+    assert_eq!(acks(&events), 4, "{events:#?}");
+    harness.join_stopped();
+}
+
+/// A sign-in sent during a logout is not for the session: it runs once
+/// the logout ends.
+#[test]
+fn a_sign_in_sent_during_a_logout_runs_after_it() {
+    let harness = Harness::restored_in_rooms(&[ROOM], &[]);
+    harness.mount(
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/_matrix/client/v3/logout$"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({}))
+                    .set_delay(Duration::from_millis(300)),
+            ),
+    );
+    harness.mount(
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/_matrix/client/v3/login$"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+                "errcode": "M_FORBIDDEN",
+                "error": "wrong password",
+            }))),
+    );
+    let mut seen = Seen::new(&harness);
+
+    harness.send(common::log_out_anyway());
+    harness.wait_for_requests("POST", "/logout", 1);
+    harness.send(password_login(&harness));
+    seen.until("LoggedOut", |event| *event == Event::LoggedOut);
+    seen.until("the sign-in's error", |event| {
+        is_error_of(event, Operation::Login)
+    });
+    assert_eq!(harness.requests("POST", "/login").len(), 1);
+
+    let events = seen.shut_down();
+    assert_eq!(acks(&events), 3, "{events:#?}");
+    harness.join_stopped();
+}
+
 #[test]
 fn every_command_is_acked_once_by_stopped() {
     let harness = Harness::restored_in_rooms(&[ROOM], &[]);

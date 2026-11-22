@@ -11,7 +11,9 @@
 //! after the command's own events: an immediate command after its
 //! handling, a lane command after its job's followup is applied, a
 //! transition's command at its end, and a command that a logout, a cancel
-//! or a shutdown drops when it drops it.
+//! or a shutdown drops when it drops it. A logout that ends the session
+//! drops the session's jobs and the commands for the session that came
+//! during it.
 //!
 //! The actor awaits only in its `select!` and in teardowns that end
 //! without the server (aborting and joining tasks): it never waits for
@@ -496,7 +498,7 @@ impl Core {
         match result {
             // The session's client is gone with it: its store can go too.
             Ok(()) => {
-                let dropped = self.jobs.abort_all().await;
+                let dropped = self.jobs.abort_all().await + self.drop_session_commands();
                 session.shut_down().await;
                 acks(&self.events, dropped);
                 let removed = matrix::remove_store(&self.config).await;
@@ -528,6 +530,15 @@ impl Core {
             }
         }
         ack(&self.events);
+    }
+
+    /// Drops the commands that came for the session during its logout, as
+    /// its jobs are dropped; the others run once the logout ends. Returns
+    /// how many it dropped.
+    fn drop_session_commands(&mut self) -> usize {
+        let waiting = self.deferred.len();
+        self.deferred.retain(|route| !route.is_for_the_session());
+        waiting - self.deferred.len()
     }
 
     /// Stops every job, the transition under way and the session's tasks,

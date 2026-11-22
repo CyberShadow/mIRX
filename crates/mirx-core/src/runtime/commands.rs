@@ -43,6 +43,18 @@ pub(super) enum Route {
     Lane(LaneCommand),
 }
 
+impl Route {
+    /// Whether the command is for the session: a logout that ends it
+    /// drops the command with it.
+    pub(super) fn is_for_the_session(&self) -> bool {
+        match self {
+            Self::Logout(_) | Self::StartSync | Self::StopSync | Self::Lane(_) => true,
+            Self::Login(_) | Self::RestoreSession(_) | Self::CancelLogin => false,
+            Self::Shutdown => unreachable!("a shutdown never waits"),
+        }
+    }
+}
+
 /// A command that runs as a job on `lane`, in a session; without one it
 /// is refused.
 pub(super) struct LaneCommand {
