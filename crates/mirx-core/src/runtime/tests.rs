@@ -2595,6 +2595,101 @@ async fn session_with_recovery_and_a_new_room_key(
     client
 }
 
+/// A new session recovers while a key query of its own account is
+/// computing the recovery state from before the backup was enabled: the
+/// state ends as what it is, enabled, not as that stale computation.
+#[test]
+fn recovering_during_a_key_query_ends_with_recovery_enabled() {
+    use matrix_sdk::encryption::recovery::RecoveryState;
+    use matrix_sdk::ruma::{owned_device_id, owned_user_id};
+    use wiremock::matchers::{method, path_regex};
+
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        mock_server.mock_crypto_endpoints_preset().await;
+        let account_data = AccountDataStore::default();
+        wiremock::Mock::given(path_regex(r"^/_matrix/client/.*/user/.*/account_data/"))
+            .respond_with(account_data.clone())
+            .mount(mock_server.server())
+            .await;
+        wiremock::Mock::given(path_regex(r"^/_matrix/client/.*/room_keys/version$"))
+            .respond_with(BackupVersionStore::default())
+            .mount(mock_server.server())
+            .await;
+        let alice = owned_user_id!("@alice:example.org");
+        let first = mock_server
+            .client_builder_for_crypto_end_to_end(&alice, &owned_device_id!("FIRST"))
+            .build()
+            .await;
+        first
+            .encryption()
+            .wait_for_e2ee_initialization_tasks()
+            .await;
+        first
+            .encryption()
+            .bootstrap_cross_signing(None)
+            .await
+            .expect("set up cross-signing");
+        let recovery_key = first
+            .encryption()
+            .recovery()
+            .enable()
+            .await
+            .expect("set up recovery");
+
+        // Whether backups are marked disabled is only asked while they
+        // are not enabled; answering slowly keeps such a computation
+        // running past the backup being enabled.
+        let slow_answer = Duration::from_millis(300);
+        wiremock::Mock::given(method("GET"))
+            .and(path_regex(
+                r"^/_matrix/client/.*/account_data/m\.key_backup$",
+            ))
+            .respond_with(move |request: &wiremock::Request| {
+                wiremock::Respond::respond(&account_data, request).set_delay(slow_answer)
+            })
+            .with_priority(1)
+            .mount(mock_server.server())
+            .await;
+        let second = mock_server
+            .client_builder_for_crypto_end_to_end(&alice, &owned_device_id!("SECOND"))
+            .build()
+            .await;
+        second
+            .encryption()
+            .wait_for_e2ee_initialization_tasks()
+            .await;
+        // Uploads the new device's keys.
+        mock_server.mock_sync().ok_and_run(&second, |_| {}).await;
+        let recovery = second.encryption().recovery();
+
+        let key_query = async {
+            while !second
+                .encryption()
+                .cross_signing_status()
+                .await
+                .is_some_and(|status| status.is_complete())
+            {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            // The recovery is now waiting on its own slow answer, before
+            // it enables the backup.
+            tokio::time::sleep(slow_answer / 2).await;
+            second
+                .encryption()
+                .request_user_identity(&alice)
+                .await
+                .expect("query the account's keys");
+        };
+        let (recovered, ()) =
+            tokio::join!(recovery.recover_and_fix_backup(&recovery_key), key_query);
+        recovered.expect("recover");
+
+        assert!(second.encryption().backups().are_enabled().await);
+        assert_eq!(recovery.state(), RecoveryState::Enabled);
+    });
+}
+
 fn log_out_keeping_room_keys() -> Command {
     Command::Logout(crate::api::LogoutRequest {
         discard_room_keys: false,

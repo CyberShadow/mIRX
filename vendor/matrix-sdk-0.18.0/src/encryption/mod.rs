@@ -203,6 +203,11 @@ pub(crate) struct EncryptionData {
 
     /// All state related to secret storage recovery.
     pub recovery_state: SharedObservable<RecoveryState>,
+
+    /// Held by each update of `recovery_state` from computing the state to
+    /// setting it, so that a computation which started before a change
+    /// cannot set its stale state after the one that started after it.
+    pub recovery_state_update: Mutex<()>,
 }
 
 impl EncryptionData {
@@ -213,6 +218,7 @@ impl EncryptionData {
             tasks: StdMutex::new(Default::default()),
             backup_state: Default::default(),
             recovery_state: Default::default(),
+            recovery_state_update: Mutex::new(()),
         }
     }
 
