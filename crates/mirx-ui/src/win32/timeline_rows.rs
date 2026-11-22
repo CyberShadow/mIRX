@@ -1567,6 +1567,7 @@ mod tests {
                     "from long ago",
                     1_600_000_000_000,
                 )),
+                updates: Vec::new(),
             }),
         )
         .unwrap();

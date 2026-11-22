@@ -1533,6 +1533,10 @@ pub enum RoomEventFetchResult {
     /// The event as the timeline line it would be.
     Loaded {
         activity: Box<RoomActivity>,
+        /// The event's edits and reactions the client knows (the server's
+        /// bundled edit, and the event cache's), each targeting it; a
+        /// quote shows the latest edit.
+        updates: Vec<RoomActivityUpdate>,
     },
     Failed {
         message: String,

@@ -5757,8 +5757,9 @@ pub(crate) async fn fetch_room_event(
     request: FetchRoomEventRequest,
 ) -> RoomEventFetch {
     let result = match fetch_room_event_activity(client, &request).await {
-        Ok(activity) => RoomEventFetchResult::Loaded {
+        Ok((activity, updates)) => RoomEventFetchResult::Loaded {
             activity: Box::new(activity),
+            updates,
         },
         Err(err) => RoomEventFetchResult::Failed {
             message: err.to_string(),
@@ -5827,13 +5828,14 @@ async fn fetch_public_rooms(
     })
 }
 
-/// The event as the timeline line backfill would make of it, from the event
-/// cache or else the server. An event that is no line of its own (an edit,
-/// a reaction, a redaction) is unsupported.
+/// The event as the timeline line backfill would make of it, with its
+/// edits and reactions, from the event cache or else the server. An event
+/// that is no line of its own (an edit, a reaction, a redaction) is
+/// unsupported.
 async fn fetch_room_event_activity(
     client: &Client,
     request: &FetchRoomEventRequest,
-) -> Result<RoomActivity, MatrixCoreError> {
+) -> Result<(RoomActivity, Vec<RoomActivityUpdate>), MatrixCoreError> {
     let room = joined_room_by_id(client, &request.room_id)?;
     let event_id = owned_event_id_from_str(&request.event_id)?;
     let event = room
@@ -5841,23 +5843,26 @@ async fn fetch_room_event_activity(
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to fetch Matrix event: {err}")))?;
     let redaction_rules = room.clone_info().room_version_rules_or_default().redaction;
-    match room_history_backfill_event_from_timeline_event(
+    let mut mapped = room_history_backfill_event_from_timeline_event(
         &room,
         &event,
         &redaction_rules,
         &mut EventBatchLookups::new(&room),
     )
     .await?
-    .into_iter()
-    .next()
-    {
-        // A quote shows the message as sent: its bundled edit is not
-        // applied (a gap).
-        Some(RoomHistoryBackfillEvent::Activity(activity)) => Ok(*activity),
-        Some(RoomHistoryBackfillEvent::ActivityUpdate(_)) | None => {
-            Err(MatrixCoreError::new("unsupported event"))
-        }
-    }
+    .into_iter();
+    let Some(RoomHistoryBackfillEvent::Activity(activity)) = mapped.next() else {
+        return Err(MatrixCoreError::new("unsupported event"));
+    };
+    let updates = mapped
+        .map(|event| match event {
+            RoomHistoryBackfillEvent::ActivityUpdate(update) => update,
+            RoomHistoryBackfillEvent::Activity(activity) => {
+                unreachable!("a line is followed by its updates only: {activity:?}")
+            }
+        })
+        .collect();
+    Ok((*activity, updates))
 }
 
 pub(crate) async fn logout(client: Client) -> Result<(), MatrixCoreError> {
@@ -12394,11 +12399,17 @@ mod tests {
                 .mock_room_event()
                 .room(room_id())
                 .match_event_id()
-                .ok(in_room(text_message_json(
-                    "$old:localhost",
-                    "@bob:localhost",
-                    "are we deploying today?",
-                )))
+                .ok(in_room({
+                    let mut old = text_message_json(
+                        "$old:localhost",
+                        "@bob:localhost",
+                        "are we deploying today?",
+                    );
+                    old["unsigned"] = serde_json::json!({ "m.relations": { "m.replace":
+                        edit_json("$fix:localhost", "@bob:localhost", "$old:localhost", "deploying")
+                    }});
+                    old
+                }))
                 .mount()
                 .await;
             mock_server
@@ -12438,7 +12449,7 @@ mod tests {
             };
 
             let loaded = fetch("!room:example.org", "$old:localhost").await;
-            let RoomEventFetchResult::Loaded { activity } = loaded.result else {
+            let RoomEventFetchResult::Loaded { activity, updates } = loaded.result else {
                 panic!("expected a loaded event, got {loaded:?}");
             };
             assert_eq!(
@@ -12450,6 +12461,16 @@ mod tests {
             };
             assert_eq!(message.body, "are we deploying today?");
             assert_eq!(message.event_id.as_deref(), Some("$old:localhost"));
+            // The server's bundled edit; a quote shows it.
+            assert_eq!(
+                updates,
+                vec![message_replaced(
+                    "$fix:localhost",
+                    "@bob:localhost",
+                    "$old:localhost",
+                    "deploying"
+                )]
+            );
             assert_eq!(
                 sender_of(&activity),
                 &member_profile("@bob:localhost", "Bob", false)

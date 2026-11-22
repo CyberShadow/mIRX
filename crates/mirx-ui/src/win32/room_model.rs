@@ -39,9 +39,11 @@ pub(super) struct RoomViewModel {
     pub(super) reactions_by_target: BTreeMap<String, BTreeMap<String, RoomReactionEntry>>,
     pub(super) threads: BTreeMap<String, ThreadViewModel>,
     pub(super) preview_media: BTreeMap<String, RoomPreviewMediaState>,
-    /// Messages replies answer that are not among `activities`, by event ID.
+    /// Messages replies answer that are not among `activities`, by event
+    /// ID. Never one of a line: a line that loads takes its target's place
+    /// (`take_line_from_quote`).
     pub(super) reply_targets: BTreeMap<String, ReplyTargetState>,
-    /// The latest edit of each of `activities` that was edited.
+    /// The edits of each shown message (`shown_activity`) that was edited.
     pub(super) line_edits: LineEdits,
     pub(super) typing_user_ids: Vec<String>,
     pub(super) members: Vec<RoomMemberSummary>,
@@ -424,17 +426,10 @@ impl RoomViewModel {
     }
 
     /// Forgets what the model holds for activities that left it. One that
-    /// a remaining reply quotes stays as that reply's target, so the quote
-    /// keeps its text without asking the server; targets nothing quotes
-    /// any more go.
+    /// a remaining reply quotes stays as that reply's target, with its
+    /// edits, so the quote keeps its text without asking the server;
+    /// targets nothing quotes any more go, with theirs.
     fn forget_activities(&mut self, dropped: Vec<RoomActivity>) {
-        for activity in &dropped {
-            self.arrivals.forget(&activity.activity_id);
-            if let Some(event_id) = room_activity_event_id(activity) {
-                self.reactions_by_target.remove(event_id);
-                self.line_edits.forget(event_id);
-            }
-        }
         let quoted = self
             .activities
             .iter()
@@ -442,6 +437,15 @@ impl RoomViewModel {
             .filter_map(replies::reply_quote_target)
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
+        for activity in &dropped {
+            self.arrivals.forget(&activity.activity_id);
+            if let Some(event_id) = room_activity_event_id(activity) {
+                self.reactions_by_target.remove(event_id);
+                if !quoted.contains(event_id) {
+                    self.line_edits.forget(event_id);
+                }
+            }
+        }
         for activity in dropped {
             if let Some(event_id) =
                 room_activity_event_id(&activity).filter(|event_id| quoted.contains(*event_id))
@@ -452,8 +456,14 @@ impl RoomViewModel {
                 );
             }
         }
-        self.reply_targets
-            .retain(|event_id, _| quoted.contains(event_id));
+        let line_edits = &mut self.line_edits;
+        self.reply_targets.retain(|event_id, _| {
+            let kept = quoted.contains(event_id);
+            if !kept {
+                line_edits.forget(event_id);
+            }
+            kept
+        });
         self.retain_preview_media_for_visible_activities();
         self.rebuild_threads();
     }
@@ -513,8 +523,20 @@ impl RoomViewModel {
     }
 
     fn push_live(&mut self, activity: RoomActivity) {
+        if let Some(event_id) = room_activity_event_id(&activity) {
+            self.take_line_from_quote(event_id);
+        }
         self.arrivals.stamp(&activity.activity_id);
         self.activities.push(activity);
+    }
+
+    /// `event_id` becomes a line: a reply's fetched copy of it, if any,
+    /// goes with the edits it held, since the line brings its own (with
+    /// its page, or live) and must keep them from its own text.
+    fn take_line_from_quote(&mut self, event_id: &str) {
+        if self.reply_targets.remove(event_id).is_some() {
+            self.line_edits.forget(event_id);
+        }
     }
 
     /// Prints a command's line in the room window (`None`) or a thread
@@ -546,10 +568,11 @@ impl RoomViewModel {
                         activity.room_id, room_id,
                         "room history activity must target the mutated room view"
                     );
-                    if room_activity_event_id(&activity).is_some_and(|event_id| {
-                        self.find_activity_index_by_event_id(event_id).is_some()
-                    }) {
-                        continue;
+                    if let Some(event_id) = room_activity_event_id(&activity) {
+                        if self.find_activity_index_by_event_id(event_id).is_some() {
+                            continue;
+                        }
+                        self.take_line_from_quote(event_id);
                     }
 
                     // History did not arrive: no arrival.
@@ -692,6 +715,10 @@ impl RoomViewModel {
         event_id: Option<&str>,
     ) {
         if let Some(index) = self.find_message_activity_index(transaction_id, event_id) {
+            // A queued line that synced gains its event ID.
+            if let Some(event_id) = event_id {
+                self.take_line_from_quote(event_id);
+            }
             self.arrivals
                 .carry(&self.activities[index].activity_id, &activity.activity_id);
             self.activities[index] = activity;
@@ -701,6 +728,7 @@ impl RoomViewModel {
     }
 
     fn mark_message_sent(&mut self, transaction_id: &str, event_id: &str) {
+        self.take_line_from_quote(event_id);
         let transaction_index = self
             .find_pending_message_activity_index(transaction_id)
             .expect("outgoing sent requires an existing queued timeline row");
@@ -799,18 +827,20 @@ impl RoomViewModel {
         self.rebuild_threads();
     }
 
-    /// Keeps an edit of a message line from the line's sender, and shows
-    /// it if it is the line's latest: only a message's sender can edit it
-    /// (the spec's validity of replacement events), and anyone else's edit
-    /// is ignored, as Element does. A line that could not be decrypted
-    /// holds the edit until it decrypts. Whether the room changed.
+    /// Keeps an edit of a shown message (`shown_activity`: a line, or a
+    /// reply's quote) from its sender, and shows it if it is the latest:
+    /// only a message's sender can edit it (the spec's validity of
+    /// replacement events), and anyone else's edit is ignored, as Element
+    /// does. A message that could not be decrypted holds the edit until it
+    /// decrypts. Whether the room changed.
     fn replace_message(&mut self, target_event_id: &str, order: EditOrder, edit: Edit) -> bool {
-        let Some(index) = self.find_activity_index_by_event_id(target_event_id) else {
+        let Some(shown) = shown_activity_in(&self.activities, &self.reply_targets, target_event_id)
+        else {
             return false;
         };
         // The envelope's sender: the server vouches for it, not the
         // ciphertext, and decryption keeps it.
-        let line_sender = match &self.activities[index].kind {
+        let line_sender = match &shown.kind {
             RoomActivityKind::Message(message) => &message.sender.user_id,
             RoomActivityKind::UnableToDecrypt(utd) => &utd.sender.user_id,
             // An edit replaces a text line's text; no other line has any.
@@ -828,7 +858,7 @@ impl RoomViewModel {
         if *line_sender != edit.sender {
             return false;
         }
-        let line = match &self.activities[index].kind {
+        let line = match &shown.kind {
             RoomActivityKind::Message(message) => EditedLine::Message(message),
             RoomActivityKind::UnableToDecrypt(_) => EditedLine::Undecrypted,
             _ => unreachable!("the line's sender was read above"),
@@ -839,21 +869,27 @@ impl RoomViewModel {
             // back to.
             return undecrypted;
         };
-        self.show_edit(index, fields);
+        self.show_edit(target_event_id, fields);
         true
     }
 
-    /// The message line at `index` shows `fields`, from an edit or its own.
-    fn show_edit(&mut self, index: usize, fields: MessageReplacementFields) {
-        let RoomActivityKind::Message(message) = &mut self.activities[index].kind else {
-            panic!("only a message line shows an edit");
+    /// The shown message `event_id` shows `fields`, from an edit or its
+    /// own. Only lines are in threads, but a quote's is no rebuild worth
+    /// telling apart.
+    fn show_edit(&mut self, event_id: &str, fields: MessageReplacementFields) {
+        let shown = self
+            .shown_activity_mut(event_id)
+            .expect("an edited message is shown");
+        let RoomActivityKind::Message(message) = &mut shown.kind else {
+            panic!("only a message shows an edit");
         };
         fields.apply_to(message);
         self.rebuild_threads();
     }
 
-    /// The edit `replacement_event_id` was redacted: its line shows the
-    /// latest edit left, or its own text. Whether a line had it.
+    /// The edit `replacement_event_id` was redacted: its message shows the
+    /// latest edit left, or its own text. Whether a shown message had it
+    /// (its edits go with it, so it still is).
     fn redact_edit(&mut self, replacement_event_id: &str) -> bool {
         let Some((target, restore)) = self.line_edits.redact_edit(replacement_event_id) else {
             return false;
@@ -862,18 +898,27 @@ impl RoomViewModel {
             Restore::Edit(fields) | Restore::Original(fields) => fields,
             Restore::Unchanged => return true,
         };
-        let index = self
-            .find_activity_index_by_event_id(&target)
-            .expect("a line's edits go with it");
-        self.show_edit(index, fields);
+        self.show_edit(&target, fields);
         true
     }
 
     /// Redacts the event a redaction names, whatever the room shows it as:
-    /// a line (its reactions and edits go with it), a reaction, or an edit
+    /// a line (its reactions and edits go with it), a reply's quote of a
+    /// message that is no line (its edits go), a reaction, or an edit
     /// (`redact_edit`). Whether the room showed it.
     fn redact_activity(&mut self, target_event_id: &str) -> bool {
         let Some(index) = self.find_activity_index_by_event_id(target_event_id) else {
+            if let Some(ReplyTargetState::Loaded(target)) =
+                self.reply_targets.get_mut(target_event_id)
+            {
+                // The quote reads `message redacted`, as one of a redacted
+                // line does.
+                self.line_edits.forget(target_event_id);
+                target.kind = RoomActivityKind::Redacted(RoomRedactedActivity {
+                    event_id: target_event_id.to_owned(),
+                });
+                return true;
+            }
             return self.remove_reaction(target_event_id) || self.redact_edit(target_event_id);
         };
         let activity_id = self.activities[index].activity_id.clone();
@@ -1031,25 +1076,36 @@ impl RoomViewModel {
         }
     }
 
-    /// What the window shows of the event, if it shows it as one that
-    /// could not be decrypted: its line, or the message a reply quotes.
-    pub(super) fn shown_undecrypted(&self, event_id: &str) -> Option<&RoomActivity> {
-        let shown = match self.find_activity_index_by_event_id(event_id) {
-            Some(index) => &self.activities[index],
-            None => match self.reply_targets.get(event_id) {
-                Some(ReplyTargetState::Loaded(target)) => &**target,
-                Some(ReplyTargetState::Pending | ReplyTargetState::Failed) | None => return None,
+    /// The message the window shows for the event: its line, or else the
+    /// message a reply quotes, fetched. Both follow the message's edits
+    /// and redaction.
+    fn shown_activity(&self, event_id: &str) -> Option<&RoomActivity> {
+        shown_activity_in(&self.activities, &self.reply_targets, event_id)
+    }
+
+    fn shown_activity_mut(&mut self, event_id: &str) -> Option<&mut RoomActivity> {
+        match self.find_activity_index_by_event_id(event_id) {
+            Some(index) => Some(&mut self.activities[index]),
+            None => match self.reply_targets.get_mut(event_id) {
+                Some(ReplyTargetState::Loaded(target)) => Some(&mut **target),
+                Some(ReplyTargetState::Pending | ReplyTargetState::Failed) | None => None,
             },
-        };
-        matches!(shown.kind, RoomActivityKind::UnableToDecrypt(_)).then_some(shown)
+        }
+    }
+
+    /// What the window shows of the event (`shown_activity`), if it shows
+    /// it as one that could not be decrypted.
+    pub(super) fn shown_undecrypted(&self, event_id: &str) -> Option<&RoomActivity> {
+        self.shown_activity(event_id)
+            .filter(|shown| matches!(shown.kind, RoomActivityKind::UnableToDecrypt(_)))
     }
 
     /// An event that could not be decrypted, read again
-    /// (`shown_undecrypted`): its line becomes what it is now in place,
-    /// with the same arrival, and a reply's quote of it follows. Decrypted,
-    /// it is the message; still undecryptable, its cause may have changed,
-    /// and an edit it holds waits on.
-    pub(super) fn apply_decrypted(&mut self, activity: RoomActivity) {
+    /// (`shown_undecrypted`): its line, or a reply's quote of it, becomes
+    /// what it is now in place, with the same arrival. Decrypted, it is
+    /// the message, showing the latest edit it held of its sender; still
+    /// undecryptable, its cause may have changed, and its edits wait on.
+    pub(super) fn apply_decrypted(&mut self, mut activity: RoomActivity) {
         let event_id = room_activity_event_id(&activity)
             .expect("a decrypted activity is an event's")
             .to_owned();
@@ -1057,34 +1113,34 @@ impl RoomViewModel {
             self.shown_undecrypted(&event_id).is_some(),
             "{event_id} is not shown as undecrypted"
         );
-        let (shown, line) = match self.find_activity_index_by_event_id(&event_id) {
-            Some(index) => (&mut self.activities[index], true),
-            None => match self.reply_targets.get_mut(&event_id) {
-                Some(ReplyTargetState::Loaded(target)) => (&mut **target, false),
-                _ => unreachable!("shown_undecrypted found it"),
-            },
+        let decrypted = match &mut activity.kind {
+            RoomActivityKind::UnableToDecrypt(_) => false,
+            RoomActivityKind::Message(message) => {
+                if let Some(fields) = self.line_edits.decrypted(&event_id, message) {
+                    fields.apply_to(message);
+                }
+                true
+            }
+            // A message of another kind has no text to edit.
+            _ => {
+                self.line_edits.forget(&event_id);
+                true
+            }
         };
+        let shown = self
+            .shown_activity_mut(&event_id)
+            .expect("shown_undecrypted found it");
         // The core names both after the event: the arrival stays valid.
         assert_eq!(
             shown.activity_id, activity.activity_id,
             "a decrypted line keeps its activity"
         );
         *shown = activity;
-        match &mut shown.kind {
-            // Its cause is in no thread's name, and its edits wait on.
-            RoomActivityKind::UnableToDecrypt(_) => return,
-            // The edits the line held of its sender apply, the latest
-            // showing; a quote holds none.
-            RoomActivityKind::Message(message) => {
-                if line && let Some(fields) = self.line_edits.decrypted(&event_id, message) {
-                    fields.apply_to(message);
-                }
-            }
-            // A line of another kind has no text to edit.
-            _ => self.line_edits.forget(&event_id),
+        // Its cause is in no thread's name; decrypted, it may be a
+        // thread's message, or a thread's root.
+        if decrypted {
+            self.rebuild_threads();
         }
-        // It may be a thread's message, or a thread's root.
-        self.rebuild_threads();
     }
 
     /// The events the window shows that could not be decrypted
@@ -1265,10 +1321,10 @@ impl RoomViewModel {
                 RoomActivityUpdateTarget::Event { event_id },
                 RoomActivityUpdateKind::MessageReplaced { .. },
             ) => self
-                .find_activity_index_by_event_id(event_id)
-                .filter(|index| {
+                .shown_activity(event_id)
+                .filter(|shown| {
                     matches!(
-                        self.activities[*index].kind,
+                        shown.kind,
                         RoomActivityKind::Message(_) | RoomActivityKind::UnableToDecrypt(_)
                     )
                 })
@@ -1277,7 +1333,7 @@ impl RoomViewModel {
             (
                 RoomActivityUpdateTarget::Event { event_id },
                 RoomActivityUpdateKind::ActivityRedacted { .. },
-            ) => (self.find_activity_index_by_event_id(event_id).is_some()
+            ) => (self.shown_activity(event_id).is_some()
                 || self.reaction_target(event_id).is_some()
                 || self.line_edits.has_edit(event_id))
             .then_some(())
@@ -1342,6 +1398,24 @@ impl RoomViewModel {
                 .iter()
                 .any(|activity| activity.activity_id == *activity_id)
         });
+    }
+}
+
+/// `shown_activity`, borrowing only what it reads.
+fn shown_activity_in<'a>(
+    activities: &'a [RoomActivity],
+    reply_targets: &'a BTreeMap<String, ReplyTargetState>,
+    event_id: &str,
+) -> Option<&'a RoomActivity> {
+    match activities
+        .iter()
+        .find(|activity| room_activity_event_id(activity) == Some(event_id))
+    {
+        Some(line) => Some(line),
+        None => match reply_targets.get(event_id) {
+            Some(ReplyTargetState::Loaded(target)) => Some(&**target),
+            Some(ReplyTargetState::Pending | ReplyTargetState::Failed) | None => None,
+        },
     }
 }
 
@@ -2814,6 +2888,82 @@ mod tests {
             room_view.preview_media.keys().collect::<Vec<_>>(),
             ["event:$m2"]
         );
+    }
+
+    fn quoted_body(room_view: &RoomViewModel, event_id: &str) -> String {
+        let ReplyTarget::Known(activity) = room_view.reply_target(event_id) else {
+            panic!("{event_id} is not known");
+        };
+        let RoomActivityKind::Message(message) = &activity.kind else {
+            panic!("{event_id} is no message: {activity:?}");
+        };
+        message.body.clone()
+    }
+
+    /// A room whose reply (`$m2`) quotes `$m0`, which the window buffer
+    /// dropped after alice edited it (`$e0`): its quote keeps the edit.
+    fn room_quoting_its_trimmed_edited_line() -> RoomViewModel {
+        let mut room_view = room_with_lines(2);
+        let mut reply = line(2);
+        reply.relation = Some(reply_relation("$m0"));
+        room_view.apply_activity(reply);
+        room_view.apply_activity(line(3));
+        assert!(room_view.apply_update(&edit_by(
+            "!ops:example",
+            "$m0",
+            "$e0",
+            "@alice:example",
+            1,
+            RoomMessagePresentationKind::Text,
+            "edited",
+        )));
+        assert!(trim(&mut room_view, 2, &BTreeSet::new()));
+        assert_eq!(quoted_body(&room_view, "$m0"), "edited");
+        room_view
+    }
+
+    #[test]
+    fn a_trimmed_line_kept_as_a_quote_keeps_its_edits() {
+        let mut room_view = room_quoting_its_trimmed_edited_line();
+        assert!(room_view.line_edits.shows_edited("$m0"));
+
+        // Deleting the edit gives the quote back the message's own text.
+        assert!(room_view.apply_update(&redaction_of("$e0")));
+        assert_eq!(quoted_body(&room_view, "$m0"), "line 0");
+        assert!(room_view.line_edits.is_empty());
+
+        // A target nothing quotes any more goes with its edits.
+        let mut room_view = room_quoting_its_trimmed_edited_line();
+        assert!(trim(&mut room_view, 1, &BTreeSet::new()));
+        assert!(room_view.reply_targets.is_empty());
+        assert!(room_view.line_edits.is_empty());
+    }
+
+    /// A quote follows its message's edits and deletion, as a line does;
+    /// it shows no reactions.
+    #[test]
+    fn edits_and_redactions_of_a_quote_target_validate_but_reactions_do_not() {
+        let room_view = room_quoting_its_trimmed_edited_line();
+        let Event::RoomActivityUpdate(reaction) =
+            incoming_reaction_added("!ops:example", "$m0", "$r0", "@bob:example", "+1", 1)
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            room_view.validate_update(&edit_by(
+                "!ops:example",
+                "$m0",
+                "$e1",
+                "@alice:example",
+                2,
+                RoomMessagePresentationKind::Text,
+                "again",
+            )),
+            Ok(())
+        );
+        assert_eq!(room_view.validate_update(&redaction_of("$m0")), Ok(()));
+        assert_eq!(room_view.validate_update(&redaction_of("$e0")), Ok(()));
+        assert!(room_view.validate_update(&reaction).is_err());
     }
 
     #[test]

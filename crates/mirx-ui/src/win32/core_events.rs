@@ -5,16 +5,37 @@ use mirx_core::SyncStopReason;
 use super::open_link::open_web_link;
 use super::*;
 
+/// A reply's quote target came: it shows, with its edits applied (its
+/// reactions show on no quote). An edit that synced while the fetch ran is
+/// dropped, but the event cache, which the fetch reads, normally has it.
 fn apply_room_event_fetch(state: &mut WindowState, fetch: RoomEventFetch) {
     // The room was left while the fetch ran: no window shows its replies.
     let Some(room_view) = state.model.room_views.get_mut(&fetch.room_id) else {
         return;
     };
-    let target = match fetch.result {
-        RoomEventFetchResult::Loaded { activity } => ReplyTargetState::Loaded(activity),
-        RoomEventFetchResult::Failed { .. } => ReplyTargetState::Failed,
-    };
-    room_view.reply_targets.insert(fetch.event_id, target);
+    // History loaded it as a line meanwhile, which a quote follows, and
+    // which brought its own edits.
+    if room_view
+        .find_activity_index_by_event_id(&fetch.event_id)
+        .is_some()
+    {
+        return;
+    }
+    match fetch.result {
+        RoomEventFetchResult::Loaded { activity, updates } => {
+            room_view
+                .reply_targets
+                .insert(fetch.event_id, ReplyTargetState::Loaded(activity));
+            for update in &updates {
+                room_view.apply_update(update);
+            }
+        }
+        RoomEventFetchResult::Failed { .. } => {
+            room_view
+                .reply_targets
+                .insert(fetch.event_id, ReplyTargetState::Failed);
+        }
+    }
 }
 
 /// Returns whether the activity should flash the frame. The active view gets
@@ -5814,6 +5835,205 @@ mod tests {
                 .any(|line| line.contains("> <") && line.contains("are we deploying today?")),
             "{lines:#?}"
         );
+    }
+
+    /// The reply quotes `$elsewhere`, which is no line; the fetch brings it
+    /// (alice's `from long ago`) with `updates`.
+    fn fetched_quote_state(target: RoomActivity, updates: Vec<RoomActivityUpdate>) -> WindowState {
+        let mut state = reply_quote_state("$elsewhere");
+        apply_core_event(
+            &mut state,
+            Event::RoomEvent(RoomEventFetch {
+                room_id: "!ops:example".to_owned(),
+                event_id: "$elsewhere".to_owned(),
+                result: RoomEventFetchResult::Loaded {
+                    activity: Box::new(target),
+                    updates,
+                },
+            }),
+        )
+        .unwrap();
+        state
+    }
+
+    fn from_long_ago() -> RoomActivity {
+        sent_message_activity(
+            "!ops:example",
+            "$elsewhere",
+            None,
+            "from long ago",
+            1_600_000_000_000,
+        )
+    }
+
+    fn edit_update(
+        target: &str,
+        replacement: &str,
+        sender: &str,
+        at: u64,
+        body: &str,
+    ) -> RoomActivityUpdate {
+        let Event::RoomActivityUpdate(update) = edit(target, replacement, sender, at, body) else {
+            unreachable!()
+        };
+        update
+    }
+
+    fn quote_line(state: &WindowState) -> String {
+        line_of(&ops_lines(state), "    > ").to_owned()
+    }
+
+    #[test]
+    fn a_fetched_quote_shows_its_latest_edit() {
+        let state = fetched_quote_state(
+            from_long_ago(),
+            vec![edit_update(
+                "$elsewhere",
+                "$fix",
+                "@alice:example",
+                1,
+                "fixed",
+            )],
+        );
+        assert_eq!(quote_line(&state), "    > <@alice:example> fixed (edited)");
+    }
+
+    #[test]
+    fn a_quote_follows_a_live_edit_and_its_redaction() {
+        let mut state = fetched_quote_state(from_long_ago(), Vec::new());
+        for event in [
+            edit("$elsewhere", "$fix", "@alice:example", 1, "fixed"),
+            edit("$elsewhere", "$forged", "@bob:example", 2, "bob was here"),
+        ] {
+            apply_core_event(&mut state, event).unwrap();
+        }
+        assert_eq!(quote_line(&state), "    > <@alice:example> fixed (edited)");
+
+        apply_core_event(
+            &mut state,
+            incoming_redacted("!ops:example", "$fix", "$unfix"),
+        )
+        .unwrap();
+        assert_eq!(quote_line(&state), "    > <@alice:example> from long ago");
+        assert!(state.model.room_views["!ops:example"].line_edits.is_empty());
+    }
+
+    /// Deleting a message deletes it from the quotes of it too, also when
+    /// no line shows it.
+    #[test]
+    fn a_quote_of_a_message_redacted_while_not_loaded_reads_message_redacted() {
+        let mut state = fetched_quote_state(
+            from_long_ago(),
+            vec![edit_update(
+                "$elsewhere",
+                "$fix",
+                "@alice:example",
+                1,
+                "fixed",
+            )],
+        );
+        apply_core_event(
+            &mut state,
+            incoming_redacted("!ops:example", "$elsewhere", "$delete"),
+        )
+        .unwrap();
+
+        let lines = ops_lines(&state);
+        assert_eq!(quote_line(&state), "    > message redacted");
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("long ago") || line.contains("fixed")),
+            "{lines:#?}"
+        );
+        assert!(state.model.room_views["!ops:example"].line_edits.is_empty());
+    }
+
+    /// The fetched copy and its edits go when history loads the message as
+    /// a line, which brings its own: the same latest edit shows on it.
+    #[test]
+    fn a_line_loaded_after_its_quote_shows_its_own_latest_edit() {
+        let bundled = edit_update("$elsewhere", "$fix", "@alice:example", 1, "fixed");
+        let mut state = fetched_quote_state(from_long_ago(), vec![bundled.clone()]);
+
+        apply_core_event(
+            &mut state,
+            room_history_backfill(
+                "!ops:example",
+                None,
+                vec![
+                    RoomHistoryBackfillEvent::Activity(Box::new(from_long_ago())),
+                    RoomHistoryBackfillEvent::ActivityUpdate(bundled),
+                ],
+            ),
+        )
+        .unwrap();
+
+        let room_view = &state.model.room_views["!ops:example"];
+        assert!(!room_view.reply_targets.contains_key("$elsewhere"));
+        let lines = ops_lines(&state);
+        assert!(
+            lines.contains(&"[12:26] <@alice:example> fixed (edited)".to_owned()),
+            "{lines:#?}"
+        );
+        assert_eq!(quote_line(&state), "    > <@alice:example> fixed (edited)");
+
+        // A fetch that answers after the line came changes nothing.
+        let before = ops_lines(&state);
+        let state = {
+            let mut state = state;
+            apply_core_event(
+                &mut state,
+                Event::RoomEvent(RoomEventFetch {
+                    room_id: "!ops:example".to_owned(),
+                    event_id: "$elsewhere".to_owned(),
+                    result: RoomEventFetchResult::Loaded {
+                        activity: Box::new(from_long_ago()),
+                        updates: Vec::new(),
+                    },
+                }),
+            )
+            .unwrap();
+            state
+        };
+        assert_eq!(ops_lines(&state), before);
+        assert!(
+            !state.model.room_views["!ops:example"]
+                .reply_targets
+                .contains_key("$elsewhere")
+        );
+    }
+
+    /// A quote of a message that could not be decrypted holds its edits,
+    /// as a line does, and shows the latest of its sender's once it
+    /// decrypts.
+    #[test]
+    fn a_quote_target_that_could_not_be_decrypted_applies_its_held_edit_when_it_does() {
+        let Event::RoomActivity(utd) = unable_to_decrypt_activity(
+            "!ops:example",
+            "$elsewhere",
+            "@alice:example",
+            1_600_000_000_000,
+        ) else {
+            unreachable!()
+        };
+        let mut state = fetched_quote_state(
+            *utd,
+            vec![edit_update(
+                "$elsewhere",
+                "$fix",
+                "@alice:example",
+                1,
+                "fixed",
+            )],
+        );
+
+        apply_core_event(
+            &mut state,
+            decrypted("!ops:example", vec![decrypted_line(from_long_ago())]),
+        )
+        .unwrap();
+        assert_eq!(quote_line(&state), "    > <@alice:example> fixed (edited)");
     }
 
     /// Only a message's sender can edit it (the spec's validity of
