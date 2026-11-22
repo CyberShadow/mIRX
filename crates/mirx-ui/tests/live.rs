@@ -39,15 +39,24 @@ use matrix_sdk::ruma::events::room::message::{
     OriginalSyncRoomMessageEvent, RoomMessageEventContent,
 };
 use matrix_sdk::ruma::{DeviceId, OwnedDeviceId, OwnedRoomId, OwnedUserId, RoomId, UserId};
-use mirx_core::RoomMembership;
-use mirx_testkit::{ContextMenuCommand, MirxApp, ViewIdentity};
+use mirx_core::{E2eeRecoveryState, E2eeStatus, RoomMembership};
+use mirx_testkit::{AutomationDialog, ComposeKey, ContextMenuCommand, MirxApp, ViewIdentity};
 use support::*;
+use windows_sys::Win32::Foundation::{HWND, WPARAM};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetDlgItem, PostMessageW, SetWindowTextW, WM_COMMAND,
+};
 
 /// Every live user's password.
 const PASSWORD: &str = "live-lane-password";
 /// How long mirx and the peers get to see a change on the server: Wine in
 /// a VM is slow, and a change can wait out a whole 30 s `/sync` long poll.
 const TIMEOUT: Duration = Duration::from_secs(90);
+/// The Recover E2EE dialog's secret field and its OK button.
+const RECOVER_E2EE_DIALOG_SECRET_ID: i32 = 5007;
+const RECOVER_E2EE_DIALOG_OK_ID: usize = 5008;
+/// The recovery key handoff dialog's "I Saved It".
+const RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID: usize = 5018;
 
 /// The homeserver under test, and the runtime its peers run on.
 struct Homeserver {
@@ -597,6 +606,163 @@ fn a_restart_restores_the_session_and_catches_up() -> Result<(), Box<dyn Error>>
     app.wait_for_connection("syncing", TIMEOUT)?;
     wait_for_view_line(&app, &room, "<Bob> while mirx was closed")?;
     assert_eq!(alice_phone.devices(), devices);
+
+    finish(app, &local_app_data)
+}
+
+/// The recovery passphrase L6 sets up and recovers with.
+const RECOVERY_PASSPHRASE: &str = "live lane recovery passphrase";
+
+/// Waits until mirx's E2EE status satisfies `check` and returns it.
+fn wait_for_e2ee_status(
+    app: &MirxApp,
+    what: &str,
+    check: impl Fn(&E2eeStatus) -> bool,
+) -> Result<E2eeStatus, Box<dyn Error>> {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let status = app.dump_model()?.e2ee_status;
+        if let Some(status) = status.as_ref().filter(|status| check(status)) {
+            return Ok(status.clone());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "the E2EE status never showed {what}: {status:?}; Status: {:?}",
+                status_view_lines(app)?
+            )
+            .into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Waits for the dialog of `class` the frame owns, opened by a gesture
+/// already made, and returns it.
+fn wait_for_dialog(app: &MirxApp, class: &str) -> Result<HWND, Box<dyn Error>> {
+    let dialog = app.wait_for_modal_dialog(TIMEOUT)?;
+    assert_eq!(dialog.class, class, "{dialog:?}");
+    Ok(dialog.hwnd as HWND)
+}
+
+/// Presses the dialog's button `button_id`, and waits for it to close.
+fn press_dialog_button(
+    app: &MirxApp,
+    dialog: HWND,
+    button_id: usize,
+    what: &str,
+) -> Result<(), Box<dyn Error>> {
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, button_id as WPARAM, 0) },
+        0
+    );
+    wait_for_window_gone(dialog, what)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+/// Accepts the invitation to the room from the treebar menu and waits for
+/// the room to say it is encrypted.
+fn accept_encrypted_invite(app: &MirxApp, room_id: &RoomId) -> Result<(), Box<dyn Error>> {
+    wait_for_room_membership(app, room_id, RoomMembership::Invite)?;
+    app.select_room(room_id.as_str())?;
+    app.open_selected_navigation_context_menu(ContextMenuCommand::AcceptInvite)?;
+    wait_for_room_membership(app, room_id, RoomMembership::Join)?;
+    wait_for_view_line(
+        app,
+        &room_identity(room_id.as_str()),
+        "* Messages in this room are end-to-end encrypted",
+    )?;
+    Ok(())
+}
+
+/// Recovery, set up with a passphrase, carries an encrypted room's keys
+/// across Log Out: the next sign-in, a new device, reads the room's history
+/// once it recovers with the passphrase.
+#[test]
+fn recovery_carries_the_room_keys_across_log_out() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let bob = homeserver.register("bob", "Bob");
+    // Alice's phone never verifies mirx, so only the backup holds the key.
+    let alice_phone = homeserver.register("alice", "Alice");
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_live_app(&local_app_data)?;
+    let first_device = sign_in(&app, &homeserver, &alice_phone)?;
+    // The sign-in hands its password to the SDK's cross-signing bootstrap,
+    // which Conduit asks to authenticate.
+    wait_for_e2ee_status(&app, "cross-signing complete, recovery off", |status| {
+        status
+            .cross_signing
+            .as_ref()
+            .is_some_and(|cross_signing| cross_signing.complete)
+            && status.recovery == E2eeRecoveryState::Disabled
+    })?;
+
+    app.select_status_view()?;
+    app.set_compose_text(&format!("/e2ee setup passphrase {RECOVERY_PASSPHRASE}"))?;
+    app.send_compose_key(ComposeKey::Return)?;
+    let handoff = wait_for_dialog(&app, "mirxWin32RecoveryKeyHandoffDialog")?;
+    press_dialog_button(
+        &app,
+        handoff,
+        RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID,
+        "recovery key handoff dialog",
+    )?;
+    wait_for_e2ee_status(&app, "recovery enabled", |status| {
+        status.recovery == E2eeRecoveryState::Enabled
+    })?;
+
+    let room_id = bob.create_encrypted_room("Secrets", alice_phone.user_id());
+    accept_encrypted_invite(&app, &room_id)?;
+    let room = room_identity(room_id.as_str());
+    bob.wait_for_member(&room_id, alice_phone.user_id());
+    bob.send_text(&room_id, "kept across log out");
+    wait_for_view_line(&app, &room, "<Bob> kept across log out")?;
+
+    // At once: the key came in the sync that brought the line, and may not
+    // be in the backup yet.
+    log_out_with_the_menu(&app, &local_app_data)?;
+
+    let second_device = sign_in(&app, &homeserver, &alice_phone)?;
+    assert_ne!(second_device, first_device);
+    let undecryptable = wait_for_view_line(&app, &room, "could not be decrypted")?;
+    assert!(
+        undecryptable.ends_with(
+            "* Bob sent an encrypted message that could not be decrypted \
+             (sent before this session existed: /verify this session or /e2ee recover to read it)"
+        ),
+        "{undecryptable:?}"
+    );
+
+    app.open_dialog(AutomationDialog::RecoverE2ee)?;
+    let recover = wait_for_dialog(&app, "mirxWin32RecoverE2eeDialog")?;
+    let secret = wide_null(RECOVERY_PASSPHRASE);
+    assert_ne!(
+        unsafe {
+            SetWindowTextW(
+                GetDlgItem(recover, RECOVER_E2EE_DIALOG_SECRET_ID),
+                secret.as_ptr(),
+            )
+        },
+        0
+    );
+    press_dialog_button(
+        &app,
+        recover,
+        RECOVER_E2EE_DIALOG_OK_ID,
+        "Recover E2EE dialog",
+    )?;
+    wait_for_e2ee_status(&app, "recovery enabled", |status| {
+        status.recovery == E2eeRecoveryState::Enabled
+    })?;
+    wait_for_view_line(&app, &room, "<Bob> kept across log out")?;
+    let ui_state = app.dump_ui_state()?;
+    let lines = &find_view(&ui_state, &room).lines;
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("could not be decrypted")),
+        "{lines:?}"
+    );
 
     finish(app, &local_app_data)
 }
