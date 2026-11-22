@@ -27,5 +27,6 @@ task, so the `SendQueue` drops when `new` returns
 
 ## When to remove
 
-When upgrading to a matrix-sdk release that contains that fix: delete
-`vendor/`, the `[patch.crates-io]` section and the workspace `exclude`.
+When upgrading to a matrix-sdk release that contains that fix: delete this
+directory and its line in `[patch.crates-io]` (and, with the last vendored
+crate, the section and the workspace's `exclude = ["vendor"]`).
