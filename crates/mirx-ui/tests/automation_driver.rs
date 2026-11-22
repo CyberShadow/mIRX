@@ -481,12 +481,15 @@ impl MockBackfillHomeserver {
         &self,
         events: Vec<serde_json::Value>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        {
-            let mut presence = self.presence.lock().expect("the presence");
-            presence.events = events;
-            presence.changes += 1;
-        }
+        self.set_presence(events);
         self.wait_for_two_syncs()
+    }
+
+    /// The same without waiting: for a client not running.
+    fn set_presence(&self, events: Vec<serde_json::Value>) {
+        let mut presence = self.presence.lock().expect("the presence");
+        presence.events = events;
+        presence.changes += 1;
     }
 
     /// Returns once the client asked twice from now: it took every answer
@@ -3854,6 +3857,155 @@ fn presence_from_the_sync_reaches_the_nick_list_and_survives_a_restart()
     wait_for_bob(&app, Some(mirx_core::PresenceKind::Unavailable))?;
     server.serve_presence(vec![bob_presence("online")])?;
     wait_for_bob(&app, Some(mirx_core::PresenceKind::Online))?;
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Bob's presence event, as the server's `/sync` serves it.
+fn bob_presence(presence: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "m.presence",
+        "sender": "@bob:example",
+        "content": { "presence": presence }
+    })
+}
+
+/// The Status lines that contain `text`, without their timestamps.
+fn status_lines_with(app: &MirxApp, text: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    Ok(status_view_lines(app)?
+        .iter()
+        .filter(|line| line.contains(text))
+        .map(|line| {
+            line.split_once("] ")
+                .map_or(line.as_str(), |(_, text)| text)
+                .to_owned()
+        })
+        .collect())
+}
+
+/// A new profile with a saved session on `server` and Bob on the notify
+/// list.
+fn write_profile_with_bob_listed(
+    local_app_data: &Path,
+    server: &MockBackfillHomeserver,
+) -> Result<(), Box<dyn std::error::Error>> {
+    write_saved_session(local_app_data, &server.base_url)?;
+    write_settings(
+        local_app_data,
+        "[notify]\r\nn0=@bob:example lunch buddy\r\n",
+    )
+}
+
+/// Launches the saved session of `local_app_data`; returns once it syncs.
+fn launch_saved_session(local_app_data: &Path) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    // Not launch_automation_app: the restore starts before the core
+    // reports Started, so the lifecycle never shows core_started.
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.to_path_buf())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    Ok(app)
+}
+
+/// mIRC's notify: Status says when a listed user the server shares
+/// presence of comes and goes, in the Notify colour; away is still on.
+/// `/notify` lists, adds and removes, saved in mirx.ini.
+#[test]
+fn notify_says_when_a_listed_user_comes_and_goes() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    write_profile_with_bob_listed(&local_app_data, &server)?;
+    let app = launch_saved_session(&local_app_data)?;
+
+    server.serve_presence(vec![bob_presence("online")])?;
+    wait_for_status_line(&app, "* Bob is on Matrix", Duration::from_secs(30))?;
+    // A new sync saying the same, and away: no line.
+    server.serve_presence(vec![bob_presence("online"), bob_presence("online")])?;
+    server.serve_presence(vec![bob_presence("unavailable")])?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(status_lines_with(&app, "Matrix")?, ["* Bob is on Matrix"]);
+    server.serve_presence(vec![bob_presence("offline")])?;
+    wait_for_status_line(&app, "* Bob has left Matrix", Duration::from_secs(30))?;
+    assert_eq!(
+        status_lines_with(&app, "Matrix")?,
+        ["* Bob is on Matrix", "* Bob has left Matrix"]
+    );
+    app.select_view(ViewIdentity::Status)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(active_line_color(&app, "Bob has left Matrix")?, "#fc7f00");
+
+    type_commands(
+        &app,
+        &["/notify", "/notify -r bob", "/notify @carol:example friend"],
+    )?;
+    let lines = status_lines_with(&app, "otify list")?;
+    assert_eq!(
+        lines,
+        [
+            "* Notify list:",
+            "* Removed Bob (@bob:example) from notify list",
+            "* Added @carol:example to notify list",
+        ]
+    );
+    assert!(
+        status_view_lines(&app)?
+            .iter()
+            .any(|line| line.ends_with("*   Bob (@bob:example) is not on Matrix - lunch buddy")),
+        "{:?}",
+        status_view_lines(&app)?
+    );
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    assert!(
+        ini.ends_with("[notify]\r\nn0=@carol:example friend\r\n"),
+        "{ini}"
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// After a restart, the roll call says who is on now, not who was: the
+/// store remembers Bob online, the server says he left meanwhile, and
+/// Status says nothing of him until he comes back.
+#[test]
+fn a_restart_announces_who_is_on_now_not_who_was() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    write_profile_with_bob_listed(&local_app_data, &server)?;
+    let app = launch_saved_session(&local_app_data)?;
+    server.serve_presence(vec![bob_presence("online")])?;
+    wait_for_status_line(&app, "* Bob is on Matrix", Duration::from_secs(30))?;
+    let status = app.close(Duration::from_secs(30))?;
+    assert!(status.success(), "mirx exited with {status}");
+    server.set_presence(vec![bob_presence("offline")]);
+
+    let syncs = server.sync_count();
+    let app = launch_saved_session(&local_app_data)?;
+    // The client asks again only after it handled the first answer, so
+    // its SyncConnected is out.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while server.sync_count() < syncs + 2 {
+        assert!(Instant::now() < deadline, "the client stopped syncing");
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        status_lines_with(&app, "Matrix")?,
+        Vec::<String>::new(),
+        "{:?}",
+        status_view_lines(&app)?
+    );
+    server.serve_presence(vec![bob_presence("online")])?;
+    wait_for_status_line(&app, "* Bob is on Matrix", Duration::from_secs(30))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(status_lines_with(&app, "Matrix")?, ["* Bob is on Matrix"]);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
