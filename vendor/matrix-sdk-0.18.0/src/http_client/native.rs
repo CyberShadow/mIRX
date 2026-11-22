@@ -64,8 +64,11 @@ impl HttpClient {
             .without_max_times();
 
         // Let's now apply any override the user or the SDK might have set.
-        let backoff = if let Some(max_delay) = config.max_retry_time {
-            backoff.with_max_delay(max_delay)
+        // `max_retry_time` bounds the total of the backoff's delays, as
+        // `RequestConfig::max_retry_time` documents (mirx: VENDORED.md
+        // section 3).
+        let backoff = if let Some(max_retry_time) = config.max_retry_time {
+            backoff.with_total_delay(Some(max_retry_time))
         } else {
             backoff
         };

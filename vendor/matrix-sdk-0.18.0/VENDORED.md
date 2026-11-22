@@ -47,9 +47,34 @@ mirx's own: `EncryptionData::recovery_state_update`, a lock each update
 holds from computing the state to setting it
 (`src/encryption/mod.rs`, `src/encryption/recovery/mod.rs`).
 
+## 3. `max_retry_time` caps one delay, not the retrying
+
+### Why
+
+`RequestConfig::max_retry_time` is documented as "a time limit for how
+long a request should be retried", the time-based variant of
+`retry_limit`. Since the move to `backon` (0.11, #4916) it is passed to
+`with_max_delay`, the cap of one backoff step, so it bounds nothing: a
+request the server answers with a transient error (a 5xx but 520, or a
+429) is retried for the fixed 15 minutes of total delay. `retry_limit`,
+the only other bound, also turns on retries of network failures, which
+hides a dropped connection for retries of 30 s timeouts. mirx bounds the
+transient retrying of its client's requests to seconds, so an outage
+behind a proxy (502, 503) fails a sync or a command, as an unreachable
+server does. Upstream `main` (as of 2025-09) has the same code. Nothing
+else in the SDK sets `max_retry_time` (only a test that reads it back),
+so no other caller changes.
+
+### The fix
+
+mirx's own: `max_retry_time` sets the backoff's `with_total_delay`
+(`src/http_client/native.rs`); the 60 s cap of one delay stays. A
+server's `Retry-After` still sets the delay of each retry.
+
 ## When to remove
 
-When upgrading to a matrix-sdk release that contains both fixes (check the
-second against upstream; it is not reported there yet): delete this
-directory and its line in `[patch.crates-io]` (and, with the last vendored
-crate, the section and the workspace's `exclude = ["vendor"]`).
+When upgrading to a matrix-sdk release that contains all three fixes
+(check the second and third against upstream; they are not reported there
+yet): delete this directory and its line in `[patch.crates-io]` (and,
+with the last vendored crate, the section and the workspace's
+`exclude = ["vendor"]`).
