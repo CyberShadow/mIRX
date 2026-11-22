@@ -36,8 +36,10 @@ pub(super) fn after_event(connection: ConnectionState, event: &Event) -> Connect
         {
             ConnectionState::SignedIn
         }
-        // Signed in already, this is the initial room sync failing after
-        // LoggedIn or RestoredSession: the session stands.
+        // After LoggedIn or RestoredSession (SignedIn already) this is the
+        // session entry's error: the initial room sync of a store that had
+        // never synced failed, or the first room snapshot could not be
+        // read. The session stands.
         Event::Error(error)
             if matches!(
                 error.operation,

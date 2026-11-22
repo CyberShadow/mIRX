@@ -322,6 +322,9 @@ struct MockBackfillHomeserver {
     logouts: Arc<AtomicUsize>,
     /// Other users' presence, which every `/sync` serves.
     presence: Arc<Mutex<MockPresence>>,
+    /// Every request it got, as `GET /path` without the query, in arrival
+    /// order.
+    requests: Arc<Mutex<Vec<String>>>,
 }
 
 /// The presence events every `/sync` serves, and how often they changed:
@@ -444,6 +447,16 @@ impl MockBackfillHomeserver {
             }
             std::thread::sleep(POLL_INTERVAL);
         }
+    }
+
+    /// How many requests the mock got so far.
+    fn request_count(&self) -> usize {
+        self.requests.lock().expect("the requests").len()
+    }
+
+    /// The requests after the first `mark`.
+    fn requests_since(&self, mark: usize) -> Vec<String> {
+        self.requests.lock().expect("the requests")[mark..].to_vec()
     }
 
     fn sync_count(&self) -> usize {
@@ -595,6 +608,8 @@ fn spawn_mock_homeserver_with_auth(
     let mock_logouts = Arc::clone(&logouts);
     let presence = Arc::new(Mutex::new(MockPresence::default()));
     let mock_presence = Arc::clone(&presence);
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let mock_requests = Arc::clone(&requests);
     let room_account_data = fully_read
         .into_iter()
         .map(|event_id| {
@@ -676,6 +691,11 @@ fn spawn_mock_homeserver_with_auth(
             let request = String::from_utf8_lossy(&request);
             let request_line = request.lines().next().unwrap_or_default();
             let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+            mock_requests.lock().expect("the requests").push(format!(
+                "{} {}",
+                request_line.split_whitespace().next().unwrap_or_default(),
+                path.split_once('?').map_or(path, |(path, _)| path)
+            ));
 
             // The request was read: closing now is a connection the
             // network dropped, not a reset of unread bytes.
@@ -1207,6 +1227,7 @@ fn spawn_mock_homeserver_with_auth(
         typing,
         logouts,
         presence,
+        requests,
     })
 }
 
@@ -4371,6 +4392,11 @@ fn automation_driver_ctrl_l_scrolls_back_to_the_line_marker()
     Ok(())
 }
 
+/// With connect on startup off, a saved session whose store never synced
+/// (here: a new profile) still syncs once while it is restored, by design:
+/// there is nothing to show before that sync. It is the continuous sync
+/// that waits for File > Connect. A store that has synced asks the server
+/// nothing: `a_restart_with_connect_on_startup_off_shows_the_rooms_and_asks_nothing`.
 #[test]
 fn startup_with_connect_on_startup_off_restores_without_syncing()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -4403,6 +4429,209 @@ fn startup_with_connect_on_startup_off_restores_without_syncing()
 
     invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
     app.wait_for_connection("syncing", Duration::from_secs(30))?;
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// mirx with a saved session on `local_app_data`, launched directly: the
+/// restore starts before the core reports Started, so the lifecycle never
+/// shows core_started (not launch_automation_app).
+fn launch_with_saved_session(
+    local_app_data: &Path,
+) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.to_path_buf())),
+    )
+}
+
+/// Waits until Beta is in the room list, the treebar and the switchbar,
+/// with Bob in its nick list.
+fn wait_for_beta_and_bob(app: &MirxApp) -> Result<UiState, Box<dyn std::error::Error>> {
+    let beta = room_identity("!beta:example");
+    app.wait_for_ui_state("Beta and Bob", Duration::from_secs(30), |ui_state| {
+        ui_state
+            .rooms
+            .iter()
+            .any(|room| room.room_id == "!beta:example")
+            && !ui_state.navigation.find_view(&beta).is_empty()
+            && ui_state
+                .switchbar
+                .items
+                .iter()
+                .any(|item| item.identity == beta && item.title == "Beta")
+            && ui_state.mdi.views.iter().any(|view| {
+                view.identity == beta
+                    && view
+                        .members
+                        .iter()
+                        .any(|member| member.user_id == "@bob:example")
+            })
+    })
+    .map_err(Into::into)
+}
+
+/// What the SDK asks by itself when it restores a session, before any
+/// sync: recovery reads whether secret storage is set up, and, since this
+/// session has no key backup enabled while the server has one, whether to
+/// enable one (`GET room_keys/version`). Not mirx's to stop; offline they
+/// fail quietly.
+fn is_the_sdks_own_startup_request(request: &str) -> bool {
+    request.ends_with("/account_data/m.secret_storage.default_key")
+        || request == "GET /_matrix/client/v3/room_keys/version"
+}
+
+/// The first run of a restart test: mirx restores the saved session,
+/// syncs, shows Beta and Bob, and exits. Its store has synced.
+fn run_once_and_close(
+    local_app_data: &Path,
+    server: &MockBackfillHomeserver,
+) -> Result<(), Box<dyn std::error::Error>> {
+    write_saved_session(local_app_data, &server.base_url)?;
+    let app = launch_with_saved_session(local_app_data)?;
+    wait_until_connected(&app)?;
+    wait_for_beta_and_bob(&app)?;
+    let status = app.close(Duration::from_secs(30))?;
+    assert!(status.success(), "mirx exited with {status}");
+    Ok(())
+}
+
+/// A restart with connect on startup off shows the rooms of the last
+/// session from the store, and asks the server nothing until File >
+/// Connect. The E2EE status, which asks the server, comes once connected.
+#[test]
+fn a_restart_with_connect_on_startup_off_shows_the_rooms_and_asks_nothing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    run_once_and_close(&local_app_data, &server)?;
+    fs::write(
+        settings_file_path(&local_app_data),
+        "[connect]\r\nstartup=off\r\n",
+    )?;
+    let mark = server.request_count();
+
+    let app = launch_with_saved_session(&local_app_data)?;
+    app.wait_for_connection("signed_in", Duration::from_secs(30))?;
+    wait_for_beta_and_bob(&app)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let asked = server.requests_since(mark);
+    assert_eq!(
+        asked
+            .iter()
+            .filter(|request| !is_the_sdks_own_startup_request(request))
+            .collect::<Vec<_>>(),
+        Vec::<&String>::new(),
+        "every request since the restart: {asked:?}"
+    );
+    let model = app.dump_model()?;
+    assert_eq!(model.connection, "signed_in");
+    assert_eq!(model.last_error, None);
+    let lines = status_view_lines(&app)?;
+    assert!(
+        lines.iter().any(|line| line.contains("* Synced rooms: ")),
+        "{lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("* Syncing with the homeserver")
+                || line.contains("server backup exists")),
+        "{lines:?}"
+    );
+
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    wait_until_connected(&app)?;
+    wait_for_status_line(&app, "server backup exists", Duration::from_secs(10))?;
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// A restart with the server down shows the rooms of the last session,
+/// retries quietly, and a line typed meanwhile goes once the server
+/// answers. In a room without E2EE, which the mock homeserver cannot do.
+#[test]
+fn a_restart_with_the_server_down_shows_the_rooms_and_retries()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    // The first run joins a room without E2EE, so the store has it too.
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_with_saved_session(&local_app_data)?;
+    wait_until_connected(&app)?;
+    wait_for_beta_and_bob(&app)?;
+    let plain = room_identity("!plain:example");
+    app.select_room("!beta:example")?;
+    type_commands(&app, &["/join #plain:example"])?;
+    app.wait_for_ui_state(
+        "the joined room active",
+        Duration::from_secs(10),
+        |ui_state| ui_state.mdi.active == plain,
+    )?;
+    let status = app.close(Duration::from_secs(30))?;
+    assert!(status.success(), "mirx exited with {status}");
+    write_connect_settings(&local_app_data, "retry_delay=1\r\n")?;
+    // The network is down: every sync and send is dropped unanswered.
+    server
+        .faults
+        .drop_syncs
+        .store(usize::MAX / 2, Ordering::SeqCst);
+    server.faults.send_down.store(true, Ordering::SeqCst);
+
+    let app = launch_with_saved_session(&local_app_data)?;
+    wait_for_beta_and_bob(&app)?;
+    app.wait_for_ui_state("the plain room", Duration::from_secs(30), |ui_state| {
+        ui_state.mdi.views.iter().any(|view| view.identity == plain)
+    })?;
+    wait_for_status_line(&app, "* Connect retry #1 example", Duration::from_secs(30))?;
+    assert_ne!(app.dump_model()?.status, "connected to example");
+    let lines = status_view_lines(&app)?;
+    // Not a word of the restore or the E2EE status failing.
+    assert!(
+        !lines.iter().any(|line| line.contains("Error during")),
+        "{lines:?}"
+    );
+    let typed_lines = |ui_state: &UiState| {
+        view_lines_containing(find_view(ui_state, &plain), "typed offline")
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    app.select_room("!plain:example")?;
+    type_commands(&app, &["typed offline"])?;
+    app.wait_for_ui_state(
+        "the line waiting to send",
+        Duration::from_secs(30),
+        |ui_state| {
+            typed_lines(ui_state)
+                .iter()
+                .any(|line| line.ends_with("> typed offline (waiting to send)"))
+        },
+    )?;
+
+    server.faults.send_down.store(false, Ordering::SeqCst);
+    server.faults.drop_syncs.store(0, Ordering::SeqCst);
+    wait_until_connected(&app)?;
+    let ui_state = app.wait_for_ui_state("the line sent", Duration::from_secs(30), |ui_state| {
+        typed_lines(ui_state)
+            .iter()
+            .any(|line| line.ends_with("> typed offline"))
+    })?;
+    assert_eq!(
+        typed_lines(&ui_state).len(),
+        1,
+        "{:?}",
+        typed_lines(&ui_state)
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
