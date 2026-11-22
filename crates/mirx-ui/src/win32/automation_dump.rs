@@ -526,6 +526,7 @@ fn ui_timeline_line_kind(kind: &TimelineRowKind) -> UiTimelineLineKind {
             UiTimelineLineKind::StateNotice
         }
         TimelineRowKind::Plain => UiTimelineLineKind::Plain,
+        TimelineRowKind::Echo { .. } => UiTimelineLineKind::Echo,
         TimelineRowKind::LineMarker => UiTimelineLineKind::LineMarker,
     }
 }

@@ -542,6 +542,10 @@ pub(super) unsafe fn run_slash_command(
             echo_in_active_view(hwnd, commands::help_lines(topic.as_deref())?)?;
             Ok(None)
         }
+        SlashCommand::Echo(echo) => {
+            print_echo(hwnd, echo)?;
+            Ok(None)
+        }
         SlashCommand::Alias(AliasCommand::List) => {
             echo_in_active_view(hwnd, alias_list_lines(state_ref(hwnd).aliases.aliases()))?;
             Ok(None)
@@ -646,6 +650,46 @@ pub(super) unsafe fn run_slash_command(
     }
 }
 
+/// `/echo`: its line goes in its window. A window the user is not in gets
+/// mIRC's event activity, as `/echo` without `-n` gives it.
+unsafe fn print_echo(hwnd: HWND, echo: EchoCommand) -> Result<(), String> {
+    let EchoCommand {
+        color,
+        place,
+        timestamp,
+        text,
+    } = echo;
+    let state = state_mut(hwnd);
+    let view = match place {
+        EchoPlace::Active => echo_view(&state.active_view),
+        EchoPlace::Status => ViewId::Status,
+        EchoPlace::Window(target) => {
+            let view = match resolve_room(&state.model.rooms, is_navigable_room, &target) {
+                Ok(room) => ViewId::Room(room.room_id.clone()),
+                Err(RoomTargetError::Unknown) => return Err(format!("no such window: {target}")),
+                Err(RoomTargetError::Ambiguous) => {
+                    return Err(format!("ambiguous window: {target}"));
+                }
+            };
+            // A query window the user closed.
+            if !state.views.contains_key(&view) {
+                return Err(format!("no such window: {target}"));
+            }
+            view
+        }
+    };
+    push_lines_in_view(
+        state,
+        &view,
+        StatusLineKind::Echo { color, timestamp },
+        [text],
+    );
+    if view != state.active_view {
+        raise_view_activity(state, view, ViewActivityLevel::Event);
+    }
+    sync_views_and_tree(hwnd)
+}
+
 /// What `/alias` alone prints: every alias's lines, as written.
 fn alias_list_lines(aliases: &Aliases) -> Vec<String> {
     let lines = aliases.list_lines();
@@ -736,16 +780,27 @@ pub(super) fn echo_lines_in_view(
     view: &ViewId,
     lines: impl IntoIterator<Item = String>,
 ) {
+    push_lines_in_view(state, view, StatusLineKind::Info, lines);
+}
+
+/// Prints lines of `kind` in a window with text. The caller refreshes the
+/// window.
+fn push_lines_in_view(
+    state: &mut WindowState,
+    view: &ViewId,
+    kind: StatusLineKind,
+    lines: impl IntoIterator<Item = String>,
+) {
     let now = state.clock.now_ms();
     for text in lines {
         match view {
-            ViewId::Status => state.model.status_log.push(now, StatusLineKind::Info, text),
+            ViewId::Status => state.model.status_log.push(now, kind, text),
             ViewId::RoomList => unreachable!("Rooms List output goes to Status"),
             ViewId::Room(room_id) => state
                 .model
                 .room_views
                 .entry_or_default(room_id.clone())
-                .push_echo(now, None, StatusLineKind::Info, text),
+                .push_echo(now, None, kind, text),
             ViewId::Thread {
                 room_id,
                 thread_root_event_id,
@@ -754,12 +809,7 @@ pub(super) fn echo_lines_in_view(
                 .room_views
                 .get_mut(room_id)
                 .expect("a thread window's room must have a view")
-                .push_echo(
-                    now,
-                    Some(thread_root_event_id.clone()),
-                    StatusLineKind::Info,
-                    text,
-                ),
+                .push_echo(now, Some(thread_root_event_id.clone()), kind, text),
         }
     }
 }

@@ -2,6 +2,7 @@
 
 use mirx_core::RoomMemberChange;
 
+use super::colors::PaletteIndex;
 use super::hotlinks::RowUserLink;
 use super::timeline_text::MessageLine;
 use super::*;
@@ -261,6 +262,10 @@ pub(super) enum TimelineRowKind {
     /// What is left of a redacted event.
     Redacted,
     Plain,
+    /// `/echo`'s line, in the Normal colour or its own.
+    Echo {
+        color: Option<PaletteIndex>,
+    },
     /// The line marker, `TimelineRow::line_marker`.
     LineMarker,
 }
@@ -945,8 +950,7 @@ fn push_activity_rows_with_echo<'a>(
 }
 
 fn echo_row(line: &EchoLine, timestamps: TimestampStyle) -> TimelineRow {
-    let prefix = timestamps.prefix(line.timestamp_ms);
-    TimelineRow::log(log_row_kind(line.kind), format!("{prefix}{}", line.text))
+    log_line_row(line.kind, line.timestamp_ms, &line.text, timestamps)
         .with_identity(TimelineRowIdentity::EchoLine {
             sequence: line.arrival,
         })
@@ -1100,12 +1104,38 @@ fn format_room_video_metadata_suffix(info: Option<&RoomVideoInfo>) -> String {
     }
 }
 
-/// How a Status or echo line of `kind` renders.
-fn log_row_kind(kind: StatusLineKind) -> TimelineRowKind {
-    match kind {
+/// A Status or echo line's row: its timestamp and text, as its `kind`
+/// draws them.
+fn log_line_row(
+    kind: StatusLineKind,
+    timestamp_ms: u64,
+    text: &str,
+    timestamps: TimestampStyle,
+) -> TimelineRow {
+    let row_kind = match kind {
         StatusLineKind::Info => TimelineRowKind::Info,
         StatusLineKind::Error => TimelineRowKind::Error,
-    }
+        StatusLineKind::Echo { color, timestamp } => {
+            let prefix = if timestamp {
+                timestamps.prefix(timestamp_ms)
+            } else {
+                String::new()
+            };
+            let (body, styles) = mirc_format::parse_mirc_input(text);
+            let styles = styles
+                .into_iter()
+                .map(|span| TextStyleSpan {
+                    start: prefix.len() + span.start,
+                    end: prefix.len() + span.end,
+                    style: span.style,
+                })
+                .collect();
+            return TimelineRow::log(TimelineRowKind::Echo { color }, format!("{prefix}{body}"))
+                .with_styles(styles);
+        }
+    };
+    let prefix = timestamps.prefix(timestamp_ms);
+    TimelineRow::log(row_kind, format!("{prefix}{text}"))
 }
 
 pub(super) fn build_status_timeline_rows(
@@ -1116,8 +1146,7 @@ pub(super) fn build_status_timeline_rows(
         .lines()
         .iter()
         .map(|line| {
-            let prefix = timestamps.prefix(line.timestamp_ms);
-            TimelineRow::log(log_row_kind(line.kind), format!("{prefix}{}", line.text))
+            log_line_row(line.kind, line.timestamp_ms, &line.text, timestamps)
                 .with_identity(TimelineRowIdentity::status_line(line.sequence))
                 .arrived(Some(line.sequence))
         })
@@ -4132,6 +4161,65 @@ mod tests {
             .map(|row| row.kind.clone())
             .collect::<Vec<_>>();
         assert_eq!(kinds, vec![TimelineRowKind::Info, TimelineRowKind::Error]);
+    }
+
+    #[test]
+    fn echo_lines_render_their_codes_and_a_stamp_only_when_asked() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        let red = PaletteIndex::new(4).unwrap();
+        let room_view = state
+            .model
+            .room_views
+            .entry_or_default("!ops:example".to_owned());
+        let echo = |color, timestamp| StatusLineKind::Echo { color, timestamp };
+        room_view.push_echo(0, None, echo(None, false), "plain".to_owned());
+        room_view.push_echo(
+            1_700_000_000_000,
+            None,
+            echo(Some(red), true),
+            "\x02bold\x02 and \x0312blue".to_owned(),
+        );
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let [plain, styled] = &rows[rows.len() - 2..] else {
+            unreachable!("two echo lines")
+        };
+        assert_eq!(plain.logical_text, "plain");
+        assert_eq!(plain.kind, TimelineRowKind::Echo { color: None });
+        assert_eq!(plain.styles, []);
+        assert_eq!(styled.logical_text, "[22:13] bold and blue");
+        assert_eq!(styled.kind, TimelineRowKind::Echo { color: Some(red) });
+        let bold = mirx_core::TextStyle {
+            bold: true,
+            ..mirx_core::TextStyle::default()
+        };
+        let blue = mirx_core::TextStyle {
+            foreground: Some(PaletteIndex::new(12).unwrap().color()),
+            ..mirx_core::TextStyle::default()
+        };
+        assert_eq!(
+            styled.styles,
+            [
+                TextStyleSpan {
+                    start: 8,
+                    end: 12,
+                    style: bold
+                },
+                TextStyleSpan {
+                    start: 17,
+                    end: 21,
+                    style: blue
+                },
+            ]
+        );
+
+        // Status rows are built the same way.
+        let mut log = StatusLog::default();
+        log.push(0, echo(None, false), "\x1fs\x1f".to_owned());
+        let rows = build_status_timeline_rows(&log, state.timestamps());
+        assert_eq!(rows[0].logical_text, "s");
+        assert_eq!(rows[0].styles.len(), 1);
     }
 
     #[test]

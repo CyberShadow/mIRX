@@ -687,7 +687,8 @@ pub(super) fn timeline_row_color(
             send_state: TimelineMessageSendState::Failed,
             ..
         } => return ERROR_COLOR.colorref(),
-        TimelineRowKind::Plain => ColorItem::Normal,
+        TimelineRowKind::Plain | TimelineRowKind::Echo { color: None } => ColorItem::Normal,
+        TimelineRowKind::Echo { color: Some(color) } => return color.colorref(),
         TimelineRowKind::Event { item } | TimelineRowKind::StateNotice { item, .. } => {
             item.color_item()
         }
@@ -1671,6 +1672,10 @@ mod tests {
             (TimelineRowKind::ReplyQuote, Some(ColorItem::Gray)),
             (TimelineRowKind::Redacted, Some(ColorItem::Gray)),
             (TimelineRowKind::Plain, Some(ColorItem::Normal)),
+            (
+                TimelineRowKind::Echo { color: None },
+                Some(ColorItem::Normal),
+            ),
             (message(Text, Sent, false, false), Some(ColorItem::Normal)),
             (message(Text, Sent, false, true), Some(ColorItem::Own)),
             (message(Notice, Sent, false, false), Some(ColorItem::Notice)),
@@ -1733,6 +1738,13 @@ mod tests {
             rgb(0x7f, 0, 0)
         );
         assert_eq!(color(TimelineRowKind::Typing), rgb(0x7f, 0x7f, 0x7f));
+        // `/echo 12 text`: the palette colour, whatever the scheme.
+        assert_eq!(
+            color(TimelineRowKind::Echo {
+                color: Some(index(12))
+            }),
+            index(12).colorref()
+        );
     }
 
     #[test]

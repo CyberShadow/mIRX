@@ -11,6 +11,7 @@ use mirx_core::{
     VerificationRequest, VerificationState, VerificationStateEvent,
 };
 
+use super::colors::PaletteIndex;
 use super::menus::verification_actions_text;
 use super::{
     e2ee_cross_signing_label, e2ee_local_backup_label, e2ee_recovery_state_label,
@@ -22,6 +23,12 @@ use super::{
 pub(super) enum StatusLineKind {
     Info,
     Error,
+    /// `/echo`'s line: its text holds mIRC codes, it is in the Normal
+    /// colour or `color`, and has a timestamp only with `-t`.
+    Echo {
+        color: Option<PaletteIndex>,
+        timestamp: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

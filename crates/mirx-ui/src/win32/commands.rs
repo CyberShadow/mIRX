@@ -14,8 +14,9 @@ use mirx_core::{
 };
 
 use super::aliases::Aliases;
+use super::colors::PaletteIndex;
 use super::nick_completion::member_mention_text;
-use super::settings::{Bar, FontSetting, parse_points};
+use super::settings::{Bar, FontSetting, parse_palette_index, parse_points};
 use super::timeline_text::{context_line, rank_prefix, topic_is_text};
 use super::timestamp::{LocalTimeFn, TimestampFormat};
 
@@ -199,6 +200,8 @@ pub(super) enum SlashCommand {
     },
     /// `/alias [name [command]]`.
     Alias(AliasCommand),
+    /// `/echo [colour] [-ast] [#room] <text>`.
+    Echo(EchoCommand),
     Timestamp(TimestampCommand),
     Log(LogCommand),
     Font(FontCommand),
@@ -218,6 +221,26 @@ pub(super) struct ClearAll {
     pub(super) channels: bool,
     pub(super) queries: bool,
     pub(super) invites: bool,
+}
+
+/// `/echo`'s line, which only this client shows: mIRC codes in `text`
+/// render, `color` (a palette index) colours the rest of the line, and
+/// `timestamp` (`-t`) stamps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct EchoCommand {
+    pub(super) color: Option<PaletteIndex>,
+    pub(super) place: EchoPlace,
+    pub(super) timestamp: bool,
+    pub(super) text: String,
+}
+
+/// Where `/echo` prints: the active window (`-a`, the default), Status
+/// (`-s`), or the window of a room named `#alias` or `!id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum EchoPlace {
+    Active,
+    Status,
+    Window(String),
 }
 
 /// `/alias` lists the aliases, `/alias name` removes one, `/alias name
@@ -373,6 +396,7 @@ impl SlashCommand {
             Self::Verify { .. } | Self::VerifyStart { .. } => "verify",
             Self::Help { .. } => "help",
             Self::Alias(_) => "alias",
+            Self::Echo(_) => "echo",
             Self::Timestamp(_) => "timestamp",
             Self::Log(_) => "log",
             Self::Font(_) => "font",
@@ -500,6 +524,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "e2ee",
         usage: "[status|refresh|recover|reset [cancel]|setup [wait] [passphrase <passphrase>]|export [file]|import [file]]",
         summary: "show or manage end-to-end encryption",
+    },
+    CommandSpec {
+        name: "echo",
+        usage: "[colour] [-ast] [#room] <text>",
+        summary: "print a line only you see",
     },
     CommandSpec {
         name: "edit",
@@ -984,6 +1013,7 @@ fn parse_named(name: &str, argument: &str) -> Result<SlashCommand, CommandError>
         "help" => Ok(SlashCommand::Help {
             topic: optional(argument),
         }),
+        "echo" => parse_echo(argument).map(SlashCommand::Echo),
         "alias" => {
             let (name, command) = split_word(argument);
             let name = name.strip_prefix('/').unwrap_or(name).to_owned();
@@ -1006,6 +1036,57 @@ fn parse_named(name: &str, argument: &str) -> Result<SlashCommand, CommandError>
         "treebar" => parse_bar(Bar::Treebar, argument),
         _ => Err(CommandError::unknown(name)),
     }
+}
+
+/// `[colour] [-switches] [#room|!id] <text>`, mIRC's `/echo` order. With
+/// `-a` or `-s` the window is chosen, so a `#` word is text.
+fn parse_echo(argument: &str) -> Result<EchoCommand, CommandError> {
+    let error = |reason: &str| CommandError::new("echo", reason);
+    let (first, rest) = split_word(argument);
+    let (color, mut rest) = if !first.is_empty() && first.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        let color = parse_palette_index(first).map_err(|_| error("colour must be 0-15"))?;
+        (Some(color), rest)
+    } else {
+        (None, argument)
+    };
+    let (mut active, mut status, mut timestamp) = (false, false, false);
+    loop {
+        let (word, after) = split_word(rest);
+        let Some(letters) = word.strip_prefix('-').filter(|letters| !letters.is_empty()) else {
+            break;
+        };
+        for letter in letters.chars() {
+            match letter.to_ascii_lowercase() {
+                'a' => active = true,
+                's' => status = true,
+                't' => timestamp = true,
+                _ => return Err(error(&format!("unknown switch -{letter}"))),
+            }
+        }
+        rest = after;
+    }
+    let place = match (active, status) {
+        (true, true) => return Err(error("-a and -s cannot both be given")),
+        (true, false) => EchoPlace::Active,
+        (false, true) => EchoPlace::Status,
+        (false, false) => match split_word(rest) {
+            (window, text) if window.starts_with(['#', '!']) => {
+                rest = text;
+                EchoPlace::Window(window.to_owned())
+            }
+            _ => EchoPlace::Active,
+        },
+    };
+    if rest.is_empty() {
+        return Err(CommandError::insufficient_parameters("echo"));
+    }
+    Ok(EchoCommand {
+        color,
+        place,
+        timestamp,
+        text: rest.to_owned(),
+    })
 }
 
 /// `/clearall`'s switches, combined (`-sn`) or apart (`-s -n`). mIRC's
@@ -1934,6 +2015,72 @@ mod tests {
     }
 
     #[test]
+    fn echo_takes_mircs_colour_switches_and_window() {
+        let echo = |color: Option<u8>, place: EchoPlace, timestamp, text: &str| {
+            Ok(SlashCommand::Echo(EchoCommand {
+                color: color.map(|index| PaletteIndex::new(index).unwrap()),
+                place,
+                timestamp,
+                text: text.to_owned(),
+            }))
+        };
+        let window = |name: &str| EchoPlace::Window(name.to_owned());
+        assert_eq!(
+            parse("/echo hi  there"),
+            echo(None, EchoPlace::Active, false, "hi  there")
+        );
+        assert_eq!(
+            parse("/echo 4 hi"),
+            echo(Some(4), EchoPlace::Active, false, "hi")
+        );
+        assert_eq!(
+            parse("/echo 007 hi"),
+            echo(Some(7), EchoPlace::Active, false, "hi")
+        );
+        assert_eq!(
+            parse("/echo -a hi"),
+            echo(None, EchoPlace::Active, false, "hi")
+        );
+        for input in ["/echo -s hi", "/echo -S hi"] {
+            assert_eq!(
+                parse(input),
+                echo(None, EchoPlace::Status, false, "hi"),
+                "{input}"
+            );
+        }
+        for input in ["/echo -st hi", "/echo -s -t hi", "/echo -ts hi"] {
+            assert_eq!(
+                parse(input),
+                echo(None, EchoPlace::Status, true, "hi"),
+                "{input}"
+            );
+        }
+        assert_eq!(
+            parse("/echo #ops hi"),
+            echo(None, window("#ops"), false, "hi")
+        );
+        assert_eq!(
+            parse("/echo 4 -t !id:x hi"),
+            echo(Some(4), window("!id:x"), true, "hi")
+        );
+        // A chosen window: the word is text.
+        assert_eq!(
+            parse("/echo -s #ops hi"),
+            echo(None, EchoPlace::Status, false, "#ops hi")
+        );
+        assert_eq!(parse("/echo -t"), insufficient("echo"));
+        assert_eq!(parse("/echo"), insufficient("echo"));
+        assert_eq!(parse("/echo #ops"), insufficient("echo"));
+        assert_eq!(parse("/echo 16 hi"), error("echo", "colour must be 0-15"));
+        assert_eq!(
+            parse("/echo -as hi"),
+            error("echo", "-a and -s cannot both be given")
+        );
+        assert_eq!(parse("/echo -e hi"), error("echo", "unknown switch -e"));
+        assert_eq!(parse("/echo 4"), insufficient("echo"));
+    }
+
+    #[test]
     fn alias_lists_removes_or_sets() {
         let alias = |command| Ok(SlashCommand::Alias(command));
         assert_eq!(parse("/alias"), alias(AliasCommand::List));
@@ -2465,6 +2612,7 @@ mod tests {
             "/devoice x",
             "/nick x",
             "/alias",
+            "/echo x",
         ];
         for input in samples {
             let name = parse(input).expect(input).name();

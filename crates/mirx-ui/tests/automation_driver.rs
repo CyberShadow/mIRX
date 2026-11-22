@@ -3361,7 +3361,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 76);
+    assert_eq!(version.protocol_version, 77);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -20653,6 +20653,94 @@ fn typed_aliases_run_their_commands() -> Result<(), Box<dyn std::error::Error>> 
             .ends_with("] * /hi: unknown command")
     );
     assert!(!fs::read_to_string(&aliases_ini)?.contains("/hi"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn echo_prints_where_it_is_told() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let (alpha, beta) = (
+        room_identity("!alpha:example"),
+        room_identity("!beta:example"),
+    );
+    // Alpha's message is read: the echo alone colours its button.
+    app.select_view(alpha.clone())?;
+    app.select_view(beta.clone())?;
+
+    type_commands(
+        &app,
+        &[
+            "/echo plain",
+            "/echo 4 -t red",
+            "/alias said say hi | echo -a said hi",
+            "/said",
+        ],
+    )?;
+    // The unauthenticated core refuses the send, with a line of its own.
+    let timeline = active_timeline(&app)?;
+    let line = |wanted: &dyn Fn(&str) -> bool| {
+        let found = timeline
+            .visible_lines
+            .iter()
+            .filter(|line| wanted(&line.text))
+            .collect::<Vec<_>>();
+        assert_eq!(found.len(), 1, "{timeline:?}");
+        (found[0].kind, found[0].color.clone())
+    };
+    let normal = (UiTimelineLineKind::Echo, "#000000".to_owned());
+    assert_eq!(line(&|text| text == "plain"), normal);
+    assert_eq!(
+        line(&|text| text.starts_with('[') && text.ends_with("] red")),
+        (UiTimelineLineKind::Echo, "#ff0000".to_owned())
+    );
+    assert_eq!(line(&|text| text == "said hi"), normal);
+    assert_eq!(
+        app.dump_model()?
+            .submitted_message_commands
+            .into_iter()
+            .map(|command| command.body)
+            .collect::<Vec<_>>(),
+        ["hi"]
+    );
+
+    type_commands(
+        &app,
+        &[
+            "/echo -s to status",
+            "/echo !alpha:example to alpha",
+            "/echo -x hi",
+        ],
+    )?;
+    let ui_state = app.dump_ui_state()?;
+    assert!(view_contains(
+        find_view(&ui_state, &ViewIdentity::Status),
+        "to status"
+    ));
+    assert_eq!(
+        view_lines_containing(find_view(&ui_state, &alpha), "to alpha"),
+        ["to alpha"]
+    );
+    assert_switchbar_activity(
+        &ui_state,
+        &ViewIdentity::Status,
+        Some(ViewActivityLevel::Event),
+    );
+    assert_switchbar_activity(&ui_state, &alpha, Some(ViewActivityLevel::Event));
+    assert_switchbar_activity(&ui_state, &beta, None);
+    assert!(
+        only_view_line_containing(find_view(&ui_state, &beta), "/echo:")
+            .ends_with("] * /echo: unknown switch -x")
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

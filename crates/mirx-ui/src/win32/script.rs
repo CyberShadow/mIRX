@@ -467,6 +467,45 @@ mod tests {
     }
 
     #[test]
+    fn echo_prints_where_it_is_told_and_raises_event_activity_elsewhere() {
+        unsafe {
+            with_alias_frame(&["/note echo -s noted $1"], |hwnd| {
+                type_compose_line(hwnd, "/echo here");
+                type_compose_line(hwnd, "/echo #ops:example here too");
+                assert_eq!(
+                    ops_lines(hwnd)[ops_lines(hwnd).len() - 2..],
+                    ["here", "here too"]
+                );
+                assert_eq!(state_ref(hwnd).room_activity, BTreeMap::new());
+                type_compose_line(hwnd, "/echo 4 -t !dm:example hi");
+                type_compose_line(hwnd, "/note it");
+                let state = state_ref(hwnd);
+                assert_eq!(
+                    render_room_lines(state, "!dm:example").last().unwrap(),
+                    "[22:12] hi"
+                );
+                let status = project_timeline_rows(&build_status_timeline_rows(
+                    &state.model.status_log,
+                    state.timestamps(),
+                ));
+                assert_eq!(status.last().unwrap(), "noted it");
+                assert_eq!(
+                    state.room_activity,
+                    BTreeMap::from([
+                        (ViewId::Status, ViewActivityLevel::Event),
+                        (room_view_id("!dm:example"), ViewActivityLevel::Event),
+                    ])
+                );
+                type_compose_line(hwnd, "/echo #nope:example x");
+                assert_eq!(
+                    ops_lines(hwnd).last().unwrap(),
+                    "[22:12] * /echo: no such window: #nope:example"
+                );
+            });
+        }
+    }
+
+    #[test]
     fn alias_sets_lists_and_removes_aliases() {
         unsafe {
             with_alias_frame(&[], |hwnd| {

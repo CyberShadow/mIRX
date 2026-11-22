@@ -306,8 +306,8 @@ use command_runner::{
 };
 use commands::{
     AliasCommand, BarCommand, CommandError, ComposeSubmission, CreateRoomArgs, E2eeSlashCommand,
-    FontCommand, LogCommand, RoomKeyTransfer, SlashCommand, TimestampCommand, VerificationAction,
-    classify_input, local_command_history_entry,
+    EchoCommand, EchoPlace, FontCommand, LogCommand, RoomKeyTransfer, SlashCommand,
+    TimestampCommand, VerificationAction, classify_input, local_command_history_entry,
 };
 #[cfg(test)]
 use compose::submit_compose_from_edit;
@@ -1332,7 +1332,7 @@ fn log_status(state: &mut WindowState, kind: StatusLineKind, text: String) {
         .push(state.clock.now_ms(), kind, context_line(&text));
     if state.active_view != ViewId::Status {
         let level = match kind {
-            StatusLineKind::Info => ViewActivityLevel::Event,
+            StatusLineKind::Info | StatusLineKind::Echo { .. } => ViewActivityLevel::Event,
             StatusLineKind::Error => ViewActivityLevel::Message,
         };
         raise_view_activity(state, ViewId::Status, level);
