@@ -187,6 +187,7 @@ use crate::{
 
 mod account;
 mod aliases;
+mod aliases_dialog;
 mod app_icon;
 #[cfg(test)]
 mod app_resources;
@@ -405,16 +406,17 @@ use menus::{
     MENU_ID_MESSAGE_REDACT, MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_SAVE_ATTACHMENT,
     MENU_ID_RECOVER_E2EE, MENU_ID_RESET_E2EE, MENU_ID_ROOM_ACCEPT_INVITE, MENU_ID_ROOM_NOTIFY_ALL,
     MENU_ID_ROOM_NOTIFY_MENTIONS, MENU_ID_ROOM_NOTIFY_MUTE, MENU_ID_ROOM_PART,
-    MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_TOOLS_COLORS,
-    MENU_ID_TOOLS_OPTIONS, MENU_ID_TOOLS_SESSIONS, MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL,
-    MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS, MENU_ID_VERIFY_THIS_SESSION,
-    MENU_ID_VIEW_SWITCHBAR, MENU_ID_VIEW_TOOLBAR, MENU_ID_VIEW_TREEBAR,
-    MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE, MENU_ID_WINDOW_TILE_HORIZONTAL,
-    MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry, ROOM_NOTIFICATIONS_MENU, TOOLBAR_ID_SEND_FILE,
-    TOOLS_MENU, VIEW_MENU, WINDOW_MENU, WindowKey, commands_menu_item, commands_menu_line,
-    commands_menu_title, file_menu_state, member_menu_command, member_menu_item_enabled,
-    member_menu_item_ids, notification_menu_id, notification_menu_mode, notification_mode_label,
-    verification_menu_action_enabled, view_menu_bar, view_menu_checks, window_key,
+    MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_TOOLS_ALIASES,
+    MENU_ID_TOOLS_COLORS, MENU_ID_TOOLS_OPTIONS, MENU_ID_TOOLS_SESSIONS, MENU_ID_VERIFY_ACCEPT,
+    MENU_ID_VERIFY_CANCEL, MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS,
+    MENU_ID_VERIFY_THIS_SESSION, MENU_ID_VIEW_SWITCHBAR, MENU_ID_VIEW_TOOLBAR,
+    MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE,
+    MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry,
+    ROOM_NOTIFICATIONS_MENU, TOOLBAR_ID_SEND_FILE, TOOLS_MENU, VIEW_MENU, WINDOW_MENU, WindowKey,
+    commands_menu_item, commands_menu_line, commands_menu_title, file_menu_state,
+    member_menu_command, member_menu_item_enabled, member_menu_item_ids, notification_menu_id,
+    notification_menu_mode, notification_mode_label, verification_menu_action_enabled,
+    view_menu_bar, view_menu_checks, window_key,
 };
 #[cfg(test)]
 use navigation::navigation_layout;

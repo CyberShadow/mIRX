@@ -351,6 +351,10 @@ configure_case_expectations() {
           ordered_actions=(dialog:colors)
           expect_dialog_title='mirx Colors'
           ;;
+        dialog-aliases)
+          ordered_actions=(dialog:aliases)
+          expect_dialog_title='Aliases - aliases.ini'
+          ;;
         dialog-select-server)
           ordered_actions=(dialog:select_server)
           expect_dialog_title='Select Server'

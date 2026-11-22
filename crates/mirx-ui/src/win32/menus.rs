@@ -80,6 +80,9 @@ pub(super) const MENU_ID_VIEW_TOOLBAR: usize = 40058;
 /// The toolbar's Send File: a command with no menu item, which runs
 /// `/sendfile`.
 pub(super) const TOOLBAR_ID_SEND_FILE: usize = 40059;
+/// Aliases..., which Alt+A sends, as mIRC's Scripts Editor at its
+/// Aliases tab.
+pub(super) const MENU_ID_TOOLS_ALIASES: usize = 40060;
 /// The window keys' command ids: accelerators with no menu item, in the
 /// gap below the Commands menu's. Alt+n sends `ACCEL_ID_WINDOW_FIRST + n - 1`.
 pub(super) const ACCEL_ID_WINDOW_FIRST: usize = 40080;
@@ -268,6 +271,10 @@ pub(super) const TOOLS_MENU: &[MenuEntry] = &[
     Item {
         id: MENU_ID_TOOLS_OPTIONS,
         label: "&Options...\tAlt+O",
+    },
+    Item {
+        id: MENU_ID_TOOLS_ALIASES,
+        label: "A&liases...\tAlt+A",
     },
 ];
 
@@ -819,9 +826,9 @@ mod tests {
     }
 
     #[test]
-    fn tools_ends_with_colors_and_options() {
+    fn tools_ends_with_colors_options_and_aliases() {
         assert_eq!(
-            TOOLS_MENU[TOOLS_MENU.len() - 3..],
+            TOOLS_MENU[TOOLS_MENU.len() - 4..],
             [
                 Separator,
                 Item {
@@ -831,6 +838,10 @@ mod tests {
                 Item {
                     id: MENU_ID_TOOLS_OPTIONS,
                     label: "&Options...\tAlt+O",
+                },
+                Item {
+                    id: MENU_ID_TOOLS_ALIASES,
+                    label: "A&liases...\tAlt+A",
                 },
             ]
         );

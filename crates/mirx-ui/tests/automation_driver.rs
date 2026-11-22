@@ -3361,7 +3361,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 77);
+    assert_eq!(version.protocol_version, 78);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -16967,6 +16967,7 @@ fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
                 ("&Cancel Verification", false),
                 ("&Colors...\tAlt+K", true),
                 ("&Options...\tAlt+O", true),
+                ("A&liases...\tAlt+A", true),
             ],
         ),
         menu(
@@ -17773,6 +17774,110 @@ fn options_connect_page_saves_reconnect_and_retry() -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+const ALIASES_DIALOG_EDIT_ID: i32 = 5030;
+const ALIASES_DIALOG_OK_ID: WPARAM = 5031;
+const ALIASES_DIALOG_CANCEL_ID: WPARAM = 5032;
+
+fn wait_for_aliases_dialog() -> Result<HWND, Box<dyn std::error::Error>> {
+    let dialog = wait_for_window(&wide_null("mirxWin32AliasesDialog"), "Aliases dialog")?;
+    assert_eq!(unsafe { read_window_text(dialog) }, "Aliases - aliases.ini");
+    Ok(dialog)
+}
+
+/// The editbox's selection, start and end.
+fn edit_selection(edit: HWND) -> (usize, usize) {
+    let selection = unsafe { SendMessageW(edit, EM_GETSEL, 0, 0) } as usize;
+    (selection & 0xffff, selection >> 16)
+}
+
+#[test]
+fn aliases_dialog_edits_aliases_ini() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let aliases_ini = local_app_data
+        .join("mirx")
+        .join("ui-shell")
+        .join("aliases.ini");
+    let defaults = app.dump_ui_state()?.aliases;
+    assert_eq!(defaults.len(), 8);
+
+    // Alt+A, as mIRC's Scripts Editor at its Aliases tab.
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe { SetForegroundWindow(frame) };
+    press_keys(&[VK_MENU, u16::from(b'A')]);
+    let dialog = wait_for_aliases_dialog()?;
+    let edit = unsafe { GetDlgItem(dialog, ALIASES_DIALOG_EDIT_ID) };
+    assert_eq!(unsafe { read_window_text(edit) }, defaults.join("\r\n"));
+    wait_for_dialog_focus(&app, dialog, ALIASES_DIALOG_EDIT_ID)?;
+    assert_eq!(edit_selection(edit), (0, 0));
+    // Enter is a line break, Tab goes on to OK.
+    for key in [VK_RETURN, VK_TAB] {
+        assert_ne!(
+            unsafe { PostMessageW(edit, WM_KEYDOWN, key as WPARAM, 0) },
+            0
+        );
+    }
+    wait_for_dialog_focus(&app, dialog, ALIASES_DIALOG_OK_ID as i32)?;
+    assert_eq!(
+        unsafe { read_window_text(edit) },
+        format!("\r\n{}", defaults.join("\r\n"))
+    );
+
+    // A wrong line keeps the dialog open, and is selected.
+    let set_text = |text: &str| {
+        let text = wide_null(text);
+        unsafe { SendMessageW(edit, WM_SETTEXT, 0, text.as_ptr() as isize) };
+    };
+    set_text("; mine\r\n/x {\r\nsay a");
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, ALIASES_DIALOG_OK_ID, 0) },
+        0
+    );
+    let (message_box, text) = wait_for_owned_message_box(dialog);
+    assert_eq!(text, "Line 2: /x's block has no }");
+    answer_message_box(&app, message_box, IDOK)?;
+    assert_eq!(unsafe { IsWindow(dialog) }, 1);
+    assert_eq!(edit_selection(edit), (8, 12));
+    assert!(!aliases_ini.exists());
+
+    let lines = ["; mine", "/hi say hello $1", "/two {", "  say a", "}"];
+    set_text(&lines.join("\r\n"));
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, ALIASES_DIALOG_OK_ID, 0) },
+        0
+    );
+    wait_for_window_gone(dialog, "Aliases dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.aliases, lines);
+    assert_eq!(ui_state.status_bar.text, "aliases saved");
+    assert_eq!(
+        fs::read_to_string(&aliases_ini)?,
+        "[aliases]\r\nn0=; mine\r\nn1=/hi say hello $1\r\nn2=/two {\r\nn3=  say a\r\nn4=}\r\n"
+    );
+
+    // Esc in the editbox, and Cancel, change nothing.
+    for close in ["escape", "cancel"] {
+        app.open_dialog(AutomationDialog::Aliases)?;
+        let dialog = wait_for_aliases_dialog()?;
+        let edit = unsafe { GetDlgItem(dialog, ALIASES_DIALOG_EDIT_ID) };
+        assert_eq!(unsafe { read_window_text(edit) }, lines.join("\r\n"));
+        let junk = wide_null("/junk");
+        unsafe { SendMessageW(edit, WM_SETTEXT, 0, junk.as_ptr() as isize) };
+        let posted = match close {
+            "escape" => unsafe { PostMessageW(edit, WM_KEYDOWN, VK_ESCAPE as WPARAM, 0) },
+            _ => unsafe { PostMessageW(dialog, WM_COMMAND, ALIASES_DIALOG_CANCEL_ID, 0) },
+        };
+        assert_ne!(posted, 0);
+        wait_for_window_gone(dialog, "Aliases dialog")?;
+        app.wait_idle(Duration::from_secs(5))?;
+        assert_eq!(app.dump_ui_state()?.aliases, lines, "{close}");
+    }
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 const MENU_ID_TOOLS_COLORS: usize = 40049;
 const COLORS_PREVIEW_ID: i32 = 6501;
 const COLORS_ITEM_ID: i32 = 6502;
@@ -18410,6 +18515,11 @@ fn open_dialog_opens_each_dialog_over_the_frame() -> Result<(), Box<dyn std::err
             AutomationDialog::Options,
             "mirxWin32OptionsDialog",
             "mirx Options",
+        ),
+        (
+            AutomationDialog::Aliases,
+            "mirxWin32AliasesDialog",
+            "Aliases - aliases.ini",
         ),
         (
             AutomationDialog::SelectServer,

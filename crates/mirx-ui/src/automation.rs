@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 77;
+pub(crate) const PROTOCOL_VERSION: u32 = 78;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -695,6 +695,8 @@ pub(crate) enum AutomationDialog {
     Options,
     /// Tools > Colors...
     Colors,
+    /// Tools > Aliases...
+    Aliases,
     /// File > Select Server...
     SelectServer,
     /// Help > About mirx
@@ -4032,8 +4034,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_77() {
-        assert_eq!(PROTOCOL_VERSION, 77);
+    fn protocol_version_is_78() {
+        assert_eq!(PROTOCOL_VERSION, 78);
     }
 
     #[test]
@@ -5420,6 +5422,7 @@ mod tests {
         for (dialog, expected) in [
             ("options", AutomationDialog::Options),
             ("colors", AutomationDialog::Colors),
+            ("aliases", AutomationDialog::Aliases),
             ("select_server", AutomationDialog::SelectServer),
             ("about", AutomationDialog::About),
             ("commands_join", AutomationDialog::CommandsJoin),
@@ -6070,7 +6073,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":77,
+                    "protocol_version":78,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })

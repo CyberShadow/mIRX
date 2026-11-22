@@ -68,7 +68,7 @@ const ESC_CANCEL_ID: usize = IDCANCEL as usize;
 
 /// The answer to `DM_GETDEFID`: the dialog's default button, which
 /// `IsDialogMessageW` presses for Enter.
-const fn default_button(id: usize) -> LRESULT {
+pub(super) const fn default_button(id: usize) -> LRESULT {
     ((DC_HASDEFID as LRESULT) << 16) | id as LRESULT
 }
 
@@ -235,7 +235,7 @@ pub(super) struct SingleFieldDialogState {
 }
 
 /// Every mirx dialog's class and window procedure.
-const DIALOG_CLASSES: [(&str, WNDPROC); 11] = [
+const DIALOG_CLASSES: [(&str, WNDPROC); 12] = [
     (LOGIN_DIALOG_CLASS_NAME, Some(login_dialog_window_proc)),
     (
         RECOVER_E2EE_DIALOG_CLASS_NAME,
@@ -271,6 +271,7 @@ const DIALOG_CLASSES: [(&str, WNDPROC); 11] = [
         Some(options_dialog::window_proc),
     ),
     colors_dialog::DIALOG_CLASS,
+    aliases_dialog::DIALOG_CLASS,
 ];
 
 /// Registers every dialog class on the button face, the colour labels and
@@ -437,18 +438,18 @@ pub(super) unsafe fn dialog_text_size(text: &str, wrap_width: i32) -> (i32, i32)
 
 /// Stacks a simple dialog's controls in one column, a label over each
 /// field and the buttons in a row under them, as mIRC's small dialogs do.
-struct DialogColumn {
+pub(super) struct DialogColumn {
     dialog: HWND,
-    metrics: DialogMetrics,
+    pub(super) metrics: DialogMetrics,
     /// In pixels at the dialog's DPI.
-    width: i32,
+    pub(super) width: i32,
     /// Where the next control goes.
     y: i32,
 }
 
 impl DialogColumn {
     /// A column `width` pixels wide, at the dialog's DPI.
-    unsafe fn new(dialog: HWND, width: i32) -> Self {
+    pub(super) unsafe fn new(dialog: HWND, width: i32) -> Self {
         let metrics = DialogMetrics::of(dialog);
         Self {
             dialog,
@@ -464,7 +465,7 @@ impl DialogColumn {
     }
 
     /// Adds a control at `x` on the next row, and leaves `gap` under it.
-    unsafe fn add(
+    pub(super) unsafe fn add(
         &mut self,
         (class, text, style, ex_style, id): (&str, &str, u32, u32, u16),
         (x, width, height): (i32, i32, i32),
@@ -539,7 +540,7 @@ impl DialogColumn {
 
     /// The buttons, right-aligned in a row a margin under the fields; the
     /// first is the default.
-    unsafe fn buttons(self, buttons: &[(usize, &str)]) -> Result<(), String> {
+    pub(super) unsafe fn buttons(self, buttons: &[(usize, &str)]) -> Result<(), String> {
         let default = buttons[0].0;
         self.buttons_with_default(buttons, default)
     }

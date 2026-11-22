@@ -217,6 +217,11 @@ pub(super) unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
             key: u16::from(b'K'),
             cmd: MENU_ID_TOOLS_COLORS as u16,
         },
+        ACCEL {
+            fVirt: FALT | FVIRTKEY,
+            key: u16::from(b'A'),
+            cmd: MENU_ID_TOOLS_ALIASES as u16,
+        },
     ]
     .into_iter()
     .chain(window_key_accelerators())
@@ -804,6 +809,10 @@ unsafe fn menu_command_result(
         MENU_ID_HELP_ABOUT => ("Help", show_about_dialog(hwnd).map(|()| Some(()))),
         MENU_ID_TOOLS_OPTIONS => ("Options", run_options_dialog(hwnd).map(|()| Some(()))),
         MENU_ID_TOOLS_COLORS => ("Colors", run_colors_dialog(hwnd).map(|()| Some(()))),
+        MENU_ID_TOOLS_ALIASES => (
+            "Aliases",
+            aliases_dialog::run_aliases_dialog(hwnd).map(|()| Some(())),
+        ),
         MENU_ID_VIEW_TOOLBAR | MENU_ID_VIEW_SWITCHBAR | MENU_ID_VIEW_TREEBAR => {
             let bar = view_menu_bar(command_id).expect("View items show and hide a bar");
             let command = if state_ref(hwnd).settings.settings().bar_shown(bar) {
@@ -934,6 +943,7 @@ pub(super) fn dialog_gesture(dialog: AutomationDialog) -> DialogGesture {
     match dialog {
         AutomationDialog::Options => DialogGesture::MenuCommand(MENU_ID_TOOLS_OPTIONS),
         AutomationDialog::Colors => DialogGesture::MenuCommand(MENU_ID_TOOLS_COLORS),
+        AutomationDialog::Aliases => DialogGesture::MenuCommand(MENU_ID_TOOLS_ALIASES),
         AutomationDialog::SelectServer => DialogGesture::MenuCommand(MENU_ID_FILE_SELECT_SERVER),
         AutomationDialog::About => DialogGesture::MenuCommand(MENU_ID_HELP_ABOUT),
         AutomationDialog::CommandsJoin => DialogGesture::MenuCommand(MENU_ID_COMMANDS_JOIN),
@@ -1405,6 +1415,10 @@ mod tests {
             (
                 AutomationDialog::Options,
                 DialogGesture::MenuCommand(MENU_ID_TOOLS_OPTIONS),
+            ),
+            (
+                AutomationDialog::Aliases,
+                DialogGesture::MenuCommand(MENU_ID_TOOLS_ALIASES),
             ),
             (
                 AutomationDialog::SelectServer,
