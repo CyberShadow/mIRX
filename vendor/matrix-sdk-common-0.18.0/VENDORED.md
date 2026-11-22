@@ -20,14 +20,14 @@ store at Log Out, which Windows refuses while the files are open.
 
 ## The fix
 
-A `Clone` for the guard that counts the new holder. Upstream (`main`, after
-0.19.1) fixed it by counting the holders as the `Weak` references the guards
-hold (`crates/matrix-sdk-common/src/cross_process_lock.rs`: "Every time
+A `Clone` for the guard that counts the new holder. Upstream fixed it by
+0.19 (0.19.1 has it) by counting the holders as the `Weak` references the
+guards hold (`crates/matrix-sdk-common/src/cross_process_lock.rs`: "Every time
 `CrossProcessLockGuard` is cloned, `Weak` is cloned, and thus the number of
 holders of `CrossProcessLockInner` increases").
 
 ## When to remove
 
-When upgrading to a matrix-sdk release that contains that fix: delete this
+When upgrading to matrix-sdk 0.19 or later: delete this
 directory and its line in `[patch.crates-io]` (and, with the last vendored
 crate, the section and the workspace's `exclude = ["vendor"]`).
