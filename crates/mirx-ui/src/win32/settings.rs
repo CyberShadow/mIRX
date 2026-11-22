@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use super::colors::{ColorItem, ColorScheme, PaletteIndex};
 use super::commands::is_user_id;
-use super::notify::NotifyList;
+use super::notify::{NotifyList, NotifySetting};
 use super::timestamp::{TimestampFormat, TimestampSetting};
 
 pub(super) const SETTINGS_FILE_NAME: &str = "mirx.ini";
@@ -101,8 +101,8 @@ pub(super) struct Settings {
     pub(super) other: OtherSetting,
     /// mIRC's Tools > Colors.
     pub(super) colors: ColorScheme,
-    /// mIRC's notify list: `/notify`.
-    pub(super) notify: NotifyList,
+    /// mIRC's notify list (`/notify`, the Address Book) and its option.
+    pub(super) notify: NotifySetting,
 }
 
 /// mIRC's Options > Connect > Options.
@@ -703,8 +703,11 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                     .colors
                     .set(item, parse_palette_index(value).map_err(error)?);
             }
+            (Section::Notify, "active") => {
+                settings.notify.active = parse_on_off(value, "active").map_err(error)?;
+            }
             (Section::Notify, key) => {
-                parse_notify_entry(&mut settings.notify, key, value).map_err(error)?;
+                parse_notify_entry(&mut settings.notify.list, key, value).map_err(error)?;
             }
             _ => return Err(error(format!("unknown key {key}"))),
         }
@@ -758,12 +761,16 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         .collect::<String>();
     let notify = settings
         .notify
+        .list
         .entries()
         .iter()
         .enumerate()
-        .map(|(index, entry)| match &entry.note {
-            Some(note) => format!("n{index}={} {note}\r\n", entry.user_id),
-            None => format!("n{index}={}\r\n", entry.user_id),
+        .map(|(index, entry)| {
+            let whois = if entry.whois { "+" } else { "" };
+            match &entry.note {
+                Some(note) => format!("n{index}={whois}{} {note}\r\n", entry.user_id),
+                None => format!("n{index}={whois}{}\r\n", entry.user_id),
+            }
         })
         .collect::<String>();
     format!(
@@ -782,7 +789,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
          [typing]\r\nsend={}\r\n\
          [other]\r\nbuffer={}\r\n\
          [colors]\r\n{colors}\
-         [notify]\r\n{notify}",
+         [notify]\r\nactive={}\r\n{notify}",
         font.face,
         font.points,
         on_off(settings.timestamp.show),
@@ -815,11 +822,12 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         settings.marker.color.get(),
         on_off(settings.typing.send),
         settings.other.window_buffer,
+        on_off(settings.notify.active),
     )
 }
 
-/// `[notify]`'s `n<i>=<user ID> [note]`: the keys count from `n0`, in
-/// list order, and a user is listed once.
+/// `[notify]`'s `n<i>=[+]<user ID> [note]` (`+`: perform `/whois`): the
+/// keys count from `n0`, in list order, and a user is listed once.
 fn parse_notify_entry(list: &mut NotifyList, key: &str, value: &str) -> Result<(), String> {
     let expected = format!("n{}", list.entries().len());
     if key != expected {
@@ -829,6 +837,9 @@ fn parse_notify_entry(list: &mut NotifyList, key: &str, value: &str) -> Result<(
         .trim()
         .split_once(char::is_whitespace)
         .map_or((value.trim(), ""), |(user_id, note)| (user_id, note.trim()));
+    let (whois, user_id) = user_id
+        .strip_prefix('+')
+        .map_or((false, user_id), |user_id| (true, user_id));
     if !is_user_id(user_id) {
         return Err(format!("{key} must start with a user ID"));
     }
@@ -838,6 +849,7 @@ fn parse_notify_entry(list: &mut NotifyList, key: &str, value: &str) -> Result<(
     list.add(
         user_id.to_owned(),
         (!note.is_empty()).then(|| note.to_owned()),
+        whois,
     );
     Ok(())
 }
@@ -932,7 +944,7 @@ mod tests {
         join=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\nnotice=5\r\nnotify=7\r\nother=6\r\nown=1\r\n\
         part=3\r\ntopic=3\r\neditbox=0\r\neditbox_text=1\r\nlistbox=0\r\nlistbox_text=1\r\n\
         gray=14\r\ntreebar=0\r\ntreebar_text=1\r\n\
-        [notify]\r\n";
+        [notify]\r\nactive=off\r\n";
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -1184,27 +1196,39 @@ mod tests {
 
     #[test]
     fn the_notify_list_round_trips_in_order_with_its_notes() {
-        let mut notify = NotifyList::default();
-        notify.add(
+        let mut list = NotifyList::default();
+        list.add(
             "@bob:example.org".to_owned(),
             Some("lunch buddy".to_owned()),
+            true,
         );
-        notify.add("@carol:example.org".to_owned(), None);
+        list.add("@carol:example.org".to_owned(), None, false);
         let settings = Settings {
-            notify,
+            notify: NotifySetting { list, active: true },
             ..Settings::default()
         };
         let text = to_ini(&settings);
-        assert!(
-            text.ends_with(
-                "[notify]\r\nn0=@bob:example.org lunch buddy\r\nn1=@carol:example.org\r\n"
-            )
-        );
+        assert!(text.ends_with(
+            "[notify]\r\nactive=on\r\nn0=+@bob:example.org lunch buddy\r\n\
+             n1=@carol:example.org\r\n"
+        ));
         assert_eq!(parse_ini(&text), Ok(settings.clone()));
         assert_eq!(
-            parse_ini("[Notify]\nN0= @bob:example.org   lunch buddy \nn1=@carol:example.org")
+            parse_ini(
+                "[Notify]\nN0= +@bob:example.org   lunch buddy \nn1=@carol:example.org\n\
+                 Active=ON"
+            )
+            .map(|parsed| parsed.notify),
+            Ok(settings.notify.clone())
+        );
+        // A file from before the option: off.
+        assert_eq!(
+            parse_ini("[notify]\nn0=+@bob:example.org lunch buddy\nn1=@carol:example.org")
                 .map(|parsed| parsed.notify),
-            Ok(settings.notify)
+            Ok(NotifySetting {
+                active: false,
+                ..settings.notify
+            })
         );
         for (text, error) in [
             ("[notify]\nn1=@bob:example.org", "line 2: expected n0"),
@@ -1215,6 +1239,20 @@ mod tests {
             ("[notify]\nnick=@bob:example.org", "line 2: expected n0"),
             ("[notify]\nn0=bob", "line 2: n0 must start with a user ID"),
             ("[notify]\nn0=", "line 2: n0 must start with a user ID"),
+            ("[notify]\nn0=+", "line 2: n0 must start with a user ID"),
+            (
+                "[notify]\nn0=+ @bob:example.org",
+                "line 2: n0 must start with a user ID",
+            ),
+            ("[notify]\nactive=yes", "line 2: active must be on or off"),
+            (
+                "[notify]\nactive=on\nactive=off",
+                "line 3: duplicate key active",
+            ),
+            (
+                "[notify]\nn0=@bob:example.org\nn1=+@bob:example.org",
+                "line 3: @bob:example.org is listed twice",
+            ),
             (
                 "[notify]\nn0=@bob:example.org\nn1=@bob:example.org friend",
                 "line 3: @bob:example.org is listed twice",
@@ -1239,7 +1277,7 @@ mod tests {
         };
         let text = to_ini(&settings);
         assert!(text.contains("[colors]\r\nbackground=1\r\naction=6\r\n"));
-        assert!(text.ends_with("treebar=0\r\ntreebar_text=15\r\n[notify]\r\n"));
+        assert!(text.ends_with("treebar=0\r\ntreebar_text=15\r\n[notify]\r\nactive=off\r\n"));
         assert_eq!(parse_ini(&text), Ok(settings));
         // Only some items: the rest keep mIRC's.
         let mut join = ColorScheme::default();

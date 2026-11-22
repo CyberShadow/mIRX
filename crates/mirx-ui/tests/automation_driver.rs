@@ -927,6 +927,17 @@ fn spawn_mock_homeserver_with_auth(
                 continue;
             }
 
+            // Bob's profile, for a whois; the SDK sends `@` and `:`
+            // unencoded.
+            if path == "/_matrix/client/v3/profile/@bob:example" {
+                respond_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({ "displayname": "Bob" }),
+                );
+                continue;
+            }
+
             // The user's presence: as Synapse, a GET reads what the last
             // PUT set.
             if path.starts_with("/_matrix/client/v3/presence/") && path.ends_with("/status") {
@@ -3969,8 +3980,105 @@ fn notify_says_when_a_listed_user_comes_and_goes() -> Result<(), Box<dyn std::er
     );
     let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
     assert!(
-        ini.ends_with("[notify]\r\nn0=@carol:example friend\r\n"),
+        ini.ends_with("[notify]\r\nactive=off\r\nn0=@carol:example friend\r\n"),
         "{ini}"
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The lines of the window `view` that contain `text`, without their
+/// timestamps.
+fn view_lines_with(
+    app: &MirxApp,
+    view: &ViewIdentity,
+    text: &str,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    Ok(find_view(&app.dump_ui_state()?, view)
+        .lines
+        .iter()
+        .filter(|line| line.contains(text))
+        .map(|line| {
+            line.split_once("] ")
+                .map_or(line.as_str(), |(_, text)| text)
+                .to_owned()
+        })
+        .collect())
+}
+
+/// Waits until the window `view` has `count` lines that contain `text`.
+fn wait_for_view_lines_with(
+    app: &MirxApp,
+    view: &ViewIdentity,
+    text: &str,
+    count: usize,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let lines = view_lines_with(app, view, text)?;
+        if lines.len() >= count {
+            return Ok(lines);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("{view:?} has {lines:?}, not {count} lines with {text:?}").into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// mIRC's `Perform /whois` (`+` in `n0=`) and `Show notifies in active
+/// window` (`active=on`): the active room says who came and went too, in
+/// the Notify colour, and a whois of a user who came prints there as a
+/// typed one; one who went is not whoised.
+#[test]
+fn whois_on_notify_and_notifies_in_the_active_window() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    write_settings(
+        &local_app_data,
+        "[notify]\r\nactive=on\r\nn0=+@bob:example\r\n",
+    )?;
+    let app = launch_saved_session(&local_app_data)?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let mark = server.request_count();
+
+    server.serve_presence(vec![bob_presence("online")])?;
+    wait_for_view_lines_with(&app, &beta, "End of /WHOIS list", 1)?;
+    assert_eq!(status_lines_with(&app, "Matrix")?, ["* Bob is on Matrix"]);
+    let whois = view_lines_with(&app, &beta, "* Bob ")?;
+    assert_eq!(
+        whois.first().map(String::as_str),
+        Some("* Bob is on Matrix")
+    );
+    assert!(
+        whois.contains(&"* Bob is @bob:example * Bob".to_owned()),
+        "{whois:?}"
+    );
+    server.serve_presence(vec![bob_presence("offline")])?;
+    wait_for_view_lines_with(&app, &beta, "has left Matrix", 1)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        status_lines_with(&app, "Matrix")?,
+        ["* Bob is on Matrix", "* Bob has left Matrix"]
+    );
+    assert_eq!(
+        view_lines_with(&app, &beta, "Matrix")?,
+        ["* Bob is on Matrix", "* Bob has left Matrix"]
+    );
+    assert_eq!(active_line_color(&app, "Bob has left Matrix")?, "#fc7f00");
+    let profile_gets = server
+        .requests_since(mark)
+        .into_iter()
+        .filter(|request| request.contains("/profile/"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        profile_gets,
+        ["GET /_matrix/client/v3/profile/@bob:example"]
     );
 
     drop(app);
@@ -8620,7 +8728,7 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
          invite=3\r\njoin=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\n\
          notice=5\r\nnotify=7\r\nother=6\r\nown=1\r\npart=3\r\ntopic=3\r\neditbox=0\r\n\
          editbox_text=1\r\nlistbox=0\r\nlistbox_text=1\r\ngray=14\r\n\
-         treebar=0\r\ntreebar_text=1\r\n[notify]\r\n"
+         treebar=0\r\ntreebar_text=1\r\n[notify]\r\nactive=off\r\n"
     );
     drop(app);
 

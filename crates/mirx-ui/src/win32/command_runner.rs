@@ -243,7 +243,7 @@ pub(super) unsafe fn run_slash_command(
             let lines = {
                 let state = state_ref(hwnd);
                 notify::list_lines(
-                    &state.settings.settings().notify,
+                    &state.settings.settings().notify.list,
                     |user_id| {
                         state
                             .notify_watch
@@ -257,18 +257,31 @@ pub(super) unsafe fn run_slash_command(
             echo_in_active_view(hwnd, lines)?;
             Ok(None)
         }
-        SlashCommand::Notify(NotifyCommand::Add { target, note }) => {
+        SlashCommand::Notify(NotifyCommand::Add {
+            target,
+            note,
+            whois,
+        }) => {
             let line = {
                 let state = state_mut(hwnd);
                 let user_id = user_target(&state.model, &target)?;
-                let mut list = state.settings.settings().notify.clone();
-                let added = list.add(user_id.clone(), note);
-                state.settings.update(|settings| settings.notify = list)?;
-                notify::added_line(added, &user_id, |user_id| known_nick(&state.model, user_id))
+                let mut list = state.settings.settings().notify.list.clone();
+                let added = list.add(user_id.clone(), note, whois);
+                let line = notify::added_line(
+                    added,
+                    list.get(&user_id).expect("the user was just listed"),
+                    |user_id| known_nick(&state.model, user_id),
+                );
+                state
+                    .settings
+                    .update(|settings| settings.notify.list = list)?;
+                line
             };
             echo_in_active_view(hwnd, [line])?;
             // As mIRC asks the server at once: a user on now is news.
-            announce_notify_changes(state_mut(hwnd));
+            announce_notify_changes(state_mut(hwnd))?;
+            let view = echo_view(&state_ref(hwnd).active_view);
+            refresh_view_content(hwnd, &view)?;
             Ok(Some("notify list saved".to_owned()))
         }
         SlashCommand::Notify(NotifyCommand::Remove { target }) => {
@@ -276,7 +289,7 @@ pub(super) unsafe fn run_slash_command(
                 let state = state_mut(hwnd);
                 let user_id = user_target(&state.model, &target)?;
                 let nick_of = |user_id: &str| known_nick(&state.model, user_id);
-                let mut list = state.settings.settings().notify.clone();
+                let mut list = state.settings.settings().notify.list.clone();
                 if !list.remove(&user_id) {
                     return Err(format!(
                         "{} is not on the notify list",
@@ -284,7 +297,9 @@ pub(super) unsafe fn run_slash_command(
                     ));
                 }
                 let line = notify::removed_line(&user_id, nick_of);
-                state.settings.update(|settings| settings.notify = list)?;
+                state
+                    .settings
+                    .update(|settings| settings.notify.list = list)?;
                 line
             };
             echo_in_active_view(hwnd, [line])?;
@@ -809,7 +824,7 @@ pub(super) unsafe fn report_error_line(hwnd: HWND, text: String) -> Result<(), S
 /// The window a command's lines print in: the active one. The Rooms List
 /// has no text of its own: what a Commands menu item run there prints goes
 /// to Status.
-fn echo_view(active_view: &ViewId) -> ViewId {
+pub(super) fn echo_view(active_view: &ViewId) -> ViewId {
     match active_view {
         ViewId::RoomList => ViewId::Status,
         view => view.clone(),
@@ -839,7 +854,7 @@ pub(super) fn echo_lines_in_view(
 
 /// Prints lines of `kind` in a window with text. The caller refreshes the
 /// window.
-fn push_lines_in_view(
+pub(super) fn push_lines_in_view(
     state: &mut WindowState,
     view: &ViewId,
     kind: StatusLineKind,
@@ -1965,7 +1980,7 @@ mod tests {
                     "/notify -r @carol:remote",
                     "/notify bob lunch buddy",
                     "/notify @carol:remote",
-                    "/notify Bob",
+                    "/notify +Bob",
                     "/notify -r @carol:remote",
                     "/notify -l",
                 ] {
@@ -1974,8 +1989,8 @@ mod tests {
                 assert_eq!(state_ref(hwnd).recorded_commands, vec![]);
                 assert_eq!(state_ref(hwnd).model.status, "notify list saved");
                 let mut list = NotifyList::default();
-                list.add("@bob:example".to_owned(), None);
-                assert_eq!(state_ref(hwnd).settings.settings().notify, list);
+                list.add("@bob:example".to_owned(), None, true);
+                assert_eq!(state_ref(hwnd).settings.settings().notify.list, list);
                 let lines = render_room_lines(state_ref(hwnd), "!ops:example");
                 assert_eq!(
                     &lines[lines.len() - 9..],
@@ -1985,10 +2000,10 @@ mod tests {
                         "[22:12] * /notify: @carol:remote is not on the notify list",
                         "[22:12] * Added Bob (@bob:example) to notify list",
                         "[22:12] * Added @carol:remote to notify list",
-                        "[22:12] * Updated Bob (@bob:example) in notify list",
+                        "[22:12] * Updated +Bob (@bob:example) in notify list",
                         "[22:12] * Removed @carol:remote from notify list",
                         "[22:12] * Notify list:",
-                        "[22:12] *   Bob (@bob:example)",
+                        "[22:12] *   +Bob (@bob:example)",
                     ]
                 );
             });

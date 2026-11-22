@@ -300,10 +300,10 @@ use command_runner::clear_window;
 #[cfg(test)]
 use command_runner::run_slash_command;
 use command_runner::{
-    devices_lines, echo_in_active_view, echo_lines_in_active_view, echo_lines_in_view,
-    enqueue_command, known_nick, open_room_link, own_server, report_command_error,
-    report_error_line, resolve_invite_command_room_id, resolve_joined_room_target,
-    run_local_command, send_edit, send_reply, set_local_command_status,
+    devices_lines, echo_in_active_view, echo_lines_in_active_view, echo_lines_in_view, echo_view,
+    enqueue_command, known_nick, open_room_link, own_server, push_lines_in_view,
+    report_command_error, report_error_line, resolve_invite_command_room_id,
+    resolve_joined_room_target, run_local_command, send_edit, send_reply, set_local_command_status,
     submit_accept_slash_command, submit_join_room, submit_part_slash_command,
     submit_query_slash_command, submit_redact_slash_command, submit_reject_slash_command,
     submit_room_notification_mode, whois_lines,

@@ -577,7 +577,7 @@ pub(super) fn apply_core_event(
         }
         Event::PresenceChanged(changes) => {
             state.model.presence.apply(changes);
-            announce_notify_changes(state);
+            announce_notify_changes(state)?;
         }
         Event::UserDevices(devices) => {
             let lines = devices_lines(&state.model, &devices, state.local_time);
@@ -777,7 +777,7 @@ pub(super) fn apply_core_event(
             state.model.last_error = None;
             // mIRC's notify on connect: who on the list is on.
             state.notify_watch.connected();
-            announce_notify_changes(state);
+            announce_notify_changes(state)?;
         }
         Event::SyncStopped(reason) => {
             let (kind, line) = match reason {
@@ -831,21 +831,34 @@ pub(super) fn apply_core_event(
 /// The server the signed-in session is on, as connection lines name it.
 /// Says in Status which notify list users came or went since the last
 /// time, by the presence the server shared; nothing while not connected.
-pub(super) fn announce_notify_changes(state: &mut WindowState) {
+/// With `Show notifies in active window` the active window says it too
+/// (once, when that is Status). An entry that performs `/whois` asks the
+/// server for the profile of a user who came, which the active window
+/// prints as a typed `/whois`. The caller refreshes the windows.
+pub(super) fn announce_notify_changes(state: &mut WindowState) -> Result<(), String> {
+    let notify = state.settings.settings().notify.clone();
     let presence = &state.model.presence;
-    let changes = state
-        .notify_watch
-        .update(&state.settings.settings().notify, |user_id| {
-            presence.is_on(user_id) == Some(true)
-        });
+    let changes = state.notify_watch.update(&notify.list, |user_id| {
+        presence.is_on(user_id) == Some(true)
+    });
+    let active_view = echo_view(&state.active_view);
     for (user_id, on) in changes {
-        let name = known_nick(&state.model, &user_id).unwrap_or(user_id);
-        log_status(
-            state,
-            StatusLineKind::Notify,
-            notify::change_text(&name, on),
-        );
+        let name = known_nick(&state.model, &user_id).unwrap_or_else(|| user_id.clone());
+        let text = notify::change_text(&name, on);
+        if notify.active && active_view != ViewId::Status {
+            let line = context_line(&text);
+            push_lines_in_view(state, &active_view, StatusLineKind::Notify, [line]);
+        }
+        log_status(state, StatusLineKind::Notify, text);
+        let entry = notify
+            .list
+            .get(&user_id)
+            .expect("a change is of a listed user");
+        if on && entry.whois {
+            enqueue_command(state, Command::FetchUserProfile(user_id))?;
+        }
     }
+    Ok(())
 }
 
 fn session_server(state: &WindowState) -> &str {
@@ -4941,7 +4954,7 @@ mod tests {
                 .settings
                 .update(|settings| {
                     for user_id in ["@carol:example", "@bob:example", "@dave:example"] {
-                        settings.notify.add(user_id.to_owned(), None);
+                        settings.notify.list.add(user_id.to_owned(), None, false);
                     }
                 })
                 .unwrap();
@@ -5012,7 +5025,81 @@ mod tests {
             apply_core_event(&mut state, presence("@bob:example", PresenceKind::Offline)).unwrap();
             assert_eq!(status_lines_since(&state, logged_out), []);
             // The list is the user's: it stays.
-            assert_eq!(state.settings.settings().notify.entries().len(), 3);
+            assert_eq!(state.settings.settings().notify.list.entries().len(), 3);
+        });
+    }
+
+    /// With `Show notifies in active window` the active room says it too,
+    /// Status once when it is active; an entry that performs `/whois`
+    /// asks for the profile of a user who came, not of one who went.
+    #[test]
+    fn notifies_in_the_active_window_and_whois_on_notify() {
+        with_local_app_data(|_| {
+            let mut state = test_state();
+            let (sender, commands) = inert_command_sender();
+            state.command_sender = Some(sender);
+            state
+                .settings
+                .update(|settings| {
+                    settings.notify.active = true;
+                    settings
+                        .notify
+                        .list
+                        .add("@bob:example".to_owned(), None, true);
+                    settings
+                        .notify
+                        .list
+                        .add("@carol:example".to_owned(), None, false);
+                })
+                .unwrap();
+            apply_core_event(
+                &mut state,
+                Event::LoggedIn {
+                    session: stored_session(),
+                    homeserver_url: "https://matrix.example".to_owned(),
+                },
+            )
+            .unwrap();
+            apply_core_event(
+                &mut state,
+                Event::SyncedRooms(vec![room("!ops:example", "Ops", false)]),
+            )
+            .unwrap();
+            state.active_view = ViewId::Room("!ops:example".to_owned());
+            apply_core_event(&mut state, Event::SyncConnected).unwrap();
+            let start = state.model.status_log.lines().len();
+            apply_core_event(&mut state, presence("@bob:example", PresenceKind::Online)).unwrap();
+            apply_core_event(&mut state, presence("@carol:example", PresenceKind::Online)).unwrap();
+            apply_core_event(&mut state, presence("@bob:example", PresenceKind::Offline)).unwrap();
+            let changes = [
+                "* @bob:example is on Matrix",
+                "* @carol:example is on Matrix",
+                "* @bob:example has left Matrix",
+            ];
+            assert_eq!(
+                status_lines_since(&state, start),
+                changes.map(|text| (StatusLineKind::Notify, text))
+            );
+            let room_lines = render_room_lines(&state, "!ops:example");
+            assert_eq!(
+                &room_lines[room_lines.len() - 3..],
+                changes.map(|text| format!("[22:12] {text}"))
+            );
+            assert_eq!(
+                state.recorded_commands,
+                [Command::FetchUserProfile("@bob:example".to_owned())]
+            );
+
+            // Status active: once.
+            state.active_view = ViewId::Status;
+            let start = state.model.status_log.lines().len();
+            apply_core_event(&mut state, presence("@bob:example", PresenceKind::Online)).unwrap();
+            assert_eq!(
+                status_lines_since(&state, start),
+                [(StatusLineKind::Notify, "* @bob:example is on Matrix")]
+            );
+            assert_eq!(state.recorded_commands.len(), 2);
+            drop(commands);
         });
     }
 

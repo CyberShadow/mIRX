@@ -7,6 +7,10 @@
 //! a room with them, and some servers share none: such users are never
 //! announced.
 //!
+//! An entry may also ask for a `/whois` when they come on (mIRC's
+//! `Perform /whois`, a `+` before the nick in `/notify`), and the lines
+//! may go to the active window too (`Show notifies in active window`).
+//!
 //! Pure code: the list, what was announced, and the lines. `nick_of` gives
 //! a user's nick where a known room has them as a member.
 
@@ -14,11 +18,31 @@ use std::collections::BTreeSet;
 
 use super::ignore::user_label;
 
+/// `mirx.ini`'s `[notify]`: the list and its display option.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct NotifySetting {
+    pub(super) list: NotifyList,
+    /// mIRC's `Show notifies in active window`: Status always says who
+    /// came and went; with this, the active window says it too.
+    pub(super) active: bool,
+}
+
 /// One listed user: mIRC's notify entry, by Matrix user ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct NotifyEntry {
     pub(super) user_id: String,
     pub(super) note: Option<String>,
+    /// mIRC's `Perform /whois`: a `/whois` when Status says they are on.
+    pub(super) whois: bool,
+}
+
+impl NotifyEntry {
+    /// The user as the list shows them: `+` first when the entry performs
+    /// `/whois`, as typed in `/notify`.
+    pub(super) fn label(&self, nick_of: impl Fn(&str) -> Option<String>) -> String {
+        let whois = if self.whois { "+" } else { "" };
+        format!("{whois}{}", user_label(&self.user_id, &nick_of))
+    }
 }
 
 /// The notify list, in the order added. A user is listed once.
@@ -29,23 +53,32 @@ pub(super) struct NotifyList(Vec<NotifyEntry>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Added {
     New,
-    /// The user was listed: their note is replaced.
+    /// The user was listed: their note and whois are replaced.
     Updated,
 }
 
 impl NotifyList {
-    /// Lists `user_id` with `note`, or replaces their note.
-    pub(super) fn add(&mut self, user_id: String, note: Option<String>) -> Added {
+    /// Lists `user_id` with `note` and `whois`, or replaces both.
+    pub(super) fn add(&mut self, user_id: String, note: Option<String>, whois: bool) -> Added {
         match self.0.iter_mut().find(|entry| entry.user_id == user_id) {
             Some(entry) => {
                 entry.note = note;
+                entry.whois = whois;
                 Added::Updated
             }
             None => {
-                self.0.push(NotifyEntry { user_id, note });
+                self.0.push(NotifyEntry {
+                    user_id,
+                    note,
+                    whois,
+                });
                 Added::New
             }
         }
+    }
+
+    pub(super) fn get(&self, user_id: &str) -> Option<&NotifyEntry> {
+        self.0.iter().find(|entry| entry.user_id == user_id)
     }
 
     /// Whether `user_id` was listed.
@@ -147,10 +180,7 @@ pub(super) fn list_lines(
                 Some(false) => " is not on Matrix",
                 None => "",
             };
-            format!(
-                "*   {}{presence}{note}",
-                user_label(&entry.user_id, &nick_of)
-            )
+            format!("*   {}{presence}{note}", entry.label(&nick_of))
         }))
         .collect()
 }
@@ -158,10 +188,10 @@ pub(super) fn list_lines(
 /// What `/notify <nick>` says it did.
 pub(super) fn added_line(
     added: Added,
-    user_id: &str,
+    entry: &NotifyEntry,
     nick_of: impl Fn(&str) -> Option<String>,
 ) -> String {
-    let label = user_label(user_id, &nick_of);
+    let label = entry.label(nick_of);
     match added {
         Added::New => format!("* Added {label} to notify list"),
         Added::Updated => format!("* Updated {label} in notify list"),
@@ -187,24 +217,39 @@ mod tests {
     fn a_user_is_listed_once_in_the_order_added() {
         let mut list = NotifyList::default();
         assert_eq!(
-            list.add("@bob:example".to_owned(), Some("lunch".to_owned())),
+            list.add("@bob:example".to_owned(), Some("lunch".to_owned()), false),
             Added::New
         );
-        assert_eq!(list.add("@carol:example".to_owned(), None), Added::New);
-        assert_eq!(list.add("@bob:example".to_owned(), None), Added::Updated);
+        assert_eq!(
+            list.add("@carol:example".to_owned(), None, true),
+            Added::New
+        );
+        // An update replaces the note and the whois.
+        assert_eq!(
+            list.add("@bob:example".to_owned(), None, true),
+            Added::Updated
+        );
+        assert_eq!(
+            list.add("@carol:example".to_owned(), None, false),
+            Added::Updated
+        );
         assert_eq!(
             list.entries(),
             [
                 NotifyEntry {
                     user_id: "@bob:example".to_owned(),
                     note: None,
+                    whois: true,
                 },
                 NotifyEntry {
                     user_id: "@carol:example".to_owned(),
                     note: None,
+                    whois: false,
                 },
             ]
         );
+        assert_eq!(list.get("@bob:example"), list.entries().first());
+        assert_eq!(list.get("@dave:example"), None);
         assert!(list.contains("@carol:example"));
         assert!(list.remove("@bob:example"));
         assert!(!list.remove("@bob:example"));
@@ -220,16 +265,20 @@ mod tests {
             list_lines(&list, unknown, nick_of),
             ["* Notify list is empty"]
         );
-        list.add("@bob:example".to_owned(), Some("lunch buddy".to_owned()));
-        list.add("@carol:example".to_owned(), None);
-        list.add("@dave:example".to_owned(), Some("work".to_owned()));
+        list.add(
+            "@bob:example".to_owned(),
+            Some("lunch buddy".to_owned()),
+            false,
+        );
+        list.add("@carol:example".to_owned(), None, true);
+        list.add("@dave:example".to_owned(), Some("work".to_owned()), true);
         assert_eq!(
             list_lines(&list, unknown, nick_of),
             [
                 "* Notify list:",
                 "*   Bob (@bob:example) - lunch buddy",
-                "*   @carol:example",
-                "*   @dave:example - work",
+                "*   +@carol:example",
+                "*   +@dave:example - work",
             ]
         );
         let is_on = |user_id: &str| match user_id {
@@ -242,8 +291,8 @@ mod tests {
             [
                 "* Notify list:",
                 "*   Bob (@bob:example) is on Matrix - lunch buddy",
-                "*   @carol:example is not on Matrix",
-                "*   @dave:example - work",
+                "*   +@carol:example is not on Matrix",
+                "*   +@dave:example - work",
             ]
         );
     }
@@ -251,7 +300,7 @@ mod tests {
     fn listed(user_ids: &[&str]) -> NotifyList {
         let mut list = NotifyList::default();
         for user_id in user_ids {
-            list.add((*user_id).to_owned(), None);
+            list.add((*user_id).to_owned(), None, false);
         }
         list
     }
@@ -329,7 +378,7 @@ mod tests {
         // she is news again.
         list.remove("@carol:example");
         assert_eq!(watch.update(&list, on_set(&[])), []);
-        list.add("@carol:example".to_owned(), None);
+        list.add("@carol:example".to_owned(), None, false);
         assert_eq!(
             watch.update(&list, on_set(&["@carol:example"])),
             [change("@carol:example", true)]
@@ -344,12 +393,21 @@ mod tests {
 
     #[test]
     fn changes_say_what_they_did() {
+        let entry = |user_id: &str, whois| NotifyEntry {
+            user_id: user_id.to_owned(),
+            note: None,
+            whois,
+        };
         assert_eq!(
-            added_line(Added::New, "@bob:example", nick_of),
+            added_line(Added::New, &entry("@bob:example", false), nick_of),
             "* Added Bob (@bob:example) to notify list"
         );
         assert_eq!(
-            added_line(Added::Updated, "@carol:example", nick_of),
+            added_line(Added::New, &entry("@bob:example", true), nick_of),
+            "* Added +Bob (@bob:example) to notify list"
+        );
+        assert_eq!(
+            added_line(Added::Updated, &entry("@carol:example", false), nick_of),
             "* Updated @carol:example in notify list"
         );
         assert_eq!(

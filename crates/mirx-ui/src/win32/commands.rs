@@ -37,10 +37,12 @@ pub(super) enum ComposeSubmission<'a> {
 pub(super) enum NotifyCommand {
     /// `/notify` or `/notify -l`.
     List,
-    /// `/notify <nick> [note]`: adds the user, or replaces their note.
+    /// `/notify [+]<nick> [note]`: adds the user, or replaces their note
+    /// and whois; `+` performs a `/whois` when they come on.
     Add {
         target: String,
         note: Option<String>,
+        whois: bool,
     },
     /// `/notify -r <nick>`.
     Remove { target: String },
@@ -1297,7 +1299,7 @@ fn parse_devices(argument: &str) -> Result<SlashCommand, CommandError> {
     }
 }
 
-/// `[-l]`, `-r <nick>` or `<nick> [note]`. mIRC's `-s`, `-h`, `-n` and
+/// `[-l]`, `-r <nick>` or `[+]<nick> [note]`. mIRC's `-s`, `-h`, `-n` and
 /// `on`/`off` are not mirx's: a user named `on` is given by their ID.
 fn parse_notify(argument: &str) -> Result<NotifyCommand, CommandError> {
     let (first, rest) = split_word(argument);
@@ -1312,10 +1314,19 @@ fn parse_notify(argument: &str) -> Result<NotifyCommand, CommandError> {
             "notify",
             format!("unknown switch {switch}"),
         )),
-        target => Ok(NotifyCommand::Add {
-            target: target.to_owned(),
-            note: (!rest.is_empty()).then(|| rest.to_owned()),
-        }),
+        target => {
+            let (whois, target) = target
+                .strip_prefix('+')
+                .map_or((false, target), |target| (true, target));
+            if target.is_empty() {
+                return Err(CommandError::insufficient_parameters("notify"));
+            }
+            Ok(NotifyCommand::Add {
+                target: target.to_owned(),
+                note: (!rest.is_empty()).then(|| rest.to_owned()),
+                whois,
+            })
+        }
     }
 }
 
@@ -3015,6 +3026,7 @@ mod tests {
             notify(NotifyCommand::Add {
                 target: "bob".to_owned(),
                 note: None,
+                whois: false,
             })
         );
         assert_eq!(
@@ -3022,8 +3034,19 @@ mod tests {
             notify(NotifyCommand::Add {
                 target: "@bob:example".to_owned(),
                 note: Some("lunch  buddy".to_owned()),
+                whois: false,
             })
         );
+        assert_eq!(
+            parse("/notify +bob lunch"),
+            notify(NotifyCommand::Add {
+                target: "bob".to_owned(),
+                note: Some("lunch".to_owned()),
+                whois: true,
+            })
+        );
+        assert_eq!(parse("/notify +"), insufficient("notify"));
+        assert_eq!(parse("/notify + bob"), insufficient("notify"));
         assert_eq!(
             parse("/notify -r bob"),
             notify(NotifyCommand::Remove {
