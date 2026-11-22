@@ -11513,6 +11513,81 @@ fn automation_driver_backfilled_messages_show_the_senders_display_name()
     Ok(())
 }
 
+/// A member who set no display name goes by their localpart, from the real
+/// core's member events through to the nick list, the timeline and Tab
+/// completion: never as `@ghost:example`, which reads as an op.
+#[test]
+fn automation_driver_a_member_without_a_display_name_goes_by_their_localpart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_homeserver(
+        MockMessages::Hang,
+        vec![
+            serde_json::json!({
+                "content": { "membership": "join" },
+                "event_id": "$ghost-member",
+                "origin_server_ts": 1_700_000_000_010u64,
+                "sender": "@ghost:example",
+                "state_key": "@ghost:example",
+                "type": "m.room.member"
+            }),
+            serde_json::json!({
+                "content": { "msgtype": "m.text", "body": "boo" },
+                "event_id": "$ghost-boo",
+                "origin_server_ts": 1_700_000_000_020u64,
+                "sender": "@ghost:example",
+                "type": "m.room.message"
+            }),
+        ],
+    )?;
+    // A saved session: it syncs on.
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    app.select_room("!beta:example")?;
+    app.wait_for_room_activity_contains(Some("!beta:example"), "boo", Duration::from_secs(30))?;
+    // The member list follows the sync on its own.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let ui_state = loop {
+        let ui_state = app.dump_ui_state()?;
+        let view = find_view(&ui_state, &room_identity("!beta:example"));
+        if view_member_labels(view).contains(&"ghost") {
+            break ui_state;
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("no ghost in {:?}", view_member_labels(view)).into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    };
+
+    let view = find_view(&ui_state, &room_identity("!beta:example"));
+    assert!(
+        !view_member_labels(view).contains(&"@ghost:example"),
+        "{:?}",
+        view_member_labels(view)
+    );
+    assert_eq!(
+        view_lines_containing(view, "ghost"),
+        vec![
+            "[22:13] * Joins: ghost (@ghost:example)",
+            "[22:13] <ghost> boo"
+        ]
+    );
+    app.set_compose_text("gh")?;
+    app.send_compose_key(ComposeKey::Tab)?;
+    assert_eq!(app.compose_text()?, "ghost");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 /// No server bundles reactions with a message: one that synced while its
 /// message was not loaded shows when history loads the message, from the
 /// client's event cache.
