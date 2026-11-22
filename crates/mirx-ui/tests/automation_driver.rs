@@ -8559,6 +8559,8 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
         )?;
         app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
         let mut events = close_lifecycle_events();
+        // A restore, so Status has lines (and counts the rooms).
+        events.insert(1, Event::RestoredSession);
         // 2023-11-14 22:13:20 UTC; the harness runs in UTC.
         events.push(text_event(
             "!beta:example",
@@ -21993,7 +21995,10 @@ fn clearall_clears_the_windows_its_switches_name() -> Result<(), Box<dyn std::er
     let options = launch_options(Some(local_app_data.clone()));
     let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
-    app.load_events(&serde_json::to_string(&base_events_with_a_query())?)?;
+    let mut events = base_events_with_a_query();
+    // A restore, so Status has lines (and counts the rooms).
+    events.insert(1, Event::RestoredSession);
+    app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
     let alpha = room_identity("!alpha:example");
     let beta = room_identity("!beta:example");
@@ -26112,8 +26117,7 @@ fn buffer_clear_on_the_window_menu_clears_that_window() -> Result<(), Box<dyn st
     // It clears the window whose menu it is, not the active one.
     let beta = view_child_hwnd(&app, &room_identity("!beta:example"))?;
     app.select_view(ViewIdentity::Status)?;
-    // The mock's sync logs its line in Status at no fixed moment.
-    wait_for_status_line(&app, "* Synced rooms: ", Duration::from_secs(10))?;
+    type_commands(&app, &["/echo -s a line of Status's own"])?;
     let status_lines = find_view(&app.dump_ui_state()?, &ViewIdentity::Status)
         .lines
         .clone();
