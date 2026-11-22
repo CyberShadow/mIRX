@@ -4310,8 +4310,8 @@ fn map_decimals((first, second, third): (u16, u16, u16)) -> VerificationDecimals
 }
 
 /// Runs continuous sync until it fails: the session's first contact (see
-/// `FirstContact`) and `SyncConnected` at the first response, then
-/// `SyncStopped` with why it ended.
+/// `FirstContact`), the response's presence and then `SyncConnected` at the
+/// first response, then `SyncStopped` with why it ended.
 ///
 /// The loop is the SDK's `sync_stream` (one `sync_once` after another, the
 /// first reusing the stored token, then `next_batch`, at most one a second
@@ -4337,17 +4337,20 @@ pub(crate) async fn sync_task(
             Err(err) => break err,
         };
         token = SyncToken::Specific(response.next_batch.clone());
-        if !connected {
+        let first = !connected;
+        if first {
             connected = true;
-            // Before SyncConnected: the UI's connected session has its
-            // rooms and its E2EE status.
             first_contact.complete(&client, &snapshots, &events).await;
+        }
+        emit_presence_changes(&events, &response.presence);
+        if first {
+            // The UI's connected session has its rooms, its E2EE status
+            // and the server's presence now, not the store's of last run.
             emit_event(&events, Event::SyncConnected);
         }
         // The server answers again.
         paused_sends.resume(&client);
         emit_member_snapshots_after_sync(&client, &response, &events).await;
-        emit_presence_changes(&events, &response.presence);
         // As the SDK's loop: not more than a request a second when the
         // server does not wait for news.
         let now = tokio::time::Instant::now();

@@ -5,6 +5,7 @@
 mod common;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::{Harness, alice_member_event};
@@ -67,19 +68,23 @@ fn change(user_id: &str, kind: PresenceKind, status_msg: Option<&str>) -> Presen
     }
 }
 
+/// What the server's syncs carry: set it to change their presence.
+type SyncPresence = Arc<Mutex<Vec<Raw<PresenceEvent>>>>;
+
 /// From now on the server answers every sync with `presence`, and nothing
-/// else.
-fn answer_syncs_with(harness: &Harness, presence: Vec<Raw<PresenceEvent>>) {
-    let mut sync = SyncResponseBuilder::new();
-    sync.add_presence_bulk(presence);
-    let body = sync.build_json_sync_response();
+/// else; the handle changes what the next syncs carry.
+fn answer_syncs_with(harness: &Harness, presence: Vec<Raw<PresenceEvent>>) -> SyncPresence {
+    let served = SyncPresence::new(Mutex::new(presence));
     let responses = AtomicUsize::new(0);
+    let serving = served.clone();
     // A new token each time: the SDK skips a response whose token it has.
     harness.mount(
         Mock::given(method("GET"))
             .and(path_regex(r"^/_matrix/client/v3/sync"))
             .respond_with(move |_: &Request| {
-                let mut body = body.clone();
+                let mut sync = SyncResponseBuilder::new();
+                sync.add_presence_bulk(serving.lock().expect("sync presence").clone());
+                let mut body = sync.build_json_sync_response();
                 body["next_batch"] = json!(format!(
                     "loop-{}",
                     responses.fetch_add(1, Ordering::Relaxed)
@@ -88,6 +93,7 @@ fn answer_syncs_with(harness: &Harness, presence: Vec<Raw<PresenceEvent>>) {
             })
             .with_priority(1),
     );
+    served
 }
 
 /// Starts the sync: the events of its first response, up to
@@ -259,6 +265,68 @@ fn the_first_snapshot_carries_stored_presence() {
     assert_eq!(
         presence_events(&events),
         Vec::<&Vec<_>>::new(),
+        "{events:#?}"
+    );
+
+    harness.shut_down();
+}
+
+/// The events of a sync task up to its `SyncConnected`.
+fn until_connected(harness: &Harness) -> Vec<Event> {
+    harness.send(Command::StartSync);
+    harness.events_until("SyncConnected", |event| *event == Event::SyncConnected)
+}
+
+/// A restart's first sync response says Bob went offline while mirx was
+/// away: the UI hears it before `SyncConnected`, not after a store seed
+/// that still says he is online.
+#[test]
+fn the_first_responses_presence_comes_before_sync_connected() {
+    let (harness, _) = restored(vec![presence("@bob:example.org", "online", None)]);
+    let (harness, restore) = harness.restarted();
+    assert_eq!(
+        presence_events(&restore),
+        [&vec![change(
+            "@bob:example.org",
+            PresenceKind::Online,
+            None
+        )]],
+        "{restore:#?}"
+    );
+    answer_syncs_with(
+        &harness,
+        vec![presence("@bob:example.org", "offline", None)],
+    );
+
+    let events = until_connected(&harness);
+
+    let offline = change("@bob:example.org", PresenceKind::Offline, None);
+    assert!(
+        presence_events(&events).contains(&&vec![offline]),
+        "{events:#?}"
+    );
+
+    harness.shut_down();
+}
+
+/// The same for every sync task: a reconnect's first response's presence
+/// comes before its `SyncConnected`.
+#[test]
+fn a_reconnects_first_presence_comes_before_sync_connected() {
+    let (harness, _) = restored(Vec::new());
+    let served = answer_syncs_with(&harness, vec![presence("@bob:example.org", "online", None)]);
+    until_connected(&harness);
+    harness.send(Command::StopSync);
+    harness.wait_for("SyncStopped", |event| {
+        matches!(event, Event::SyncStopped(_))
+    });
+    *served.lock().expect("sync presence") = vec![presence("@bob:example.org", "offline", None)];
+
+    let events = until_connected(&harness);
+
+    let offline = change("@bob:example.org", PresenceKind::Offline, None);
+    assert!(
+        presence_events(&events).contains(&&vec![offline]),
         "{events:#?}"
     );
 

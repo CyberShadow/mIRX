@@ -2276,7 +2276,8 @@ pub enum Event {
     RestoredSession,
     SyncStarted,
     /// The sync task's first successful response: the server answers.
-    /// Once per `SyncStarted`.
+    /// Once per `SyncStarted`, after the response's rooms, E2EE status
+    /// and presence have been sent.
     SyncConnected,
     SyncStopped(SyncStopReason),
     SyncedRooms(Vec<RoomSummary>),
