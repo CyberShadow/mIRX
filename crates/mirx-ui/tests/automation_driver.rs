@@ -3666,7 +3666,6 @@ fn automation_driver_lifecycle_commands_are_submitted_in_render_state_mode()
     Ok(())
 }
 
-const MENU_ID_FILE_CONNECT: usize = 40030;
 const MENU_ID_FILE_DISCONNECT: usize = 40031;
 const LOGIN_DIALOG_CANCEL_ID: usize = 5006;
 const CONNECT_HINT: &str = "* Not connected. Use File > Select Server... (Alt+E) or /server to connect to a Matrix homeserver";
@@ -4403,10 +4402,7 @@ fn startup_with_connect_on_startup_off_restores_without_syncing()
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
     write_saved_session(&local_app_data, &server.base_url)?;
-    fs::write(
-        settings_file_path(&local_app_data),
-        "[connect]\r\nstartup=off\r\n",
-    )?;
+    write_settings(&local_app_data, "[connect]\r\nstartup=off\r\n")?;
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let app = launch_app_with_options(
@@ -4510,10 +4506,7 @@ fn a_restart_with_connect_on_startup_off_shows_the_rooms_and_asks_nothing()
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
     run_once_and_close(&local_app_data, &server)?;
-    fs::write(
-        settings_file_path(&local_app_data),
-        "[connect]\r\nstartup=off\r\n",
-    )?;
+    write_settings(&local_app_data, "[connect]\r\nstartup=off\r\n")?;
     let mark = server.request_count();
 
     let app = launch_with_saved_session(&local_app_data)?;

@@ -610,6 +610,58 @@ fn a_restart_restores_the_session_and_catches_up() -> Result<(), Box<dyn Error>>
     finish(app, &local_app_data)
 }
 
+/// With connect on startup off, a restart shows the room and Bob in its
+/// nick list from the store a real server filled, before connecting; what
+/// Bob said meanwhile comes with File > Connect.
+#[test]
+fn a_restart_with_connect_on_startup_off_shows_the_rooms_it_had() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let bob = homeserver.register("bob", "Bob");
+    let alice = homeserver.register("alice", "Alice");
+    let alias_localpart = unique_name("lobby");
+    let room_id = bob.create_public_room("Lobby", &alias_localpart);
+    let room = room_identity(room_id.as_str());
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_live_app(&local_app_data)?;
+    sign_in(&app, &homeserver, &alice)?;
+    join_by_address(&app, &format!("#{alias_localpart}:localhost"), &room_id)?;
+    bob.wait_for_member(&room_id, alice.user_id());
+    bob.send_text(&room_id, "before the restart");
+    wait_for_view_line(&app, &room, "<Bob> before the restart")?;
+    assert!(app.close(Duration::from_secs(30))?.success());
+    write_settings(&local_app_data, "[connect]\r\nstartup=off\r\n")?;
+
+    bob.send_text(&room_id, "while mirx was closed");
+    // Not launch_live_app: the restore starts before the core reports
+    // Started, so the lifecycle never shows core_started.
+    let app = launch_app_with_options(
+        &mirx_ui_exe(),
+        &["--automation".into()],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("signed_in", TIMEOUT)?;
+    let ui_state = app.wait_for_ui_state("the room and Bob", TIMEOUT, |ui_state| {
+        ui_state.mdi.views.iter().any(|view| {
+            view.identity == room
+                && view
+                    .members
+                    .iter()
+                    .any(|member| member.user_id == bob.user_id().as_str())
+        })
+    })?;
+    assert!(
+        !view_contains(find_view(&ui_state, &room), "while mirx was closed"),
+        "{:?}",
+        find_view(&ui_state, &room).lines
+    );
+    assert_eq!(app.dump_model()?.connection, "signed_in");
+
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+    wait_for_view_line(&app, &room, "<Bob> while mirx was closed")?;
+
+    finish(app, &local_app_data)
+}
+
 /// The recovery passphrase L6 sets up and recovers with.
 const RECOVERY_PASSPHRASE: &str = "live lane recovery passphrase";
 

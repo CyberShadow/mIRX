@@ -54,15 +54,23 @@ pub fn settings_file_path(local_app_data: &Path) -> PathBuf {
         .join("mirx.ini")
 }
 
+/// Writes `ini` as the whole settings file.
+pub fn write_settings(local_app_data: &Path, ini: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let path = settings_file_path(local_app_data);
+    fs::create_dir_all(path.parent().ok_or("the settings file has a folder")?)?;
+    fs::write(path, ini)?;
+    Ok(())
+}
+
 /// `connect` is the `[connect]` section's keys after `startup`.
 pub fn write_connect_settings(
     local_app_data: &Path,
     connect: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let path = settings_file_path(local_app_data);
-    fs::create_dir_all(path.parent().ok_or("the settings file has a folder")?)?;
-    fs::write(path, format!("[connect]\r\nstartup=on\r\n{connect}"))?;
-    Ok(())
+    write_settings(
+        local_app_data,
+        &format!("[connect]\r\nstartup=on\r\n{connect}"),
+    )
 }
 
 pub fn launch_options(local_app_data: Option<PathBuf>) -> LaunchOptions {
@@ -172,6 +180,7 @@ pub fn wide_null(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+pub const MENU_ID_FILE_CONNECT: usize = 40030;
 pub const MENU_ID_FILE_SELECT_SERVER: usize = 40032;
 pub const MENU_ID_FILE_LOG_OUT: usize = 40004;
 pub const LOGIN_DIALOG_SERVER_ID: i32 = 5001;
