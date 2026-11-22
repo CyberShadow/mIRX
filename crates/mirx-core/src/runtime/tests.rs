@@ -1579,8 +1579,13 @@ async fn mock_dead_refresh(mock_server: &MatrixMockServer) {
 }
 
 /// A server that signs `example` in as this device, with a refresh token
-/// if `refresh_token`, and answers every `/sync` with nothing.
-async fn mount_sign_in(mock_server: &MatrixMockServer, device_id: &str, refresh_token: bool) {
+/// if `refresh_token`, and answers every `/sync` with `sync`.
+async fn mount_sign_in(
+    mock_server: &MatrixMockServer,
+    device_id: &str,
+    refresh_token: bool,
+    sync: impl FnOnce(&mut matrix_sdk_test::SyncResponseBuilder),
+) {
     mock_server.mock_versions().ok().mount().await;
     let mut login = (*matrix_sdk_test::test_json::LOGIN).clone();
     login["device_id"] = serde_json::json!(device_id);
@@ -1592,7 +1597,7 @@ async fn mount_sign_in(mock_server: &MatrixMockServer, device_id: &str, refresh_
         .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(login))
         .mount()
         .await;
-    mock_server.mock_sync().ok(|_| {}).mount().await;
+    mock_server.mock_sync().ok(sync).mount().await;
 }
 
 fn profile_config(profile: &tempfile::TempDir) -> CoreConfig {
@@ -1631,7 +1636,16 @@ async fn signed_in_core(
     mock_server: &MatrixMockServer,
     refresh_token: bool,
 ) -> (tempfile::TempDir, Core, mpsc::Receiver<Event>) {
-    mount_sign_in(mock_server, "GHTYAJCE", refresh_token).await;
+    signed_in_core_with(mock_server, refresh_token, |_| {}).await
+}
+
+/// The same, with `sync` the answer to every `/sync`.
+async fn signed_in_core_with(
+    mock_server: &MatrixMockServer,
+    refresh_token: bool,
+    sync: impl FnOnce(&mut matrix_sdk_test::SyncResponseBuilder),
+) -> (tempfile::TempDir, Core, mpsc::Receiver<Event>) {
+    mount_sign_in(mock_server, "GHTYAJCE", refresh_token, sync).await;
     let profile = tempfile::TempDir::new().expect("temporary profile directory");
     let (event_tx, event_rx) = mpsc::channel::<Event>();
     let mut core = Core::new(profile_config(&profile), event_tx);
@@ -1678,7 +1692,7 @@ fn signing_in_after_logging_out_starts_a_new_session() {
             vec![Event::LoggedOut]
         );
         let second_server = MatrixMockServer::new().await;
-        mount_sign_in(&second_server, "NEWDEVICE", false).await;
+        mount_sign_in(&second_server, "NEWDEVICE", false, |_| {}).await;
 
         let device_id = sign_in(&mut core, &event_rx, &second_server).await;
 
@@ -1695,13 +1709,13 @@ fn a_sign_in_clears_a_store_left_without_its_session() {
     run_local(async {
         let profile = tempfile::TempDir::new().expect("temporary profile directory");
         let first_server = MatrixMockServer::new().await;
-        mount_sign_in(&first_server, "GHTYAJCE", false).await;
+        mount_sign_in(&first_server, "GHTYAJCE", false, |_| {}).await;
         let (event_tx, event_rx) = mpsc::channel::<Event>();
         let mut core = Core::new(profile_config(&profile), event_tx.clone());
         sign_in(&mut core, &event_rx, &first_server).await;
         core.stop().await;
         let second_server = MatrixMockServer::new().await;
-        mount_sign_in(&second_server, "NEWDEVICE", false).await;
+        mount_sign_in(&second_server, "NEWDEVICE", false, |_| {}).await;
         let mut core = Core::new(profile_config(&profile), event_tx);
 
         let device_id = sign_in(&mut core, &event_rx, &second_server).await;
@@ -1786,18 +1800,42 @@ fn open_files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 
 /// A logged-out session's client is gone, so its store is closed: Windows
 /// would refuse to delete open files. (matrix-sdk 0.18 kept every client
-/// that synced with the event cache subscribed: see vendor/.)
+/// that synced with the event cache subscribed, and the event cache store
+/// of one that synced a room: see vendor/.)
 #[cfg(target_os = "linux")]
 #[test]
 fn logging_out_closes_the_sessions_store() {
     run_local(async {
         let mock_server = MatrixMockServer::new().await;
-        let (profile, mut core, event_rx) = signed_in_core(&mock_server, false).await;
-        mock_logout(
-            &mock_server,
-            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({})),
-        )
+        // In a room, as a session is.
+        mock_server
+            .mock_room_state_encryption()
+            .expect_any_access_token()
+            .plain()
+            .mount()
+            .await;
+        mock_server
+            .mock_get_members()
+            .expect_any_access_token()
+            .ok(logged_in_user_room_members())
+            .mount()
+            .await;
+        let (profile, mut core, event_rx) = signed_in_core_with(&mock_server, false, |sync| {
+            sync.add_joined_room(
+                JoinedRoomBuilder::new(room_id().as_ref())
+                    .add_state_bulk(logged_in_user_room_members()),
+            );
+        })
         .await;
+        mock_logout(&mock_server, logged_out()).await;
+        run(&mut core, Command::StartSync).await;
+        loop {
+            match next_event(&event_rx).await {
+                Event::SyncConnected => break,
+                Event::E2eeStatus(_) | Event::SyncStarted => {}
+                other => panic!("expected the sync to connect, got {other:?}"),
+            }
+        }
         assert!(!open_files_under(profile.path()).is_empty());
 
         run(&mut core, Command::Logout).await;

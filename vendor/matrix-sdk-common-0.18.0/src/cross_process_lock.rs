@@ -132,7 +132,7 @@ enum WaitingTime {
 ///
 /// The lock will be automatically released a short period of time after all the
 /// guards have dropped.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 #[must_use = "If unused, the `CrossProcessLock` will unlock at the end of the lease"]
 pub struct CrossProcessLockGuard {
     /// A clone of [`CrossProcessLock::num_holders`].
@@ -164,6 +164,17 @@ impl CrossProcessLockGuard {
     /// marking that it has recovered.
     pub fn clear_dirty(&self) {
         self.is_dirty.store(false, Ordering::SeqCst);
+    }
+}
+
+/// A clone is one more holder, as its drop is one fewer (mirx's backport:
+/// with a derived `Clone` the count wrapped below zero, and the lease
+/// extension task never stopped). The lock is held while `self` is, so the
+/// task cannot be ending now.
+impl Clone for CrossProcessLockGuard {
+    fn clone(&self) -> Self {
+        self.num_holders.fetch_add(1, Ordering::SeqCst);
+        Self { num_holders: self.num_holders.clone(), is_dirty: self.is_dirty.clone() }
     }
 }
 
