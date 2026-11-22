@@ -267,6 +267,21 @@ fn retry_decryption_of_shown_lines(state: &mut WindowState) -> Result<(), String
     Ok(())
 }
 
+/// Whether the session's state that tells why a line could not be
+/// decrypted changed: its verification, its key backup, or whether the
+/// server has one. Then the shown lines are read again, and decrypt or
+/// take their current cause (no line keeps saying "/verify" once you
+/// did). Lines made before the first status were told by the core with
+/// the live state already. A status that did not ask the server
+/// (`exists_on_server: None`) differs from one that did; the retry it
+/// costs changes nothing.
+fn decryption_context_changed(last: &E2eeStatus, new: &E2eeStatus) -> bool {
+    last.session != new.session
+        || last.backup.state != new.backup.state
+        || last.backup.enabled_locally != new.backup.enabled_locally
+        || last.backup.exists_on_server != new.backup.exists_on_server
+}
+
 /// The room's history load failed. An error for a room that is not loading
 /// (it was left, or the user cleared it meanwhile) changes nothing.
 fn apply_backfill_room_history_error(state: &mut WindowState, room_id: &str, message: String) {
@@ -576,8 +591,16 @@ pub(super) fn apply_core_event(
             for (kind, line) in status_log::e2ee_status(&status) {
                 log_status(state, kind, line);
             }
+            let context_changed = state
+                .model
+                .last_e2ee_status
+                .as_ref()
+                .is_some_and(|last| decryption_context_changed(last, &status));
             state.model.last_e2ee_status = Some(status);
             state.model.status = "e2ee status updated".to_owned();
+            if context_changed {
+                retry_decryption_of_shown_lines(state)?;
+            }
         }
         Event::RoomKeysExported { path } => {
             log_status(
@@ -5886,6 +5909,68 @@ mod tests {
                 event_ids: vec!["$again".to_owned(), "$olm".to_owned(), "$secret".to_owned()],
             })]
         );
+    }
+
+    /// Why a line could not be decrypted depends on this session's
+    /// verification and key backup: when either changes, the shown lines
+    /// are read again. The first status, an equal one, or one that differs
+    /// elsewhere (recovery, cross-signing) asks nothing.
+    #[test]
+    fn a_changed_session_state_retries_the_shown_undecrypted_lines() {
+        let mut state = undecrypted_state();
+        let (sender, _commands) = inert_command_sender();
+        state.command_sender = Some(sender);
+        state.model.connection = ConnectionState::Syncing;
+        let unverified = E2eeStatus {
+            session: E2eeSessionState::Unverified,
+            ..e2ee_status(
+                E2eeRecoveryState::Disabled,
+                E2eeBackupState::Unknown,
+                false,
+                Some(true),
+                Some(true),
+            )
+        };
+        let retry = Command::RetryDecryption(RetryDecryptionRequest {
+            room_id: "!ops:example".to_owned(),
+            event_ids: vec!["$secret".to_owned()],
+        });
+        let status_then = |state: &mut WindowState, status: &E2eeStatus| {
+            state.recorded_commands.clear();
+            apply_core_event(state, Event::E2eeStatus(status.clone())).unwrap();
+            std::mem::take(&mut state.recorded_commands)
+        };
+
+        assert_eq!(status_then(&mut state, &unverified), [], "the first");
+        assert_eq!(status_then(&mut state, &unverified), [], "the same");
+        let recovery = E2eeStatus {
+            recovery: E2eeRecoveryState::Incomplete,
+            cross_signing: None,
+            ..unverified.clone()
+        };
+        assert_eq!(status_then(&mut state, &recovery), [], "nothing it reads");
+        let verified = E2eeStatus {
+            session: E2eeSessionState::Verified,
+            ..recovery.clone()
+        };
+        assert_eq!(status_then(&mut state, &verified), vec![retry.clone()]);
+        let no_backup = E2eeStatus {
+            backup: mirx_core::E2eeBackupStatus {
+                exists_on_server: Some(false),
+                ..verified.backup.clone()
+            },
+            ..verified.clone()
+        };
+        assert_eq!(status_then(&mut state, &no_backup), vec![retry.clone()]);
+        let enabled = E2eeStatus {
+            backup: mirx_core::E2eeBackupStatus {
+                state: E2eeBackupState::Enabled,
+                enabled_locally: true,
+                exists_on_server: Some(true),
+            },
+            ..no_backup.clone()
+        };
+        assert_eq!(status_then(&mut state, &enabled), vec![retry]);
     }
 
     #[test]
