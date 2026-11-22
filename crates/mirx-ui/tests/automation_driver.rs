@@ -18350,7 +18350,7 @@ fn help_topics_echoes_command_list() -> Result<(), Box<dyn std::error::Error>> {
     invoke_account_menu_command(&app, MENU_ID_HELP_TOPICS)?;
     assert!(status_view_contains(
         &app,
-        "* Commands: /accept /ame /amsg /away /back /ban"
+        "* Commands: /accept /alias /ame /amsg /away /back /ban"
     )?);
     assert!(status_view_contains(&app, " /join ")?);
 
