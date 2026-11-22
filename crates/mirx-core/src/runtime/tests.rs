@@ -1542,6 +1542,151 @@ fn login_without_start_sync_leaves_sync_idle() {
     });
 }
 
+/// The server's answer when it no longer knows a token.
+fn unknown_token(error: &str) -> wiremock::ResponseTemplate {
+    wiremock::ResponseTemplate::new(401).set_body_json(serde_json::json!({
+        "errcode": "M_UNKNOWN_TOKEN",
+        "error": error,
+        "soft_logout": false,
+    }))
+}
+
+/// The events but the E2EE status, which the session's start reports
+/// as it comes.
+fn without_e2ee_status(events: Vec<Event>) -> Vec<Event> {
+    events
+        .into_iter()
+        .filter(|event| !matches!(event, Event::E2eeStatus(_)))
+        .collect()
+}
+
+async fn mock_logout(mock_server: &MatrixMockServer, answer: wiremock::ResponseTemplate) {
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/_matrix/client/v3/logout"))
+        .respond_with(answer)
+        .mount(mock_server.server())
+        .await;
+}
+
+/// The server refuses the refresh token: it ended the session.
+async fn mock_dead_refresh(mock_server: &MatrixMockServer) {
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/_matrix/client/v3/refresh"))
+        .respond_with(unknown_token("Invalid refresh token"))
+        .expect(1..)
+        .mount(mock_server.server())
+        .await;
+}
+
+/// A core signed in with a password, without sync; the server's login
+/// answer has a refresh token if `refresh_token`.
+async fn signed_in_core(
+    mock_server: &MatrixMockServer,
+    refresh_token: bool,
+) -> (tempfile::TempDir, Core, mpsc::Receiver<Event>) {
+    mock_server.mock_versions().ok().mount().await;
+    let mut login = (*matrix_sdk_test::test_json::LOGIN).clone();
+    if refresh_token {
+        login["refresh_token"] = serde_json::json!("RT1");
+    }
+    mock_server
+        .mock_login()
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(login))
+        .mount()
+        .await;
+    mock_server.mock_sync().ok(|_| {}).mount().await;
+    let profile = tempfile::TempDir::new().expect("temporary profile directory");
+    let config = CoreConfig {
+        profile_dir: profile.path().join("profile"),
+        store_passphrase: "test-store-passphrase".to_owned(),
+    };
+    let (event_tx, event_rx) = mpsc::channel::<Event>();
+    let mut core = Core::new(config, event_tx);
+    run(&mut core, Command::Login(login_request(mock_server, false))).await;
+    let events = drain_events(&event_rx);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::LoggedIn { .. })),
+        "{events:?}"
+    );
+    (profile, core, event_rx)
+}
+
+/// Logging out asks the server to end the session: one it already ended
+/// is logged out.
+#[test]
+fn logging_out_a_session_the_server_ended_logs_out() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        let (_profile, mut core, event_rx) = signed_in_core(&mock_server, false).await;
+        mock_logout(&mock_server, unknown_token("Invalid token")).await;
+
+        run(&mut core, Command::Logout).await;
+
+        assert_eq!(
+            without_e2ee_status(drain_events(&event_rx)),
+            vec![Event::LoggedOut]
+        );
+        core.stop().await;
+    });
+}
+
+/// The SDK tries the refresh token on the logout's 401; the server refuses
+/// it too.
+#[test]
+fn logging_out_with_a_dead_refresh_token_logs_out() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        let (_profile, mut core, event_rx) = signed_in_core(&mock_server, true).await;
+        mock_logout(&mock_server, unknown_token("Invalid token")).await;
+        mock_dead_refresh(&mock_server).await;
+
+        run(&mut core, Command::Logout).await;
+
+        assert_eq!(
+            without_e2ee_status(drain_events(&event_rx)),
+            vec![Event::LoggedOut]
+        );
+        core.stop().await;
+    });
+}
+
+/// Signed out elsewhere, a session with a refresh token gets a 401 on its
+/// sync, and a 401 on the refresh the SDK tries: the session ended, so no
+/// reconnect could help.
+#[test]
+fn sync_with_a_dead_refresh_token_stops_with_session_ended() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        let (_profile, mut core, event_rx) = signed_in_core(&mock_server, true).await;
+        // Ahead of the sign-in's mock.
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(unknown_token("Invalid token"))
+            .with_priority(1)
+            .mount(mock_server.server())
+            .await;
+        mock_dead_refresh(&mock_server).await;
+
+        run(&mut core, Command::StartSync).await;
+
+        let stopped = loop {
+            match next_event(&event_rx).await {
+                Event::E2eeStatus(_) | Event::SyncStarted => {}
+                event => break event,
+            }
+        };
+        match stopped {
+            Event::SyncStopped(SyncStopReason::SessionEnded(message)) => {
+                assert!(message.contains("Invalid refresh token"), "{message}");
+            }
+            other => panic!("expected a session-ended sync stop, got {other:?}"),
+        }
+        core.stop().await;
+    });
+}
+
 /// The mock login's user and Bob, joined, as state or member events.
 fn logged_in_user_room_members<T>() -> Vec<Raw<T>> {
     ["@cheeky_monkey:matrix.org", "@bob:example.org"]

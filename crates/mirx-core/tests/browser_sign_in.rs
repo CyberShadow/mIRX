@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use matrix_sdk::test_utils::mocks::MatrixMockServer;
 use mirx_core::{
     Command, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginMethod, LoginRequest, Operation,
-    RestoreSessionRequest, SessionAuth, StoredSession, start,
+    RestoreSessionRequest, SessionAuth, StoredSession, SyncStopReason, start,
 };
 use tempfile::TempDir;
 use url::Url;
@@ -267,6 +267,38 @@ fn a_restored_oauth_session_saves_its_refreshed_tokens() {
         Event::SessionUpdated {
             session: oauth_session("AT2", "RT2"),
         }
+    );
+    harness.shut_down();
+}
+
+/// Signed out elsewhere, an OAuth 2.0 session's sync gets a 401, and the
+/// authorization server refuses its refresh token: the session ended.
+#[test]
+fn an_oauth_session_whose_refresh_is_refused_ends() {
+    let harness = Harness::new(async |server| {
+        server.mock_versions().ok().mount().await;
+        server.oauth().mock_server_metadata().ok().mount().await;
+        // The restore's sync; the next ones find the token gone.
+        server.mock_sync().ok(|_| {}).up_to_n_times(1).mount().await;
+        server.mock_sync().error_unknown_token(false).mount().await;
+        server
+            .oauth()
+            .mock_token()
+            .invalid_grant()
+            .expect(1..)
+            .mount()
+            .await;
+    });
+
+    restore(&harness, oauth_session("AT1", "RT1"));
+    harness.wait_for("RestoredSession", |event| *event == Event::RestoredSession);
+    harness.send(Command::StartSync);
+    let stopped = harness.wait_for("SyncStopped", |event| {
+        matches!(event, Event::SyncStopped(_))
+    });
+    assert!(
+        matches!(stopped, Event::SyncStopped(SyncStopReason::SessionEnded(_))),
+        "{stopped:?}"
     );
     harness.shut_down();
 }

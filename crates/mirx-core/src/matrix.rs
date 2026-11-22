@@ -12,7 +12,8 @@ use std::pin::Pin;
 
 use futures_util::{Stream, StreamExt};
 use matrix_sdk::{
-    Client, Room, RoomMemberships, SessionChange, SessionMeta, SessionTokens,
+    Client, HttpError, RefreshTokenError, Room, RoomMemberships, SessionChange, SessionMeta,
+    SessionTokens,
     attachment::{
         AttachmentConfig, AttachmentInfo, BaseAudioInfo, BaseFileInfo, BaseImageInfo, BaseVideoInfo,
     },
@@ -20,8 +21,8 @@ use matrix_sdk::{
         AuthApi, AuthSession,
         matrix::MatrixSession,
         oauth::{
-            ClientId, ClientRegistrationData, OAuthSession, UserSession,
-            error::OAuthDiscoveryError,
+            ClientId, ClientRegistrationData, OAuthError, OAuthSession, UserSession,
+            error::{BasicErrorResponseType, OAuthDiscoveryError, RequestTokenError},
             registration::{ApplicationType, ClientMetadata, Localized, OAuthGrantType},
         },
     },
@@ -4361,13 +4362,46 @@ fn presence_kind(presence: &PresenceState) -> Result<PresenceKind, MatrixCoreErr
     }
 }
 
-/// Only a token the server no longer accepts is final; mIRC retries any
-/// other disconnection.
+/// Only a session the server ended is final; mIRC retries any other
+/// disconnection.
 fn sync_stop_reason(err: &matrix_sdk::Error) -> SyncStopReason {
     let message = err.to_string();
-    match err.client_api_error_kind() {
-        Some(ErrorKind::UnknownToken { .. }) => SyncStopReason::SessionEnded(message),
-        _ => SyncStopReason::Lost(message),
+    if session_ended(err) {
+        SyncStopReason::SessionEnded(message)
+    } else {
+        SyncStopReason::Lost(message)
+    }
+}
+
+/// Whether `err` says the server ended the session: see
+/// `server_ended_session`.
+fn session_ended(err: &matrix_sdk::Error) -> bool {
+    matches!(err, matrix_sdk::Error::Http(err) if server_ended_session(err))
+}
+
+/// Whether the server ended the session a request failed in: it no longer
+/// knows the access token, and the session had no refresh token, or the
+/// server refused the refresh too (a native session's refresh answering
+/// `M_UNKNOWN_TOKEN`, an OAuth 2.0 one's `invalid_grant`).
+///
+/// The cases are those for which the SDK broadcasts
+/// `SessionChange::UnknownToken` (matrix-sdk 0.18 `client/futures.rs`), but
+/// for its catch-all: a refresh that failed otherwise, on the network for
+/// one, says nothing about the session.
+fn server_ended_session(err: &HttpError) -> bool {
+    match err {
+        HttpError::RefreshToken(RefreshTokenError::MatrixAuth(refresh)) => {
+            server_ended_session(refresh)
+        }
+        HttpError::RefreshToken(RefreshTokenError::OAuth(refresh)) => matches!(
+            &**refresh,
+            OAuthError::RefreshToken(RequestTokenError::ServerResponse(response))
+                if *response.error() == BasicErrorResponseType::InvalidGrant
+        ),
+        _ => matches!(
+            err.client_api_error_kind(),
+            Some(ErrorKind::UnknownToken(_))
+        ),
     }
 }
 
@@ -5880,11 +5914,16 @@ async fn fetch_room_event_activity(
     Ok((*activity, updates))
 }
 
+/// Ends the session on the server. A session the server already ended is
+/// logged out too: its end is what logging out asks for.
 pub(crate) async fn logout(client: Client) -> Result<(), MatrixCoreError> {
-    client
-        .logout()
-        .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to log out of Matrix: {err}")))
+    match client.logout().await {
+        Ok(()) => Ok(()),
+        Err(err) if session_ended(&err) => Ok(()),
+        Err(err) => Err(MatrixCoreError::new(format!(
+            "failed to log out of Matrix: {err}"
+        ))),
+    }
 }
 
 /// The signed-in client's session, as the UI saves it.
@@ -17835,6 +17874,94 @@ mod tests {
                         .to_string()
                 );
             });
+        }
+    }
+
+    mod session_ended {
+        use std::sync::Arc;
+
+        use matrix_sdk::authentication::oauth::OAuthError;
+        use matrix_sdk::authentication::oauth::error::{
+            BasicErrorResponse, BasicErrorResponseType, OAuthRequestError, RequestTokenError,
+        };
+        use matrix_sdk::ruma::api::error::{
+            Error as ApiError, ErrorBody, ErrorKind, FromHttpResponseError, StandardErrorBody,
+            UnknownTokenErrorData,
+        };
+        use matrix_sdk::ruma::exports::http::StatusCode;
+        use matrix_sdk::{HttpError, RefreshTokenError, RumaApiError};
+
+        use super::super::server_ended_session;
+
+        fn server_error(status: StatusCode, kind: ErrorKind) -> HttpError {
+            let body = ErrorBody::Standard(StandardErrorBody::new(kind, "message".to_owned()));
+            HttpError::Api(Box::new(FromHttpResponseError::Server(
+                RumaApiError::MatrixError(ApiError::new(status, body)),
+            )))
+        }
+
+        fn unknown_token() -> HttpError {
+            server_error(
+                StatusCode::UNAUTHORIZED,
+                ErrorKind::UnknownToken(UnknownTokenErrorData::new()),
+            )
+        }
+
+        fn refresh_failed(refresh: HttpError) -> HttpError {
+            HttpError::RefreshToken(RefreshTokenError::MatrixAuth(Arc::new(refresh)))
+        }
+
+        fn oauth_refresh_failed(refresh: OAuthRequestError<BasicErrorResponseType>) -> HttpError {
+            HttpError::RefreshToken(RefreshTokenError::OAuth(Arc::new(
+                OAuthError::RefreshToken(refresh),
+            )))
+        }
+
+        #[test]
+        fn an_unknown_token_ended_the_session() {
+            assert!(server_ended_session(&unknown_token()));
+        }
+
+        #[test]
+        fn another_server_error_did_not() {
+            let forbidden = server_error(StatusCode::FORBIDDEN, ErrorKind::Forbidden);
+            assert!(!server_ended_session(&forbidden));
+        }
+
+        #[test]
+        fn a_refresh_the_server_refused_ended_the_session() {
+            assert!(server_ended_session(&refresh_failed(unknown_token())));
+        }
+
+        #[test]
+        fn a_refresh_that_failed_otherwise_did_not() {
+            let limited = server_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                ErrorKind::LimitExceeded(Default::default()),
+            );
+            assert!(!server_ended_session(&refresh_failed(limited)));
+        }
+
+        #[test]
+        fn an_oauth_refresh_with_an_invalid_grant_ended_the_session() {
+            let refused = RequestTokenError::ServerResponse(BasicErrorResponse::new(
+                BasicErrorResponseType::InvalidGrant,
+                None,
+                None,
+            ));
+            assert!(server_ended_session(&oauth_refresh_failed(refused)));
+        }
+
+        #[test]
+        fn an_oauth_refresh_that_failed_otherwise_did_not() {
+            let refused = RequestTokenError::ServerResponse(BasicErrorResponse::new(
+                BasicErrorResponseType::InvalidClient,
+                None,
+                None,
+            ));
+            assert!(!server_ended_session(&oauth_refresh_failed(refused)));
+            let garbled = RequestTokenError::Other("garbled".to_owned());
+            assert!(!server_ended_session(&oauth_refresh_failed(garbled)));
         }
     }
 }
