@@ -531,6 +531,22 @@ impl MockBackfillHomeserver {
         self.timeline.lock().expect("the timeline").push(event);
     }
 
+    /// Beta's timeline goes empty from the next `/sync` on. Returns once the
+    /// client asked twice since, so it took every sync that had the old
+    /// events (it asks again only after it handled an answer).
+    fn clear_timeline(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.timeline.lock().expect("the timeline").clear();
+        let after = self.sync_count();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while self.sync_count() < after + 2 {
+            if Instant::now() >= deadline {
+                return Err("the client stopped syncing".into());
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
+        Ok(())
+    }
+
     fn held(&self) -> usize {
         self.faults.held.lock().expect("the held requests").len()
     }
@@ -1099,6 +1115,40 @@ fn spawn_mock_homeserver_with_auth(
                 || path.contains("/rooms/!beta:example/members")
             {
                 respond_json(&mut stream, 200, &serde_json::json!({ "chunk": members }));
+                continue;
+            }
+
+            // Another, which its sender edited: the server bundles the
+            // edit.
+            if path == "/_matrix/client/v3/rooms/!beta:example/event/$old-edited" {
+                respond_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({
+                        "content": { "msgtype": "m.text", "body": "from the archive" },
+                        "event_id": "$old-edited",
+                        "origin_server_ts": 1690000000000u64,
+                        "room_id": "!beta:example",
+                        "sender": "@alice:example",
+                        "type": "m.room.message",
+                        "unsigned": { "m.relations": { "m.replace": {
+                            "content": {
+                                "msgtype": "m.text",
+                                "body": "* from the archive, corrected",
+                                "m.new_content": {
+                                    "msgtype": "m.text",
+                                    "body": "from the archive, corrected"
+                                },
+                                "m.relates_to": { "rel_type": "m.replace", "event_id": "$old-edited" }
+                            },
+                            "event_id": "$old-correction",
+                            "origin_server_ts": 1690000060000u64,
+                            "room_id": "!beta:example",
+                            "sender": "@alice:example",
+                            "type": "m.room.message"
+                        }}}
+                    }),
+                );
                 continue;
             }
 
@@ -9633,6 +9683,84 @@ fn automation_driver_fetches_unloaded_reply_target() -> Result<(), Box<dyn std::
     Ok(())
 }
 
+/// A quote of a message that is no line shows its latest edit (the
+/// server's bundle), and reads `message redacted` once the message is
+/// deleted.
+#[test]
+fn automation_driver_a_fetched_quote_follows_its_original() -> Result<(), Box<dyn std::error::Error>>
+{
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_homeserver(
+        MockMessages::Hang,
+        vec![serde_json::json!({
+            "content": {
+                "msgtype": "m.text",
+                "body": "still true",
+                "m.relates_to": { "m.in_reply_to": { "event_id": "$old-edited" } }
+            },
+            "event_id": "$bob-reply",
+            "origin_server_ts": 1700000000011u64,
+            "sender": "@bob:example",
+            "type": "m.room.message"
+        })],
+    )?;
+    // A saved session: it syncs on, and a later sync brings the deletion.
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    app.select_room("!beta:example")?;
+
+    let quote_above_reply = |quote: &str| -> Result<(), Box<dyn std::error::Error>> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let lines = loop {
+            let ui_state = app.dump_ui_state()?;
+            let lines = find_view(&ui_state, &room_identity("!beta:example"))
+                .lines
+                .clone();
+            if lines.iter().any(|line| line == quote) || std::time::Instant::now() > deadline {
+                break lines;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        let reply = lines
+            .iter()
+            .position(|line| line.ends_with("<Bob> still true"))
+            .ok_or_else(|| format!("no reply line in {lines:?}"))?;
+        assert_eq!(lines[reply - 1], quote, "{lines:?}");
+        Ok(())
+    };
+    quote_above_reply("    > <Alice> from the archive, corrected (edited)")?;
+
+    server.append_timeline(serde_json::json!({
+        "content": {},
+        "redacts": "$old-edited",
+        "event_id": "$delete-old",
+        "origin_server_ts": 1700000000020u64,
+        "sender": "@alice:example",
+        "type": "m.room.redaction"
+    }));
+    quote_above_reply("    > message redacted")?;
+    let ui_state = app.dump_ui_state()?;
+    assert!(
+        !find_view(&ui_state, &room_identity("!beta:example"))
+            .lines
+            .iter()
+            .any(|line| line.contains("archive")),
+        "the deleted text shows nowhere"
+    );
+    assert_eq!(app.dump_model()?.last_error, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 #[test]
 fn automation_driver_renders_every_membership_change_in_mirc_format()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -11391,6 +11519,80 @@ fn automation_driver_backfilled_messages_show_the_senders_display_name()
     assert_eq!(
         view_lines_containing(view, "hello from history"),
         vec!["[21:56] <Alice> hello from history"]
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// No server bundles reactions with a message: one that synced while its
+/// message was not loaded shows when history loads the message, from the
+/// client's event cache.
+#[test]
+fn automation_driver_a_reaction_to_an_older_message_shows_when_it_loads()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_homeserver(
+        MockMessages::Respond(serde_json::json!({
+            "start": "s-current",
+            "chunk": [{
+                "content": {
+                    "msgtype": "m.text",
+                    "body": "hello from history"
+                },
+                "event_id": "$history-alice",
+                "origin_server_ts": 1_699_999_000_000u64,
+                "sender": "@alice:example",
+                "type": "m.room.message"
+            }]
+        })),
+        vec![serde_json::json!({
+            "content": {
+                "m.relates_to": {
+                    "rel_type": "m.annotation",
+                    "event_id": "$history-alice",
+                    "key": "👍"
+                }
+            },
+            "event_id": "$bob-thumbs-up",
+            "origin_server_ts": 1_700_000_000_020u64,
+            "sender": "@bob:example",
+            "type": "m.reaction"
+        })],
+    )?;
+    // A saved session: it syncs on.
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    // Only the client's event cache has the reaction now: no later sync
+    // brings it again live.
+    server.clear_timeline()?;
+    app.select_room("!beta:example")?;
+    app.trigger_active_timeline_history_backfill()?;
+    app.wait_for_room_activity_contains(
+        Some("!beta:example"),
+        "hello from history",
+        Duration::from_secs(30),
+    )?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    let lines = &find_view(&ui_state, &room_identity("!beta:example")).lines;
+    let line = lines
+        .iter()
+        .position(|line| line == "[21:56] <Alice> hello from history")
+        .ok_or_else(|| format!("no history line in {lines:?}"))?;
+    assert_eq!(
+        lines.get(line + 1).map(String::as_str),
+        Some("    reactions: 👍 Bob"),
+        "{lines:?}"
     );
 
     drop(app);
