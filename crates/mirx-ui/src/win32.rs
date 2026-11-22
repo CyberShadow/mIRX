@@ -306,9 +306,10 @@ use command_runner::{
     submit_room_notification_mode, whois_lines,
 };
 use commands::{
-    AliasCommand, BarCommand, CommandError, ComposeSubmission, CreateRoomArgs, E2eeSlashCommand,
-    EchoCommand, EchoPlace, FontCommand, LogCommand, RoomKeyTransfer, SlashCommand,
-    TimestampCommand, VerificationAction, classify_input, local_command_history_entry,
+    AliasCommand, BarCommand, CommandError, ComposeInput, ComposeSubmission, CreateRoomArgs,
+    E2eeSlashCommand, EchoCommand, EchoPlace, FontCommand, LogCommand, RoomKeyTransfer,
+    SlashCommand, TimestampCommand, VerificationAction, classify_input,
+    local_command_history_entry,
 };
 #[cfg(test)]
 use compose::submit_compose_from_edit;

@@ -115,12 +115,12 @@ pub(super) fn editable_message<'a>(
 }
 
 /// The editbox text that would send `message` as it is: its styles as mIRC
-/// codes, `/me` for an emote, and `//` escaping a text's leading `/`.
+/// codes, `/me` for an emote, and `/say` before a text that starts with `/`.
 pub(super) fn compose_text_for_edit(message: &RoomMessageActivity) -> String {
     let input = mirc_input_from_styled(&message.body, &message.styles);
     match message.presentation {
         // Codes before a `/` already keep it from reading as a command.
-        RoomMessagePresentationKind::Text if input.starts_with('/') => format!("/{input}"),
+        RoomMessagePresentationKind::Text if input.starts_with('/') => format!("/say {input}"),
         RoomMessagePresentationKind::Text => input,
         RoomMessagePresentationKind::Emote => format!("/me {input}"),
         RoomMessagePresentationKind::Notice => {
@@ -286,7 +286,7 @@ mod tests {
         );
         assert_eq!(
             edit_text(&message("@me:example", Text, "/not a command")),
-            Ok("//not a command".to_owned())
+            Ok("/say /not a command".to_owned())
         );
         assert_eq!(
             edit_text(&message("@me:example", Emote, "waves")),
@@ -335,7 +335,7 @@ mod tests {
                 5,
                 6
             )),
-            Ok("//not \x02a\x0f command".to_owned())
+            Ok("/say /not \x02a\x0f command".to_owned())
         );
     }
 

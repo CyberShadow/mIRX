@@ -1,5 +1,7 @@
 //! Running aliases (`aliases.rs`): each command of an alias typed in the
-//! editbox is evaluated, then run as a typed command would be.
+//! editbox is evaluated, then run as a typed command would be. A `//line`
+//! typed in the editbox is run the same way, as mIRC's is: evaluated, with
+//! no parameters, then run as a command.
 //!
 //! What a call evaluates is fixed when it starts: `#` and `$me` are those
 //! of the window the alias was typed in. Where a command acts is not: a
@@ -22,10 +24,21 @@ enum Flow {
     Stop,
 }
 
-/// The window an alias call was typed in, as `#` and `$me` see it.
+/// The window an alias call or a `//line` was typed in, as `#` and `$me`
+/// see it.
 struct CallWindow {
     chan: String,
     me: String,
+}
+
+impl CallWindow {
+    /// The active window, which typed lines come from.
+    fn active(state: &WindowState) -> Self {
+        Self {
+            chan: chan(&state.model, &state.active_view),
+            me: me(&state.model, &state.active_view),
+        }
+    }
 }
 
 /// Runs the alias `name`, typed with `args` in the active window.
@@ -37,11 +50,35 @@ pub(super) unsafe fn run_alias_call(hwnd: HWND, name: &str, args: &str) -> Resul
         .get(name)
         .expect("a typed alias call names an alias")
         .clone();
-    let window = CallWindow {
-        chan: chan(&state.model, &state.active_view),
-        me: me(&state.model, &state.active_view),
-    };
+    let window = CallWindow::active(state);
     run_alias(hwnd, &alias, args, &window, &mut Vec::new()).map(|_| ())
+}
+
+/// Runs `//line`, typed in the active window: `line` evaluated as an
+/// alias's command is, with no parameters, then run as a command. An empty
+/// `$$` identifier stops it silently; a wrong identifier is the command's
+/// error.
+pub(super) unsafe fn run_evaluated_line(hwnd: HWND, line: &str) -> Result<(), String> {
+    let window = CallWindow::active(state_ref(hwnd));
+    let context = CallContext {
+        params: &[],
+        chan: &window.chan,
+        me: &window.me,
+    };
+    match evaluate(line, &context) {
+        Ok(Evaluated::Command(text)) => {
+            run_command(hwnd, &text, None, &window, &mut Vec::new()).map(|_| ())
+        }
+        Ok(Evaluated::Halt) => Ok(()),
+        Err(reason) => {
+            let name = line
+                .split_ascii_whitespace()
+                .next()
+                .expect("a line with a wrong identifier has a word")
+                .trim_start_matches('/');
+            report_error_line(hwnd, format!("* /{name}: {reason}"))
+        }
+    }
 }
 
 /// Runs `alias` with `stack` holding the aliases running it, by lowercase
@@ -74,7 +111,9 @@ unsafe fn run_alias_commands(
     };
     for command in &alias.commands {
         let flow = match evaluate(command, &context) {
-            Ok(Evaluated::Command(text)) => run_command(hwnd, &text, &alias.name, window, stack)?,
+            Ok(Evaluated::Command(text)) => {
+                run_command(hwnd, &text, Some(&alias.name), window, stack)?
+            }
             Ok(Evaluated::Halt) => Flow::Stop,
             Err(reason) => {
                 report_error_line(hwnd, format!("* /{}: {reason}", alias.name))?;
@@ -88,13 +127,13 @@ unsafe fn run_alias_commands(
     Ok(Flow::Continue)
 }
 
-/// Runs one evaluated command of the alias `alias_name`. Its leading `/`
-/// is optional, and `//` the same as `/`: the command is evaluated
-/// already.
+/// Runs one evaluated command of the alias `alias_name`, or of a typed
+/// `//line` (`None`). Its leading `/` is optional, and `//` the same as
+/// `/`: the command is evaluated already.
 unsafe fn run_command(
     hwnd: HWND,
     text: &str,
-    alias_name: &str,
+    alias_name: Option<&str>,
     window: &CallWindow,
     stack: &mut Vec<String>,
 ) -> Result<Flow, String> {
@@ -110,12 +149,16 @@ unsafe fn run_command(
         })
     };
     let failed = |error: CommandError| {
-        report_error_line(hwnd, format!("{error} (in alias /{alias_name})")).map(|()| Flow::Stop)
+        let line = match alias_name {
+            Some(alias_name) => format!("{error} (in alias /{alias_name})"),
+            None => error.to_string(),
+        };
+        report_error_line(hwnd, line).map(|()| Flow::Stop)
     };
     match submission {
         // Never the editbox's armed reply or edit: the alias sends text.
         ComposeSubmission::Message { presentation, body } => {
-            match submit_compose(state_mut(hwnd), presentation, &body, None) {
+            match submit_compose(state_mut(hwnd), presentation, body, None) {
                 Ok(_) => Ok(Flow::Continue),
                 Err(reason) => failed(CommandError::new(
                     message_command_name(presentation),
@@ -452,6 +495,50 @@ mod tests {
                     );
                 },
             );
+        }
+    }
+
+    #[test]
+    fn a_double_slash_line_is_evaluated_then_run() {
+        unsafe {
+            with_alias_frame(&["/hi say hi $1"], |hwnd| {
+                let lines_before = ops_lines(hwnd);
+                type_compose_line(hwnd, "//echo in # as $me $+ ! $1");
+                assert_eq!(ops_lines(hwnd).last().unwrap(), "in #ops:example as Mee!");
+                // Aliases are called; `$$` stops silently.
+                type_compose_line(hwnd, "//hi $me");
+                type_compose_line(hwnd, "//say $$1 never");
+                type_compose_line(hwnd, "///say slashes");
+                assert_eq!(
+                    sent(state_ref(hwnd)),
+                    [
+                        text_to("!ops:example", "hi Mee"),
+                        text_to("!ops:example", "slashes")
+                    ]
+                );
+                assert_eq!(ops_lines(hwnd).len(), lines_before.len() + 1);
+                // Errors name the command, with no alias.
+                type_compose_line(hwnd, "//hello");
+                assert_eq!(
+                    ops_lines(hwnd).last().unwrap(),
+                    "[22:12] * /hello: unknown command"
+                );
+                type_compose_line(hwnd, "//say $active");
+                assert_eq!(
+                    ops_lines(hwnd).last().unwrap(),
+                    "[22:12] * /say: no such identifier: $active"
+                );
+                // Typed text that starts with `/` is sent with /say.
+                type_compose_line(hwnd, "/say //not a command");
+                assert_eq!(
+                    sent(state_ref(hwnd)).last().unwrap(),
+                    &text_to("!ops:example", "//not a command")
+                );
+                assert_eq!(
+                    active_compose_history(state_mut(hwnd)).entries.last(),
+                    Some(&"/say //not a command".to_owned())
+                );
+            });
         }
     }
 

@@ -353,17 +353,17 @@ pub(super) unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> 
     };
     let empty = wide_null("");
     match classify_input(&input, state_ref(hwnd).aliases.aliases()) {
-        ComposeSubmission::Message { presentation, body } => {
+        ComposeInput::Line(ComposeSubmission::Message { presentation, body }) => {
             let target = state_ref(hwnd).views[&view].compose().target.clone();
             match &target {
                 None => {
-                    submit_compose(state_mut(hwnd), presentation, &body, None)?;
+                    submit_compose(state_mut(hwnd), presentation, body, None)?;
                 }
                 Some(ComposeTarget::Reply { event_id }) => {
-                    send_reply(state_mut(hwnd), event_id, presentation, &body)?;
+                    send_reply(state_mut(hwnd), event_id, presentation, body)?;
                 }
                 Some(ComposeTarget::Edit { event_id }) => {
-                    send_edit(state_mut(hwnd), event_id, presentation, &body)?;
+                    send_edit(state_mut(hwnd), event_id, presentation, body)?;
                 }
             }
             record(input.clone());
@@ -378,7 +378,7 @@ pub(super) unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> 
                 refresh_view_content(hwnd, &view)?;
             }
         }
-        ComposeSubmission::Alias { name, args } => {
+        ComposeInput::Line(ComposeSubmission::Alias { name, args }) => {
             // The line as typed, as a command's: an alias that wraps a
             // secret (`/e2ee setup passphrase`) records it, since the user
             // wrote that alias.
@@ -386,7 +386,13 @@ pub(super) unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> 
             SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
             script::run_alias_call(hwnd, name, args)?;
         }
-        ComposeSubmission::LocalCommand(parsed) => {
+        // Recorded as typed, as an alias call is.
+        ComposeInput::Evaluate(line) => {
+            record(input.clone());
+            SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
+            script::run_evaluated_line(hwnd, line)?;
+        }
+        ComposeInput::Line(ComposeSubmission::LocalCommand(parsed)) => {
             if let Some(entry) = local_command_history_entry(&input, &parsed) {
                 record(entry);
             }

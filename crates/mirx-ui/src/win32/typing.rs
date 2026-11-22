@@ -12,7 +12,7 @@ use windows_sys::Win32::Foundation::HWND;
 
 use super::aliases::Aliases;
 use super::command_runner::enqueue_command;
-use super::commands::{ComposeSubmission, classify_input};
+use super::commands::{ComposeInput, ComposeSubmission, classify_input};
 use super::room_model::sendable_room_by_id;
 use super::{ConnectionState, ViewId, mdi_child_edit, read_window_text, state_mut};
 
@@ -63,12 +63,12 @@ impl TypingNotices {
 }
 
 /// Whether the editbox's text would go out as a message on Enter: text,
-/// `//text`, `/me action` or `/say text`, not a command, an alias or
+/// `/me action` or `/say text`, not a command, an alias, a `//line` or
 /// nothing.
 pub(super) fn composes_a_message(text: &str, aliases: &Aliases) -> bool {
     matches!(
         classify_input(text, aliases),
-        ComposeSubmission::Message { body, .. } if !body.is_empty()
+        ComposeInput::Line(ComposeSubmission::Message { body, .. }) if !body.is_empty()
     )
 }
 
@@ -146,7 +146,7 @@ mod tests {
     #[test]
     fn only_what_would_be_sent_as_a_message_is_typing() {
         let defaults = Aliases::defaults();
-        for text in ["hi", "//x", "/me x", "/say x", "/!me x", " "] {
+        for text in ["hi", "/say //x", "/me x", "/say x", "/!me x", " "] {
             assert!(composes_a_message(text, &defaults), "{text:?}");
         }
         for text in [
@@ -159,6 +159,8 @@ mod tests {
             "/away",
             "/",
             "/j x",
+            "//x",
+            "//say x",
         ] {
             assert!(!composes_a_message(text, &defaults), "{text:?}");
         }

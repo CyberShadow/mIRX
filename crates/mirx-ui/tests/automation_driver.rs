@@ -19851,7 +19851,7 @@ fn automation_driver_literal_query_submission_is_sent_as_text()
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!beta:example")?;
 
-    app.set_compose_text("//query @alice:example.org")?;
+    app.set_compose_text("/say /query @alice:example.org")?;
     app.send_compose_key(ComposeKey::Return)?;
     assert_eq!(app.compose_text()?, "");
     app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
@@ -19875,7 +19875,7 @@ fn automation_driver_literal_query_submission_is_sent_as_text()
     );
 
     app.send_compose_key(ComposeKey::Up)?;
-    assert_eq!(app.compose_text()?, "//query @alice:example.org");
+    assert_eq!(app.compose_text()?, "/say /query @alice:example.org");
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -20770,6 +20770,36 @@ fn typed_aliases_run_their_commands() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[test]
+fn double_slash_lines_are_evaluated_then_run() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+
+    type_commands(&app, &["//echo -a x $+ y $1 z", "//hello"])?;
+    let ui_state = app.dump_ui_state()?;
+    let view = find_view(&ui_state, &beta);
+    assert_eq!(only_view_line_containing(view, "xy"), "xy z");
+    assert!(only_view_line_containing(view, "/hello:").ends_with("] * /hello: unknown command"));
+    let model = app.dump_model()?;
+    assert!(model.submitted_message_commands.is_empty());
+    assert_eq!(model.last_error, None);
+
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "//hello");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn echo_prints_where_it_is_told() -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
@@ -21437,7 +21467,7 @@ fn automation_driver_literal_react_submission_is_sent_as_text()
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    app.set_compose_text("//react $react-normal +1")?;
+    app.set_compose_text("/say /react $react-normal +1")?;
     app.send_compose_key(ComposeKey::Return)?;
     assert_eq!(app.compose_text()?, "");
     app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
@@ -21464,7 +21494,7 @@ fn automation_driver_literal_react_submission_is_sent_as_text()
     );
 
     app.send_compose_key(ComposeKey::Up)?;
-    assert_eq!(app.compose_text()?, "//react $react-normal +1");
+    assert_eq!(app.compose_text()?, "/say /react $react-normal +1");
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -21486,7 +21516,7 @@ fn automation_driver_literal_edit_submission_is_sent_as_text()
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    app.set_compose_text("//edit $event-to-edit replacement text")?;
+    app.set_compose_text("/say /edit $event-to-edit replacement text")?;
     app.send_compose_key(ComposeKey::Return)?;
     assert_eq!(app.compose_text()?, "");
     app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
@@ -21516,7 +21546,7 @@ fn automation_driver_literal_edit_submission_is_sent_as_text()
     app.send_compose_key(ComposeKey::Up)?;
     assert_eq!(
         app.compose_text()?,
-        "//edit $event-to-edit replacement text"
+        "/say /edit $event-to-edit replacement text"
     );
 
     drop(app);
@@ -21539,7 +21569,7 @@ fn automation_driver_literal_reply_submission_is_sent_as_text()
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    app.set_compose_text("//reply $react-normal thanks")?;
+    app.set_compose_text("/say /reply $react-normal thanks")?;
     app.send_compose_key(ComposeKey::Return)?;
     assert_eq!(app.compose_text()?, "");
     app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
@@ -21568,7 +21598,7 @@ fn automation_driver_literal_reply_submission_is_sent_as_text()
     );
 
     app.send_compose_key(ComposeKey::Up)?;
-    assert_eq!(app.compose_text()?, "//reply $react-normal thanks");
+    assert_eq!(app.compose_text()?, "/say /reply $react-normal thanks");
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -24186,7 +24216,7 @@ fn automation_driver_literal_slash_submission_is_sent_as_text()
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!beta:example")?;
 
-    app.set_compose_text("//me waves")?;
+    app.set_compose_text("/say /me waves")?;
     app.send_compose_key(ComposeKey::Return)?;
     assert_eq!(app.compose_text()?, "");
     app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
@@ -24209,7 +24239,7 @@ fn automation_driver_literal_slash_submission_is_sent_as_text()
     );
 
     app.send_compose_key(ComposeKey::Up)?;
-    assert_eq!(app.compose_text()?, "//me waves");
+    assert_eq!(app.compose_text()?, "/say /me waves");
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

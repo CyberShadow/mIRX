@@ -5,7 +5,6 @@
 //! window can print them the way mIRC does: `* /kick: insufficient
 //! parameters`.
 
-use std::borrow::Cow;
 use std::fmt;
 
 use mirx_core::{
@@ -24,7 +23,7 @@ use super::timestamp::{LocalTimeFn, TimestampFormat};
 pub(super) enum ComposeSubmission<'a> {
     Message {
         presentation: RoomMessagePresentationKind,
-        body: Cow<'a, str>,
+        body: &'a str,
     },
     LocalCommand(Result<SlashCommand, CommandError>),
     /// `/name args` naming an alias (`aliases.rs`), run by `script.rs`.
@@ -742,24 +741,30 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
 ];
 
-/// Classifies editbox input: text, `//text` (literal slash), or a command
-/// line (`classify_command`).
-pub(super) fn classify_input<'a>(input: &'a str, aliases: &Aliases) -> ComposeSubmission<'a> {
-    if !input.starts_with('/') {
-        return ComposeSubmission::Message {
-            presentation: RoomMessagePresentationKind::Text,
-            body: Cow::Borrowed(input),
-        };
-    }
+/// What a line typed in the editbox is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ComposeInput<'a> {
+    /// Text, or a command line (`classify_command`).
+    Line(ComposeSubmission<'a>),
+    /// `//line`: mIRC's evaluated command line, `line` with its
+    /// identifiers evaluated and then run as a command (`script.rs`).
+    Evaluate(&'a str),
+}
 
-    if input.starts_with("//") {
-        return ComposeSubmission::Message {
+/// Classifies editbox input: text, `//line` to evaluate, or a command
+/// line (`classify_command`). Text that starts with `/` is sent with
+/// `/say`.
+pub(super) fn classify_input<'a>(input: &'a str, aliases: &Aliases) -> ComposeInput<'a> {
+    let Some(line) = input.strip_prefix('/') else {
+        return ComposeInput::Line(ComposeSubmission::Message {
             presentation: RoomMessagePresentationKind::Text,
-            body: Cow::Owned(input[1..].to_owned()),
-        };
+            body: input,
+        });
+    };
+    if let Some(line) = line.strip_prefix('/') {
+        return ComposeInput::Evaluate(line);
     }
-
-    classify_command(input, |name| aliases.get(name).is_some())
+    ComposeInput::Line(classify_command(input, |name| aliases.get(name).is_some()))
 }
 
 /// Classifies a command line, `/name arguments`: `/!name` is always the
@@ -798,7 +803,7 @@ fn classify_builtin<'a>(name: &str, argument: &'a str) -> ComposeSubmission<'a> 
     }
     ComposeSubmission::Message {
         presentation,
-        body: Cow::Borrowed(argument),
+        body: argument,
     }
 }
 
@@ -1836,14 +1841,22 @@ mod tests {
         error(command, "insufficient parameters")
     }
 
-    fn classify(input: &str) -> ComposeSubmission<'_> {
-        classify_input(input, &Aliases::defaults())
+    /// The line `input` is, which must not be `//line`.
+    fn line<'a>(input: &'a str, aliases: &Aliases) -> ComposeSubmission<'a> {
+        match classify_input(input, aliases) {
+            ComposeInput::Line(submission) => submission,
+            ComposeInput::Evaluate(line) => panic!("{input:?} evaluates {line:?}"),
+        }
     }
 
-    fn text(body: &str) -> ComposeSubmission<'static> {
+    fn classify(input: &str) -> ComposeSubmission<'_> {
+        line(input, &Aliases::defaults())
+    }
+
+    fn text(body: &str) -> ComposeSubmission<'_> {
         ComposeSubmission::Message {
             presentation: RoomMessagePresentationKind::Text,
-            body: Cow::Owned(body.to_owned()),
+            body,
         }
     }
 
@@ -1888,12 +1901,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_compose_submission_distinguishes_text_emote_literal_slash_and_commands() {
+    fn classify_input_distinguishes_text_emote_evaluated_lines_and_commands() {
         assert_eq!(
             classify("hello"),
             ComposeSubmission::Message {
                 presentation: RoomMessagePresentationKind::Text,
-                body: Cow::Borrowed("hello"),
+                body: "hello",
             }
         );
         for input in ["/me waves", "/ME    waves"] {
@@ -1901,7 +1914,7 @@ mod tests {
                 classify(input),
                 ComposeSubmission::Message {
                     presentation: RoomMessagePresentationKind::Emote,
-                    body: Cow::Borrowed("waves"),
+                    body: "waves",
                 }
             );
         }
@@ -1911,21 +1924,17 @@ mod tests {
                 ComposeSubmission::LocalCommand(insufficient("me"))
             );
         }
-        for (input, body) in [
-            ("//me waves", "/me waves"),
-            ("//status", "/status"),
-            ("//find needle", "/find needle"),
-            ("//react $react-normal +1", "/react $react-normal +1"),
-            (
-                "//edit $event replacement text",
-                "/edit $event replacement text",
-            ),
-            ("//reply $event thanks", "/reply $event thanks"),
-            ("//accept", "/accept"),
-            ("//reject", "/reject"),
-            ("///status", "//status"),
+        for (input, line) in [
+            ("//me waves", "me waves"),
+            ("//echo -a $me", "echo -a $me"),
+            ("//", ""),
+            ("///status", "/status"),
         ] {
-            assert_eq!(classify(input), text(body), "{input}");
+            assert_eq!(
+                classify_input(input, &Aliases::defaults()),
+                ComposeInput::Evaluate(line),
+                "{input}"
+            );
         }
         assert_eq!(
             classify("/status"),
@@ -1942,7 +1951,7 @@ mod tests {
         let aliases =
             Aliases::from_source(vec!["/j /join #$$1".to_owned(), "/me say I am".to_owned()])
                 .unwrap();
-        let classify = |input| classify_input(input, &aliases);
+        let classify = |input| line(input, &aliases);
         assert_eq!(
             classify("/j #ops"),
             ComposeSubmission::Alias {
@@ -1978,7 +1987,7 @@ mod tests {
             classify("/!me waves"),
             ComposeSubmission::Message {
                 presentation: RoomMessagePresentationKind::Emote,
-                body: Cow::Borrowed("waves"),
+                body: "waves",
             }
         );
         for input in ["/!", "/! j"] {
@@ -1989,29 +1998,19 @@ mod tests {
             );
         }
         for input in ["/say hi there", "/SAY   hi there"] {
-            assert_eq!(classify(input), text_borrowed("hi there"), "{input}");
+            assert_eq!(classify(input), text("hi there"), "{input}");
         }
-        assert_eq!(
-            classify("/say /not a command"),
-            text_borrowed("/not a command")
-        );
+        assert_eq!(classify("/say /not a command"), text("/not a command"));
         assert_eq!(
             classify("/say"),
             ComposeSubmission::LocalCommand(insufficient("say"))
         );
-        assert_eq!(classify("plain"), text_borrowed("plain"));
+        assert_eq!(classify("plain"), text("plain"));
         // An alias is called only with is_alias's leave.
         assert_eq!(
             classify_command("/j x", |_| false),
             ComposeSubmission::LocalCommand(error("j", "unknown command"))
         );
-    }
-
-    fn text_borrowed(body: &str) -> ComposeSubmission<'_> {
-        ComposeSubmission::Message {
-            presentation: RoomMessagePresentationKind::Text,
-            body: Cow::Borrowed(body),
-        }
     }
 
     #[test]
