@@ -2101,6 +2101,10 @@ async fn room_users_default_power_level(room: &Room) -> Int {
     room.power_levels_or_default().await.users_default
 }
 
+/// Every joined room's members, from the store. mirx syncs without lazy
+/// loading members, so the store has every member the sync sent; the SDK's
+/// `members()` would instead ask the server for each room whose list it
+/// never fetched, which offline fails the whole snapshot.
 pub(crate) async fn summarize_joined_room_members(
     client: &Client,
 ) -> Result<Vec<RoomMembers>, MatrixCoreError> {
@@ -2111,7 +2115,7 @@ pub(crate) async fn summarize_joined_room_members(
     let mut room_members = Vec::with_capacity(joined_rooms.len());
 
     for room in joined_rooms {
-        room_members.push(joined_room_members(authenticated_user_id, &room).await?);
+        room_members.push(joined_room_members_no_sync(authenticated_user_id, &room).await?);
     }
 
     Ok(room_members)
@@ -6272,6 +6276,68 @@ mod tests {
                     .await
                     .expect("synced members"),
                 expected
+            );
+        });
+    }
+
+    /// The first room snapshot is read at session entry, also offline: it
+    /// takes the members the sync stored, and asks the server nothing.
+    #[test]
+    fn a_room_snapshot_reads_members_from_the_store() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let state_events = serde_json::json!([
+                {
+                    "type": "m.room.member",
+                    "state_key": "@example:localhost",
+                    "sender": "@example:localhost",
+                    "event_id": "$actor:localhost",
+                    "origin_server_ts": 1u64,
+                    "content": { "membership": "join", "displayname": "Actor" }
+                },
+                {
+                    "type": "m.room.member",
+                    "state_key": "@bob:localhost",
+                    "sender": "@bob:localhost",
+                    "event_id": "$bob:localhost",
+                    "origin_server_ts": 2u64,
+                    "content": { "membership": "join", "displayname": "Bob" }
+                }
+            ]);
+            mock_server
+                .mock_get_members()
+                .ok(raw_room_member_events(&state_events))
+                .expect(0)
+                .mount()
+                .await;
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&state_events)),
+                )
+                .await;
+
+            let snapshot = super::summarize_joined_room_members(&client)
+                .await
+                .expect("the stored members");
+
+            let [members] = snapshot.as_slice() else {
+                panic!("one joined room in {snapshot:#?}");
+            };
+            assert_eq!(
+                members
+                    .members
+                    .iter()
+                    .map(|member| member.user_id.as_str())
+                    .collect::<Vec<_>>(),
+                ["@example:localhost", "@bob:localhost"]
             );
         });
     }

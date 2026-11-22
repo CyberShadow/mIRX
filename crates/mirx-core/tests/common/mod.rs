@@ -160,14 +160,6 @@ impl Harness {
                 .plain()
                 .mount()
                 .await;
-            Mock::given(method("GET"))
-                .and(path_regex(r"^/_matrix/client/v3/rooms/.*/members"))
-                .respond_with(
-                    ResponseTemplate::new(200)
-                        .set_body_json(json!({ "chunk": [alice_member_event()] })),
-                )
-                .mount(server.server())
-                .await;
             (server, "TOKEN_1".to_owned())
         });
         let profile = TempDir::new().expect("temporary profile directory");
