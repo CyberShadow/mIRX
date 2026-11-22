@@ -2462,6 +2462,40 @@ configure_case_expectations() {
         --expect-frame-bar-hidden treebar
       )
       ;;
+    away-nicks)
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      room_expect_args=(
+        --expect-room '!ops:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::* Now talking in Ops (!ops:example)'
+        --expect-room-view '!ops:example::[22:13] <Bob> back in an hour'
+        --expect-room-view '!ops:example::[22:14] <Dave> the deploy is green'
+        --expect-room-view '!ops:example::[22:15] <Alice> thanks, Dave'
+      )
+      room_member_expect_args=(
+        --expect-room-member '!ops:example::Admin'
+        --expect-room-member '!ops:example::Mod'
+        --expect-room-member '!ops:example::Alice'
+        --expect-room-member '!ops:example::Bob'
+        --expect-room-member '!ops:example::Carol'
+        --expect-room-member '!ops:example::Dave'
+        --expect-room-member '!ops:example::Erin'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!ops:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!ops:example'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'back in an hour'
+      )
+      ;;
     member-ranks)
       expect_selected='!ranks:example'
       expect_active_view='room:!ranks:example'

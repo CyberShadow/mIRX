@@ -993,6 +993,7 @@ pub(super) fn test_state() -> WindowState {
         reconnect: connection::Reconnect::default(),
         log_out_warning: None,
         refresh_counters: RefreshCounters::default(),
+        painted_presence_revision: 0,
         treebar_drag: None,
     }
 }

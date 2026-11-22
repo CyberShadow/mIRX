@@ -23,8 +23,8 @@ use mirx_core::{
     E2eeStatus, EditMessageRequest, Event, ExportRoomKeysRequest, FetchRoomEventRequest,
     FetchRoomMediaRequest, HighlightWord, HistoryFrom, ImportRoomKeysRequest,
     InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, LoginMethod,
-    LoginRequest, LogoutRequest, MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoomsPage,
-    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
+    LoginRequest, LogoutRequest, MarkRoomReadRequest, MemberPowerRole, Operation, PresenceKind,
+    PublicRoomsPage, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
     ResetE2eeIdentityRequest, RestoreSessionRequest, RetryDecryptionRequest, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
@@ -825,6 +825,9 @@ struct WindowState {
     log_out_warning: Option<RoomKeysAtRisk>,
     /// How often the refresh path rebuilt, wrapped and redrew, for tests.
     refresh_counters: RefreshCounters,
+    /// The `model.presence` revision the nick lists were last painted at;
+    /// they draw presence at paint time, so a change only repaints them.
+    painted_presence_revision: u64,
     /// The treebar splitter's drag while the frame has the mouse for it.
     treebar_drag: Option<splitter::TreebarDrag>,
 }
@@ -1071,6 +1074,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         reconnect: connection::Reconnect::default(),
         log_out_warning: None,
         refresh_counters: RefreshCounters::default(),
+        painted_presence_revision: 0,
         treebar_drag: None,
     });
 

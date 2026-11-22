@@ -24,6 +24,35 @@ pub(super) fn room_member_view_rows(
         .collect()
 }
 
+/// The colour item a member's nick is drawn in: away and offline members
+/// in grey, as HexChat shows them; online ones, and those the server shares
+/// no presence of, in the list's text colour.
+pub(super) fn nick_color_item(presence: Option<PresenceKind>) -> ColorItem {
+    match presence {
+        Some(PresenceKind::Unavailable | PresenceKind::Offline) => ColorItem::Gray,
+        Some(PresenceKind::Online) | None => ColorItem::ListboxText,
+    }
+}
+
+/// The member a room content window's nick list shows at `index`: the
+/// list holds its room's members in order (`set_room_member_list`).
+fn listed_member(state: &WindowState, content: HWND, index: u32) -> &RoomMemberSummary {
+    let (view_id, _) = state
+        .views
+        .iter()
+        .find(|(_, view)| view.content == content)
+        .expect("a nick list's window is a view's");
+    let room_id = view_id
+        .room_id()
+        .expect("a window with a nick list has a room");
+    state
+        .model
+        .room_views
+        .get(room_id)
+        .and_then(|room_view| room_view.members.get(index as usize))
+        .expect("a nick list item is one of its room's members")
+}
+
 /// A nick list item's height: a line of the frame's text font, as the
 /// stock listbox sizes its items for its font.
 pub(super) unsafe fn text_font_item_height(hwnd: HWND) -> u32 {
@@ -35,8 +64,9 @@ pub(super) unsafe fn text_font_item_height(hwnd: HWND) -> u32 {
     u32::try_from(height).expect("a font height is positive")
 }
 
-/// Draws a nick list item like the stock listbox does, with the text in the
-/// frame's text font and its fallbacks.
+/// Draws an item of the nick list of `hwnd`, a room content window, like
+/// the stock listbox does, with the text in the frame's text font and its
+/// fallbacks, and the colour of the member's presence.
 pub(super) unsafe fn draw_nick_list_item(hwnd: HWND, item: &DRAWITEMSTRUCT) {
     let hdc = item.hDC;
     // An empty list with the focus: only the focus rectangle.
@@ -54,13 +84,16 @@ pub(super) unsafe fn draw_nick_list_item(hwnd: HWND, item: &DRAWITEMSTRUCT) {
             GetSysColor(COLOR_HIGHLIGHTTEXT),
         )
     } else {
+        let member = listed_member(frame_state, hwnd, item.itemID);
         (
             frame_state.scheme_brushes.listbox,
             frame_state
                 .settings
                 .settings()
                 .colors
-                .colorref(ColorItem::ListboxText),
+                .colorref(nick_color_item(
+                    frame_state.model.presence.kind(&member.user_id),
+                )),
         )
     };
     FillRect(hdc, &item.rcItem, background);
@@ -352,7 +385,7 @@ pub(super) unsafe fn select_member_for_automation(hwnd: HWND, user_id: &str) -> 
 
 #[cfg(test)]
 mod tests {
-    use mirx_core::{PresenceChange, PresenceKind, RoomMemberRank};
+    use mirx_core::{PresenceChange, RoomMemberRank};
 
     use super::super::test_fixtures::*;
     use super::*;
@@ -450,5 +483,22 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("Bob", Some(PresenceKind::Unavailable)), ("Erin", None)]
         );
+    }
+
+    #[test]
+    fn away_and_offline_nicks_are_grey() {
+        assert_eq!(
+            nick_color_item(Some(PresenceKind::Unavailable)),
+            ColorItem::Gray
+        );
+        assert_eq!(
+            nick_color_item(Some(PresenceKind::Offline)),
+            ColorItem::Gray
+        );
+        assert_eq!(
+            nick_color_item(Some(PresenceKind::Online)),
+            ColorItem::ListboxText
+        );
+        assert_eq!(nick_color_item(None), ColorItem::ListboxText);
     }
 }

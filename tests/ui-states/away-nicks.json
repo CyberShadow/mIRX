@@ -1,0 +1,194 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!ops:example",
+        "display_name": "Ops",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$ops-1",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "nick": "Bob",
+          "nick_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "back in an hour",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$ops-2",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-2",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@dave:example",
+          "nick": "Dave",
+          "nick_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "the deploy is green",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$ops-3",
+      "timestamp_ms": 1700000120000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-3",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "nick": "Alice",
+          "nick_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "thanks, Dave",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!ops:example",
+      "members": [
+        {
+          "user_id": "@admin:example",
+          "nick": "Admin",
+          "nick_ambiguous": false,
+          "is_own_user": false,
+          "rank": "administrator",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@mod:example",
+          "nick": "Mod",
+          "nick_ambiguous": false,
+          "is_own_user": false,
+          "rank": "moderator",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@alice:example",
+          "nick": "Alice",
+          "nick_ambiguous": false,
+          "is_own_user": true,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@bob:example",
+          "nick": "Bob",
+          "nick_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@carol:example",
+          "nick": "Carol",
+          "nick_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@dave:example",
+          "nick": "Dave",
+          "nick_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@erin:example",
+          "nick": "Erin",
+          "nick_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        }
+      ]
+    }
+  },
+  {
+    "PresenceChanged": [
+      {
+        "user_id": "@bob:example",
+        "kind": "unavailable",
+        "status_msg": "lunch"
+      },
+      {
+        "user_id": "@carol:example",
+        "kind": "offline",
+        "status_msg": null
+      },
+      {
+        "user_id": "@dave:example",
+        "kind": "online",
+        "status_msg": null
+      },
+      {
+        "user_id": "@mod:example",
+        "kind": "unavailable",
+        "status_msg": null
+      }
+    ]
+  }
+]

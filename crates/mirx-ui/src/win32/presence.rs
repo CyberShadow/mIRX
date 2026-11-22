@@ -12,22 +12,33 @@ use mirx_core::{PresenceChange, PresenceKind};
 #[derive(Debug, Default)]
 pub(super) struct PresenceBook {
     users: BTreeMap<String, PresenceKind>,
+    /// Moves whenever a user's presence changes: the nick lists repaint
+    /// when it differs from the one they were painted at.
+    revision: u64,
 }
 
 impl PresenceBook {
     pub(super) fn apply(&mut self, changes: Vec<PresenceChange>) {
         for change in changes {
-            self.users.insert(change.user_id, change.kind);
+            if self.users.insert(change.user_id, change.kind) != Some(change.kind) {
+                self.revision += 1;
+            }
         }
+    }
+
+    pub(super) fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub(super) fn kind(&self, user_id: &str) -> Option<PresenceKind> {
         self.users.get(user_id).copied()
     }
 
-    /// At the session's end: its users' presence goes with it.
+    /// At the session's end: its users' presence goes with it. The
+    /// revision moves on, never back to one already painted.
     pub(super) fn clear(&mut self) {
         self.users.clear();
+        self.revision += 1;
     }
 }
 
@@ -58,5 +69,24 @@ mod tests {
 
         book.clear();
         assert_eq!(book.kind("@carol:example.org"), None);
+    }
+
+    #[test]
+    fn the_revision_moves_only_on_a_change() {
+        let mut book = PresenceBook::default();
+        let bob = || change("@bob:example.org", PresenceKind::Unavailable, Some("lunch"));
+        book.apply(vec![bob()]);
+        let revision = book.revision();
+        assert_ne!(revision, PresenceBook::default().revision());
+        // The same again (a sync repeating it, or the snapshot's copy of
+        // the first sync's) is no change.
+        book.apply(vec![bob()]);
+        assert_eq!(book.revision(), revision);
+        book.apply(vec![change("@bob:example.org", PresenceKind::Online, None)]);
+        assert_ne!(book.revision(), revision);
+
+        let revision = book.revision();
+        book.clear();
+        assert!(book.revision() > revision);
     }
 }

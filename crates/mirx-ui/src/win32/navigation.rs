@@ -243,6 +243,7 @@ pub(super) unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
             sync_view_content(hwnd, view_id)?;
         }
     }
+    repaint_nick_lists_after_presence_change(hwnd);
 
     // A room the user joined is activated now that its window exists,
     // unless the room went again in the same batch. Otherwise the active
@@ -269,6 +270,23 @@ pub(super) unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
     } else {
         activate_view(hwnd, &active_view, None)
     }
+}
+
+/// Repaints every nick list if anyone's presence changed since they were
+/// painted: they draw it at paint time, so nothing is rebuilt, and the
+/// timeline rows (`view_rows_key`) do not depend on it.
+unsafe fn repaint_nick_lists_after_presence_change(hwnd: HWND) {
+    let state = state_mut(hwnd);
+    let revision = state.model.presence.revision();
+    if revision == state.painted_presence_revision {
+        return;
+    }
+    for (view_id, view) in &state.views {
+        if view_id.room_id().is_some() {
+            InvalidateRect(room_content_member_list(view.content), null(), 1);
+        }
+    }
+    state.painted_presence_revision = revision;
 }
 
 /// Rebuilds the treebar if its items changed; otherwise only repaints it,
