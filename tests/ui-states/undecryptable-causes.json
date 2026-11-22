@@ -1,0 +1,142 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!encrypted:example.org",
+        "display_name": "Encrypted",
+        "topic": null,
+        "encrypted": true,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!encrypted:example.org",
+      "activity_id": "event:$utd-unknown:example.org",
+      "timestamp_ms": 1710000000000,
+      "highlight": false,
+      "kind": {
+        "type": "unable_to_decrypt",
+        "event_id": "$utd-unknown:example.org",
+        "sender": {
+          "user_id": "@alice:example.org",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "session_id": "SESSION0",
+        "cause": "unknown"
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!encrypted:example.org",
+      "activity_id": "event:$utd-sent-before-you-joined:example.org",
+      "timestamp_ms": 1710000060000,
+      "highlight": false,
+      "kind": {
+        "type": "unable_to_decrypt",
+        "event_id": "$utd-sent-before-you-joined:example.org",
+        "sender": {
+          "user_id": "@bob:example.org",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "session_id": "SESSION1",
+        "cause": "sent_before_you_joined"
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!encrypted:example.org",
+      "activity_id": "event:$utd-historical-no-backup:example.org",
+      "timestamp_ms": 1710000120000,
+      "highlight": false,
+      "kind": {
+        "type": "unable_to_decrypt",
+        "event_id": "$utd-historical-no-backup:example.org",
+        "sender": {
+          "user_id": "@alice:example.org",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "session_id": "SESSION2",
+        "cause": "historical_no_backup"
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!encrypted:example.org",
+      "activity_id": "event:$utd-historical-unverified:example.org",
+      "timestamp_ms": 1710000180000,
+      "highlight": false,
+      "kind": {
+        "type": "unable_to_decrypt",
+        "event_id": "$utd-historical-unverified:example.org",
+        "sender": {
+          "user_id": "@bob:example.org",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "session_id": "SESSION3",
+        "cause": "historical_unverified"
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!encrypted:example.org",
+      "activity_id": "event:$utd-withheld-unverified:example.org",
+      "timestamp_ms": 1710000240000,
+      "highlight": false,
+      "kind": {
+        "type": "unable_to_decrypt",
+        "event_id": "$utd-withheld-unverified:example.org",
+        "sender": {
+          "user_id": "@alice:example.org",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "session_id": "SESSION4",
+        "cause": "withheld_unverified"
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!encrypted:example.org",
+      "activity_id": "event:$utd-withheld-by-sender:example.org",
+      "timestamp_ms": 1710000300000,
+      "highlight": false,
+      "kind": {
+        "type": "unable_to_decrypt",
+        "event_id": "$utd-withheld-by-sender:example.org",
+        "sender": {
+          "user_id": "@bob:example.org",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "session_id": "SESSION5",
+        "cause": "withheld_by_sender"
+      },
+      "relation": null
+    }
+  }
+]

@@ -13135,6 +13135,112 @@ fn automation_driver_applies_receive_side_message_edits_in_place()
     Ok(())
 }
 
+/// Each line that could not be decrypted says why. Read again, a line still
+/// undecryptable takes its current cause in place; one whose key came
+/// becomes its message in place.
+#[test]
+fn automation_driver_undecryptable_lines_say_why_and_take_a_new_cause_in_place()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(fixture_state_path(
+        "undecryptable-causes.json",
+    ))?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let room = room_identity("!encrypted:example.org");
+    let undecrypted = "sent an encrypted message that could not be decrypted";
+    let lines = |app: &MirxApp| -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let state = app.dump_ui_state()?;
+        Ok(find_view(&state, &room).lines.clone())
+    };
+    let before = lines(&app)?;
+    let shown = before
+        .iter()
+        .filter(|line| line.contains(undecrypted))
+        .map(|line| line.split_once(undecrypted).expect("filtered").1)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shown,
+        [
+            "",
+            " (sent before you joined)",
+            " (sent before this session existed, and you have no key backup)",
+            " (sent before this session existed: /verify this session or /e2ee recover to read it)",
+            " (the sender shares keys only with verified sessions: /verify this session)",
+            " (the sender withheld its key)",
+        ],
+        "{before:#?}"
+    );
+    let historical = before
+        .iter()
+        .position(|line| line.contains("/e2ee recover"))
+        .expect("the historical line");
+    let read_again = |kind: serde_json::Value| {
+        serde_json::json!([{ "RoomEventsDecrypted": {
+            "room_id": "!encrypted:example.org",
+            "events": [{
+                "type": "activity",
+                "room_id": "!encrypted:example.org",
+                "activity_id": "event:$utd-historical-unverified:example.org",
+                "timestamp_ms": 1_710_000_180_000u64,
+                "highlight": false,
+                "relation": null,
+                "kind": kind,
+            }],
+        }}])
+        .to_string()
+    };
+    let bob = serde_json::json!({
+        "user_id": "@bob:example.org",
+        "display_name": "Bob",
+        "display_name_ambiguous": false,
+    });
+
+    // Verified, without the key in the backup: nothing more to say.
+    app.append_synthetic_events(&read_again(serde_json::json!({
+        "type": "unable_to_decrypt",
+        "event_id": "$utd-historical-unverified:example.org",
+        "sender": bob,
+        "session_id": "SESSION3",
+        "cause": "unknown",
+    })))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let after = lines(&app)?;
+    assert_eq!(after.len(), before.len(), "{after:#?}");
+    assert!(
+        after[historical].ends_with(&format!("* Bob {undecrypted}")),
+        "{after:#?}"
+    );
+    assert!(!after.iter().any(|line| line.contains("/e2ee recover")));
+
+    app.append_synthetic_events(&read_again(serde_json::json!({
+        "type": "message",
+        "event_id": "$utd-historical-unverified:example.org",
+        "transaction_id": null,
+        "sender": bob,
+        "presentation": "text",
+        "body": "from before you were here",
+        "styles": [],
+        "user_links": [],
+        "send_state": { "state": "sent" },
+    })))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let decrypted = lines(&app)?;
+    assert!(
+        decrypted[historical].ends_with("<Bob> from before you were here"),
+        "{decrypted:#?}"
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 /// Deleting an edit shows what it replaced: the latest edit left, then the
 /// message's own text, no longer `(edited)`.
 #[test]

@@ -3004,6 +3004,24 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!encrypted:example.org'
       ;;
+    # Each line that could not be decrypted says why, and what to do when
+    # something can be done; the long notes wrap with the indent.
+    undecryptable-causes)
+      expect_selected='!encrypted:example.org'
+      expect_active_view='room:!encrypted:example.org'
+      room_expect_args=(
+        --expect-room '!encrypted:example.org'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!encrypted:example.org::"cause":"sent_before_you_joined"'
+        --expect-room-activity '!encrypted:example.org::"cause":"historical_unverified"'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!encrypted:example.org::* Bob sent an encrypted message that could not be decrypted (sent before you joined)'
+        --expect-room-view '!encrypted:example.org::(the sender withheld its key)'
+      )
+      expect_switchbar_active='room:!encrypted:example.org'
+      ;;
     # Bob's reply decrypts once its key comes, in place; his later line
     # still waits for its key.
     room-keys-decrypted)
