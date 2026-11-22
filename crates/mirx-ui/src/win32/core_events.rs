@@ -849,6 +849,8 @@ pub(super) unsafe fn apply_events_and_refresh(
         return Ok(());
     }
 
+    // A warning already waiting for its dialog has its message posted.
+    let log_out_warning_posted = state_ref(hwnd).log_out_warning.is_some();
     let mut history_backfill_anchor = None;
     let mut history_backfill_views = Vec::new();
     let mut backfill_result = false;
@@ -933,6 +935,9 @@ pub(super) unsafe fn apply_events_and_refresh(
     // After the anchor, so the jump's scroll wins.
     if backfill_result {
         continue_event_jump(hwnd, failed_backfill_room_id.as_deref())?;
+    }
+    if !log_out_warning_posted && state_ref(hwnd).log_out_warning.is_some() {
+        PostMessageW(hwnd, WM_LOG_OUT_WARNING, 0, 0);
     }
     Ok(())
 }

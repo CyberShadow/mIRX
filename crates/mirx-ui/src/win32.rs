@@ -338,9 +338,9 @@ use dialogs::{
 use dialogs::{
     SubmittedSetupE2eeRecovery, create_child_window, pack_size_lparam, register_dialog_classes,
     room_keys_dialog_title, run_colors_dialog, run_modal_dialog, run_options_dialog,
-    show_about_dialog, show_e2ee_recovery_key, show_login_dialog, show_recover_e2ee_dialog,
-    show_reset_e2ee_dialog, show_room_keys_dialog, show_setup_e2ee_dialog,
-    show_sign_out_session_dialog, show_single_field_dialog,
+    show_about_dialog, show_e2ee_recovery_key, show_log_out_dialog, show_login_dialog,
+    show_recover_e2ee_dialog, show_reset_e2ee_dialog, show_room_keys_dialog,
+    show_setup_e2ee_dialog, show_sign_out_session_dialog, show_single_field_dialog,
 };
 use echo::{EchoLine, EchoLog};
 use errors::{ErrorDestination, error_destination};
@@ -372,9 +372,9 @@ use frame_menus::{
     default_context_point_for_window, disconnect, frame_menu_item_enabled, handle_menu_command,
     handle_switchbar_command, handle_window_key_command, invoke_menu_command_for_automation,
     invoke_navigation_context_menu_for_automation, invoke_timeline_context_menu_for_automation,
-    log_out, open_dialog_for_automation, refresh_menu_popup, refresh_message_menu_state,
-    refresh_room_menu_state, refresh_tools_menu_state, run_room_keys_dialogs,
-    select_timeline_event_for_automation, selected_message_quote_target,
+    log_out, log_out_warning, open_dialog_for_automation, refresh_menu_popup,
+    refresh_message_menu_state, refresh_room_menu_state, refresh_tools_menu_state,
+    run_room_keys_dialogs, select_timeline_event_for_automation, selected_message_quote_target,
     selected_timeline_event_id, selected_timeline_event_id_for_automation,
     selected_timeline_media_attachment, show_context_menu, show_recover_e2ee_menu_dialog,
     show_reset_e2ee_menu_dialog, show_timeline_message_context_menu, timeline_row_is_selected,
@@ -549,6 +549,10 @@ const WM_TRAY_ICON: u32 = WM_APP + 4;
 /// its buffer kept while it was scrolled back, `window_buffer`). Posted: the
 /// sync must not run inside the scrolled window's message.
 const WM_SYNC_VIEWS: u32 = WM_APP + 5;
+/// The core refused to log out (`log_out_warning`): its dialog opens.
+/// Posted: a modal must not run inside the events' application, which an
+/// automation `WM_COPYDATA` may be running.
+const WM_LOG_OUT_WARNING: u32 = WM_APP + 6;
 const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
 /// A connect retry is due (`reconnect`).

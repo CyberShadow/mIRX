@@ -1294,12 +1294,32 @@ pub(super) unsafe fn disconnect(hwnd: HWND) -> Result<(), String> {
     enqueue_command(state_mut(hwnd), command)
 }
 
-/// File > Log Out: a due retry goes first.
+/// File > Log Out. The core may answer that room keys would be lost:
+/// then `log_out_warning` asks.
 pub(super) unsafe fn log_out(hwnd: HWND) -> Result<(), String> {
+    submit_logout_after_any_retry(hwnd, false)
+}
+
+/// A due retry goes first: it would start sync again.
+unsafe fn submit_logout_after_any_retry(hwnd: HWND, discard_room_keys: bool) -> Result<(), String> {
     if state_ref(hwnd).model.connection == ConnectionState::WaitingToReconnect {
         reconnect::cancel(hwnd);
     }
-    submit_logout(state_mut(hwnd), true)
+    submit_logout(state_mut(hwnd), discard_room_keys)
+}
+
+/// The Log Out dialog of the core's refusal (`WM_LOG_OUT_WARNING`): its
+/// Log Out logs out all the same, its Cancel leaves the session as it is.
+pub(super) unsafe fn log_out_warning(hwnd: HWND) -> Result<(), String> {
+    // Posted once a refusal came; a Log Out that went on to log out before
+    // this message's turn took the session, and the warning, with it.
+    let Some(risk) = state_mut(hwnd).log_out_warning.take() else {
+        return Ok(());
+    };
+    if show_log_out_dialog(hwnd, &risk)? {
+        submit_logout_after_any_retry(hwnd, true)?;
+    }
+    Ok(())
 }
 
 /// A Commands item runs the slash command it stands for, prompting first

@@ -222,13 +222,64 @@ pub fn sign_in_with_select_server(
     Ok(())
 }
 
-/// File > Log Out, and what it leaves: no session file, no store.
+/// The Log Out dialog, which opens when logging out would lose room keys.
+pub const LOG_OUT_DIALOG_CLASS: &str = "mirxWin32LogOutDialog";
+/// Its Log Out button.
+pub const LOG_OUT_DIALOG_LOG_OUT_ID: usize = 5020;
+
+/// File > Log Out of a session whose key backup a new session can open:
+/// it logs out without a word.
+#[allow(
+    dead_code,
+    reason = "only the live suite's server sets up recovery, which this needs"
+)]
 pub fn log_out_with_the_menu(
     app: &MirxApp,
     local_app_data: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     invoke_account_menu_command(app, MENU_ID_FILE_LOG_OUT)?;
+    let class = wide_null(LOG_OUT_DIALOG_CLASS);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while app.dump_model()?.connection != "signed_out" {
+        let dialog = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
+        if !dialog.is_null() {
+            return Err("Log Out warned that room keys would be lost".into());
+        }
+        if Instant::now() >= deadline {
+            return Err("Log Out did not log out within 30 seconds".into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    assert_logged_out(app, local_app_data)
+}
+
+/// File > Log Out, and Log Out in the dialog that warns that room keys
+/// would be lost.
+pub fn log_out_anyway_with_the_menu(
+    app: &MirxApp,
+    local_app_data: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    invoke_account_menu_command(app, MENU_ID_FILE_LOG_OUT)?;
+    let dialog = app.wait_for_modal_dialog(Duration::from_secs(30))?;
+    assert_eq!(
+        (dialog.class.as_str(), dialog.title.as_str()),
+        (LOG_OUT_DIALOG_CLASS, "Log Out")
+    );
+    let dialog = dialog.hwnd as HWND;
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, LOG_OUT_DIALOG_LOG_OUT_ID as WPARAM, 0) },
+        0
+    );
+    wait_for_window_gone(dialog, "Log Out dialog")?;
     app.wait_for_connection("signed_out", Duration::from_secs(30))?;
+    assert_logged_out(app, local_app_data)
+}
+
+/// What Log Out leaves: no session file, no store.
+fn assert_logged_out(
+    app: &MirxApp,
+    local_app_data: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     wait_for_status_line(app, "* Logged out", Duration::from_secs(10))?;
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.dump_model()?.last_error, None);

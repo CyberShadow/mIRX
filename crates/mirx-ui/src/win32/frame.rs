@@ -213,6 +213,12 @@ unsafe extern "system" fn window_proc(
             }
             0
         }
+        WM_LOG_OUT_WARNING => {
+            if let Err(message) = log_out_warning(hwnd) {
+                show_error_message(hwnd, "Log Out", &message);
+            }
+            0
+        }
         WM_CONNECT_AT_STARTUP => {
             if let Err(message) = connect(hwnd, None) {
                 show_error_message(hwnd, "Connect", &message);

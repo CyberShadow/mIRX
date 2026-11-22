@@ -74,17 +74,18 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, DM_GETDEFID, EnumThreadWindows,
-    FindWindowExW, FindWindowW, GCL_STYLE, GUITHREADINFO, GW_OWNER, GWL_STYLE, GetClassLongPtrW,
-    GetClassNameW, GetClientRect, GetDlgCtrlID, GetDlgItem, GetForegroundWindow, GetGUIThreadInfo,
-    GetLastActivePopup, GetScrollInfo, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES, IsIconic, IsWindow, IsWindowVisible,
-    LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN, LBS_OWNERDRAWFIXED, PostMessageW,
-    RegisterWindowMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE,
-    SC_RESTORE, SCROLLINFO, SIF_ALL, SMTO_NORMAL, SPI_GETWHEELSCROLLLINES, SWP_NOMOVE,
-    SWP_NOZORDER, SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowPos,
-    SetWindowTextW, SystemParametersInfoW, WM_CHAR, WM_COMMAND, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NULL, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
+    FindWindowExW, FindWindowW, GCL_STYLE, GUITHREADINFO, GW_CHILD, GW_HWNDNEXT, GW_OWNER,
+    GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect, GetDlgCtrlID, GetDlgItem,
+    GetForegroundWindow, GetGUIThreadInfo, GetLastActivePopup, GetScrollInfo, GetWindow,
+    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES,
+    IsIconic, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN,
+    LBS_OWNERDRAWFIXED, PostMessageW, RegisterWindowMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP,
+    SB_VERT, SC_CLOSE, SC_MINIMIZE, SC_RESTORE, SCROLLINFO, SIF_ALL, SMTO_NORMAL,
+    SPI_GETWHEELSCROLLLINES, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW, SendMessageW,
+    SetForegroundWindow, SetWindowPos, SetWindowTextW, SystemParametersInfoW, WM_CHAR, WM_COMMAND,
+    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL,
+    WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -317,6 +318,8 @@ struct MockBackfillHomeserver {
     sync_presence: Arc<Mutex<Vec<Option<String>>>>,
     /// The bodies of the typing notices, in arrival order.
     typing: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// The `/logout` requests it got.
+    logouts: Arc<AtomicUsize>,
 }
 
 /// What the mock homeserver fails, as the network would: a failed request
@@ -550,6 +553,8 @@ fn spawn_mock_homeserver_with_auth(
     let mock_sync_presence = Arc::clone(&sync_presence);
     let typing = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
     let mock_typing = Arc::clone(&typing);
+    let logouts = Arc::new(AtomicUsize::new(0));
+    let mock_logouts = Arc::clone(&logouts);
     let room_account_data = fully_read
         .into_iter()
         .map(|event_id| {
@@ -645,6 +650,9 @@ fn spawn_mock_homeserver_with_auth(
                 path.contains("/send/") && mock_faults.send_down.load(Ordering::SeqCst);
             if dropped_sync || dropped_send {
                 continue;
+            }
+            if path == "/_matrix/client/v3/logout" {
+                mock_logouts.fetch_add(1, Ordering::SeqCst);
             }
             if mock_faults.session_ended.load(Ordering::SeqCst)
                 && (path.contains("/sync") || path == "/_matrix/client/v3/logout")
@@ -1140,6 +1148,7 @@ fn spawn_mock_homeserver_with_auth(
         presence_puts,
         sync_presence,
         typing,
+        logouts,
     })
 }
 
@@ -4698,7 +4707,7 @@ fn logging_out_and_signing_in_again_works() -> Result<(), Box<dyn std::error::Er
     sign_in_with_select_server(&app, &server.base_url, "alice", "secret")?;
     assert!(store_dir_path(&local_app_data).is_dir());
 
-    log_out_with_the_menu(&app, &local_app_data)?;
+    log_out_anyway_with_the_menu(&app, &local_app_data)?;
 
     sign_in_with_select_server(&app, &server.base_url, "alice", "secret")?;
     wait_for_status_line(
@@ -4741,7 +4750,7 @@ fn a_session_the_server_ended_logs_out_and_signs_in_again() -> Result<(), Box<dy
         "{lines:?}"
     );
 
-    log_out_with_the_menu(&app, &local_app_data)?;
+    log_out_anyway_with_the_menu(&app, &local_app_data)?;
     assert!(
         !status_view_contains(&app, "Error during logout")?,
         "{:?}",
@@ -4750,6 +4759,80 @@ fn a_session_the_server_ended_logs_out_and_signs_in_again() -> Result<(), Box<dy
 
     server.faults.session_ended.store(false, Ordering::SeqCst);
     sign_in_with_select_server(&app, &server.base_url, "alice", "secret")?;
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The texts of a dialog's controls, in their order.
+unsafe fn dialog_control_texts(dialog: HWND) -> Vec<String> {
+    let mut texts = Vec::new();
+    let mut control = unsafe { GetWindow(dialog, GW_CHILD) };
+    while !control.is_null() {
+        texts.push(unsafe { read_window_text(control) });
+        control = unsafe { GetWindow(control, GW_HWNDNEXT) };
+    }
+    texts
+}
+
+/// The Log Out dialog's Cancel.
+const LOG_OUT_DIALOG_CANCEL_ID: i32 = 5021;
+
+/// Without recovery, no new session could read what this one can: Log Out
+/// says so first, and its Cancel, the default, leaves the session as it
+/// was. Its Log Out logs out.
+#[test]
+fn log_out_asks_before_it_loses_the_room_keys() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
+    sign_in_with_select_server(&app, &server.base_url, "alice", "secret")?;
+    // Until the SDK has read the account's recovery, it is not known.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while app
+        .dump_model()?
+        .e2ee_status
+        .is_none_or(|status| status.recovery != E2eeRecoveryState::Disabled)
+    {
+        assert!(Instant::now() < deadline, "recovery never showed as off");
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    let lines = status_view_lines(&app)?;
+
+    invoke_account_menu_command(&app, MENU_ID_FILE_LOG_OUT)?;
+    let dialog = app.wait_for_modal_dialog(Duration::from_secs(30))?;
+    assert_eq!(
+        (dialog.class.as_str(), dialog.title.as_str()),
+        (LOG_OUT_DIALOG_CLASS, "Log Out")
+    );
+    let dialog = dialog.hwnd as HWND;
+    let texts = unsafe { dialog_control_texts(dialog) };
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.starts_with("Recovery is not set up")
+                && text.contains("/e2ee setup")
+                && text.contains("/e2ee export")),
+        "{texts:?}"
+    );
+    unsafe { SetForegroundWindow(dialog) };
+    wait_for_dialog_focus(&app, dialog, LOG_OUT_DIALOG_CANCEL_ID)?;
+    press_keys(&[VK_ESCAPE]);
+    wait_for_window_gone(dialog, "Log Out dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(model.connection, "syncing");
+    assert_eq!(model.last_error, None);
+    assert!(session_file_path(&local_app_data).is_file());
+    assert!(store_dir_path(&local_app_data).is_dir());
+    assert_eq!(server.logouts.load(Ordering::SeqCst), 0);
+    // Not a word in Status.
+    assert_eq!(status_view_lines(&app)?, lines);
+
+    log_out_anyway_with_the_menu(&app, &local_app_data)?;
+    assert_eq!(server.logouts.load(Ordering::SeqCst), 1);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

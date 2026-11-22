@@ -500,7 +500,8 @@ fn logging_out_and_signing_in_again_works() -> Result<(), Box<dyn Error>> {
         alice_phone.devices()
     );
 
-    log_out_with_the_menu(&app, &local_app_data)?;
+    // A new account has no recovery.
+    log_out_anyway_with_the_menu(&app, &local_app_data)?;
     assert_eq!(alice_phone.devices(), [alice_phone.device_id().to_owned()]);
 
     let second_device = sign_in(&app, &homeserver, &alice_phone)?;
@@ -551,7 +552,7 @@ fn a_session_signed_out_elsewhere_ends_and_signs_in_again() -> Result<(), Box<dy
         "{lines:?}"
     );
 
-    log_out_with_the_menu(&app, &local_app_data)?;
+    log_out_anyway_with_the_menu(&app, &local_app_data)?;
     assert!(
         !status_view_contains(&app, "Error during logout")?,
         "{:?}",

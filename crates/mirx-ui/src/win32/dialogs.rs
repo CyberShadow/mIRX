@@ -22,6 +22,7 @@ const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32RecoverE2eeDialog";
 const SETUP_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32SetupE2eeDialog";
 const RESET_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32ResetE2eeDialog";
 const SIGN_OUT_SESSION_DIALOG_CLASS_NAME: &str = "mirxWin32SignOutSessionDialog";
+const LOG_OUT_DIALOG_CLASS_NAME: &str = "mirxWin32LogOutDialog";
 const RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME: &str = "mirxWin32RecoveryKeyHandoffDialog";
 const ROOM_KEYS_DIALOG_CLASS_NAME: &str = "mirxWin32RoomKeysDialog";
 pub(super) const SINGLE_FIELD_DIALOG_CLASS_NAME: &str = "mirxWin32SingleFieldDialog";
@@ -169,8 +170,8 @@ struct SetupE2eeRecoveryDialogState {
 }
 
 /// A destructive action's confirmation dialog: the warning, then the
-/// account password field or a note that the browser confirms, then the
-/// action's button and Cancel. Cancel is the default: Enter, typed after
+/// account password field, a note that the browser confirms, or nothing,
+/// then the action's button and Cancel. Cancel is the default: Enter, typed after
 /// the password as in any other dialog, must not do it.
 struct ConfirmDialog {
     class_name: &'static str,
@@ -188,6 +189,8 @@ enum ConfirmWith {
     Password,
     /// The server's page in the browser, as this note tells.
     Browser(&'static str),
+    /// The button alone: nothing to type or approve.
+    Nothing,
 }
 
 /// A confirmed action.
@@ -235,7 +238,7 @@ pub(super) struct SingleFieldDialogState {
 }
 
 /// Every mirx dialog's class and window procedure.
-const DIALOG_CLASSES: [(&str, WNDPROC); 12] = [
+const DIALOG_CLASSES: [(&str, WNDPROC); 13] = [
     (LOGIN_DIALOG_CLASS_NAME, Some(login_dialog_window_proc)),
     (
         RECOVER_E2EE_DIALOG_CLASS_NAME,
@@ -253,6 +256,7 @@ const DIALOG_CLASSES: [(&str, WNDPROC); 12] = [
         SIGN_OUT_SESSION_DIALOG_CLASS_NAME,
         Some(confirm_dialog_window_proc),
     ),
+    (LOG_OUT_DIALOG_CLASS_NAME, Some(confirm_dialog_window_proc)),
     (
         RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME,
         Some(recovery_key_handoff_dialog_window_proc),
@@ -1232,6 +1236,7 @@ unsafe fn create_confirm_dialog(
                 ConfirmWith::Browser(note) => {
                     column.label(note, 0, 0)?;
                 }
+                ConfirmWith::Nothing => {}
             }
             column.buttons_with_default(
                 &[
@@ -1254,7 +1259,7 @@ unsafe fn show_confirm_dialog(
     let dialog = create_confirm_dialog(owner, confirm, Arc::clone(&result))?;
     let focus = match confirm.confirm_with {
         ConfirmWith::Password => CONFIRM_DIALOG_PASSWORD_ID,
-        ConfirmWith::Browser(_) => CONFIRM_DIALOG_CANCEL_ID as u16,
+        ConfirmWith::Browser(_) | ConfirmWith::Nothing => CONFIRM_DIALOG_CANCEL_ID as u16,
     };
     SetFocus(GetDlgItem(dialog, focus.into()));
     run_modal_dialog(owner, dialog);
@@ -1308,6 +1313,57 @@ pub(super) unsafe fn show_sign_out_session_dialog(
     device_id: &str,
 ) -> Result<Option<ConfirmForm>, String> {
     show_confirm_dialog(owner, &sign_out_session_confirmation(device_id))
+}
+
+/// What Log Out would lose, why, and what keeps it: the core's refusal
+/// (`RoomKeysAtRisk`), worded for the Log Out dialog.
+fn log_out_warning(risk: &RoomKeysAtRisk) -> String {
+    match risk {
+        RoomKeysAtRisk::RecoveryOff => "Recovery is not set up, so no new session can open \
+             your key backup. After you log out, encrypted messages only this session can \
+             read stay unreadable, unless another of your sessions verifies the new one. \
+             /e2ee setup sets up recovery; /e2ee export saves the room keys to a file."
+            .to_owned(),
+        RoomKeysAtRisk::RecoveryIncomplete => "Recovery is missing some of your keys, so a \
+             new session may not open your key backup. After you log out, encrypted messages \
+             only this session can read may stay unreadable. /e2ee recover completes \
+             recovery; /e2ee export saves the room keys to a file."
+            .to_owned(),
+        RoomKeysAtRisk::RecoveryUnknown => "mirx cannot tell yet whether recovery is set up: \
+             your server has not said. If it is not, encrypted messages only this session can \
+             read stay unreadable after you log out. /e2ee export saves the room keys to a \
+             file."
+            .to_owned(),
+        RoomKeysAtRisk::BackupOff => "Key backup is off, so your backup does not hold this \
+             session's room keys. After you log out, encrypted messages only this session can \
+             read stay unreadable. /e2ee setup turns it on; /e2ee export saves the room keys \
+             to a file."
+            .to_owned(),
+        RoomKeysAtRisk::BackupFailed(reason) => format!(
+            "Saving this session's room keys to your key backup failed: {reason}. After you \
+             log out, encrypted messages whose keys only this session holds stay unreadable. \
+             Cancel and try again later, or /e2ee export saves the room keys to a file."
+        ),
+    }
+}
+
+/// The Log Out confirmation, when logging out would lose room keys.
+fn log_out_confirmation(risk: &RoomKeysAtRisk) -> ConfirmDialog {
+    ConfirmDialog {
+        class_name: LOG_OUT_DIALOG_CLASS_NAME,
+        title: "Log Out",
+        warning: log_out_warning(risk),
+        confirm_label: "&Log Out",
+        confirm_with: ConfirmWith::Nothing,
+    }
+}
+
+/// Whether the user said to log out all the same.
+pub(super) unsafe fn show_log_out_dialog(
+    owner: HWND,
+    risk: &RoomKeysAtRisk,
+) -> Result<bool, String> {
+    Ok(show_confirm_dialog(owner, &log_out_confirmation(risk))?.is_some())
 }
 
 /// One labelled field with OK and Cancel: the Commands menu's prompts and
@@ -1848,6 +1904,101 @@ mod tests {
         }
     }
 
+    /// Presses `button` in the Log Out dialog, which has no field.
+    unsafe fn press_in_log_out(frame: HWND, timer: usize, button: usize) {
+        KillTimer(frame, timer);
+        let dialog = owned_dialog(frame, LOG_OUT_DIALOG_CLASS_NAME);
+        assert!(GetDlgItem(dialog, CONFIRM_DIALOG_PASSWORD_ID.into()).is_null());
+        PostMessageW(dialog, WM_COMMAND, button, 0);
+    }
+
+    unsafe extern "system" fn click_log_out(frame: HWND, _message: u32, timer: usize, _time: u32) {
+        press_in_log_out(frame, timer, CONFIRM_DIALOG_CONFIRM_ID);
+    }
+
+    unsafe extern "system" fn click_cancel_in_log_out(
+        frame: HWND,
+        _message: u32,
+        timer: usize,
+        _time: u32,
+    ) {
+        press_in_log_out(frame, timer, CONFIRM_DIALOG_CANCEL_ID);
+    }
+
+    unsafe extern "system" fn press_escape_in_log_out(
+        frame: HWND,
+        _message: u32,
+        timer: usize,
+        _time: u32,
+    ) {
+        press_in_log_out(frame, timer, ESC_CANCEL_ID);
+    }
+
+    /// Cancel is the default; only Log Out logs out.
+    #[test]
+    fn the_log_out_dialog_logs_out_only_from_its_button() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                register_dialog_classes(GetModuleHandleW(null())).unwrap();
+                let risk = RoomKeysAtRisk::RecoveryOff;
+                let dialog =
+                    create_confirm_dialog(hwnd, &log_out_confirmation(&risk), Arc::default())
+                        .unwrap();
+                assert_eq!(
+                    SendMessageW(dialog, DM_GETDEFID, 0, 0),
+                    default_button(CONFIRM_DIALOG_CANCEL_ID)
+                );
+                DestroyWindow(dialog);
+                SetTimer(hwnd, 1, 0, Some(click_cancel_in_log_out));
+                assert!(!show_log_out_dialog(hwnd, &risk).unwrap());
+                SetTimer(hwnd, 1, 0, Some(press_escape_in_log_out));
+                assert!(!show_log_out_dialog(hwnd, &risk).unwrap());
+                SetTimer(hwnd, 1, 0, Some(click_log_out));
+                assert!(show_log_out_dialog(hwnd, &risk).unwrap());
+                assert_ne!(IsWindowEnabled(hwnd), 0, "closing it enables the frame");
+            });
+        }
+    }
+
+    /// Each warning says what is at risk, and what keeps the keys.
+    #[test]
+    fn the_log_out_warning_names_the_cause_and_the_fix() {
+        for (risk, cause, fixes) in [
+            (
+                RoomKeysAtRisk::RecoveryOff,
+                "Recovery is not set up",
+                &["/e2ee setup", "/e2ee export", "another of your sessions"][..],
+            ),
+            (
+                RoomKeysAtRisk::RecoveryIncomplete,
+                "Recovery is missing some of your keys",
+                &["/e2ee recover", "/e2ee export"],
+            ),
+            (
+                RoomKeysAtRisk::RecoveryUnknown,
+                "cannot tell yet whether recovery is set up",
+                &["/e2ee export"],
+            ),
+            (
+                RoomKeysAtRisk::BackupOff,
+                "Key backup is off",
+                &["/e2ee setup", "/e2ee export"],
+            ),
+            (
+                RoomKeysAtRisk::BackupFailed("the server said no".to_owned()),
+                "key backup failed: the server said no.",
+                &["try again later", "/e2ee export"],
+            ),
+        ] {
+            let warning = log_out_warning(&risk);
+            assert!(warning.contains(cause), "{warning}");
+            for fix in fixes {
+                assert!(warning.contains(fix), "{warning}");
+            }
+            assert!(!warning.contains("  "), "{warning}");
+        }
+    }
+
     /// Enter presses Cancel, the default; the password goes with a click on
     /// Sign Out; the field is empty afterwards either way.
     #[test]
@@ -2121,6 +2272,12 @@ mod tests {
                     create_confirm_dialog(
                         frame,
                         &sign_out_session_confirmation("PH0NE"),
+                        Arc::default(),
+                    )
+                    .unwrap(),
+                    create_confirm_dialog(
+                        frame,
+                        &log_out_confirmation(&RoomKeysAtRisk::RecoveryOff),
                         Arc::default(),
                     )
                     .unwrap(),
