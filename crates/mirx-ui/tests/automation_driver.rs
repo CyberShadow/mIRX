@@ -5,11 +5,10 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::ptr::{copy_nonoverlapping, null_mut};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mirx_core::{
@@ -83,10 +82,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     RegisterWindowMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE,
     SC_RESTORE, SCROLLINFO, SIF_ALL, SMTO_NORMAL, SPI_GETWHEELSCROLLLINES, SWP_NOMOVE,
     SWP_NOZORDER, SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowPos,
-    SetWindowTextW, SystemParametersInfoW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH,
-    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL,
-    WS_VSCROLL,
+    SetWindowTextW, SystemParametersInfoW, WM_CHAR, WM_COMMAND, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NULL, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -100,6 +98,9 @@ fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
 #[allow(dead_code)]
 #[path = "../src/dpapi.rs"]
 mod dpapi;
+mod support;
+
+use support::*;
 
 const PROTECTED_SESSION_MAGIC: &[u8] = b"mirx-ui-session:v1\0";
 const SESSION_DPAPI_ENTROPY: &[u8] = b"mirx-ui/session/v1";
@@ -127,8 +128,6 @@ const SETUP_E2EE_DIALOG_PASSPHRASE_ID: i32 = 5013;
 const SETUP_E2EE_DIALOG_OK_ID: usize = 5015;
 const RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID: i32 = 5017;
 const RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID: usize = 5018;
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
-static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 fn mirx_ui_exe_path() -> Result<PathBuf, String> {
     if let Some(path) = option_env!("CARGO_BIN_EXE_mirx-ui") {
@@ -154,19 +153,6 @@ fn mirx_ui_exe_path() -> Result<PathBuf, String> {
     }
 }
 
-fn unique_temp_path(prefix: &str, extension: Option<&str>) -> PathBuf {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock must be after unix epoch")
-        .as_nanos();
-    let counter = TEMP_PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let stem = format!("{prefix}-{}-{timestamp}-{counter}", std::process::id());
-    match extension {
-        Some(extension) => env::temp_dir().join(format!("{stem}.{extension}")),
-        None => env::temp_dir().join(stem),
-    }
-}
-
 fn unique_state_path() -> PathBuf {
     unique_temp_path("mirx-ui-automation-driver", Some("json"))
 }
@@ -175,89 +161,11 @@ fn unique_screenshot_path() -> PathBuf {
     unique_temp_path("mirx-ui-automation-driver", Some("png"))
 }
 
-fn unique_local_app_data_path() -> PathBuf {
-    unique_temp_path("mirx-ui-local-app-data", None)
-}
-
-fn session_file_path(local_app_data: &Path) -> PathBuf {
-    local_app_data
-        .join("mirx")
-        .join("ui-shell")
-        .join("session.json")
-}
-
-fn launch_options(local_app_data: Option<PathBuf>) -> LaunchOptions {
-    LaunchOptions {
-        startup_timeout: Duration::from_secs(20),
-        local_app_data,
-        frame_size: None,
-    }
-}
-
-struct GuiTestApp {
-    app: MirxApp,
-    _gui_test_guard: MutexGuard<'static, ()>,
-}
-
-impl Deref for GuiTestApp {
-    type Target = MirxApp;
-
-    fn deref(&self) -> &Self::Target {
-        &self.app
-    }
-}
-
-impl GuiTestApp {
-    /// Closes mirx and waits for it to exit, still holding the GUI lock.
-    fn close(self, timeout: Duration) -> Result<std::process::ExitStatus, TestkitError> {
-        self.app.close(timeout)
-    }
-
-    /// Waits for mirx to exit on its own, still holding the GUI lock.
-    fn wait_for_exit(self, timeout: Duration) -> Result<std::process::ExitStatus, TestkitError> {
-        self.app.wait_for_exit(timeout)
-    }
-}
-
-fn gui_test_lock() -> &'static Mutex<()> {
-    static GUI_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    GUI_TEST_LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn lock_gui_test() -> MutexGuard<'static, ()> {
-    let lock = gui_test_lock();
-    match lock.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            lock.clear_poison();
-            poisoned.into_inner()
-        }
-    }
-}
-
 fn launch_app(
     exe_path: &Path,
     args: &[OsString],
 ) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
-    let guard = lock_gui_test();
-    let app = mirx_testkit::MirxApp::launch(exe_path, args)?;
-    Ok(GuiTestApp {
-        app,
-        _gui_test_guard: guard,
-    })
-}
-
-fn launch_app_with_options(
-    exe_path: &Path,
-    args: &[OsString],
-    options: LaunchOptions,
-) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
-    let guard = lock_gui_test();
-    let app = mirx_testkit::MirxApp::launch_with_options(exe_path, args, options)?;
-    Ok(GuiTestApp {
-        app,
-        _gui_test_guard: guard,
-    })
+    launch_app_with_options(exe_path, args, LaunchOptions::default())
 }
 
 fn stored_session() -> StoredSession {
@@ -356,15 +264,6 @@ fn saved_session_homeserver_url(
         .as_str()
         .ok_or("saved session has no homeserver_url")?
         .to_owned())
-}
-
-fn assert_bytes_do_not_contain(bytes: &[u8], needle: &str) {
-    assert!(
-        !bytes
-            .windows(needle.len())
-            .any(|window| window == needle.as_bytes()),
-        "bytes unexpectedly contained {needle:?}"
-    );
 }
 
 fn fixture_state_path(name: &str) -> PathBuf {
@@ -2380,26 +2279,11 @@ fn fixture_audio_activity() -> RoomAudioActivity {
     }
 }
 
-fn room_identity(room_id: &str) -> ViewIdentity {
-    ViewIdentity::Room {
-        room_id: room_id.to_owned(),
-    }
-}
-
 fn thread_identity(room_id: &str, thread_root_event_id: &str) -> ViewIdentity {
     ViewIdentity::Thread {
         room_id: room_id.to_owned(),
         thread_root_event_id: thread_root_event_id.to_owned(),
     }
-}
-
-fn find_view<'a>(ui_state: &'a UiState, identity: &ViewIdentity) -> &'a MdiView {
-    ui_state
-        .mdi
-        .views
-        .iter()
-        .find(|view| &view.identity == identity)
-        .unwrap_or_else(|| panic!("missing MDI view for {identity:?}"))
 }
 
 fn find_switchbar_item<'a>(ui_state: &'a UiState, identity: &ViewIdentity) -> &'a SwitchbarItem {
@@ -2458,10 +2342,6 @@ fn assert_switchbar_activity(
         expected,
         "unexpected switchbar activity for {identity:?}"
     );
-}
-
-fn view_contains(view: &MdiView, substring: &str) -> bool {
-    view.lines.iter().any(|line| line.contains(substring))
 }
 
 fn view_lines_containing<'a>(view: &'a MdiView, substring: &str) -> Vec<&'a str> {
@@ -2683,22 +2563,6 @@ fn assert_account_verification_menu_state(
         state.reject_sas_enabled, reject,
         "unexpected enabled state for Reject SAS"
     );
-}
-
-fn invoke_account_menu_command(
-    app: &MirxApp,
-    command_id: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let frame = app.automation_frame_hwnd() as HWND;
-    unsafe {
-        SendMessageW(frame, WM_COMMAND, command_id as WPARAM, 0);
-    }
-    app.wait_idle(Duration::from_secs(5))?;
-    Ok(())
-}
-
-fn wide_null(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 unsafe fn recover_e2ee_dialog_hwnd(frame: HWND, class_name_wide: *const u16) -> HWND {
@@ -3706,38 +3570,13 @@ fn automation_driver_lifecycle_commands_are_submitted_in_render_state_mode()
 
 const MENU_ID_FILE_CONNECT: usize = 40030;
 const MENU_ID_FILE_DISCONNECT: usize = 40031;
-const MENU_ID_FILE_SELECT_SERVER: usize = 40032;
-const MENU_ID_FILE_LOG_OUT: usize = 40004;
-const LOGIN_DIALOG_SERVER_ID: i32 = 5001;
-const LOGIN_DIALOG_USER_ID: i32 = 5002;
-const LOGIN_DIALOG_PASSWORD_ID: i32 = 5003;
-const LOGIN_DIALOG_OK_ID: usize = 5005;
 const LOGIN_DIALOG_CANCEL_ID: usize = 5006;
 const CONNECT_HINT: &str = "* Not connected. Use File > Select Server... (Alt+E) or /server to connect to a Matrix homeserver";
-
-fn launch_automation_app(local_app_data: &Path) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
-    let exe_path =
-        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
-    let app = launch_app_with_options(
-        &exe_path,
-        &[OsString::from("--automation")],
-        launch_options(Some(local_app_data.to_path_buf())),
-    )?;
-    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
-    Ok(app)
-}
-
-fn status_view_contains(app: &MirxApp, line: &str) -> Result<bool, Box<dyn std::error::Error>> {
-    Ok(view_contains(
-        find_view(&app.dump_ui_state()?, &ViewIdentity::Status),
-        line,
-    ))
-}
 
 #[test]
 fn startup_without_session_logs_connect_hint() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
 
     assert_eq!(app.dump_model()?.connection, "signed_out");
     assert!(status_view_contains(&app, CONNECT_HINT)?);
@@ -4467,7 +4306,7 @@ fn toolbar_connect_button_follows_the_connection_and_clicks_through()
 -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     let labels = app
         .dump_ui_state()?
         .toolbar
@@ -4525,7 +4364,7 @@ fn toolbar_connect_button_follows_the_connection_and_clicks_through()
 #[test]
 fn toolbar_options_button_opens_options() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     click_toolbar_button(&app, "Options")?;
     let dialog = wait_for_options_dialog(&app)?;
     post_options_command(dialog, IDCANCEL)?;
@@ -4593,7 +4432,7 @@ fn toolbar_command_hides_the_toolbar_and_persists() -> Result<(), Box<dyn std::e
 fn file_disconnect_and_connect_toggle_sync() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.restore_session(&server.base_url, stored_session())?;
     app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
     assert_eq!(app.dump_model()?.connection, "signed_in");
@@ -4629,7 +4468,7 @@ fn app_with_a_held_history_request()
 -> Result<(PathBuf, MockBackfillHomeserver, GuiTestApp), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_homeserver(MockMessages::Hang, vec![])?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.restore_session(&server.base_url, stored_session())?;
     app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
     invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
@@ -4646,7 +4485,7 @@ fn app_with_a_held_history_request()
 fn away_rides_the_sync_loop() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_homeserver(MockMessages::Hang, vec![])?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.restore_session(&server.base_url, stored_session())?;
     app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
     invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
@@ -4701,7 +4540,7 @@ fn away_rides_the_sync_loop() -> Result<(), Box<dyn std::error::Error>> {
 fn typing_in_a_room_window_tells_the_room() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_homeserver(MockMessages::Hang, vec![])?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.restore_session(&server.base_url, stored_session())?;
     app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
     invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
@@ -4826,7 +4665,7 @@ fn file_disconnect_cancels_a_hung_sign_in() -> Result<(), Box<dyn std::error::Er
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
     server.faults.hold_login.store(true, Ordering::SeqCst);
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
 
     let (dialog, menu_thread) = open_select_server(&app, [&server.base_url, "alice", "secret"])?;
     submit_select_server(dialog, menu_thread)?;
@@ -4848,40 +4687,6 @@ fn file_disconnect_cancels_a_hung_sign_in() -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
-/// The SDK's stores of the session mirx signed in.
-fn store_dir_path(local_app_data: &Path) -> PathBuf {
-    local_app_data
-        .join("mirx")
-        .join("ui-shell")
-        .join("matrix-store")
-}
-
-/// Signs in through Select Server and waits for the sync.
-fn sign_in_with_select_server(
-    app: &MirxApp,
-    server: &MockBackfillHomeserver,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let (dialog, menu_thread) = open_select_server(app, [&server.base_url, "alice", "secret"])?;
-    submit_select_server(dialog, menu_thread)?;
-    app.wait_for_connection("syncing", Duration::from_secs(30))?;
-    Ok(())
-}
-
-/// File > Log Out, and what it leaves: no session file, no store.
-fn log_out_with_the_menu(
-    app: &MirxApp,
-    local_app_data: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    invoke_account_menu_command(app, MENU_ID_FILE_LOG_OUT)?;
-    app.wait_for_connection("signed_out", Duration::from_secs(30))?;
-    wait_for_status_line(app, "* Logged out", Duration::from_secs(10))?;
-    app.wait_idle(Duration::from_secs(5))?;
-    assert_eq!(app.dump_model()?.last_error, None);
-    assert!(!session_file_path(local_app_data).exists());
-    assert!(!store_dir_path(local_app_data).exists());
-    Ok(())
-}
-
 /// Log Out removes the session's store, so the next sign-in, a new device,
 /// starts afresh. Under Wine this also proves the store's files were
 /// closed: Windows does not delete an open file.
@@ -4889,13 +4694,13 @@ fn log_out_with_the_menu(
 fn logging_out_and_signing_in_again_works() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
-    let app = launch_automation_app(&local_app_data)?;
-    sign_in_with_select_server(&app, &server)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
+    sign_in_with_select_server(&app, &server.base_url, "alice", "secret")?;
     assert!(store_dir_path(&local_app_data).is_dir());
 
     log_out_with_the_menu(&app, &local_app_data)?;
 
-    sign_in_with_select_server(&app, &server)?;
+    sign_in_with_select_server(&app, &server.base_url, "alice", "secret")?;
     wait_for_status_line(
         &app,
         "* Logged in as @alice:example (device DEVICE2)",
@@ -4916,8 +4721,8 @@ fn a_session_the_server_ended_logs_out_and_signs_in_again() -> Result<(), Box<dy
     let local_app_data = unique_local_app_data_path();
     write_connect_settings(&local_app_data, "retry_delay=1\r\n")?;
     let server = spawn_mock_backfill_homeserver()?;
-    let app = launch_automation_app(&local_app_data)?;
-    sign_in_with_select_server(&app, &server)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
+    sign_in_with_select_server(&app, &server.base_url, "alice", "secret")?;
 
     server.faults.session_ended.store(true, Ordering::SeqCst);
     wait_for_status_line(
@@ -4944,7 +4749,7 @@ fn a_session_the_server_ended_logs_out_and_signs_in_again() -> Result<(), Box<dy
     );
 
     server.faults.session_ended.store(false, Ordering::SeqCst);
-    sign_in_with_select_server(&app, &server)?;
+    sign_in_with_select_server(&app, &server.base_url, "alice", "secret")?;
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -4954,31 +4759,6 @@ fn a_session_the_server_ended_logs_out_and_signs_in_again() -> Result<(), Box<dy
 // Reconnect on disconnection and connect retry. The mock homeserver drops
 // `/sync` requests as a network would; every test retries after 1 second
 // unless it needs the wait to last.
-
-/// The Status window's lines.
-fn status_view_lines(app: &MirxApp) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    Ok(find_view(&app.dump_ui_state()?, &ViewIdentity::Status)
-        .lines
-        .clone())
-}
-
-fn wait_for_status_line(
-    app: &MirxApp,
-    line: &str,
-    timeout: Duration,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let lines = status_view_lines(app)?;
-        if lines.iter().any(|status_line| status_line.contains(line)) {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(format!("Status never showed {line:?}: {lines:?}").into());
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
 
 /// Until the sync's first response came: `SyncConnected`.
 fn wait_until_connected(app: &MirxApp) -> Result<(), Box<dyn std::error::Error>> {
@@ -5013,7 +4793,7 @@ fn reconnect_app(
     let local_app_data = unique_local_app_data_path();
     write_connect_settings(&local_app_data, connect)?;
     let server = spawn_mock_backfill_homeserver()?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.restore_session(&server.base_url, stored_session())?;
     app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
     invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
@@ -5153,7 +4933,7 @@ fn reconnect_retry_gives_up_after_retry_times() -> Result<(), Box<dyn std::error
     let local_app_data = unique_local_app_data_path();
     write_connect_settings(&local_app_data, "retry_times=2\r\nretry_delay=1\r\n")?;
     let server = spawn_mock_backfill_homeserver()?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.restore_session(&server.base_url, stored_session())?;
     app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
     server.faults.drop_syncs.store(100, Ordering::SeqCst);
@@ -5182,7 +4962,7 @@ fn reconnect_disconnect_cancels_a_waiting_retry() -> Result<(), Box<dyn std::err
     let local_app_data = unique_local_app_data_path();
     write_connect_settings(&local_app_data, "retry_delay=30\r\n")?;
     let server = spawn_mock_backfill_homeserver()?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.restore_session(&server.base_url, stored_session())?;
     app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
     server.faults.drop_syncs.store(100, Ordering::SeqCst);
@@ -5219,7 +4999,7 @@ fn reconnect_connect_while_waiting_retries_now() -> Result<(), Box<dyn std::erro
     let local_app_data = unique_local_app_data_path();
     write_connect_settings(&local_app_data, "retry_delay=30\r\n")?;
     let server = spawn_mock_backfill_homeserver()?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.restore_session(&server.base_url, stored_session())?;
     app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
     server.faults.drop_syncs.store(100, Ordering::SeqCst);
@@ -5310,61 +5090,11 @@ fn reconnect_a_message_typed_offline_goes_once_the_connection_returns()
     Ok(())
 }
 
-/// Opens File > Select Server..., which runs modally on the thread this
-/// returns, and fills in its fields; the dialog is returned open.
-fn open_select_server(
-    app: &MirxApp,
-    fields: [&str; 3],
-) -> Result<(HWND, std::thread::JoinHandle<()>), Box<dyn std::error::Error>> {
-    let frame_value = app.automation_frame_hwnd();
-    let menu_thread = std::thread::spawn(move || unsafe {
-        SendMessageW(
-            frame_value as HWND,
-            WM_COMMAND,
-            MENU_ID_FILE_SELECT_SERVER as WPARAM,
-            0,
-        );
-    });
-    let class_name = wide_null("mirxWin32LoginDialog");
-    let dialog = wait_for_window(&class_name, "Select Server dialog")?;
-    assert_eq!(unsafe { read_window_text(dialog) }, "Select Server");
-    for (control_id, text) in [
-        LOGIN_DIALOG_SERVER_ID,
-        LOGIN_DIALOG_USER_ID,
-        LOGIN_DIALOG_PASSWORD_ID,
-    ]
-    .into_iter()
-    .zip(fields)
-    {
-        let edit = unsafe { GetDlgItem(dialog, control_id) };
-        assert!(!edit.is_null(), "login dialog control {control_id}");
-        let text = wide_null(text);
-        assert_ne!(unsafe { SetWindowTextW(edit, text.as_ptr()) }, 0);
-    }
-    Ok((dialog, menu_thread))
-}
-
-/// Presses OK on a valid Select Server form, which signs in.
-fn submit_select_server(
-    dialog: HWND,
-    menu_thread: std::thread::JoinHandle<()>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    assert_ne!(
-        unsafe { PostMessageW(dialog, WM_COMMAND, LOGIN_DIALOG_OK_ID as WPARAM, 0) },
-        0
-    );
-    wait_for_window_gone(dialog, "Select Server dialog")?;
-    menu_thread
-        .join()
-        .expect("Select Server menu command thread must not panic");
-    Ok(())
-}
-
 #[test]
 fn select_server_dialog_logs_in_and_syncs() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     assert_eq!(app.dump_model()?.connection, "signed_out");
 
     // A user ID's server part cannot name the http://127.0.0.1 mock, so the
@@ -5468,7 +5198,7 @@ fn select_server_browser_sign_in_with_oauth_restores_after_restart()
     let local_app_data = unique_local_app_data_path();
     let server =
         spawn_mock_homeserver_with_auth(MockAuth::OAuth, MockMessages::Hang, vec![], None)?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
 
     let sign_in = start_browser_sign_in(&app, &server.base_url)?;
     let authorize = format!("{}/oauth2/authorize?", server.base_url);
@@ -5552,7 +5282,7 @@ fn file_disconnect_cancels_a_browser_sign_in() -> Result<(), Box<dyn std::error:
     let local_app_data = unique_local_app_data_path();
     let server =
         spawn_mock_homeserver_with_auth(MockAuth::OAuth, MockMessages::Hang, vec![], None)?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
 
     let sign_in = start_browser_sign_in(&app, &server.base_url)?;
     let (port, _) = loopback_redirect(&query_param(&sign_in, "redirect_uri").ok_or("no redirect")?);
@@ -5572,7 +5302,7 @@ fn file_disconnect_cancels_a_browser_sign_in() -> Result<(), Box<dyn std::error:
 fn select_server_refuses_a_bare_user_without_a_password() -> Result<(), Box<dyn std::error::Error>>
 {
     let local_app_data = unique_local_app_data_path();
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
 
     let (dialog, menu_thread) = open_select_server(&app, ["matrix.example", "alice", ""])?;
     assert_ne!(
@@ -5599,33 +5329,6 @@ fn select_server_refuses_a_bare_user_without_a_password() -> Result<(), Box<dyn 
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
-    Ok(())
-}
-
-/// Waits for a window of `class_name` to show. A dialog exists before its
-/// controls do: it shows once they are there.
-fn wait_for_window(class_name: &[u16], what: &str) -> Result<HWND, Box<dyn std::error::Error>> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let window = unsafe { FindWindowW(class_name.as_ptr(), std::ptr::null()) };
-        if !window.is_null() && unsafe { IsWindowVisible(window) } != 0 {
-            return Ok(window);
-        }
-        if Instant::now() >= deadline {
-            return Err(format!("{what} did not appear within five seconds").into());
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
-
-fn wait_for_window_gone(window: HWND, what: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while unsafe { IsWindow(window) } != 0 {
-        if Instant::now() >= deadline {
-            return Err(format!("{what} did not close within five seconds").into());
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    }
     Ok(())
 }
 
@@ -7968,17 +7671,6 @@ fn settings_file_path(local_app_data: &Path) -> PathBuf {
         .join("mirx.ini")
 }
 
-/// Types each command in the active window and waits for it to run.
-fn type_commands(app: &MirxApp, inputs: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
-    for input in inputs {
-        app.set_compose_text(input)?;
-        app.send_compose_key(ComposeKey::Return)?;
-        app.wait_idle(Duration::from_secs(5))?;
-        assert_eq!(app.compose_text()?, "", "{input}");
-    }
-    Ok(())
-}
-
 /// The window menu's Font... id.
 const SYSMENU_ID_FONT: WPARAM = 0x0110;
 
@@ -8671,7 +8363,7 @@ fn window_menu_logging_toggles_the_log_and_its_check() -> Result<(), Box<dyn std
 #[test]
 fn a_thread_windows_logging_is_its_rooms() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.load_events(&fs::read_to_string(fixture_state_path(
         "message-edits.json",
     ))?)?;
@@ -12272,13 +11964,6 @@ unsafe fn window_style(hwnd: HWND) -> u32 {
     unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 }
 }
 
-unsafe fn read_window_text(hwnd: HWND) -> String {
-    let len = unsafe { SendMessageW(hwnd, WM_GETTEXTLENGTH, 0, 0) };
-    let mut buffer = vec![0u16; len as usize + 1];
-    unsafe { SendMessageW(hwnd, WM_GETTEXT, buffer.len(), buffer.as_mut_ptr() as isize) };
-    String::from_utf16_lossy(&buffer[..len as usize])
-}
-
 unsafe fn timeline_top_line(hwnd: HWND) -> i32 {
     unsafe { SendMessageW(hwnd, WM_TIMELINE_GET_TOP_LINE, 0, 0) as i32 }
 }
@@ -13213,7 +12898,7 @@ const OPEN_DIALOG_FILE_NAME_ID: i32 = 0x047C;
 /// `LOCALAPPDATA`, a Windows path the app can open.
 fn launch_send_file_app() -> Result<(GuiTestApp, PathBuf, PathBuf), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.load_events(&fs::read_to_string(fixture_state_path(
         "thread-hierarchy.json",
     ))?)?;
@@ -17003,7 +16688,7 @@ fn automation_driver_slash_join_activates_the_joined_room() -> Result<(), Box<dy
 fn slash_create_activates_the_created_room() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_homeserver(MockMessages::Hang, vec![])?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.restore_session(&server.base_url, stored_session())?;
     app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -17228,7 +16913,7 @@ fn list_the_mock_directory(
     local_app_data: &Path,
     server: &MockBackfillHomeserver,
 ) -> Result<(GuiTestApp, UiState), Box<dyn std::error::Error>> {
-    let app = launch_automation_app(local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, local_app_data)?;
     app.restore_session(&server.base_url, stored_session())?;
     app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -17376,7 +17061,7 @@ fn alt_l_lists_matching_rooms_and_closing_the_window_drops_the_listing()
 -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_homeserver(MockMessages::Hang, vec![])?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     let frame = app.automation_frame_hwnd() as HWND;
 
     // Signed out there is no directory to list.
@@ -17447,7 +17132,7 @@ fn alt_l_lists_matching_rooms_and_closing_the_window_drops_the_listing()
 fn commands_menu_part_parts_the_active_room_and_empty_join_echoes_the_error()
 -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
     let beta = room_identity("!beta:example");
@@ -17579,7 +17264,7 @@ fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
 #[test]
 fn menu_bar_is_mirc_shaped() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     assert_eq!(
         app.dump_ui_state()?.menu_bar,
         expected_menu_bar([true, false, true, false])
@@ -18923,7 +18608,7 @@ fn options_highlight_page_is_greyed_while_signed_out() -> Result<(), Box<dyn std
 #[test]
 fn help_topics_echoes_command_list() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     invoke_account_menu_command(&app, MENU_ID_HELP_TOPICS)?;
     assert!(status_view_contains(
         &app,
@@ -18939,7 +18624,7 @@ fn help_topics_echoes_command_list() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn help_about_dialog_shows_version_and_closes() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     let frame_value = app.automation_frame_hwnd();
     let menu_thread = std::thread::spawn(move || unsafe {
         SendMessageW(
@@ -18994,7 +18679,7 @@ fn cancel_find_dialog() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn find_text_in_window_menu_and_ctrl_f() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     let ui_state = app.dump_ui_state()?;
     for label in ["Find &Text...\tCtrl+F", "&Font..."] {
         assert!(
@@ -19032,7 +18717,7 @@ fn find_text_in_window_menu_and_ctrl_f() -> Result<(), Box<dyn std::error::Error
 fn alt_e_opens_select_server_only_while_signed_out() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     let frame = app.automation_frame_hwnd() as HWND;
     unsafe { SetForegroundWindow(frame) };
     let class_name = wide_null("mirxWin32LoginDialog");
@@ -19162,7 +18847,7 @@ fn open_dialog_opens_each_dialog_over_the_frame() -> Result<(), Box<dyn std::err
 fn open_dialog_refuses_a_greyed_menu_item() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.restore_session(&server.base_url, stored_session())?;
     app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
 
@@ -19291,7 +18976,7 @@ fn wait_for_dialog_focus(
 fn select_server_tab_moves_between_fields_and_esc_cancels() -> Result<(), Box<dyn std::error::Error>>
 {
     let local_app_data = unique_local_app_data_path();
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.open_dialog(AutomationDialog::SelectServer)?;
     let dialog = app.wait_for_modal_dialog(Duration::from_secs(5))?.hwnd as HWND;
     unsafe { SetForegroundWindow(dialog) };
@@ -25260,10 +24945,10 @@ fn editbox_format_keys_insert_mirc_codes() -> Result<(), Box<dyn std::error::Err
 #[test]
 fn crash_writes_crash_log_and_ends_the_process() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    let app = launch_automation_app(&local_app_data)?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
 
     assert!(app.crash("automation-requested crash").is_err());
-    let status = app.wait_for_exit(Duration::from_secs(20))?;
+    let status = app.end(|app| app.wait_for_exit(Duration::from_secs(20)))?;
     assert!(!status.success(), "{status:?}");
 
     let log = fs::read_to_string(
