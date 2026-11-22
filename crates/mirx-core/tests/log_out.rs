@@ -4,7 +4,7 @@
 mod common;
 
 use common::{Harness, log_out_anyway};
-use mirx_core::{Command, E2eeRecoveryState, Event, LogoutRequest, RoomKeysAtRisk};
+use mirx_core::{Command, E2eeRecoveryState, Event, LogoutRequest, Operation, RoomKeysAtRisk};
 use serde_json::json;
 use wiremock::matchers::{method, path_regex};
 use wiremock::{Mock, ResponseTemplate};
@@ -74,6 +74,49 @@ fn logging_out_anyway_logs_out_without_recovery() {
     harness.send(log_out_anyway());
     harness.wait_for("LoggedOut", |event| *event == Event::LoggedOut);
     assert_eq!(harness.requests("POST", "/logout").len(), 1);
+
+    harness.shut_down();
+}
+
+/// A server that answers `/logout` with errors, as a proxy in front of a
+/// stopped server does: the logout fails in seconds, and the session goes
+/// on, syncing again.
+#[test]
+fn a_logout_the_server_answers_with_errors_fails_in_seconds() {
+    let harness = Harness::restored_in_rooms(&[ROOM], &[]);
+    harness.mount(
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/_matrix/client/v3/logout$"))
+            .respond_with(ResponseTemplate::new(503).set_body_json(json!({
+                "errcode": "M_UNKNOWN",
+                "error": "the server is restarting",
+            }))),
+    );
+    harness.send(Command::StartSync);
+    harness.wait_for("SyncConnected", |event| *event == Event::SyncConnected);
+
+    harness.send(log_out_anyway());
+    let events = harness.events_until("the logout's ack", |event| *event == Event::CommandHandled);
+
+    let answers: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::LoggedOut | Event::SyncStarted | Event::SyncStopped(_) | Event::Error(_)
+            )
+        })
+        .collect();
+    assert!(
+        matches!(
+            answers[..],
+            [Event::Error(error), Event::SyncStarted]
+                if error.operation == Operation::Logout && error.message.contains("restarting")
+        ),
+        "{events:#?}"
+    );
+    // The first request and 4 retries.
+    assert_eq!(harness.requests("POST", "/logout").len(), 5);
 
     harness.shut_down();
 }

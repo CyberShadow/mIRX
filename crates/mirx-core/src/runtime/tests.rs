@@ -2769,7 +2769,6 @@ fn logging_out_saves_the_room_keys_to_the_backup_first() {
 fn a_failed_key_backup_keeps_the_session() {
     run_local(async {
         let mock_server = MatrixMockServer::new().await;
-        // Not a 5xx, which the SDK retries.
         let client = session_with_recovery_and_a_new_room_key(
             &mock_server,
             wiremock::ResponseTemplate::new(403).set_body_json(serde_json::json!({

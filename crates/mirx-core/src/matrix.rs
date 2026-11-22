@@ -27,7 +27,7 @@ use matrix_sdk::{
             registration::{ApplicationType, ClientMetadata, Localized, OAuthGrantType},
         },
     },
-    config::{SyncSettings, SyncToken},
+    config::{RequestConfig, SyncSettings, SyncToken},
     deserialized_responses::{
         SyncOrStrippedState, TimelineEvent, TimelineEventKind, UnableToDecryptInfo,
     },
@@ -262,6 +262,22 @@ fn file_in_use(err: &std::io::Error) -> bool {
     cfg!(windows) && err.raw_os_error() == Some(ERROR_SHARING_VIOLATION)
 }
 
+/// How long the client retries a request the server answered with a
+/// transient error (a 5xx, a 429) before it fails: seconds, not the SDK's
+/// 15 minutes, so an outage behind a proxy is a lost connection and a
+/// failed command, as an unreachable server is. With backoff delays of
+/// 0.5, 1, 2 and 4 s that is 4 retries. Network failures are not retried,
+/// as by default (no `retry_limit`). Requests the SDK sends with their own
+/// config (login, account data, the send queue) keep theirs.
+const SERVER_ERROR_RETRY_TIME: Duration = Duration::from_secs(10);
+
+/// The client's request config: the SDK's, with transient errors retried
+/// for `SERVER_ERROR_RETRY_TIME` (vendor/matrix-sdk-0.18.0/VENDORED.md
+/// section 3).
+pub(crate) fn request_config() -> RequestConfig {
+    RequestConfig::new().max_retry_time(SERVER_ERROR_RETRY_TIME)
+}
+
 pub(crate) async fn build_client(
     config: &CoreConfig,
     homeserver: HomeserverSpec<'_>,
@@ -277,6 +293,7 @@ pub(crate) async fn build_client(
     builder
         .sqlite_store(&store_path, Some(config.store_passphrase.as_str()))
         .with_encryption_settings(encryption_settings())
+        .request_config(request_config())
         .handle_refresh_tokens()
         .build()
         .await
@@ -14339,6 +14356,60 @@ mod tests {
             );
             read_state_task.abort();
             room_list_task.abort();
+        });
+    }
+
+    /// The client's request config retries a server error a few times,
+    /// within seconds, and then reports it: the SDK's default is 15
+    /// minutes of retries. (A request with a config of its own, such as
+    /// a profile's `short_retry`, keeps that.)
+    #[test]
+    fn a_server_error_is_retried_for_seconds_then_reported() {
+        use matrix_sdk::ruma::api::client::presence::get_presence;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server
+                .client_builder()
+                .on_builder(|builder| builder.request_config(super::request_config()))
+                .build()
+                .await;
+            let path = "/_matrix/client/v3/presence/@bob:remote.org/status";
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path(path))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(503).set_body_string("<html>503</html>"),
+                )
+                .mount(mock_server.server())
+                .await;
+            let user_id = OwnedUserId::try_from("@bob:remote.org").expect("valid user id");
+
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                client.send(get_presence::v3::Request::new(user_id)),
+            )
+            .await
+            .expect("the retrying ends within seconds");
+
+            let err = result.expect_err("a 503 is reported");
+            assert_eq!(
+                err.as_client_api_error().map(|error| error.status_code),
+                Some(matrix_sdk::ruma::exports::http::StatusCode::SERVICE_UNAVAILABLE),
+                "{err}"
+            );
+            // The first request and 4 retries, 0.5 + 1 + 2 + 4 s apart.
+            let requests = mock_server
+                .server()
+                .received_requests()
+                .await
+                .expect("recorded requests");
+            let tries = requests.iter().filter(|r| r.url.path() == path).count();
+            assert_eq!(tries, 5);
         });
     }
 

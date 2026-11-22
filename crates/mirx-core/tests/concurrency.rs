@@ -533,7 +533,7 @@ fn is_error_of(event: &Event, operation: Operation) -> bool {
 #[test]
 fn a_failed_logout_keeps_the_session_whole() {
     let harness = Harness::restored_in_rooms(&[ROOM], &[]);
-    // Not a 5xx, which the SDK retries.
+    // Not a 5xx, which the client retries for seconds first.
     harness.mount(
         Mock::given(method("POST"))
             .and(path_regex(r"^/_matrix/client/v3/logout$"))
