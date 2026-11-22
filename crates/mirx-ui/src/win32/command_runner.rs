@@ -98,10 +98,11 @@ pub(super) unsafe fn run_slash_command(
                     if let Some(input) = message {
                         send_room_message(
                             state_mut(hwnd),
-                            room_id,
+                            room_id.clone(),
                             RoomMessagePresentationKind::Text,
                             &input,
                         )?;
+                        echo_in_active_view(hwnd, away_notice(state_mut(hwnd), &room_id))?;
                     }
                     Ok(Some(format!("query opened: {user_id}")))
                 }
@@ -128,8 +129,10 @@ pub(super) unsafe fn run_slash_command(
             presentation,
         } => {
             let room_id = msg_target_room_id(&state_ref(hwnd).model, &target)?;
-            let sent = send_room_message(state_mut(hwnd), room_id, presentation, &body)?;
-            echo_in_active_view(hwnd, [commands::msg_echo(presentation, &target, &sent)])?;
+            let sent = send_room_message(state_mut(hwnd), room_id.clone(), presentation, &body)?;
+            let echo = commands::msg_echo(presentation, &target, &sent);
+            let notice = away_notice(state_mut(hwnd), &room_id);
+            echo_in_active_view(hwnd, std::iter::once(echo).chain(notice))?;
             Ok(None)
         }
         SlashCommand::Names { target } => {
@@ -1299,7 +1302,7 @@ pub(super) fn send_reply(
     enqueue_send_message(
         state,
         SendMessageRequest {
-            room_id: destination.room_id,
+            room_id: destination.room_id.clone(),
             presentation,
             body,
             styles,
@@ -1313,6 +1316,8 @@ pub(super) fn send_reply(
     if clears_active_thread_marker {
         state.room_activity.remove(&state.active_view);
     }
+    let notice = away_notice(state, &destination.room_id);
+    echo_lines_in_active_view(state, notice);
     Ok(())
 }
 

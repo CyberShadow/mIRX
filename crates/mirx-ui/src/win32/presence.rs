@@ -1,28 +1,48 @@
 //! Other users' presence, as the sync reports it: the nick list greys away
-//! and offline members, as HexChat does.
+//! and offline members, as HexChat does, and a message to an away user's
+//! query says they are away, as IRC's `RPL_AWAY` does.
 //!
 //! Pure code: the book of every user's latest presence the session heard.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mirx_core::{PresenceChange, PresenceKind};
+
+use super::commands::away_line;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Presence {
+    kind: PresenceKind,
+    status_msg: Option<String>,
+}
 
 /// Each user's latest presence, from the core's `PresenceChanged` events.
 /// A user the server shared no presence of has none.
 #[derive(Debug, Default)]
 pub(super) struct PresenceBook {
-    users: BTreeMap<String, PresenceKind>,
+    users: BTreeMap<String, Presence>,
     /// Moves whenever a user's presence changes: the nick lists repaint
     /// when it differs from the one they were painted at.
     revision: u64,
+    /// The `(query room, user)` pairs that printed the user's current away
+    /// status: a change of the user's presence takes theirs out.
+    announced: BTreeSet<(String, String)>,
 }
 
 impl PresenceBook {
     pub(super) fn apply(&mut self, changes: Vec<PresenceChange>) {
         for change in changes {
-            if self.users.insert(change.user_id, change.kind) != Some(change.kind) {
-                self.revision += 1;
+            let presence = Presence {
+                kind: change.kind,
+                status_msg: change.status_msg,
+            };
+            if self.users.get(&change.user_id) == Some(&presence) {
+                continue;
             }
+            self.revision += 1;
+            self.announced
+                .retain(|(_, user_id)| *user_id != change.user_id);
+            self.users.insert(change.user_id, presence);
         }
     }
 
@@ -31,13 +51,34 @@ impl PresenceBook {
     }
 
     pub(super) fn kind(&self, user_id: &str) -> Option<PresenceKind> {
-        self.users.get(user_id).copied()
+        self.users.get(user_id).map(|presence| presence.kind)
+    }
+
+    /// The away line for a message sent to `room_id`, the query with
+    /// `user_id`, who goes by `nick`; `None` unless they are away, and once
+    /// per query for each away status. mIRC prints the server's `RPL_AWAY`
+    /// at every message; Element marks users away after a few idle
+    /// minutes, so that would fill a normal conversation.
+    pub(super) fn away_notice(
+        &mut self,
+        room_id: &str,
+        user_id: &str,
+        nick: &str,
+    ) -> Option<String> {
+        let presence = self
+            .users
+            .get(user_id)
+            .filter(|presence| presence.kind == PresenceKind::Unavailable)?;
+        self.announced
+            .insert((room_id.to_owned(), user_id.to_owned()))
+            .then(|| away_line(nick, presence.status_msg.as_deref()))
     }
 
     /// At the session's end: its users' presence goes with it. The
     /// revision moves on, never back to one already painted.
     pub(super) fn clear(&mut self) {
         self.users.clear();
+        self.announced.clear();
         self.revision += 1;
     }
 }
@@ -88,5 +129,56 @@ mod tests {
         let revision = book.revision();
         book.clear();
         assert!(book.revision() > revision);
+    }
+
+    #[test]
+    fn an_away_user_is_announced_once_per_query_and_away_status() {
+        const QUERY: &str = "!bob:example.org";
+        const BOB: &str = "@bob:example.org";
+        let mut book = PresenceBook::default();
+        let notice = |book: &mut PresenceBook| book.away_notice(QUERY, BOB, "Bob");
+        // Nothing known.
+        assert_eq!(notice(&mut book), None);
+
+        book.apply(vec![change(BOB, PresenceKind::Unavailable, Some("lunch"))]);
+        assert_eq!(notice(&mut book).as_deref(), Some("* Bob is away: lunch"));
+        assert_eq!(notice(&mut book), None);
+        // Another query with him has its own.
+        assert_eq!(
+            book.away_notice("!other:example.org", BOB, "Bob")
+                .as_deref(),
+            Some("* Bob is away: lunch")
+        );
+        // The same status again is no news.
+        book.apply(vec![change(BOB, PresenceKind::Unavailable, Some("lunch"))]);
+        assert_eq!(notice(&mut book), None);
+        // Another user's change keeps his.
+        book.apply(vec![change(
+            "@carol:example.org",
+            PresenceKind::Offline,
+            None,
+        )]);
+        assert_eq!(notice(&mut book), None);
+
+        // A new status.
+        book.apply(vec![change(
+            BOB,
+            PresenceKind::Unavailable,
+            Some("meeting"),
+        )]);
+        assert_eq!(notice(&mut book).as_deref(), Some("* Bob is away: meeting"));
+        // Back, then away again.
+        book.apply(vec![change(BOB, PresenceKind::Online, None)]);
+        assert_eq!(notice(&mut book), None);
+        book.apply(vec![change(BOB, PresenceKind::Unavailable, None)]);
+        assert_eq!(notice(&mut book).as_deref(), Some("* Bob is away"));
+
+        // Offline is not away: Matrix delivers to offline users.
+        book.apply(vec![change(BOB, PresenceKind::Offline, None)]);
+        assert_eq!(notice(&mut book), None);
+
+        book.apply(vec![change(BOB, PresenceKind::Unavailable, None)]);
+        book.clear();
+        assert_eq!(notice(&mut book), None);
     }
 }

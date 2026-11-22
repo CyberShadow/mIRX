@@ -1603,10 +1603,7 @@ pub(super) fn whois_lines(
         && presence.kind != PresenceKind::Offline
     {
         if presence.kind == PresenceKind::Unavailable {
-            lines.push(match &presence.status_msg {
-                Some(message) => format!("* {nick} is away: {message}"),
-                None => format!("* {nick} is away"),
-            });
+            lines.push(away_line(nick, presence.status_msg.as_deref()));
         }
         if let Some(idle_ms) = presence.last_active_ago_ms
             && presence.currently_active != Some(true)
@@ -1619,6 +1616,15 @@ pub(super) fn whois_lines(
     }
     lines.push(format!("* {nick} End of /WHOIS list"));
     lines
+}
+
+/// IRC's `RPL_AWAY`, as mIRC prints it: in `/whois`, and when you message
+/// an away user.
+pub(super) fn away_line(nick: &str, status_msg: Option<&str>) -> String {
+    match status_msg {
+        Some(message) => format!("* {nick} is away: {message}"),
+        None => format!("* {nick} is away"),
+    }
 }
 
 /// mIRC's `$duration`: `1wk 2days 3hrs 4mins 5secs`, without the units

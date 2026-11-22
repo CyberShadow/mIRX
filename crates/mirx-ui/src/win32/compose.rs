@@ -539,6 +539,8 @@ pub(super) fn submit_compose(
     if clears_active_thread_marker {
         state.room_activity.remove(&state.active_view);
     }
+    let notice = away_notice(state, &destination.room_id);
+    echo_lines_in_active_view(state, notice);
 
     Ok(destination.room_id)
 }
@@ -582,6 +584,22 @@ pub(super) fn enqueue_send_message(
         .map_err(|err| format!("failed to enqueue send message command: {err}"))?;
     state.recorded_commands.push(command);
     Ok(())
+}
+
+/// After a message to `room_id`: if it is a query whose user is away, the
+/// line that says so (IRC's `RPL_AWAY`), once per away status
+/// (`PresenceBook::away_notice`). It prints in the active window, after
+/// any echo of the message.
+pub(super) fn away_notice(state: &mut WindowState, room_id: &str) -> Option<String> {
+    let room = room_by_id(&state.model.rooms, room_id).expect("a message goes to a known room");
+    let (RoomWindowKind::Query, [user_id]) =
+        (room_window_kind(room), room.direct_user_ids.as_slice())
+    else {
+        return None;
+    };
+    let user_id = user_id.clone();
+    let nick = known_nick(&state.model, &user_id).unwrap_or_else(|| user_id.clone());
+    state.model.presence.away_notice(room_id, &user_id, &nick)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1770,6 +1788,62 @@ mod tests {
             .send(Command::Shutdown)
             .expect("shutdown command must enqueue");
         handle.join().expect("test core must stop cleanly");
+    }
+
+    /// IRC's `RPL_AWAY` in a query: once for each away status, and never
+    /// in a channel.
+    #[test]
+    fn a_message_to_an_away_user_says_so_once() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![
+                query("!bob:example", "Bob", "@bob:example"),
+                room("!ops:example", "Ops", false),
+            ]),
+        )
+        .unwrap();
+        for room_id in ["!bob:example", "!ops:example"] {
+            apply_core_event(
+                &mut state,
+                Event::RoomMembers(RoomMembers {
+                    room_id: room_id.to_owned(),
+                    members: vec![member_summary("@bob:example", "Bob", false)],
+                }),
+            )
+            .unwrap();
+        }
+        apply_core_event(
+            &mut state,
+            Event::PresenceChanged(vec![mirx_core::PresenceChange {
+                user_id: "@bob:example".to_owned(),
+                kind: PresenceKind::Unavailable,
+                status_msg: Some("lunch".to_owned()),
+            }]),
+        )
+        .unwrap();
+        let echo = |state: &WindowState, room_id: &str| {
+            state.model.room_views[room_id]
+                .echo
+                .lines_for(None)
+                .map(|line| line.text.clone())
+                .collect::<Vec<_>>()
+        };
+
+        state.active_view = ViewId::Room("!ops:example".to_owned());
+        submit_compose(&mut state, RoomMessagePresentationKind::Text, "hi", None).unwrap();
+        assert_eq!(echo(&state, "!ops:example"), Vec::<String>::new());
+
+        state.active_view = ViewId::Room("!bob:example".to_owned());
+        for _ in 0..2 {
+            submit_compose(&mut state, RoomMessagePresentationKind::Text, "hi", None).unwrap();
+        }
+        assert_eq!(echo(&state, "!bob:example"), ["* Bob is away: lunch"]);
+        assert_eq!(state.recorded_commands.len(), 3);
+
+        stop_test_core(handle);
     }
 
     #[test]

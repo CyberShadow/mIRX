@@ -20856,6 +20856,118 @@ fn slash_whois_prints_server_profile() -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+/// Away and offline members are grey in the nick list, and a message to
+/// an away user's query says so once for each away status, as IRC's
+/// `RPL_AWAY` does.
+#[test]
+fn away_members_are_grey_and_a_query_says_away_once() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let mut events = base_events_with_a_query();
+    events.push(room_members_event(
+        "!beta:example",
+        &[
+            ("@alice:example", "Alice"),
+            ("@bob:example", "Bob"),
+            ("@carol:example", "Carol"),
+        ],
+    ));
+    events.push(room_members_event(
+        "!dm:example",
+        &[("@alice:example", "Alice")],
+    ));
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let presence = |user_id: &str, kind, status_msg: Option<&str>| mirx_core::PresenceChange {
+        user_id: user_id.to_owned(),
+        kind,
+        status_msg: status_msg.map(str::to_owned),
+    };
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::PresenceChanged(
+        vec![
+            presence(
+                "@alice:example",
+                mirx_core::PresenceKind::Unavailable,
+                Some("lunch"),
+            ),
+            presence("@bob:example", mirx_core::PresenceKind::Offline, None),
+        ],
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let beta = room_identity("!beta:example");
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(
+        find_view(&ui_state, &beta)
+            .members
+            .iter()
+            .map(|member| (member.nick.as_str(), member.presence))
+            .collect::<Vec<_>>(),
+        [
+            ("Alice", Some(mirx_core::PresenceKind::Unavailable)),
+            ("Bob", Some(mirx_core::PresenceKind::Offline)),
+            ("Carol", None),
+        ]
+    );
+
+    // In the query, once; never in a channel.
+    let dm = room_identity("!dm:example");
+    app.select_view(dm.clone())?;
+    type_commands(&app, &["hi", "still there?"])?;
+    app.select_view(beta.clone())?;
+    type_commands(&app, &["hi all"])?;
+    // The unauthenticated core refuses the sends; the UI recorded them.
+    assert_eq!(app.dump_model()?.submitted_message_commands.len(), 3);
+    let lines = |ui_state: &UiState, view: &ViewIdentity, text: &str| {
+        view_lines_containing(find_view(ui_state, view), text)
+            .into_iter()
+            .map(|line| {
+                line.split_once("] ")
+                    .map_or(line, |(_, text)| text)
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+    };
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(lines(&ui_state, &dm, "is away"), ["* Alice is away: lunch"]);
+    assert_eq!(lines(&ui_state, &beta, "is away"), Vec::<String>::new());
+
+    // Back, then away with another message: said again, by `/msg` in the
+    // window it was typed in, after its echo, as the server's answer would
+    // be; then the query has heard it.
+    app.append_synthetic_events(&serde_json::to_string(&vec![
+        Event::PresenceChanged(vec![presence(
+            "@alice:example",
+            mirx_core::PresenceKind::Online,
+            None,
+        )]),
+        Event::PresenceChanged(vec![presence(
+            "@alice:example",
+            mirx_core::PresenceKind::Unavailable,
+            Some("meeting"),
+        )]),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    type_commands(&app, &["/msg Alice ping"])?;
+    app.select_view(dm.clone())?;
+    type_commands(&app, &["and now?"])?;
+    assert_eq!(app.dump_model()?.submitted_message_commands.len(), 5);
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(
+        lines(&ui_state, &beta, "Alice"),
+        ["-> *Alice* ping", "* Alice is away: meeting"]
+    );
+    assert_eq!(lines(&ui_state, &dm, "is away"), ["* Alice is away: lunch"]);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 #[test]
 fn slash_away_marks_away_and_back() -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =

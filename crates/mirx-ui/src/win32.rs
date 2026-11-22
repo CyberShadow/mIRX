@@ -317,7 +317,7 @@ use commands::{
 use compose::submit_compose_from_edit;
 use compose::{
     ComposeHistory, ComposeNickCompletion, active_compose_history, arm_compose_target,
-    arm_compose_target_on_selected_message, armed_compose_target_row, compose_edit,
+    arm_compose_target_on_selected_message, armed_compose_target_row, away_notice, compose_edit,
     disarm_vanished_compose_target, dump_compose_text, enqueue_send_message,
     message_text_from_input, prefill_react_to_selected_message, replace_edit_selection,
     resolve_compose_destination, run_send_file_dialog, send_compose_key, send_file_room_id,
