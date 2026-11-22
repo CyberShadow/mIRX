@@ -333,8 +333,9 @@ struct MockPresence {
     changes: usize,
 }
 
-/// What the mock homeserver fails, as the network would: a failed request
-/// gets its connection closed without an answer.
+/// What the mock homeserver fails, as the network or a proxy would: a
+/// failed request gets its connection closed without an answer, or held,
+/// or a proxy's error page.
 #[derive(Default)]
 struct MockFaults {
     /// The next this many `/sync` requests fail.
@@ -343,6 +344,13 @@ struct MockFaults {
     send_down: AtomicBool,
     /// Every `/login` request is held while this is set.
     hold_login: AtomicBool,
+    /// Every `/logout` request is held while this is set; it still counts
+    /// in `logouts`.
+    hold_logout: AtomicBool,
+    /// Every `/sync` request is answered `503 Service Unavailable`, with
+    /// a page of HTML, while this is set: a proxy in front of a stopped
+    /// homeserver.
+    sync_unavailable: AtomicBool,
     /// The server signed the session out (from another client, say):
     /// `/sync` and `/logout` answer `M_UNKNOWN_TOKEN` while this is set.
     session_ended: AtomicBool,
@@ -685,6 +693,18 @@ fn spawn_mock_homeserver_with_auth(
             }
             if path == "/_matrix/client/v3/logout" {
                 mock_logouts.fetch_add(1, Ordering::SeqCst);
+                if mock_faults.hold_logout.load(Ordering::SeqCst) {
+                    mock_faults
+                        .held
+                        .lock()
+                        .expect("the held requests")
+                        .push(stream);
+                    continue;
+                }
+            }
+            if path.contains("/sync") && mock_faults.sync_unavailable.load(Ordering::SeqCst) {
+                respond_proxy_error(&mut stream);
+                continue;
             }
             if mock_faults.session_ended.load(Ordering::SeqCst)
                 && (path.contains("/sync") || path == "/_matrix/client/v3/logout")
@@ -1239,6 +1259,16 @@ fn respond_json(stream: &mut std::net::TcpStream, status: u16, body: &serde_json
     );
     let _ = stream.write_all(response.as_bytes());
     let _ = stream.write_all(&body);
+}
+
+/// A reverse proxy's answer while the homeserver behind it is down.
+fn respond_proxy_error(stream: &mut std::net::TcpStream) {
+    let body = "<html>503</html>";
+    let response = format!(
+        "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(response.as_bytes());
 }
 
 fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSummary {
@@ -4800,6 +4830,58 @@ fn file_disconnect_cancels_a_hung_sign_in() -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
+/// File > Disconnect stops a Log Out the server does not answer, as
+/// mIRC's Disconnect stops whatever the connection is doing: the session
+/// stays, disconnected, and File > Connect syncs again.
+#[test]
+fn disconnect_stops_a_log_out_the_server_does_not_answer() -> Result<(), Box<dyn std::error::Error>>
+{
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    server.faults.hold_logout.store(true, Ordering::SeqCst);
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
+    sign_in_with_select_server(&app, &server.base_url, "alice", "secret")?;
+
+    start_log_out_anyway_with_the_menu(&app)?;
+    app.wait_for_connection("logging_out", Duration::from_secs(10))?;
+    wait_for_status_line(
+        &app,
+        "* Logging out; File > Disconnect stops it",
+        Duration::from_secs(10),
+    )?;
+    server.wait_for_held(1)?;
+    assert_eq!(app.dump_model()?.status, "logging out");
+
+    invoke_account_menu_command(&app, MENU_ID_FILE_DISCONNECT)?;
+    app.wait_for_connection("signed_in", Duration::from_secs(10))?;
+    wait_for_status_line(
+        &app,
+        "* Log Out cancelled; still signed in",
+        Duration::from_secs(10),
+    )?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let model = app.dump_model()?;
+    assert_eq!(model.connection, "signed_in");
+    assert_eq!(model.last_error, None);
+    assert!(session_file_path(&local_app_data).is_file());
+    assert!(store_dir_path(&local_app_data).is_dir());
+    assert_eq!(server.logouts.load(Ordering::SeqCst), 1);
+
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+
+    drop(app);
+    // The held `/logout`'s connection closes.
+    server
+        .faults
+        .held
+        .lock()
+        .expect("the held requests")
+        .clear();
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 /// Log Out removes the session's store, so the next sign-in, a new device,
 /// starts afresh. Under Wine this also proves the store's files were
 /// closed: Windows does not delete an open file.
@@ -5071,6 +5153,36 @@ fn reconnect_after_a_lost_connection_is_immediate() -> Result<(), Box<dyn std::e
         "{lines:?}"
     );
     assert_eq!(app.dump_model()?.reconnect_attempts, 0);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// A server that answers only with errors, as a proxy in front of a
+/// stopped homeserver does, is a lost connection after a few seconds of
+/// retries, and reconnects once it answers again.
+#[test]
+fn a_server_answering_errors_is_a_lost_connection_and_reconnects()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (local_app_data, server, app) = reconnect_app("retry_delay=1\r\n")?;
+    wait_until_connected(&app)?;
+
+    server.faults.sync_unavailable.store(true, Ordering::SeqCst);
+    wait_for_status_line(&app, "* Disconnected: ", Duration::from_secs(40))?;
+    server
+        .faults
+        .sync_unavailable
+        .store(false, Ordering::SeqCst);
+    wait_for_status_line(&app, "* Reconnected to example", Duration::from_secs(40))?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    let lines = status_view_lines(&app)?;
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("* Disconnected: ") && line.contains("503")),
+        "{lines:?}"
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

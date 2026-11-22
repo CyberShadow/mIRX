@@ -1041,6 +1041,29 @@ configure_case_expectations() {
       )
       expect_switchbar_active='status'
       ;;
+    logging-out)
+      # A Log Out under way: Disconnect stops it.
+      expect_active_view='status'
+      select_views=('status')
+      status_view_expect_args=(
+        --expect-status-view '[22:12] * Logged in as @me:example (device MIRXDEVICE)'
+        --expect-status-view '[22:12] * Syncing with the homeserver'
+        --expect-status-view '[22:12] * Synced rooms: 1 joined, 0 invited'
+        --expect-status-view '[22:12] * Logging out; File > Disconnect stops it'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'logging out'
+      )
+      toolbar_button_expect_args=(
+        --expect-toolbar-button 'Connect::hidden::disabled'
+        --expect-toolbar-button 'Disconnect::shown::enabled'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::@me:example'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+      )
+      expect_switchbar_active='status'
+      ;;
     status-log)
       expect_active_view='status'
       select_views=('status')

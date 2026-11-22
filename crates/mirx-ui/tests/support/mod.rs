@@ -259,6 +259,13 @@ pub fn log_out_anyway_with_the_menu(
     app: &MirxApp,
     local_app_data: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    start_log_out_anyway_with_the_menu(app)?;
+    app.wait_for_connection("signed_out", Duration::from_secs(30))?;
+    assert_logged_out(app, local_app_data)
+}
+
+/// The same, up to the dialog's close: the Log Out is under way.
+pub fn start_log_out_anyway_with_the_menu(app: &MirxApp) -> Result<(), Box<dyn std::error::Error>> {
     invoke_account_menu_command(app, MENU_ID_FILE_LOG_OUT)?;
     let dialog = app.wait_for_modal_dialog(Duration::from_secs(30))?;
     assert_eq!(
@@ -270,9 +277,7 @@ pub fn log_out_anyway_with_the_menu(
         unsafe { PostMessageW(dialog, WM_COMMAND, LOG_OUT_DIALOG_LOG_OUT_ID as WPARAM, 0) },
         0
     );
-    wait_for_window_gone(dialog, "Log Out dialog")?;
-    app.wait_for_connection("signed_out", Duration::from_secs(30))?;
-    assert_logged_out(app, local_app_data)
+    wait_for_window_gone(dialog, "Log Out dialog")
 }
 
 /// What Log Out leaves: no session file, no store.
