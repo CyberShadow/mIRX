@@ -31,8 +31,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false
+          "nick": "Alice",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "bold italic курсив underline strike all",
@@ -118,8 +118,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 0,1 8,2",
@@ -361,8 +361,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false
+          "nick": "Carol",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "extended colour 61 violet",
@@ -400,8 +400,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "Alice: the green build is yours",
@@ -439,8 +439,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false
+          "nick": "Carol",
+          "nick_ambiguous": false
         },
         "presentation": "emote",
         "body": "waves hard",
@@ -478,8 +478,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "notice",
         "body": "deploy window starts now",
@@ -517,8 +517,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false
+          "nick": "Alice",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "this line is long enough to wrap and its red underlined span carries on past the break onto the next line before ending plain",
@@ -556,8 +556,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false
+          "nick": "Carol",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "todo:\n* ship it\n* tell everyone\n> quoted wisdom\nlet x = 1;",
@@ -619,8 +619,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "see docs (https://example.org/docs)",
@@ -645,8 +645,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false
+          "nick": "Alice",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "draft text",
@@ -710,8 +710,8 @@
       "members": [
         {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false,
+          "nick": "Alice",
+          "nick_ambiguous": false,
           "is_own_user": true,
           "rank": "member",
           "can_kick": false,
@@ -719,8 +719,8 @@
         },
         {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false,
+          "nick": "Bob",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,
@@ -728,8 +728,8 @@
         },
         {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false,
+          "nick": "Carol",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,

@@ -612,9 +612,7 @@ fn member_change_item(change: &RoomMemberChange) -> EventItem {
         | RoomMemberChange::Knocked
         | RoomMemberChange::KnockAccepted
         | RoomMemberChange::KnockDenied => EventItem::Invite,
-        RoomMemberChange::DisplayNameChanged { .. } | RoomMemberChange::AvatarChanged => {
-            EventItem::Nick
-        }
+        RoomMemberChange::NickChanged { .. } | RoomMemberChange::AvatarChanged => EventItem::Nick,
     }
 }
 
@@ -1418,8 +1416,8 @@ mod tests {
                     change,
                     target: RoomUserProfile {
                         user_id: state_key.to_owned(),
-                        display_name: display_name.map(str::to_owned),
-                        display_name_ambiguous: false,
+                        nick: display_name.map(str::to_owned),
+                        nick_ambiguous: false,
                     },
                     reason: None,
                 },
@@ -2598,8 +2596,8 @@ mod tests {
         };
         message.sender = RoomUserProfile {
             user_id: "@sam1:example".to_owned(),
-            display_name: Some("Sam".to_owned()),
-            display_name_ambiguous: true,
+            nick: Some("Sam".to_owned()),
+            nick_ambiguous: true,
         };
         apply_core_event(&mut state, Event::RoomActivity(Box::new(activity))).unwrap();
 
@@ -3841,7 +3839,7 @@ mod tests {
             (KnockAccepted, EventItem::Invite),
             (KnockDenied, EventItem::Invite),
             (
-                DisplayNameChanged {
+                NickChanged {
                     old: None,
                     new: Some("Caz".to_owned()),
                 },

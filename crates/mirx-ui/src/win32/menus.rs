@@ -976,8 +976,8 @@ mod tests {
     fn member(user_id: &str, rank: RoomMemberRank) -> RoomMemberSummary {
         RoomMemberSummary {
             user_id: user_id.to_owned(),
-            display_name: None,
-            display_name_ambiguous: false,
+            nick: None,
+            nick_ambiguous: false,
             is_own_user: false,
             rank,
             can_kick: false,

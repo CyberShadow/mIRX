@@ -41,7 +41,7 @@
       "kind": {
         "type": "unable_to_decrypt",
         "event_id": "$encrypted-utd1:example.org",
-        "sender": { "user_id": "@alice:example.org", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example.org", "nick": null, "nick_ambiguous": false },
         "session_id": "SESSIONID",
         "cause": "unknown"
       },

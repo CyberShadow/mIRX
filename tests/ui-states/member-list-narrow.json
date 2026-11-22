@@ -28,7 +28,7 @@
         "type": "message",
         "event_id": "$members-context-1",
         "transaction_id": null,
-        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "nick": "Alice", "nick_ambiguous": false },
         "presentation": "text",
         "body": "member list context line",
         "styles": [],
@@ -50,7 +50,7 @@
         "type": "message",
         "event_id": "$members-context-2",
         "transaction_id": null,
-        "sender": { "user_id": "@casey:example", "display_name": "Casey", "display_name_ambiguous": false },
+        "sender": { "user_id": "@casey:example", "nick": "Casey", "nick_ambiguous": false },
         "presentation": "text",
         "body": "timeline stays visible beside the list",
         "styles": [],
@@ -72,7 +72,7 @@
         "type": "message",
         "event_id": "$members-context-3",
         "transaction_id": null,
-        "sender": { "user_id": "@sam-one:example", "display_name": "Sam", "display_name_ambiguous": true },
+        "sender": { "user_id": "@sam-one:example", "nick": "Sam", "nick_ambiguous": true },
         "presentation": "text",
         "body": "shared names show the user ID",
         "styles": [],
@@ -90,49 +90,49 @@
       "members": [
         {
           "user_id": "@alice:example",
-          "display_name": "Alice", "display_name_ambiguous": false,
+          "nick": "Alice", "nick_ambiguous": false,
           "is_own_user": false, "rank": "member",
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@casey:example",
-          "display_name": "Casey", "display_name_ambiguous": false,
+          "nick": "Casey", "nick_ambiguous": false,
           "is_own_user": false, "rank": "member",
           "can_kick": true,
           "can_ban": true
         },
         {
           "user_id": "@sam-one:example",
-          "display_name": "Sam", "display_name_ambiguous": true,
+          "nick": "Sam", "nick_ambiguous": true,
           "is_own_user": false, "rank": "member",
           "can_kick": true,
           "can_ban": false
         },
         {
           "user_id": "@sam-two:example",
-          "display_name": "Sam", "display_name_ambiguous": true,
+          "nick": "Sam", "nick_ambiguous": true,
           "is_own_user": false, "rank": "member",
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@ghost:example",
-          "display_name": null, "display_name_ambiguous": false,
+          "nick": null, "nick_ambiguous": false,
           "is_own_user": false, "rank": "member",
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@blank:example",
-          "display_name": "", "display_name_ambiguous": false,
+          "nick": "", "nick_ambiguous": false,
           "is_own_user": false, "rank": "member",
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@zoe:example",
-          "display_name": "Zoe", "display_name_ambiguous": false,
+          "nick": "Zoe", "nick_ambiguous": false,
           "is_own_user": false, "rank": "member",
           "can_kick": false,
           "can_ban": false

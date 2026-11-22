@@ -70,7 +70,7 @@ impl NickCompletion {
         for member in members.iter().filter(|member| !member.is_own_user) {
             let user_id = member.user_id.to_lowercase();
             let display_name = member
-                .display_name
+                .nick
                 .as_deref()
                 .filter(|name| !name.is_empty())
                 .map(str::to_lowercase);
@@ -86,7 +86,7 @@ impl NickCompletion {
             let inserted = if wants_user_id {
                 member.user_id.as_str()
             } else {
-                member_mention_text(&member.user_id, member.display_name.as_deref())
+                member_mention_text(&member.user_id, member.nick.as_deref())
             };
             if !candidates.iter().any(|candidate| candidate == inserted) {
                 candidates.push(inserted.to_owned());
@@ -170,8 +170,8 @@ mod tests {
     fn member(user_id: &str, display_name: Option<&str>) -> RoomMemberSummary {
         RoomMemberSummary {
             user_id: user_id.to_owned(),
-            display_name: display_name.map(str::to_owned),
-            display_name_ambiguous: false,
+            nick: display_name.map(str::to_owned),
+            nick_ambiguous: false,
             is_own_user: false,
             rank: RoomMemberRank::Member,
             can_kick: false,

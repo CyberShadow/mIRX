@@ -240,7 +240,7 @@ fn me(model: &UiModel, view: &ViewId) -> String {
                 .find(|member| member.user_id == user_id)
         })
         .map_or(user_id, |member| {
-            member_mention_text(&member.user_id, member.display_name.as_deref())
+            member_mention_text(&member.user_id, member.nick.as_deref())
         })
         .to_owned()
 }

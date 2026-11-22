@@ -112,8 +112,8 @@ fn room_members(index: usize) -> Event {
             .iter()
             .map(|user_id| RoomMemberSummary {
                 user_id: (*user_id).to_owned(),
-                display_name: None,
-                display_name_ambiguous: false,
+                nick: None,
+                nick_ambiguous: false,
                 is_own_user: false,
                 rank: RoomMemberRank::Member,
                 can_kick: false,
@@ -135,8 +135,8 @@ fn text_event(index: usize, event_id: &str, sender: &str, timestamp_ms: u64, bod
             transaction_id: None,
             sender: RoomUserProfile {
                 user_id: sender.to_owned(),
-                display_name: None,
-                display_name_ambiguous: false,
+                nick: None,
+                nick_ambiguous: false,
             },
             presentation: RoomMessagePresentationKind::Text,
             body: body.to_owned(),

@@ -27,7 +27,7 @@
       "kind": {
         "type": "audio",
         "event_id": "$audio1:example.org",
-        "sender": { "user_id": "@alice:example.org", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example.org", "nick": null, "nick_ambiguous": false },
         "body": "voice-note.ogg",
         "filename": "voice-note.ogg",
         "source": {

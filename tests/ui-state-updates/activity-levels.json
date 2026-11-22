@@ -11,8 +11,8 @@
         "event_id": "$events-join",
         "sender": {
           "user_id": "@dave:example",
-          "display_name": "Dave",
-          "display_name_ambiguous": false
+          "nick": "Dave",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -21,8 +21,8 @@
           },
           "target": {
             "user_id": "@dave:example",
-            "display_name": "Dave",
-            "display_name_ambiguous": false
+            "nick": "Dave",
+            "nick_ambiguous": false
           },
           "reason": null
         }
@@ -42,8 +42,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false
+          "nick": "Carol",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "lunch?",
@@ -68,8 +68,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "Alice: review please",
@@ -94,8 +94,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@casey:example",
-          "display_name": "Casey",
-          "display_name_ambiguous": false
+          "nick": "Casey",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "hey, got a minute?",

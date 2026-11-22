@@ -810,7 +810,7 @@ fn data_models_round_trip_through_json() {
                     lines: vec!["hello".to_owned()],
                     members: vec![RoomMemberView {
                         user_id: "@alice:example".to_owned(),
-                        display_name: Some("Alice".to_owned()),
+                        nick: Some("Alice".to_owned()),
                         label: "Alice".to_owned(),
                         rank: RoomMemberRank::Voiced,
                         can_kick: true,
@@ -1275,7 +1275,7 @@ fn data_models_round_trip_through_json() {
                         "members": [
                             {
                                 "user_id": "@alice:example",
-                                "display_name": "Alice",
+                                "nick": "Alice",
                                 "label": "Alice",
                                 "rank": "voiced",
                                 "can_kick": true,
@@ -2011,11 +2011,11 @@ fn room_activity_member_state_notice_round_trips_through_json() {
             sender: "@carol:example".to_owned(),
             state_key: "@carol:example".to_owned(),
             content: RoomStateNoticeContent::Member {
-                change: RoomMemberChange::DisplayNameChanged {
+                change: RoomMemberChange::NickChanged {
                     old: None,
                     new: Some("carol".to_owned()),
                 },
-                target_display_name: Some("carol".to_owned()),
+                target_nick: Some("carol".to_owned()),
                 reason: Some("rename".to_owned()),
             },
         }),
@@ -2038,11 +2038,11 @@ fn room_activity_member_state_notice_round_trips_through_json() {
                 "content": {
                     "type": "member",
                     "change": {
-                        "type": "display_name_changed",
+                        "type": "nick_changed",
                         "old": null,
                         "new": "carol"
                     },
-                    "target_display_name": "carol",
+                    "target_nick": "carol",
                     "reason": "rename"
                 }
             }
@@ -2230,8 +2230,8 @@ fn core_room_activity_unable_to_decrypt_carries_its_cause() {
     let core = |extra: serde_json::Value| {
         let mut kind = serde_json::json!({
             "type":"unable_to_decrypt", "event_id":"$encrypted1:example.org",
-            "sender":{"user_id":"@alice:example.org", "display_name":null,
-                "display_name_ambiguous":false},
+            "sender":{"user_id":"@alice:example.org", "nick":null,
+                "nick_ambiguous":false},
             "session_id":"SESSIONID",
         });
         kind.as_object_mut()
@@ -2393,8 +2393,8 @@ fn room_activity_sticker_round_trips_through_json() {
     let mut core_kind = kind;
     core_kind["sender"] = serde_json::json!({
         "user_id": "@alice:example.org",
-        "display_name": null,
-        "display_name_ambiguous": false
+        "nick": null,
+        "nick_ambiguous": false
     });
     let core_json = serde_json::json!({
         "room_id": "!room:example",
@@ -2442,8 +2442,8 @@ fn room_verification_request_activity_round_trips_through_json() {
         "event_id": "$e",
         "sender": {
             "user_id": "@bob:example",
-            "display_name": null,
-            "display_name_ambiguous": false
+            "nick": null,
+            "nick_ambiguous": false
         },
         "to": "@carol:example"
     });
@@ -2511,8 +2511,8 @@ fn room_poll_activities_round_trip_through_json() {
             "event_id": "$e",
             "sender": {
                 "user_id": "@bob:example",
-                "display_name": null,
-                "display_name_ambiguous": false
+                "nick": null,
+                "nick_ambiguous": false
             },
             "content": json
         });
@@ -6665,7 +6665,7 @@ fn data_models_reject_unknown_fields() {
             r#"{
             "type":"member",
             "change":{"type":"joined"},
-            "target_display_name":"carol",
+            "target_nick":"carol",
             "reason":null,
             "unexpected":true
         }"#
@@ -6800,7 +6800,7 @@ fn data_models_reject_unknown_fields() {
         serde_json::from_str::<RoomMemberView>(
             r#"{
             "user_id":"@alice:example",
-            "display_name":"Alice",
+            "nick":"Alice",
             "label":"Alice",
             "rank":"member",
             "can_kick":true,
@@ -6814,7 +6814,7 @@ fn data_models_reject_unknown_fields() {
         serde_json::from_str::<RoomMemberView>(
             r#"{
             "user_id":"@alice:example",
-            "display_name":"Alice",
+            "nick":"Alice",
             "label":"Alice",
             "rank":"member",
             "can_ban":false
@@ -6826,7 +6826,7 @@ fn data_models_reject_unknown_fields() {
         serde_json::from_str::<RoomMemberView>(
             r#"{
             "user_id":"@alice:example",
-            "display_name":"Alice",
+            "nick":"Alice",
             "label":"Alice",
             "rank":"member",
             "can_kick":true
@@ -6838,7 +6838,7 @@ fn data_models_reject_unknown_fields() {
         serde_json::from_str::<RoomMemberView>(
             r#"{
             "user_id":"@alice:example",
-            "display_name":"Alice",
+            "nick":"Alice",
             "label":"Alice",
             "can_kick":true,
             "can_ban":false
@@ -6851,7 +6851,7 @@ fn data_models_reject_unknown_fields() {
         serde_json::from_str::<RoomMemberView>(
             r#"{
             "user_id":"@alice:example",
-            "display_name":"Alice",
+            "nick":"Alice",
             "label":"Alice",
             "rank":"creator",
             "can_kick":true,
@@ -7213,7 +7213,7 @@ fn room_state_notice_content_rejects_impossible_tagged_combinations() {
             r#"{
             "type":"topic",
             "change":{"type":"joined"},
-            "target_display_name":"alice",
+            "target_nick":"alice",
             "reason":null
         }"#
         )

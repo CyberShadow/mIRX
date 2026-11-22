@@ -30,8 +30,8 @@
         "event_id": "$utd-unknown:example.org",
         "sender": {
           "user_id": "@alice:example.org",
-          "display_name": "Alice",
-          "display_name_ambiguous": false
+          "nick": "Alice",
+          "nick_ambiguous": false
         },
         "session_id": "SESSION0",
         "cause": "unknown"
@@ -50,8 +50,8 @@
         "event_id": "$utd-sent-before-you-joined:example.org",
         "sender": {
           "user_id": "@bob:example.org",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "session_id": "SESSION1",
         "cause": "sent_before_you_joined"
@@ -70,8 +70,8 @@
         "event_id": "$utd-historical-no-backup:example.org",
         "sender": {
           "user_id": "@alice:example.org",
-          "display_name": "Alice",
-          "display_name_ambiguous": false
+          "nick": "Alice",
+          "nick_ambiguous": false
         },
         "session_id": "SESSION2",
         "cause": "historical_no_backup"
@@ -90,8 +90,8 @@
         "event_id": "$utd-historical-unverified:example.org",
         "sender": {
           "user_id": "@bob:example.org",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "session_id": "SESSION3",
         "cause": "historical_unverified"
@@ -110,8 +110,8 @@
         "event_id": "$utd-withheld-unverified:example.org",
         "sender": {
           "user_id": "@alice:example.org",
-          "display_name": "Alice",
-          "display_name_ambiguous": false
+          "nick": "Alice",
+          "nick_ambiguous": false
         },
         "session_id": "SESSION4",
         "cause": "withheld_unverified"
@@ -130,8 +130,8 @@
         "event_id": "$utd-withheld-by-sender:example.org",
         "sender": {
           "user_id": "@bob:example.org",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "session_id": "SESSION5",
         "cause": "withheld_by_sender"

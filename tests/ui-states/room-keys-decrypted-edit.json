@@ -40,8 +40,8 @@
       "members": [
         {
           "user_id": "@alice:example.org",
-          "display_name": "Alice",
-          "display_name_ambiguous": false,
+          "nick": "Alice",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,
@@ -49,8 +49,8 @@
         },
         {
           "user_id": "@bob:example.org",
-          "display_name": "Bob",
-          "display_name_ambiguous": false,
+          "nick": "Bob",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,
@@ -72,8 +72,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@alice:example.org",
-          "display_name": "Alice",
-          "display_name_ambiguous": false
+          "nick": "Alice",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "when do we ship?",
@@ -100,8 +100,8 @@
         "event_id": "$answer:example.org",
         "sender": {
           "user_id": "@bob:example.org",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "session_id": "SESSION-B",
         "cause": "unknown"
@@ -120,8 +120,8 @@
         "event_id": "$later:example.org",
         "sender": {
           "user_id": "@bob:example.org",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "session_id": "SESSION-C",
         "cause": "unknown"

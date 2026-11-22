@@ -45,15 +45,15 @@ pub(super) fn rank_prefix(rank: RoomMemberRank) -> &'static str {
 pub(super) fn profile_nick(profile: &RoomUserProfile) -> String {
     nick_label(
         &profile.user_id,
-        profile.display_name.as_deref(),
-        profile.display_name_ambiguous,
+        profile.nick.as_deref(),
+        profile.nick_ambiguous,
     )
 }
 
 /// The nick together with the user ID, as mIRC shows `nick (user@host)` on
 /// joins and parts.
 fn nick_with_user_id(profile: &RoomUserProfile) -> String {
-    nick_label(&profile.user_id, profile.display_name.as_deref(), true)
+    nick_label(&profile.user_id, profile.nick.as_deref(), true)
 }
 
 /// A line a user's message or action makes: its text, where the sender's
@@ -166,7 +166,7 @@ pub(super) fn member_change_text(
         RoomMemberChange::KnockAccepted => format!("{op} accepted knock from {nick}"),
         RoomMemberChange::KnockRetracted => format!("{nick} withdrew knock"),
         RoomMemberChange::KnockDenied => format!("{op} denied knock from {nick}"),
-        RoomMemberChange::DisplayNameChanged { old, new } => format!(
+        RoomMemberChange::NickChanged { old, new } => format!(
             "{} is now known as {}",
             nick_label(&target.user_id, old.as_deref(), false),
             nick_label(&target.user_id, new.as_deref(), false),
@@ -228,8 +228,8 @@ mod tests {
     fn profile(user_id: &str, display_name: Option<&str>, ambiguous: bool) -> RoomUserProfile {
         RoomUserProfile {
             user_id: user_id.to_owned(),
-            display_name: display_name.map(str::to_owned),
-            display_name_ambiguous: ambiguous,
+            nick: display_name.map(str::to_owned),
+            nick_ambiguous: ambiguous,
         }
     }
 
@@ -408,7 +408,7 @@ mod tests {
         );
         assert_eq!(
             text(
-                RoomMemberChange::DisplayNameChanged {
+                RoomMemberChange::NickChanged {
                     old: Some("Carol".to_owned()),
                     new: Some("Caz".to_owned()),
                 },
@@ -419,7 +419,7 @@ mod tests {
         );
         assert_eq!(
             text(
-                RoomMemberChange::DisplayNameChanged {
+                RoomMemberChange::NickChanged {
                     old: None,
                     new: Some("Carol".to_owned()),
                 },

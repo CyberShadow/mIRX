@@ -5,8 +5,8 @@ use super::*;
 pub(super) fn room_member_nick(member: &RoomMemberSummary) -> String {
     nick_label(
         &member.user_id,
-        member.display_name.as_deref(),
-        member.display_name_ambiguous,
+        member.nick.as_deref(),
+        member.nick_ambiguous,
     )
 }
 
@@ -15,7 +15,7 @@ pub(super) fn room_member_view_rows(members: &[RoomMemberSummary]) -> Vec<RoomMe
         .iter()
         .map(|member| RoomMemberView {
             user_id: member.user_id.clone(),
-            display_name: member.display_name.clone(),
+            nick: member.nick.clone(),
             label: room_member_nick(member),
             rank: member.rank,
             can_kick: member.can_kick,
@@ -147,7 +147,7 @@ pub(super) unsafe fn query_selected_member(hwnd: HWND) -> Result<(), String> {
 /// selection, followed by a space to type on.
 pub(super) unsafe fn mention_selected_member(hwnd: HWND) -> Result<(), String> {
     let member = selected_member(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
-    let mention = member_mention_text(&member.user_id, member.display_name.as_deref());
+    let mention = member_mention_text(&member.user_id, member.nick.as_deref());
     let edit = compose_edit(hwnd);
     active_compose_history(state_mut(hwnd)).reset_navigation();
     replace_edit_selection(edit, &format!("{mention} "));

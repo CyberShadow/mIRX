@@ -56,7 +56,7 @@
         "type": "message",
         "event_id": "$focus-1",
         "transaction_id": null,
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "nick": null, "nick_ambiguous": false },
         "presentation": "text",
         "body": "focus kickoff for constrained shell snapshot coverage",
         "styles": [],
@@ -78,7 +78,7 @@
         "type": "message",
         "event_id": "$focus-2",
         "transaction_id": null,
-        "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@bob:example", "nick": null, "nick_ambiguous": false },
         "presentation": "text",
         "body": "member pane stays visible while the timeline still has enough width to read",
         "styles": [],
@@ -100,7 +100,7 @@
         "type": "message",
         "event_id": "$focus-3",
         "transaction_id": null,
-        "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@carol:example", "nick": null, "nick_ambiguous": false },
         "presentation": "text",
         "body": "long visible timeline line for the 900x620 shell frame so the MDI content remains obvious",
         "styles": [],
@@ -122,7 +122,7 @@
         "type": "message",
         "event_id": "$focus-4",
         "transaction_id": null,
-        "sender": { "user_id": "@dave:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@dave:example", "nick": null, "nick_ambiguous": false },
         "presentation": "text",
         "body": "another line keeps the room busy without depending on any new protocol behavior",
         "styles": [],
@@ -144,7 +144,7 @@
         "type": "message",
         "event_id": "$inbox-1",
         "transaction_id": null,
-        "sender": { "user_id": "@erin:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@erin:example", "nick": null, "nick_ambiguous": false },
         "presentation": "text",
         "body": "inbox update keeps the status bar visible",
         "styles": [],
@@ -162,28 +162,28 @@
       "members": [
         {
           "user_id": "@alice:example",
-          "display_name": "Alice", "display_name_ambiguous": false,
+          "nick": "Alice", "nick_ambiguous": false,
           "is_own_user": false, "rank": "member",
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@bob:example",
-          "display_name": "Bob", "display_name_ambiguous": false,
+          "nick": "Bob", "nick_ambiguous": false,
           "is_own_user": false, "rank": "member",
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@casey:example",
-          "display_name": "Casey", "display_name_ambiguous": false,
+          "nick": "Casey", "nick_ambiguous": false,
           "is_own_user": false, "rank": "member",
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@dana:example",
-          "display_name": "Dana", "display_name_ambiguous": false,
+          "nick": "Dana", "nick_ambiguous": false,
           "is_own_user": false, "rank": "member",
           "can_kick": false,
           "can_ban": false

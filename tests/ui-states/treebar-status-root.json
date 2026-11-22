@@ -131,8 +131,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false
+          "nick": "Alice",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "the treebar roots at the Status window",

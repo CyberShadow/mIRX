@@ -221,8 +221,8 @@ fn assert_invalid_authenticated_command(
 fn profile(user_id: &str) -> RoomUserProfile {
     RoomUserProfile {
         user_id: user_id.to_owned(),
-        display_name: Some("Alice".to_owned()),
-        display_name_ambiguous: false,
+        nick: Some("Alice".to_owned()),
+        nick_ambiguous: false,
     }
 }
 
@@ -2261,14 +2261,14 @@ fn room_activity_events_round_trip_through_serde() {
             event_id: "$member:example.org".to_owned(),
             sender: profile("@alice:example.org"),
             content: RoomStateNoticeContent::Member {
-                change: RoomMemberChange::DisplayNameChanged {
+                change: RoomMemberChange::NickChanged {
                     old: Some("carol".to_owned()),
                     new: None,
                 },
                 target: RoomUserProfile {
                     user_id: "@carol:example.org".to_owned(),
-                    display_name: Some("Carol".to_owned()),
-                    display_name_ambiguous: true,
+                    nick: Some("Carol".to_owned()),
+                    nick_ambiguous: true,
                 },
                 reason: Some("rename".to_owned()),
             },
@@ -2478,14 +2478,14 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             event_id: "$member:example.org".to_owned(),
             sender: profile("@alice:example.org"),
             content: RoomStateNoticeContent::Member {
-                change: RoomMemberChange::DisplayNameChanged {
+                change: RoomMemberChange::NickChanged {
                     old: Some("carol".to_owned()),
                     new: None,
                 },
                 target: RoomUserProfile {
                     user_id: "@carol:example.org".to_owned(),
-                    display_name: Some("Carol".to_owned()),
-                    display_name_ambiguous: true,
+                    nick: Some("Carol".to_owned()),
+                    nick_ambiguous: true,
                 },
                 reason: Some("rename".to_owned()),
             },
@@ -2628,28 +2628,28 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
 
     assert_eq!(
         serde_json::to_string(&pending_message_event).expect("serialize pending room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"pending"}}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"pending"}}}}"#
     );
     assert_eq!(
         serde_json::to_string(&member_notice_event).expect("serialize member room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"state:$member:example.org","timestamp_ms":1700000000002,"highlight":false,"relation":null,"kind":{"type":"state_notice","event_id":"$member:example.org","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"content":{"type":"member","change":{"type":"display_name_changed","old":"carol","new":null},"target":{"user_id":"@carol:example.org","display_name":"Carol","display_name_ambiguous":true},"reason":"rename"}}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"state:$member:example.org","timestamp_ms":1700000000002,"highlight":false,"relation":null,"kind":{"type":"state_notice","event_id":"$member:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"content":{"type":"member","change":{"type":"nick_changed","old":"carol","new":null},"target":{"user_id":"@carol:example.org","nick":"Carol","nick_ambiguous":true},"reason":"rename"}}}}"#
     );
     assert_eq!(
         serde_json::to_string(&image_event).expect("serialize image room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$image1:example.org","timestamp_ms":1700000000003,"highlight":false,"relation":null,"kind":{"type":"image","event_id":"$image1:example.org","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"body":"diagram.png","filename":"Incident diagram.png","source":{"type":"plain","url":"mxc://example.org/image"},"info":{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false,"thumbnail_source":null}}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$image1:example.org","timestamp_ms":1700000000003,"highlight":false,"relation":null,"kind":{"type":"image","event_id":"$image1:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"body":"diagram.png","filename":"Incident diagram.png","source":{"type":"plain","url":"mxc://example.org/image"},"info":{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false,"thumbnail_source":null}}}}"#
     );
     assert_eq!(
         serde_json::to_string(&file_event).expect("serialize file room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$file1:example.org","timestamp_ms":1700000000004,"highlight":false,"relation":null,"kind":{"type":"file","event_id":"$file1:example.org","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"body":"Quarterly report","filename":"report.pdf","source":{"type":"plain","url":"mxc://example.org/file"},"info":{"mimetype":"application/pdf","size":65536}}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$file1:example.org","timestamp_ms":1700000000004,"highlight":false,"relation":null,"kind":{"type":"file","event_id":"$file1:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"body":"Quarterly report","filename":"report.pdf","source":{"type":"plain","url":"mxc://example.org/file"},"info":{"mimetype":"application/pdf","size":65536}}}}"#
     );
     assert_eq!(
         serde_json::to_string(&audio_event).expect("serialize audio room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$audio1:example.org","timestamp_ms":1700000000005,"highlight":false,"relation":null,"kind":{"type":"audio","event_id":"$audio1:example.org","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"body":"Voice note","filename":"voice-note.ogg","source":{"type":"plain","url":"mxc://example.org/audio"},"info":{"mimetype":"audio/ogg","size":8192,"duration_ms":12000}}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$audio1:example.org","timestamp_ms":1700000000005,"highlight":false,"relation":null,"kind":{"type":"audio","event_id":"$audio1:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"body":"Voice note","filename":"voice-note.ogg","source":{"type":"plain","url":"mxc://example.org/audio"},"info":{"mimetype":"audio/ogg","size":8192,"duration_ms":12000}}}}"#
     );
     assert_eq!(
         serde_json::to_string(&unsupported_message_event)
             .expect("serialize unsupported room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$custom1:example.org","timestamp_ms":1700000000006,"highlight":false,"relation":null,"kind":{"type":"unsupported_message","event_id":"$custom1:example.org","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"msgtype":"com.example.custom","body":"Custom body"}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$custom1:example.org","timestamp_ms":1700000000006,"highlight":false,"relation":null,"kind":{"type":"unsupported_message","event_id":"$custom1:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"msgtype":"com.example.custom","body":"Custom body"}}}"#
     );
     assert_eq!(
         serde_json::to_string(&redacted_event).expect("serialize redacted room activity"),
@@ -2833,7 +2833,7 @@ fn room_history_backfill_event_round_trips_through_serde() {
     let json = serde_json::to_string(&event).expect("serialize room history backfill event");
     assert_eq!(
         json,
-        r#"{"RoomHistoryBackfill":{"room_id":"!ops:example.org","end":"t4747337_219379_2603","events":[{"type":"activity","room_id":"!ops:example.org","activity_id":"event:$message:example.org","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$message:example.org","transaction_id":null,"sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"older message","styles":[],"user_links":[],"send_state":{"state":"sent"}}},{"type":"activity_update","room_id":"!ops:example.org","target":{"type":"event","event_id":"$message:example.org"},"kind":{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@bob:example.org","timestamp_ms":1700000000100,"key":"heart"}}]}}"#
+        r#"{"RoomHistoryBackfill":{"room_id":"!ops:example.org","end":"t4747337_219379_2603","events":[{"type":"activity","room_id":"!ops:example.org","activity_id":"event:$message:example.org","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$message:example.org","transaction_id":null,"sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"presentation":"text","body":"older message","styles":[],"user_links":[],"send_state":{"state":"sent"}}},{"type":"activity_update","room_id":"!ops:example.org","target":{"type":"event","event_id":"$message:example.org"},"kind":{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@bob:example.org","timestamp_ms":1700000000100,"key":"heart"}}]}}"#
     );
 
     let restored: Event =
@@ -2867,7 +2867,7 @@ fn room_history_backfill_rejects_invalid_nested_event_tag() {
 fn room_history_backfill_event_rejects_unknown_fields() {
     assert!(
         serde_json::from_str::<RoomHistoryBackfillEvent>(
-            r#"{"type":"activity","room_id":"!room:example.org","activity_id":"event:$event:example.org","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$event:example.org","transaction_id":null,"sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"}},"unexpected":"value"}"#
+            r#"{"type":"activity","room_id":"!room:example.org","activity_id":"event:$event:example.org","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$event:example.org","transaction_id":null,"sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"}},"unexpected":"value"}"#
         )
         .is_err(),
         "room history backfill event must reject unknown fields"
@@ -2952,8 +2952,8 @@ fn room_members_event_round_trips_multiple_members_and_allows_empty_members() {
         members: vec![
             RoomMemberSummary {
                 user_id: "@alice:example.org".to_owned(),
-                display_name: Some("Alice".to_owned()),
-                display_name_ambiguous: true,
+                nick: Some("Alice".to_owned()),
+                nick_ambiguous: true,
                 is_own_user: true,
                 rank: RoomMemberRank::Moderator,
                 can_kick: true,
@@ -2961,8 +2961,8 @@ fn room_members_event_round_trips_multiple_members_and_allows_empty_members() {
             },
             RoomMemberSummary {
                 user_id: "@bob:example.org".to_owned(),
-                display_name: None,
-                display_name_ambiguous: false,
+                nick: None,
+                nick_ambiguous: false,
                 is_own_user: false,
                 rank: RoomMemberRank::Voiced,
                 can_kick: false,
@@ -2974,7 +2974,7 @@ fn room_members_event_round_trips_multiple_members_and_allows_empty_members() {
     let populated_json = serde_json::to_string(&populated_event).expect("serialize room members");
     assert_eq!(
         populated_json,
-        r#"{"RoomMembers":{"room_id":"!ops:example.org","members":[{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":true,"is_own_user":true,"rank":"moderator","can_kick":true,"can_ban":false},{"user_id":"@bob:example.org","display_name":null,"display_name_ambiguous":false,"is_own_user":false,"rank":"voiced","can_kick":false,"can_ban":true}]}}"#
+        r#"{"RoomMembers":{"room_id":"!ops:example.org","members":[{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":true,"is_own_user":true,"rank":"moderator","can_kick":true,"can_ban":false},{"user_id":"@bob:example.org","nick":null,"nick_ambiguous":false,"is_own_user":false,"rank":"voiced","can_kick":false,"can_ban":true}]}}"#
     );
 
     let restored: Event =
@@ -3541,7 +3541,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<RoomActivity>(
-            r#"{"room_id":"!ops:example.org","activity_id":"event:$event:example.org","timestamp_ms":1700000000000,"highlight":false,"kind":{"type":"message","event_id":"$event:example.org","transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"}},"unexpected":"value"}"#
+            r#"{"room_id":"!ops:example.org","activity_id":"event:$event:example.org","timestamp_ms":1700000000000,"highlight":false,"kind":{"type":"message","event_id":"$event:example.org","transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"}},"unexpected":"value"}"#
         )
         .is_err(),
         "room activity must reject unknown fields"
@@ -3549,7 +3549,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<RoomMessageActivity>(
-            r#"{"event_id":"$event:example.org","transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"},"unexpected":"value"}"#
+            r#"{"event_id":"$event:example.org","transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"},"unexpected":"value"}"#
         )
         .is_err(),
         "room message activity must reject unknown fields"
@@ -3557,7 +3557,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<UnsupportedRoomMessageActivity>(
-            r#"{"event_id":"$audio1:example.org","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"msgtype":"m.audio","body":"voice.ogg","unexpected":"value"}"#
+            r#"{"event_id":"$audio1:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"msgtype":"m.audio","body":"voice.ogg","unexpected":"value"}"#
         )
         .is_err(),
         "unsupported room message activity must reject unknown fields"
@@ -3565,7 +3565,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<RoomImageActivity>(
-            r#"{"event_id":"$image1:example.org","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"body":"diagram.png","filename":"Incident diagram.png","source":{"type":"plain","url":"mxc://example.org/image"},"info":{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false},"unexpected":"value"}"#
+            r#"{"event_id":"$image1:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"body":"diagram.png","filename":"Incident diagram.png","source":{"type":"plain","url":"mxc://example.org/image"},"info":{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false},"unexpected":"value"}"#
         )
         .is_err(),
         "room image activity must reject unknown fields"
@@ -3573,7 +3573,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<RoomFileActivity>(
-            r#"{"event_id":"$file1:example.org","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"body":"Quarterly report","filename":"report.pdf","source":{"type":"plain","url":"mxc://example.org/file"},"info":{"mimetype":"application/pdf","size":65536},"unexpected":"value"}"#
+            r#"{"event_id":"$file1:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"body":"Quarterly report","filename":"report.pdf","source":{"type":"plain","url":"mxc://example.org/file"},"info":{"mimetype":"application/pdf","size":65536},"unexpected":"value"}"#
         )
         .is_err(),
         "room file activity must reject unknown fields"
@@ -3581,7 +3581,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<RoomAudioActivity>(
-            r#"{"event_id":"$audio1:example.org","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"body":"Voice note","filename":"voice-note.ogg","source":{"type":"plain","url":"mxc://example.org/audio"},"info":{"mimetype":"audio/ogg","size":8192,"duration_ms":12000},"unexpected":"value"}"#
+            r#"{"event_id":"$audio1:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"body":"Voice note","filename":"voice-note.ogg","source":{"type":"plain","url":"mxc://example.org/audio"},"info":{"mimetype":"audio/ogg","size":8192,"duration_ms":12000},"unexpected":"value"}"#
         )
         .is_err(),
         "room audio activity must reject unknown fields"
@@ -3637,7 +3637,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<Event>(
-            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"highlight":false,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"failed","message":"send failed","recoverable":true,"unexpected":"value"}}}}"#
+            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"highlight":false,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"failed","message":"send failed","recoverable":true,"unexpected":"value"}}}}"#
         )
         .is_err(),
         "failed message send state must reject unknown fields"
@@ -3645,7 +3645,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<RoomMessageActivity>(
-            r#"{"event_id":"$event:example.org","transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"body":"hello","send_state":{"state":"sent"}}"#
+            r#"{"event_id":"$event:example.org","transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"body":"hello","send_state":{"state":"sent"}}"#
         )
         .is_err(),
         "room message activity must require presentation"
@@ -3653,7 +3653,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<RoomMessageActivity>(
-            r#"{"event_id":"$event:example.org","transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"html","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"}}"#
+            r#"{"event_id":"$event:example.org","transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"presentation":"html","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"}}"#
         )
         .is_err(),
         "room message activity must reject unknown presentation"
@@ -3661,7 +3661,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<RoomStateNoticeActivity>(
-            r#"{"event_id":"$topic:example.org","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"content":{"type":"topic","topic":"incident review"},"unexpected":"value"}"#
+            r#"{"event_id":"$topic:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"content":{"type":"topic","topic":"incident review"},"unexpected":"value"}"#
         )
         .is_err(),
         "room state notice activity must reject unknown fields"
@@ -3669,7 +3669,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<Event>(
-            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"state:$topic:example.org","timestamp_ms":1700000000001,"highlight":false,"kind":{"type":"state_notice","event_id":"$topic:example.org","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"content":{"type":"topic","topic":"incident review","unexpected":"value"}}}}"#
+            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"state:$topic:example.org","timestamp_ms":1700000000001,"highlight":false,"kind":{"type":"state_notice","event_id":"$topic:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"content":{"type":"topic","topic":"incident review","unexpected":"value"}}}}"#
         )
         .is_err(),
         "room state notice content must reject unknown fields"
@@ -3677,7 +3677,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<Event>(
-            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$custom1:example.org","timestamp_ms":1700000000006,"highlight":false,"kind":{"type":"unsupported_message","event_id":"$custom1:example.org","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"msgtype":"com.example.custom","body":"Custom body","unexpected":"value"}}}"#
+            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$custom1:example.org","timestamp_ms":1700000000006,"highlight":false,"kind":{"type":"unsupported_message","event_id":"$custom1:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"msgtype":"com.example.custom","body":"Custom body","unexpected":"value"}}}"#
         )
         .is_err(),
         "unsupported room activity kind must reject unknown fields"
@@ -3742,8 +3742,8 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     let complete_member = serde_json::json!({
         "user_id": "@alice:example.org",
-        "display_name": "Alice",
-        "display_name_ambiguous": false,
+        "nick": "Alice",
+        "nick_ambiguous": false,
         "is_own_user": false,
         "rank": "creator",
         "can_kick": false,
@@ -3791,7 +3791,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 fn room_state_notice_content_mismatch_is_unrepresentable() {
     assert!(
         serde_json::from_str::<Event>(
-            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"state:$member:example.org","timestamp_ms":1700000000002,"highlight":false,"kind":{"type":"state_notice","event_id":"$member:example.org","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"content":{"type":"member","topic":"incident review"}}}}"#
+            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"state:$member:example.org","timestamp_ms":1700000000002,"highlight":false,"kind":{"type":"state_notice","event_id":"$member:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"content":{"type":"member","topic":"incident review"}}}}"#
         )
         .is_err(),
         "tagged room state notice content must reject mismatched payloads"

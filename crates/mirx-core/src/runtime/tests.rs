@@ -591,8 +591,8 @@ fn room_members(room_id: &str, members: &[(&str, Option<&str>)]) -> RoomMembers 
             .iter()
             .map(|(user_id, display_name)| RoomMemberSummary {
                 user_id: (*user_id).to_owned(),
-                display_name: display_name.map(str::to_owned),
-                display_name_ambiguous: false,
+                nick: display_name.map(str::to_owned),
+                nick_ambiguous: false,
                 is_own_user: false,
                 rank: RoomMemberRank::Member,
                 can_kick: false,

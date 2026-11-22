@@ -667,7 +667,7 @@ mod tests {
             };
             assert_eq!(utd.event_id, "$secret");
             assert_eq!(utd.sender.user_id, "@alice:example.org");
-            assert_eq!(utd.sender.display_name.as_deref(), Some("Alice"));
+            assert_eq!(utd.sender.nick.as_deref(), Some("Alice"));
             // Sent after this session was made, while bob was in the room:
             // the key may yet come.
             assert_eq!(utd.cause, RoomUnableToDecryptCause::Unknown);

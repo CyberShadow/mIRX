@@ -28,7 +28,7 @@
         "type": "message",
         "event_id": "$typing-context",
         "transaction_id": null,
-        "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@carol:example", "nick": null, "nick_ambiguous": false },
         "presentation": "text",
         "body": "typing context",
         "styles": [],

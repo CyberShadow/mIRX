@@ -898,7 +898,7 @@ fn all_room_members(model: &UiModel) -> impl Iterator<Item = &RoomMemberSummary>
 pub(super) fn known_nick(model: &UiModel, user_id: &str) -> Option<String> {
     all_room_members(model)
         .filter(|member| member.user_id == user_id)
-        .find_map(|member| member.display_name.clone())
+        .find_map(|member| member.nick.clone())
 }
 
 /// The user `/ignore` and `/unignore` name: a user ID, which need not be a

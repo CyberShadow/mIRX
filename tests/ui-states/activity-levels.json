@@ -109,8 +109,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false
+          "nick": "Carol",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "morning all",
@@ -135,8 +135,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "Alice: ping",
@@ -161,8 +161,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "emote",
         "body": "waves at Alice",
@@ -187,8 +187,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false
+          "nick": "Carol",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "back to work",

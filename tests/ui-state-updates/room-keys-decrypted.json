@@ -19,8 +19,8 @@
             "transaction_id": null,
             "sender": {
               "user_id": "@bob:example.org",
-              "display_name": "Bob",
-              "display_name_ambiguous": false
+              "nick": "Bob",
+              "nick_ambiguous": false
             },
             "presentation": "text",
             "body": "at noon, once the build is green",

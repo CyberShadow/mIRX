@@ -868,10 +868,12 @@ pub enum RoomActivityKind {
 #[serde(deny_unknown_fields)]
 pub struct RoomUserProfile {
     pub user_id: String,
-    pub display_name: Option<String>,
-    /// Whether another room member shares `display_name`, so it alone does
-    /// not identify this user.
-    pub display_name_ambiguous: bool,
+    /// The name the room knows the user by: their display name there.
+    /// `None` when they have none.
+    pub nick: Option<String>,
+    /// Whether another room member's nick is the same, so the nick alone
+    /// does not identify this user.
+    pub nick_ambiguous: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1407,7 +1409,7 @@ pub enum RoomMemberChange {
     KnockAccepted,
     KnockRetracted,
     KnockDenied,
-    DisplayNameChanged {
+    NickChanged {
         old: Option<String>,
         new: Option<String>,
     },
@@ -1594,8 +1596,8 @@ pub struct RoomTyping {
 #[serde(deny_unknown_fields)]
 pub struct RoomMemberSummary {
     pub user_id: String,
-    pub display_name: Option<String>,
-    pub display_name_ambiguous: bool,
+    pub nick: Option<String>,
+    pub nick_ambiguous: bool,
     /// Whether this member is the authenticated user.
     pub is_own_user: bool,
     pub rank: RoomMemberRank,
@@ -2660,8 +2662,8 @@ mod tests {
             "transaction_id": null,
             "sender": {
                 "user_id": "@alice:example.org",
-                "display_name": null,
-                "display_name_ambiguous": false,
+                "nick": null,
+                "nick_ambiguous": false,
             },
             "presentation": "text",
             "body": "hi there",

@@ -30,8 +30,8 @@
         "event_id": "$sticker:example.org",
         "sender": {
           "user_id": "@bob:example.org",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "body": "a waving cat",
         "filename": null,
@@ -165,8 +165,8 @@
         "event_id": "$poll:example.org",
         "sender": {
           "user_id": "@bob:example.org",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "start",
@@ -194,8 +194,8 @@
         "event_id": "$poll-end:example.org",
         "sender": {
           "user_id": "@bob:example.org",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "end",
@@ -217,8 +217,8 @@
         "event_id": "$location:example.org",
         "sender": {
           "user_id": "@bob:example.org",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "msgtype": "m.location",
         "body": "Big Ben, London"
@@ -237,8 +237,8 @@
         "event_id": "$verify:example.org",
         "sender": {
           "user_id": "@bob:example.org",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "to": "@alice:example.org"
       },

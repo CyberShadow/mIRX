@@ -1484,7 +1484,7 @@ pub(super) fn resolve_nick<'m>(
         &|member| member.user_id == nick,
         &|member| {
             member
-                .display_name
+                .nick
                 .as_deref()
                 .is_some_and(|name| name.to_lowercase() == folded)
         },
@@ -1559,7 +1559,7 @@ fn user_id_localpart(user_id: &str) -> &str {
 
 /// The nick a member goes by in command output.
 fn member_nick(member: &RoomMemberSummary) -> &str {
-    member_mention_text(&member.user_id, member.display_name.as_deref())
+    member_mention_text(&member.user_id, member.nick.as_deref())
 }
 
 /// `/names`: the members, in nick list order, with their rank prefixes.
@@ -2806,8 +2806,8 @@ mod tests {
     ) -> RoomMemberSummary {
         RoomMemberSummary {
             user_id: user_id.to_owned(),
-            display_name: display_name.map(str::to_owned),
-            display_name_ambiguous: false,
+            nick: display_name.map(str::to_owned),
+            nick_ambiguous: false,
             is_own_user: false,
             rank,
             can_kick: false,

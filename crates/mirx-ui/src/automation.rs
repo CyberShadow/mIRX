@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 79;
+pub(crate) const PROTOCOL_VERSION: u32 = 80;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1783,8 +1783,9 @@ impl<'de> Deserialize<'de> for ComposeKey {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RoomMemberView {
     pub(crate) user_id: String,
-    pub(crate) display_name: Option<String>,
-    /// The bare nick; the nick list shows it after the rank prefix.
+    pub(crate) nick: Option<String>,
+    /// The nick, with the user ID when it is ambiguous; the nick list shows
+    /// it after the rank prefix.
     pub(crate) label: String,
     pub(crate) rank: RoomMemberRank,
     pub(crate) can_kick: bool,
@@ -2562,7 +2563,7 @@ pub(crate) enum DumpRoomStateNoticeContent {
     },
     Member {
         change: RoomMemberChange,
-        target_display_name: Option<String>,
+        target_nick: Option<String>,
         reason: Option<String>,
     },
     PowerLevels {
@@ -3014,7 +3015,7 @@ pub(crate) fn dump_room_state_notice_content_from_core(
             reason,
         } => DumpRoomStateNoticeContent::Member {
             change: change.clone(),
-            target_display_name: target.display_name.clone(),
+            target_nick: target.nick.clone(),
             reason: reason.clone(),
         },
         RoomStateNoticeContent::PowerLevels {
@@ -3571,8 +3572,8 @@ mod tests {
     fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
         mirx_core::RoomUserProfile {
             user_id: user_id.to_owned(),
-            display_name: None,
-            display_name_ambiguous: false,
+            nick: None,
+            nick_ambiguous: false,
         }
     }
     fn stored_session() -> StoredSession {
@@ -4034,8 +4035,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_79() {
-        assert_eq!(PROTOCOL_VERSION, 79);
+    fn protocol_version_is_80() {
+        assert_eq!(PROTOCOL_VERSION, 80);
     }
 
     #[test]
@@ -4401,7 +4402,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_LOAD_SYNTHETIC_STATE,
-                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":{"user_id":"@alice:example","display_name":null,"display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"}}}}]}}"#,
+                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":{"user_id":"@alice:example","nick":null,"nick_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"}}}}]}}"#,
             )
             .unwrap(),
             ParsedCommand::LoadSyntheticState {
@@ -6073,7 +6074,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":79,
+                    "protocol_version":80,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6544,7 +6545,7 @@ mod tests {
                                 lines: vec!["hello".to_owned()],
                                 members: vec![RoomMemberView {
                                     user_id: "@alice:example".to_owned(),
-                                    display_name: Some("Alice".to_owned()),
+                                    nick: Some("Alice".to_owned()),
                                     label: "Alice".to_owned(),
                                     rank: RoomMemberRank::Moderator,
                                     can_kick: true,
@@ -6893,7 +6894,7 @@ mod tests {
                                 "members":[
                                     {
                                         "user_id":"@alice:example",
-                                        "display_name":"Alice",
+                                        "nick":"Alice",
                                         "label":"Alice",
                                         "rank":"moderator",
                                         "can_kick":true,
@@ -8926,7 +8927,7 @@ mod tests {
                     "content":{
                         "type":"member",
                         "change":{"type":"joined"},
-                        "target_display_name":"alice",
+                        "target_nick":"alice",
                         "reason":null
                     }
                 }

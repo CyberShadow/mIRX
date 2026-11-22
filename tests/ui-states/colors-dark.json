@@ -30,8 +30,8 @@
         "event_id": "$membership-1",
         "sender": {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false
+          "nick": "Carol",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -40,8 +40,8 @@
           },
           "target": {
             "user_id": "@carol:example",
-            "display_name": "Carol",
-            "display_name_ambiguous": false
+            "nick": "Carol",
+            "nick_ambiguous": false
           },
           "reason": null
         }
@@ -60,8 +60,8 @@
         "event_id": "$membership-2",
         "sender": {
           "user_id": "@dave:example",
-          "display_name": null,
-          "display_name_ambiguous": false
+          "nick": null,
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -70,8 +70,8 @@
           },
           "target": {
             "user_id": "@dave:example",
-            "display_name": null,
-            "display_name_ambiguous": false
+            "nick": null,
+            "nick_ambiguous": false
           },
           "reason": null
         }
@@ -90,8 +90,8 @@
         "event_id": "$membership-3",
         "sender": {
           "user_id": "@op:example",
-          "display_name": "Op",
-          "display_name_ambiguous": false
+          "nick": "Op",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -100,8 +100,8 @@
           },
           "target": {
             "user_id": "@eve:example",
-            "display_name": "Eve",
-            "display_name_ambiguous": false
+            "nick": "Eve",
+            "nick_ambiguous": false
           },
           "reason": "flooding"
         }
@@ -120,8 +120,8 @@
         "event_id": "$membership-4",
         "sender": {
           "user_id": "@op:example",
-          "display_name": "Op",
-          "display_name_ambiguous": false
+          "nick": "Op",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -130,8 +130,8 @@
           },
           "target": {
             "user_id": "@frank:example",
-            "display_name": "Frank",
-            "display_name_ambiguous": false
+            "nick": "Frank",
+            "nick_ambiguous": false
           },
           "reason": "spam"
         }
@@ -150,8 +150,8 @@
         "event_id": "$membership-5",
         "sender": {
           "user_id": "@op:example",
-          "display_name": "Op",
-          "display_name_ambiguous": false
+          "nick": "Op",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -160,8 +160,8 @@
           },
           "target": {
             "user_id": "@grace:example",
-            "display_name": "Grace",
-            "display_name_ambiguous": false
+            "nick": "Grace",
+            "nick_ambiguous": false
           },
           "reason": null
         }
@@ -180,8 +180,8 @@
         "event_id": "$membership-6",
         "sender": {
           "user_id": "@op:example",
-          "display_name": "Op",
-          "display_name_ambiguous": false
+          "nick": "Op",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -190,8 +190,8 @@
           },
           "target": {
             "user_id": "@frank:example",
-            "display_name": "Frank",
-            "display_name_ambiguous": false
+            "nick": "Frank",
+            "nick_ambiguous": false
           },
           "reason": null
         }
@@ -210,8 +210,8 @@
         "event_id": "$membership-7",
         "sender": {
           "user_id": "@op:example",
-          "display_name": "Op",
-          "display_name_ambiguous": false
+          "nick": "Op",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -220,8 +220,8 @@
           },
           "target": {
             "user_id": "@heidi:example",
-            "display_name": "Heidi",
-            "display_name_ambiguous": false
+            "nick": "Heidi",
+            "nick_ambiguous": false
           },
           "reason": null
         }
@@ -240,8 +240,8 @@
         "event_id": "$membership-8",
         "sender": {
           "user_id": "@heidi:example",
-          "display_name": "Heidi",
-          "display_name_ambiguous": false
+          "nick": "Heidi",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -250,8 +250,8 @@
           },
           "target": {
             "user_id": "@heidi:example",
-            "display_name": "Heidi",
-            "display_name_ambiguous": false
+            "nick": "Heidi",
+            "nick_ambiguous": false
           },
           "reason": null
         }
@@ -270,8 +270,8 @@
         "event_id": "$membership-9",
         "sender": {
           "user_id": "@ivan:example",
-          "display_name": "Ivan",
-          "display_name_ambiguous": false
+          "nick": "Ivan",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -280,8 +280,8 @@
           },
           "target": {
             "user_id": "@ivan:example",
-            "display_name": "Ivan",
-            "display_name_ambiguous": false
+            "nick": "Ivan",
+            "nick_ambiguous": false
           },
           "reason": null
         }
@@ -300,8 +300,8 @@
         "event_id": "$membership-10",
         "sender": {
           "user_id": "@op:example",
-          "display_name": "Op",
-          "display_name_ambiguous": false
+          "nick": "Op",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -310,8 +310,8 @@
           },
           "target": {
             "user_id": "@judy:example",
-            "display_name": "Judy",
-            "display_name_ambiguous": false
+            "nick": "Judy",
+            "nick_ambiguous": false
           },
           "reason": null
         }
@@ -330,8 +330,8 @@
         "event_id": "$membership-11",
         "sender": {
           "user_id": "@mallory:example",
-          "display_name": "Mallory",
-          "display_name_ambiguous": false
+          "nick": "Mallory",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -340,8 +340,8 @@
           },
           "target": {
             "user_id": "@mallory:example",
-            "display_name": "Mallory",
-            "display_name_ambiguous": false
+            "nick": "Mallory",
+            "nick_ambiguous": false
           },
           "reason": "let me in"
         }
@@ -360,8 +360,8 @@
         "event_id": "$membership-12",
         "sender": {
           "user_id": "@op:example",
-          "display_name": "Op",
-          "display_name_ambiguous": false
+          "nick": "Op",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -370,8 +370,8 @@
           },
           "target": {
             "user_id": "@mallory:example",
-            "display_name": "Mallory",
-            "display_name_ambiguous": false
+            "nick": "Mallory",
+            "nick_ambiguous": false
           },
           "reason": null
         }
@@ -390,8 +390,8 @@
         "event_id": "$membership-13",
         "sender": {
           "user_id": "@niaj:example",
-          "display_name": "Niaj",
-          "display_name_ambiguous": false
+          "nick": "Niaj",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -400,8 +400,8 @@
           },
           "target": {
             "user_id": "@niaj:example",
-            "display_name": "Niaj",
-            "display_name_ambiguous": false
+            "nick": "Niaj",
+            "nick_ambiguous": false
           },
           "reason": null
         }
@@ -420,8 +420,8 @@
         "event_id": "$membership-14",
         "sender": {
           "user_id": "@op:example",
-          "display_name": "Op",
-          "display_name_ambiguous": false
+          "nick": "Op",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
@@ -430,8 +430,8 @@
           },
           "target": {
             "user_id": "@olivia:example",
-            "display_name": "Olivia",
-            "display_name_ambiguous": false
+            "nick": "Olivia",
+            "nick_ambiguous": false
           },
           "reason": null
         }
@@ -450,20 +450,20 @@
         "event_id": "$membership-15",
         "sender": {
           "user_id": "@carol:example",
-          "display_name": "Caz",
-          "display_name_ambiguous": false
+          "nick": "Caz",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "member",
           "change": {
-            "type": "display_name_changed",
+            "type": "nick_changed",
             "old": "Carol",
             "new": "Caz"
           },
           "target": {
             "user_id": "@carol:example",
-            "display_name": "Caz",
-            "display_name_ambiguous": false
+            "nick": "Caz",
+            "nick_ambiguous": false
           },
           "reason": null
         }
@@ -482,8 +482,8 @@
         "event_id": "$membership-16",
         "sender": {
           "user_id": "@sam:example",
-          "display_name": "Sam",
-          "display_name_ambiguous": true
+          "nick": "Sam",
+          "nick_ambiguous": true
         },
         "content": {
           "type": "member",
@@ -492,8 +492,8 @@
           },
           "target": {
             "user_id": "@sam:example",
-            "display_name": "Sam",
-            "display_name_ambiguous": true
+            "nick": "Sam",
+            "nick_ambiguous": true
           },
           "reason": null
         }
@@ -501,5 +501,5 @@
       "relation": null
     }
   },
-  {"RoomMembers": {"room_id": "!membership:example", "members": [{"user_id": "@op:example", "display_name": "Op", "display_name_ambiguous": false, "is_own_user": false, "rank": "moderator", "can_kick": true, "can_ban": true}, {"user_id": "@carol:example", "display_name": "Caz", "display_name_ambiguous": false, "is_own_user": false, "rank": "member", "can_kick": false, "can_ban": false}, {"user_id": "@heidi:example", "display_name": "Heidi", "display_name_ambiguous": false, "is_own_user": false, "rank": "member", "can_kick": false, "can_ban": false}]}}
+  {"RoomMembers": {"room_id": "!membership:example", "members": [{"user_id": "@op:example", "nick": "Op", "nick_ambiguous": false, "is_own_user": false, "rank": "moderator", "can_kick": true, "can_ban": true}, {"user_id": "@carol:example", "nick": "Caz", "nick_ambiguous": false, "is_own_user": false, "rank": "member", "can_kick": false, "can_ban": false}, {"user_id": "@heidi:example", "nick": "Heidi", "nick_ambiguous": false, "is_own_user": false, "rank": "member", "can_kick": false, "can_ban": false}]}}
 ]

@@ -46,8 +46,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false
+          "nick": "Alice",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "the spec is at https://spec.matrix.org/latest/ for anyone asking",
@@ -72,8 +72,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "mirror on www.example.org.",
@@ -98,8 +98,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false
+          "nick": "Carol",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "see docs (https://example.org/docs)",
@@ -124,8 +124,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false
+          "nick": "Alice",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "join https://matrix.to/#/%23rust%3Amatrix.org or #rust:matrix.org, ask https://matrix.to/#/@bob:example",
@@ -150,8 +150,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "logs: https://example.org/a/very/long/path/that/wraps/over/the/edge/of/the/window/to/the/next/line/index.html then more",
@@ -176,8 +176,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false
+          "nick": "Carol",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "C# is not a link, nor is issue#12",
@@ -202,8 +202,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "elsewhere: https://matrix.to/#/%23elsewhere%3Aexample.org?via=example.org",
@@ -228,8 +228,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false
+          "nick": "Carol",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "thanks Alice, and www.bob.example too",
@@ -259,8 +259,8 @@
       "members": [
         {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false,
+          "nick": "Alice",
+          "nick_ambiguous": false,
           "is_own_user": true,
           "rank": "member",
           "can_kick": false,
@@ -268,8 +268,8 @@
         },
         {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false,
+          "nick": "Bob",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,
@@ -277,8 +277,8 @@
         },
         {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false,
+          "nick": "Carol",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,

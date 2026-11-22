@@ -38,8 +38,8 @@
       "members": [
         {
           "user_id": "@me:example",
-          "display_name": "Me",
-          "display_name_ambiguous": false,
+          "nick": "Me",
+          "nick_ambiguous": false,
           "is_own_user": true,
           "rank": "member",
           "can_kick": false,
@@ -47,8 +47,8 @@
         },
         {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false,
+          "nick": "Bob",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,
@@ -56,8 +56,8 @@
         },
         {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false,
+          "nick": "Carol",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,

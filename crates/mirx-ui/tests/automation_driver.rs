@@ -92,8 +92,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
     mirx_core::RoomUserProfile {
         user_id: user_id.to_owned(),
-        display_name: None,
-        display_name_ambiguous: false,
+        nick: None,
+        nick_ambiguous: false,
     }
 }
 
@@ -1817,8 +1817,8 @@ fn room_members_event(room_id: &str, members: &[(&str, Option<&str>)]) -> Event 
             .iter()
             .map(|(user_id, display_name)| RoomMemberSummary {
                 user_id: (*user_id).to_owned(),
-                display_name: display_name.map(str::to_owned),
-                display_name_ambiguous: false,
+                nick: display_name.map(str::to_owned),
+                nick_ambiguous: false,
                 is_own_user: false,
                 rank: RoomMemberRank::Member,
                 can_kick: false,
@@ -2134,7 +2134,7 @@ fn member_entry_with_event_id(
     timestamp_ms: u64,
     state_key: &str,
     change: RoomMemberChange,
-    target_display_name: Option<&str>,
+    target_nick: Option<&str>,
 ) -> RoomActivity {
     RoomActivity {
         room_id: room_id.to_owned(),
@@ -2149,7 +2149,7 @@ fn member_entry_with_event_id(
             state_key: state_key.to_owned(),
             content: RoomStateNoticeContent::Member {
                 change,
-                target_display_name: target_display_name.map(str::to_owned),
+                target_nick: target_nick.map(str::to_owned),
                 reason: None,
             },
         }),
@@ -3411,7 +3411,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 79);
+    assert_eq!(version.protocol_version, 80);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -5941,8 +5941,8 @@ fn launch_signed_in_member_app(
 fn signed_in_member_events() -> Vec<Event> {
     let member = |user_id: &str, display_name: &str, is_own_user| RoomMemberSummary {
         user_id: user_id.to_owned(),
-        display_name: Some(display_name.to_owned()),
-        display_name_ambiguous: false,
+        nick: Some(display_name.to_owned()),
+        nick_ambiguous: false,
         is_own_user,
         rank: RoomMemberRank::Member,
         can_kick: false,
@@ -9099,8 +9099,8 @@ fn ranked_member(
 ) -> RoomMemberSummary {
     RoomMemberSummary {
         user_id: user_id.to_owned(),
-        display_name: Some(display_name.to_owned()),
-        display_name_ambiguous: false,
+        nick: Some(display_name.to_owned()),
+        nick_ambiguous: false,
         is_own_user: false,
         rank,
         can_kick: moderatable,
@@ -9338,8 +9338,8 @@ fn automation_driver_loads_member_list_fixture() -> Result<(), Box<dyn std::erro
 fn named_profile(user_id: &str, display_name: &str) -> mirx_core::RoomUserProfile {
     mirx_core::RoomUserProfile {
         user_id: user_id.to_owned(),
-        display_name: Some(display_name.to_owned()),
-        display_name_ambiguous: false,
+        nick: Some(display_name.to_owned()),
+        nick_ambiguous: false,
     }
 }
 
@@ -9863,8 +9863,8 @@ fn member_menu_control_items() -> Result<(), Box<dyn std::error::Error>> {
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     let member = |user_id: &str, display_name: &str, rank, is_own_user| RoomMemberSummary {
         user_id: user_id.to_owned(),
-        display_name: Some(display_name.to_owned()),
-        display_name_ambiguous: false,
+        nick: Some(display_name.to_owned()),
+        nick_ambiguous: false,
         is_own_user,
         rank,
         can_kick: false,
@@ -13399,8 +13399,8 @@ fn automation_driver_undecryptable_lines_say_why_and_take_a_new_cause_in_place()
     };
     let bob = serde_json::json!({
         "user_id": "@bob:example.org",
-        "display_name": "Bob",
-        "display_name_ambiguous": false,
+        "nick": "Bob",
+        "nick_ambiguous": false,
     });
 
     // Verified, without the key in the backup: nothing more to say.

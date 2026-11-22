@@ -31,8 +31,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@creator:example",
-          "display_name": "Creator",
-          "display_name_ambiguous": false
+          "nick": "Creator",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "ranks sort above names",
@@ -56,8 +56,8 @@
         "event_id": "$ranks-power-1",
         "sender": {
           "user_id": "@admin:example",
-          "display_name": "Admin",
-          "display_name_ambiguous": false
+          "nick": "Admin",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "power_levels",
@@ -65,8 +65,8 @@
             {
               "target": {
                 "user_id": "@mod:example",
-                "display_name": "Mod",
-                "display_name_ambiguous": false
+                "nick": "Mod",
+                "nick_ambiguous": false
               },
               "old": 0,
               "new": 50
@@ -74,8 +74,8 @@
             {
               "target": {
                 "user_id": "@voice:example",
-                "display_name": "Voice",
-                "display_name_ambiguous": false
+                "nick": "Voice",
+                "nick_ambiguous": false
               },
               "old": 0,
               "new": 10
@@ -102,8 +102,8 @@
         "event_id": "$ranks-power-2",
         "sender": {
           "user_id": "@admin:example",
-          "display_name": "Admin",
-          "display_name_ambiguous": false
+          "nick": "Admin",
+          "nick_ambiguous": false
         },
         "content": {
           "type": "power_levels",
@@ -127,8 +127,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@sam-one:example",
-          "display_name": "Sam",
-          "display_name_ambiguous": true
+          "nick": "Sam",
+          "nick_ambiguous": true
         },
         "presentation": "text",
         "body": "shared names still show the user ID",
@@ -147,8 +147,8 @@
       "members": [
         {
           "user_id": "@creator:example",
-          "display_name": "Creator",
-          "display_name_ambiguous": false,
+          "nick": "Creator",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "creator",
           "can_kick": false,
@@ -156,8 +156,8 @@
         },
         {
           "user_id": "@admin:example",
-          "display_name": "Admin",
-          "display_name_ambiguous": false,
+          "nick": "Admin",
+          "nick_ambiguous": false,
           "is_own_user": true,
           "rank": "administrator",
           "can_kick": false,
@@ -165,8 +165,8 @@
         },
         {
           "user_id": "@mod:example",
-          "display_name": "Mod",
-          "display_name_ambiguous": false,
+          "nick": "Mod",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "moderator",
           "can_kick": true,
@@ -174,8 +174,8 @@
         },
         {
           "user_id": "@voice:example",
-          "display_name": "Voice",
-          "display_name_ambiguous": false,
+          "nick": "Voice",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "voiced",
           "can_kick": true,
@@ -183,8 +183,8 @@
         },
         {
           "user_id": "@ghost:example",
-          "display_name": null,
-          "display_name_ambiguous": false,
+          "nick": null,
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": true,
@@ -192,8 +192,8 @@
         },
         {
           "user_id": "@alan:example",
-          "display_name": "Alan",
-          "display_name_ambiguous": false,
+          "nick": "Alan",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": true,
@@ -201,8 +201,8 @@
         },
         {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false,
+          "nick": "Alice",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": true,
@@ -210,8 +210,8 @@
         },
         {
           "user_id": "@casey:example",
-          "display_name": "Casey",
-          "display_name_ambiguous": false,
+          "nick": "Casey",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": true,
@@ -219,8 +219,8 @@
         },
         {
           "user_id": "@sam-one:example",
-          "display_name": "Sam",
-          "display_name_ambiguous": true,
+          "nick": "Sam",
+          "nick_ambiguous": true,
           "is_own_user": false,
           "rank": "member",
           "can_kick": true,
@@ -228,8 +228,8 @@
         },
         {
           "user_id": "@sam-two:example",
-          "display_name": "Sam",
-          "display_name_ambiguous": true,
+          "nick": "Sam",
+          "nick_ambiguous": true,
           "is_own_user": false,
           "rank": "member",
           "can_kick": true,

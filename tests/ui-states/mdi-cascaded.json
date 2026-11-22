@@ -46,8 +46,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false
+          "nick": "Carol",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "morning all",
@@ -72,8 +72,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "coffee is ready",
@@ -98,8 +98,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false
+          "nick": "Alice",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "deploy window opens at 18:00 UTC",
@@ -124,8 +124,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "rollback plan is in the doc",
@@ -144,8 +144,8 @@
       "members": [
         {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false,
+          "nick": "Alice",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "moderator",
           "can_kick": false,
@@ -153,8 +153,8 @@
         },
         {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false,
+          "nick": "Bob",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,
@@ -162,8 +162,8 @@
         },
         {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false,
+          "nick": "Carol",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,
@@ -178,8 +178,8 @@
       "members": [
         {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false,
+          "nick": "Alice",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "administrator",
           "can_kick": false,
@@ -187,8 +187,8 @@
         },
         {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false,
+          "nick": "Bob",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "voiced",
           "can_kick": false,

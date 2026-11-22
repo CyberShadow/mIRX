@@ -2822,7 +2822,7 @@ configure_case_expectations() {
       )
       room_activity_expect_args=(
         --expect-room-activity '!membership:example::kicked_and_banned'
-        --expect-room-activity '!membership:example::display_name_changed'
+        --expect-room-activity '!membership:example::nick_changed'
         --expect-room-activity '!membership:example::flooding'
       )
       room_view_expect_args=(

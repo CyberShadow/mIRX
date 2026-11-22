@@ -144,8 +144,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@alice:example",
-          "display_name": null,
-          "display_name_ambiguous": false
+          "nick": null,
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "morning all",
@@ -170,8 +170,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": null,
-          "display_name_ambiguous": false
+          "nick": null,
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "ops has updates",
@@ -196,8 +196,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@carol:example",
-          "display_name": null,
-          "display_name_ambiguous": false
+          "nick": null,
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "me: the deploy needs you",
@@ -222,8 +222,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@dave:example",
-          "display_name": null,
-          "display_name_ambiguous": false
+          "nick": null,
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "random chatter",

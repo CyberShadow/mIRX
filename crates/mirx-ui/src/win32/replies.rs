@@ -261,8 +261,8 @@ mod tests {
                 transaction_id: None,
                 sender: RoomUserProfile {
                     user_id: sender.to_owned(),
-                    display_name: None,
-                    display_name_ambiguous: false,
+                    nick: None,
+                    nick_ambiguous: false,
                 },
                 presentation,
                 body: body.to_owned(),

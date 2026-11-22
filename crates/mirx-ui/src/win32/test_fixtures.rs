@@ -13,8 +13,8 @@ use super::*;
 pub(super) fn user_profile(user_id: &str) -> RoomUserProfile {
     RoomUserProfile {
         user_id: user_id.to_owned(),
-        display_name: None,
-        display_name_ambiguous: false,
+        nick: None,
+        nick_ambiguous: false,
     }
 }
 
@@ -1233,13 +1233,13 @@ pub(super) fn bold_style() -> mirx_core::TextStyle {
 
 pub(super) fn member_summary(
     user_id: &str,
-    display_name: Option<&str>,
-    display_name_ambiguous: bool,
+    nick: Option<&str>,
+    nick_ambiguous: bool,
 ) -> RoomMemberSummary {
     RoomMemberSummary {
         user_id: user_id.to_owned(),
-        display_name: display_name.map(str::to_owned),
-        display_name_ambiguous,
+        nick: nick.map(str::to_owned),
+        nick_ambiguous,
         is_own_user: false,
         rank: RoomMemberRank::Member,
         can_kick: false,

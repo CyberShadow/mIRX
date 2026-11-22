@@ -103,8 +103,8 @@ pub(super) unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 transaction_id: None,
                 sender: RoomUserProfile {
                     user_id: "@alice:example".to_owned(),
-                    display_name: None,
-                    display_name_ambiguous: false,
+                    nick: None,
+                    nick_ambiguous: false,
                 },
                 presentation: RoomMessagePresentationKind::Text,
                 body: "first line".to_owned(),
@@ -124,8 +124,8 @@ pub(super) unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 transaction_id: None,
                 sender: RoomUserProfile {
                     user_id: "@alice:example".to_owned(),
-                    display_name: None,
-                    display_name_ambiguous: false,
+                    nick: None,
+                    nick_ambiguous: false,
                 },
                 presentation: RoomMessagePresentationKind::Text,
                 body: "second line".to_owned(),
@@ -145,8 +145,8 @@ pub(super) unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 transaction_id: None,
                 sender: RoomUserProfile {
                     user_id: "@bob:example".to_owned(),
-                    display_name: None,
-                    display_name_ambiguous: false,
+                    nick: None,
+                    nick_ambiguous: false,
                 },
                 presentation: RoomMessagePresentationKind::Text,
                 body: "third line".to_owned(),

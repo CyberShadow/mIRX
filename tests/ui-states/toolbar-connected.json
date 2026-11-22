@@ -69,7 +69,7 @@
         "type": "message",
         "event_id": "$lobby-1",
         "transaction_id": null,
-        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "nick": "Alice", "nick_ambiguous": false },
         "presentation": "text",
         "body": "welcome to the lobby",
         "styles": [],
@@ -91,7 +91,7 @@
         "type": "message",
         "event_id": "$lobby-2",
         "transaction_id": null,
-        "sender": { "user_id": "@bob:example", "display_name": "Bob", "display_name_ambiguous": false },
+        "sender": { "user_id": "@bob:example", "nick": "Bob", "nick_ambiguous": false },
         "presentation": "text",
         "body": "build is green",
         "styles": [],
@@ -112,7 +112,7 @@
       "kind": {
         "type": "state_notice",
         "event_id": "$ops-topic-1",
-        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "nick": "Alice", "nick_ambiguous": false },
         "content": {
           "type": "topic",
           "topic": "incident review"
@@ -130,11 +130,11 @@
       "kind": {
         "type": "state_notice",
         "event_id": "$ops-member-1",
-        "sender": { "user_id": "@carol:example", "display_name": "Carol", "display_name_ambiguous": false },
+        "sender": { "user_id": "@carol:example", "nick": "Carol", "nick_ambiguous": false },
         "content": {
           "type": "member",
           "change": { "type": "joined" },
-          "target": { "user_id": "@carol:example", "display_name": "Carol", "display_name_ambiguous": false },
+          "target": { "user_id": "@carol:example", "nick": "Carol", "nick_ambiguous": false },
           "reason": null
         }
       },
@@ -151,7 +151,7 @@
         "type": "message",
         "event_id": "$ops-1",
         "transaction_id": null,
-        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "nick": "Alice", "nick_ambiguous": false },
         "presentation": "text",
         "body": "ops topic: incident review",
         "styles": [],
@@ -173,7 +173,7 @@
         "type": "message",
         "event_id": "$ops-2",
         "transaction_id": null,
-        "sender": { "user_id": "@bob:example", "display_name": "Bob", "display_name_ambiguous": false },
+        "sender": { "user_id": "@bob:example", "nick": "Bob", "nick_ambiguous": false },
         "presentation": "text",
         "body": "encryption enabled for ops",
         "styles": [],
@@ -195,7 +195,7 @@
         "type": "message",
         "event_id": "$ops-3",
         "transaction_id": null,
-        "sender": { "user_id": "@carol:example", "display_name": "Carol", "display_name_ambiguous": false },
+        "sender": { "user_id": "@carol:example", "nick": "Carol", "nick_ambiguous": false },
         "presentation": "text",
         "body": "deploy window opens at 18:00 UTC",
         "styles": [],
@@ -217,7 +217,7 @@
         "type": "message",
         "event_id": "$random-1",
         "transaction_id": null,
-        "sender": { "user_id": "@dave:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@dave:example", "nick": null, "nick_ambiguous": false },
         "presentation": "text",
         "body": "random: lunch votes are in",
         "styles": [],

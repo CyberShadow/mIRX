@@ -1873,7 +1873,7 @@ async fn emit_room_snapshot_or_room_list_error(
 }
 
 fn room_member_display_label(member: &RoomMemberSummary) -> &str {
-    match member.display_name.as_deref() {
+    match member.nick.as_deref() {
         Some(display_name) if !display_name.is_empty() => display_name,
         _ => member.user_id.as_str(),
     }
@@ -1887,8 +1887,8 @@ fn sorted_room_member_summaries_from_parts(
         .into_iter()
         .map(|(user_id, display_name)| RoomMemberSummary {
             user_id,
-            display_name,
-            display_name_ambiguous: false,
+            nick: display_name,
+            nick_ambiguous: false,
             is_own_user: false,
             rank: RoomMemberRank::Member,
             can_kick: false,
@@ -1988,8 +1988,8 @@ fn room_members_from_matrix_members(
                 );
                 RoomMemberSummary {
                     user_id: member.user_id().to_string(),
-                    display_name: member.display_name().map(str::to_owned),
-                    display_name_ambiguous: member.name_ambiguous(),
+                    nick: member.display_name().map(str::to_owned),
+                    nick_ambiguous: member.name_ambiguous(),
                     is_own_user: member.user_id() == authenticated_user_id,
                     rank: room_member_rank(member.power_level(), users_default),
                     can_kick,
@@ -2074,13 +2074,13 @@ async fn room_user_profile(
     Ok(match member {
         Some(member) => RoomUserProfile {
             user_id: user_id.to_string(),
-            display_name: member.display_name().map(str::to_owned),
-            display_name_ambiguous: member.name_ambiguous(),
+            nick: member.display_name().map(str::to_owned),
+            nick_ambiguous: member.name_ambiguous(),
         },
         None => RoomUserProfile {
             user_id: user_id.to_string(),
-            display_name: None,
-            display_name_ambiguous: false,
+            nick: None,
+            nick_ambiguous: false,
         },
     })
 }
@@ -2094,7 +2094,7 @@ async fn member_target_profile(
     target: &UserId,
     display_name: Option<String>,
 ) -> Result<RoomUserProfile, MatrixCoreError> {
-    let display_name_ambiguous = match display_name.as_deref() {
+    let nick_ambiguous = match display_name.as_deref() {
         // Without a display name the target is shown by user ID.
         None => false,
         Some(name) => {
@@ -2117,8 +2117,8 @@ async fn member_target_profile(
     };
     Ok(RoomUserProfile {
         user_id: target.to_string(),
-        display_name,
-        display_name_ambiguous,
+        nick: display_name,
+        nick_ambiguous,
     })
 }
 
@@ -3429,7 +3429,7 @@ fn room_member_change_from_sync_member(
         MembershipChange::ProfileChanged {
             displayname_change: Some(change),
             ..
-        } => RoomMemberChange::DisplayNameChanged {
+        } => RoomMemberChange::NickChanged {
             old: change.old.map(str::to_owned),
             new: change.new.map(str::to_owned),
         },
@@ -3498,8 +3498,7 @@ async fn room_activity_from_member_event(
         return Ok(None);
     };
     let sender = lookups.profile(&event.sender).await?;
-    let target =
-        member_target_profile(room, &event.state_key, member_target_display_name(event)).await?;
+    let target = member_target_profile(room, &event.state_key, member_target_display_name(event)).await?;
     Ok(Some(room_activity_from_sync_member(
         room.room_id().as_str(),
         event,
@@ -6029,8 +6028,8 @@ mod tests {
                 members: vec![
                     RoomMemberSummary {
                         user_id: "@example:localhost".to_owned(),
-                        display_name: Some("Actor".to_owned()),
-                        display_name_ambiguous: false,
+                        nick: Some("Actor".to_owned()),
+                        nick_ambiguous: false,
                         is_own_user: true,
                         rank: RoomMemberRank::Moderator,
                         can_kick: false,
@@ -6038,8 +6037,8 @@ mod tests {
                     },
                     RoomMemberSummary {
                         user_id: "@bob:localhost".to_owned(),
-                        display_name: Some("Bob".to_owned()),
-                        display_name_ambiguous: false,
+                        nick: Some("Bob".to_owned()),
+                        nick_ambiguous: false,
                         is_own_user: false,
                         rank: RoomMemberRank::Member,
                         can_kick: true,
@@ -6958,8 +6957,8 @@ mod tests {
                     members: vec![
                         RoomMemberSummary {
                             user_id: "@higher:example.org".to_owned(),
-                            display_name: Some("Higher".to_owned()),
-                            display_name_ambiguous: false,
+                            nick: Some("Higher".to_owned()),
+                            nick_ambiguous: false,
                             is_own_user: false,
                             rank: RoomMemberRank::Administrator,
                             can_kick: false,
@@ -6967,8 +6966,8 @@ mod tests {
                         },
                         RoomMemberSummary {
                             user_id: "@alice:example.org".to_owned(),
-                            display_name: Some("Actor".to_owned()),
-                            display_name_ambiguous: false,
+                            nick: Some("Actor".to_owned()),
+                            nick_ambiguous: false,
                             is_own_user: true,
                             rank: RoomMemberRank::Moderator,
                             can_kick: false,
@@ -6976,8 +6975,8 @@ mod tests {
                         },
                         RoomMemberSummary {
                             user_id: "@equal:example.org".to_owned(),
-                            display_name: Some("Equal".to_owned()),
-                            display_name_ambiguous: false,
+                            nick: Some("Equal".to_owned()),
+                            nick_ambiguous: false,
                             is_own_user: false,
                             rank: RoomMemberRank::Moderator,
                             can_kick: false,
@@ -6985,8 +6984,8 @@ mod tests {
                         },
                         RoomMemberSummary {
                             user_id: "@default:example.org".to_owned(),
-                            display_name: Some("Default".to_owned()),
-                            display_name_ambiguous: false,
+                            nick: Some("Default".to_owned()),
+                            nick_ambiguous: false,
                             is_own_user: false,
                             rank: RoomMemberRank::Member,
                             can_kick: false,
@@ -7898,8 +7897,8 @@ mod tests {
     fn profile(user_id: &str) -> RoomUserProfile {
         RoomUserProfile {
             user_id: user_id.to_owned(),
-            display_name: None,
-            display_name_ambiguous: false,
+            nick: None,
+            nick_ambiguous: false,
         }
     }
 
@@ -8289,8 +8288,8 @@ mod tests {
             vec![
                 RoomMemberSummary {
                     user_id: "@beta:example.org".to_owned(),
-                    display_name: Some(String::new()),
-                    display_name_ambiguous: false,
+                    nick: Some(String::new()),
+                    nick_ambiguous: false,
                     is_own_user: false,
                     rank: RoomMemberRank::Member,
                     can_kick: false,
@@ -8298,8 +8297,8 @@ mod tests {
                 },
                 RoomMemberSummary {
                     user_id: "@charlie:example.org".to_owned(),
-                    display_name: None,
-                    display_name_ambiguous: false,
+                    nick: None,
+                    nick_ambiguous: false,
                     is_own_user: false,
                     rank: RoomMemberRank::Member,
                     can_kick: false,
@@ -8307,8 +8306,8 @@ mod tests {
                 },
                 RoomMemberSummary {
                     user_id: "@alpha:example.org".to_owned(),
-                    display_name: Some("ALICE".to_owned()),
-                    display_name_ambiguous: false,
+                    nick: Some("ALICE".to_owned()),
+                    nick_ambiguous: false,
                     is_own_user: false,
                     rank: RoomMemberRank::Member,
                     can_kick: false,
@@ -8316,8 +8315,8 @@ mod tests {
                 },
                 RoomMemberSummary {
                     user_id: "@echo:example.org".to_owned(),
-                    display_name: Some("alice".to_owned()),
-                    display_name_ambiguous: false,
+                    nick: Some("alice".to_owned()),
+                    nick_ambiguous: false,
                     is_own_user: false,
                     rank: RoomMemberRank::Member,
                     can_kick: false,
@@ -8325,8 +8324,8 @@ mod tests {
                 },
                 RoomMemberSummary {
                     user_id: "@delta:example.org".to_owned(),
-                    display_name: Some("beta".to_owned()),
-                    display_name_ambiguous: false,
+                    nick: Some("beta".to_owned()),
+                    nick_ambiguous: false,
                     is_own_user: false,
                     rank: RoomMemberRank::Member,
                     can_kick: false,
@@ -8351,8 +8350,8 @@ mod tests {
             vec![
                 RoomMemberSummary {
                     user_id: "@alpha:example.org".to_owned(),
-                    display_name: Some("same".to_owned()),
-                    display_name_ambiguous: false,
+                    nick: Some("same".to_owned()),
+                    nick_ambiguous: false,
                     is_own_user: false,
                     rank: RoomMemberRank::Member,
                     can_kick: false,
@@ -8360,8 +8359,8 @@ mod tests {
                 },
                 RoomMemberSummary {
                     user_id: "@mike:example.org".to_owned(),
-                    display_name: Some("same".to_owned()),
-                    display_name_ambiguous: false,
+                    nick: Some("same".to_owned()),
+                    nick_ambiguous: false,
                     is_own_user: false,
                     rank: RoomMemberRank::Member,
                     can_kick: false,
@@ -8369,8 +8368,8 @@ mod tests {
                 },
                 RoomMemberSummary {
                     user_id: "@zulu:example.org".to_owned(),
-                    display_name: Some("Same".to_owned()),
-                    display_name_ambiguous: false,
+                    nick: Some("Same".to_owned()),
+                    nick_ambiguous: false,
                     is_own_user: false,
                     rank: RoomMemberRank::Member,
                     can_kick: false,
@@ -10464,7 +10463,7 @@ mod tests {
                 carol,
                 serde_json::json!({ "membership": "join", "displayname": "Caz" }),
                 Some(joined.clone()),
-                Some(RoomMemberChange::DisplayNameChanged {
+                Some(RoomMemberChange::NickChanged {
                     old: Some("Carol".to_owned()),
                     new: Some("Caz".to_owned()),
                 }),
@@ -10473,7 +10472,7 @@ mod tests {
                 carol,
                 serde_json::json!({ "membership": "join" }),
                 Some(joined.clone()),
-                Some(RoomMemberChange::DisplayNameChanged {
+                Some(RoomMemberChange::NickChanged {
                     old: Some("Carol".to_owned()),
                     new: None,
                 }),
@@ -10496,7 +10495,7 @@ mod tests {
                     "avatar_url": "mxc://example.org/avatar"
                 }),
                 Some(joined.clone()),
-                Some(RoomMemberChange::DisplayNameChanged {
+                Some(RoomMemberChange::NickChanged {
                     old: Some("Carol".to_owned()),
                     new: Some("Caz".to_owned()),
                 }),
@@ -10547,11 +10546,7 @@ mod tests {
             (serde_json::json!({ "membership": "leave" }), None, None),
         ] {
             let event = member_event(carol, carol, content.clone(), prev_content);
-            assert_eq!(
-                member_target_display_name(&event).as_deref(),
-                expected,
-                "{content}"
-            );
+            assert_eq!(member_target_display_name(&event).as_deref(), expected, "{content}");
         }
     }
 
@@ -10565,8 +10560,8 @@ mod tests {
         );
         let target = RoomUserProfile {
             user_id: "@carol:example.org".to_owned(),
-            display_name: member_target_display_name(&event),
-            display_name_ambiguous: false,
+            nick: member_target_display_name(&event),
+            nick_ambiguous: false,
         };
 
         assert_eq!(
@@ -10591,8 +10586,8 @@ mod tests {
                         change: RoomMemberChange::Kicked,
                         target: RoomUserProfile {
                             user_id: "@carol:example.org".to_owned(),
-                            display_name: Some("Carol".to_owned()),
-                            display_name_ambiguous: false,
+                            nick: Some("Carol".to_owned()),
+                            nick_ambiguous: false,
                         },
                         reason: Some("flooding".to_owned()),
                     },
@@ -11260,8 +11255,8 @@ mod tests {
     fn member_profile(user_id: &str, display_name: &str, ambiguous: bool) -> RoomUserProfile {
         RoomUserProfile {
             user_id: user_id.to_owned(),
-            display_name: Some(display_name.to_owned()),
-            display_name_ambiguous: ambiguous,
+            nick: Some(display_name.to_owned()),
+            nick_ambiguous: ambiguous,
         }
     }
 
@@ -11327,7 +11322,7 @@ mod tests {
                 snapshot
                     .members
                     .iter()
-                    .map(|member| (member.user_id.as_str(), member.display_name_ambiguous))
+                    .map(|member| (member.user_id.as_str(), member.nick_ambiguous))
                     .collect::<Vec<_>>(),
                 vec![
                     // Without power levels the creator has 100, so ranks first.
@@ -11379,7 +11374,7 @@ mod tests {
                     event_id: "$bob-rename:localhost".to_owned(),
                     sender: member_profile("@bob:localhost", "Robert", false),
                     content: RoomStateNoticeContent::Member {
-                        change: RoomMemberChange::DisplayNameChanged {
+                        change: RoomMemberChange::NickChanged {
                             old: Some("Bob".to_owned()),
                             new: Some("Robert".to_owned()),
                         },
@@ -13035,8 +13030,8 @@ mod tests {
                     .expect("own room profile"),
                 RoomUserProfile {
                     user_id: "@alice:example.org".to_owned(),
-                    display_name: Some("Alice".to_owned()),
-                    display_name_ambiguous: false,
+                    nick: Some("Alice".to_owned()),
+                    nick_ambiguous: false,
                 }
             );
         });

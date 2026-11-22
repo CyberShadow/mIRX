@@ -25,8 +25,8 @@
       "members": [
         {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false,
+          "nick": "Alice",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,
@@ -34,8 +34,8 @@
         },
         {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false,
+          "nick": "Bob",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,
@@ -43,8 +43,8 @@
         },
         {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false,
+          "nick": "Carol",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,
@@ -52,8 +52,8 @@
         },
         {
           "user_id": "@dave:example",
-          "display_name": "Dave",
-          "display_name_ambiguous": false,
+          "nick": "Dave",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,
@@ -75,8 +75,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false
+          "nick": "Alice",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "are we deploying today?",
@@ -104,8 +104,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "yes, after lunch",
@@ -130,8 +130,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@carol:example",
-          "display_name": "Carol",
-          "display_name_ambiguous": false
+          "nick": "Carol",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "the build is green on every platform",
@@ -188,8 +188,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@dave:example",
-          "display_name": "Dave",
-          "display_name_ambiguous": false
+          "nick": "Dave",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "I will tag the release",
@@ -214,8 +214,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false
+          "nick": "Alice",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "release notes are in the wiki",
@@ -240,8 +240,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "thanks, reading them now",

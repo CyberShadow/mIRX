@@ -48,8 +48,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@creator:example",
-          "display_name": "Creator",
-          "display_name_ambiguous": false
+          "nick": "Creator",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "welcome to ops",
@@ -74,8 +74,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false
+          "nick": "Alice",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "who is around?",
@@ -100,8 +100,8 @@
         "transaction_id": null,
         "sender": {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false
+          "nick": "Bob",
+          "nick_ambiguous": false
         },
         "presentation": "text",
         "body": "lunch?",
@@ -120,8 +120,8 @@
       "members": [
         {
           "user_id": "@creator:example",
-          "display_name": "Creator",
-          "display_name_ambiguous": false,
+          "nick": "Creator",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "creator",
           "can_kick": false,
@@ -129,8 +129,8 @@
         },
         {
           "user_id": "@admin:example",
-          "display_name": "Admin",
-          "display_name_ambiguous": false,
+          "nick": "Admin",
+          "nick_ambiguous": false,
           "is_own_user": true,
           "rank": "administrator",
           "can_kick": false,
@@ -138,8 +138,8 @@
         },
         {
           "user_id": "@mod:example",
-          "display_name": "Mod",
-          "display_name_ambiguous": false,
+          "nick": "Mod",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "moderator",
           "can_kick": true,
@@ -147,8 +147,8 @@
         },
         {
           "user_id": "@voice:example",
-          "display_name": "Voice",
-          "display_name_ambiguous": false,
+          "nick": "Voice",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "voiced",
           "can_kick": true,
@@ -156,8 +156,8 @@
         },
         {
           "user_id": "@alan:example",
-          "display_name": "Alan",
-          "display_name_ambiguous": false,
+          "nick": "Alan",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": true,
@@ -165,8 +165,8 @@
         },
         {
           "user_id": "@alice:example",
-          "display_name": "Alice",
-          "display_name_ambiguous": false,
+          "nick": "Alice",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": true,
@@ -174,8 +174,8 @@
         },
         {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false,
+          "nick": "Bob",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": true,
@@ -190,8 +190,8 @@
       "members": [
         {
           "user_id": "@admin:example",
-          "display_name": "Admin",
-          "display_name_ambiguous": false,
+          "nick": "Admin",
+          "nick_ambiguous": false,
           "is_own_user": true,
           "rank": "member",
           "can_kick": false,
@@ -199,8 +199,8 @@
         },
         {
           "user_id": "@bob:example",
-          "display_name": "Bob",
-          "display_name_ambiguous": false,
+          "nick": "Bob",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,
@@ -208,8 +208,8 @@
         },
         {
           "user_id": "@spam:example",
-          "display_name": "Spam",
-          "display_name_ambiguous": false,
+          "nick": "Spam",
+          "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",
           "can_kick": false,

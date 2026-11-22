@@ -21,8 +21,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
     mirx_core::RoomUserProfile {
         user_id: user_id.to_owned(),
-        display_name: None,
-        display_name_ambiguous: false,
+        nick: None,
+        nick_ambiguous: false,
     }
 }
 

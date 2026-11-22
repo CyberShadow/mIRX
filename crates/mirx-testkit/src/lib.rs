@@ -1141,7 +1141,7 @@ pub enum RoomStateNoticeContent {
     },
     Member {
         change: RoomMemberChange,
-        target_display_name: Option<String>,
+        target_nick: Option<String>,
         reason: Option<String>,
     },
     PowerLevels {
@@ -1183,7 +1183,7 @@ pub enum RoomMemberChange {
     KnockAccepted,
     KnockRetracted,
     KnockDenied,
-    DisplayNameChanged {
+    NickChanged {
         old: Option<String>,
         new: Option<String>,
     },
@@ -2213,8 +2213,9 @@ impl<'de> Deserialize<'de> for ComposeKey {
 #[serde(deny_unknown_fields)]
 pub struct RoomMemberView {
     pub user_id: String,
-    pub display_name: Option<String>,
-    /// The bare nick; the nick list shows it after the rank prefix.
+    pub nick: Option<String>,
+    /// The nick, with the user ID when it is ambiguous; the nick list shows
+    /// it after the rank prefix.
     pub label: String,
     pub rank: RoomMemberRank,
     pub can_kick: bool,

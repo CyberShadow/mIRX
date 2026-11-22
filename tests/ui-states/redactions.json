@@ -28,7 +28,7 @@
         "type": "message",
         "event_id": "$redact-text",
         "transaction_id": null,
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "nick": null, "nick_ambiguous": false },
         "presentation": "text",
         "body": "redaction text payload should disappear",
         "styles": [],
@@ -50,7 +50,7 @@
         "type": "message",
         "event_id": "$redact-edited",
         "transaction_id": null,
-        "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@bob:example", "nick": null, "nick_ambiguous": false },
         "presentation": "text",
         "body": "redaction edited original should disappear",
         "styles": [],
@@ -71,7 +71,7 @@
       "kind": {
         "type": "image",
         "event_id": "$redact-image",
-        "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@carol:example", "nick": null, "nick_ambiguous": false },
         "body": "redaction-image-body.png",
         "filename": "redaction-image-file.png",
         "source": {
@@ -98,7 +98,7 @@
       "kind": {
         "type": "unsupported_message",
         "event_id": "$redact-unsupported",
-        "sender": { "user_id": "@dave:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@dave:example", "nick": null, "nick_ambiguous": false },
         "msgtype": "com.example.custom",
         "body": "redaction unsupported payload should disappear"
       },
@@ -115,7 +115,7 @@
         "type": "message",
         "event_id": "$redact-thread-root",
         "transaction_id": null,
-        "sender": { "user_id": "@erin:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@erin:example", "nick": null, "nick_ambiguous": false },
         "presentation": "text",
         "body": "redaction thread root payload should disappear",
         "styles": [],
@@ -143,7 +143,7 @@
         "type": "message",
         "event_id": "$redact-thread-reply",
         "transaction_id": null,
-        "sender": { "user_id": "@frank:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@frank:example", "nick": null, "nick_ambiguous": false },
         "presentation": "text",
         "body": "redaction thread reply payload should disappear",
         "styles": [],
@@ -163,7 +163,7 @@
       "kind": {
         "type": "state_notice",
         "event_id": "$redact-topic-notice",
-        "sender": { "user_id": "@grace:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@grace:example", "nick": null, "nick_ambiguous": false },
         "content": {
           "type": "topic",
           "topic": "redaction topic should disappear"
