@@ -430,6 +430,9 @@ struct MockFaults {
     send_down: AtomicBool,
     /// Every `/login` request is held while this is set.
     hold_login: AtomicBool,
+    /// The server signed the session out (from another client, say):
+    /// `/sync` and `/logout` answer `M_UNKNOWN_TOKEN` while this is set.
+    session_ended: AtomicBool,
     /// The requests held unanswered, their connections open, while the
     /// mock goes on answering the others.
     held: Mutex<Vec<std::net::TcpStream>>,
@@ -592,7 +595,8 @@ fn spawn_mock_backfill_homeserver() -> Result<MockBackfillHomeserver, Box<dyn st
 /// How the mock homeserver signs users in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MockAuth {
-    /// `/login` answers every request with Alice's session.
+    /// `/login` answers every request with a session of Alice's: device
+    /// `DEVICE` the first time, then `DEVICE2`, `DEVICE3`...
     Password,
     /// An OAuth 2.0 authorization server on the same port, as MAS behind a
     /// homeserver: it registers `mirx-client` and grants `oauth-token`.
@@ -688,6 +692,8 @@ fn spawn_mock_homeserver_with_auth(
                     .cloned(),
             )
             .collect::<Vec<_>>();
+        // The sign-ins answered so far; each makes a new device.
+        let mut logins = 0usize;
         for mut stream in listener.incoming().flatten() {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
             let mut request = Vec::new();
@@ -741,6 +747,20 @@ fn spawn_mock_homeserver_with_auth(
             if dropped_sync || dropped_send {
                 continue;
             }
+            if mock_faults.session_ended.load(Ordering::SeqCst)
+                && (path.contains("/sync") || path == "/_matrix/client/v3/logout")
+            {
+                respond_json(
+                    &mut stream,
+                    401,
+                    &serde_json::json!({
+                        "errcode": "M_UNKNOWN_TOKEN",
+                        "error": "Invalid token",
+                        "soft_logout": false
+                    }),
+                );
+                continue;
+            }
 
             if auth == MockAuth::OAuth {
                 let body = match path {
@@ -788,15 +808,25 @@ fn spawn_mock_homeserver_with_auth(
                         .push(stream);
                     continue;
                 }
+                logins += 1;
+                let device_id = match logins {
+                    1 => "DEVICE".to_owned(),
+                    n => format!("DEVICE{n}"),
+                };
                 respond_json(
                     &mut stream,
                     200,
                     &serde_json::json!({
                         "user_id": "@alice:example",
                         "access_token": "secret-token",
-                        "device_id": "DEVICE"
+                        "device_id": device_id
                     }),
                 );
+                continue;
+            }
+
+            if path == "/_matrix/client/v3/logout" {
+                respond_json(&mut stream, 200, &serde_json::json!({}));
                 continue;
             }
 
@@ -3677,6 +3707,7 @@ fn automation_driver_lifecycle_commands_are_submitted_in_render_state_mode()
 const MENU_ID_FILE_CONNECT: usize = 40030;
 const MENU_ID_FILE_DISCONNECT: usize = 40031;
 const MENU_ID_FILE_SELECT_SERVER: usize = 40032;
+const MENU_ID_FILE_LOG_OUT: usize = 40004;
 const LOGIN_DIALOG_SERVER_ID: i32 = 5001;
 const LOGIN_DIALOG_USER_ID: i32 = 5002;
 const LOGIN_DIALOG_PASSWORD_ID: i32 = 5003;
@@ -4811,6 +4842,109 @@ fn file_disconnect_cancels_a_hung_sign_in() -> Result<(), Box<dyn std::error::Er
     let (dialog, menu_thread) = open_select_server(&app, [&server.base_url, "alice", "secret"])?;
     submit_select_server(dialog, menu_thread)?;
     app.wait_for_connection("syncing", Duration::from_secs(30))?;
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The SDK's stores of the session mirx signed in.
+fn store_dir_path(local_app_data: &Path) -> PathBuf {
+    local_app_data
+        .join("mirx")
+        .join("ui-shell")
+        .join("matrix-store")
+}
+
+/// Signs in through Select Server and waits for the sync.
+fn sign_in_with_select_server(
+    app: &MirxApp,
+    server: &MockBackfillHomeserver,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (dialog, menu_thread) = open_select_server(app, [&server.base_url, "alice", "secret"])?;
+    submit_select_server(dialog, menu_thread)?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    Ok(())
+}
+
+/// File > Log Out, and what it leaves: no session file, no store.
+fn log_out_with_the_menu(
+    app: &MirxApp,
+    local_app_data: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    invoke_account_menu_command(app, MENU_ID_FILE_LOG_OUT)?;
+    app.wait_for_connection("signed_out", Duration::from_secs(30))?;
+    wait_for_status_line(app, "* Logged out", Duration::from_secs(10))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.dump_model()?.last_error, None);
+    assert!(!session_file_path(local_app_data).exists());
+    assert!(!store_dir_path(local_app_data).exists());
+    Ok(())
+}
+
+/// Log Out removes the session's store, so the next sign-in, a new device,
+/// starts afresh. Under Wine this also proves the store's files were
+/// closed: Windows does not delete an open file.
+#[test]
+fn logging_out_and_signing_in_again_works() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    let app = launch_automation_app(&local_app_data)?;
+    sign_in_with_select_server(&app, &server)?;
+    assert!(store_dir_path(&local_app_data).is_dir());
+
+    log_out_with_the_menu(&app, &local_app_data)?;
+
+    sign_in_with_select_server(&app, &server)?;
+    wait_for_status_line(
+        &app,
+        "* Logged in as @alice:example (device DEVICE2)",
+        Duration::from_secs(10),
+    )?;
+    assert_eq!(app.dump_model()?.last_error, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Signed out elsewhere: mirx says so and does not retry, Log Out ends the
+/// session it can no longer use, and a new sign-in works.
+#[test]
+fn a_session_the_server_ended_logs_out_and_signs_in_again() -> Result<(), Box<dyn std::error::Error>>
+{
+    let local_app_data = unique_local_app_data_path();
+    write_connect_settings(&local_app_data, "retry_delay=1\r\n")?;
+    let server = spawn_mock_backfill_homeserver()?;
+    let app = launch_automation_app(&local_app_data)?;
+    sign_in_with_select_server(&app, &server)?;
+
+    server.faults.session_ended.store(true, Ordering::SeqCst);
+    wait_for_status_line(
+        &app,
+        "signed this session out (the server returned an error: [401 / M_UNKNOWN_TOKEN] Invalid token). /e2ee export saves its room keys; File > Log Out ends it, then sign in again.",
+        Duration::from_secs(30),
+    )?;
+    // Twice the retry delay: a retry, had one been armed, would have run.
+    std::thread::sleep(Duration::from_secs(2));
+    app.wait_idle(Duration::from_secs(5))?;
+    let lines = status_view_lines(&app)?;
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("Reconnect") || line.contains("Connect retry")),
+        "{lines:?}"
+    );
+
+    log_out_with_the_menu(&app, &local_app_data)?;
+    assert!(
+        !status_view_contains(&app, "Error during logout")?,
+        "{:?}",
+        status_view_lines(&app)?
+    );
+
+    server.faults.session_ended.store(false, Ordering::SeqCst);
+    sign_in_with_select_server(&app, &server)?;
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
