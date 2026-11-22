@@ -133,6 +133,9 @@ mod cli {
             dialog: AutomationDialog,
             options_page: Option<String>,
         },
+        /// Waits for the dialog the state opened with no gesture, as a core
+        /// event opens Log Out's warning. Last, as `Dialog` is.
+        OpenedDialog,
         /// Presses the left button on the active timeline at one point and
         /// moves to another, marking the text between them. The button is
         /// never released (a release copies the mark and clears it), so this
@@ -150,7 +153,10 @@ mod cli {
         /// Whether nothing may follow this action: a dialog disables the
         /// frame, and a drag holds the mouse.
         fn is_terminal(&self) -> bool {
-            matches!(self, Action::Dialog { .. } | Action::Drag { .. })
+            matches!(
+                self,
+                Action::Dialog { .. } | Action::OpenedDialog | Action::Drag { .. }
+            )
         }
     }
 
@@ -793,7 +799,7 @@ mod cli {
         let dialog_actions = config
             .actions
             .iter()
-            .filter(|action| matches!(action, Action::Dialog { .. }))
+            .filter(|action| matches!(action, Action::Dialog { .. } | Action::OpenedDialog))
             .count();
         if config.expect_dialog_title.is_some() && dialog_actions == 0 {
             return Err(format!(
@@ -814,7 +820,7 @@ mod cli {
             "  --trigger-history-backfill",
             "  --append-events <path>",
             "  --find-active-view <query>",
-            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>|drag-treebar-splitter:<dx>|colors:<item>=<index>[,...]|compose-text:<text>|compose-key:<format key>> (repeatable)",
+            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|dialog:opened|drag:<point>:<point>|drag-treebar-splitter:<dx>|colors:<item>=<index>[,...]|compose-text:<text>|compose-key:<format key>> (repeatable)",
             "  <item> is a Colors dialog item's mirx.ini key such as join or editbox_text, and <index> a palette index 0-15",
             "  <format key> is bold, color, underline, italic, reset, reverse, or strikethrough",
             "  <node> is a treebar item: space:<room_id> for a space folder, or a view identity",
@@ -883,6 +889,9 @@ mod cli {
             return parse_wire_name(arrangement)
                 .map(Action::Arrange)
                 .ok_or_else(invalid);
+        }
+        if value == "dialog:opened" {
+            return Ok(Action::OpenedDialog);
         }
         if let Some(target) = value.strip_prefix("dialog:") {
             let (name, options_page) = match target.split_once(':') {
@@ -1185,7 +1194,7 @@ mod cli {
             assert!(usage().contains("--select-view <identity> (repeatable)"));
             assert!(usage().contains("--append-events <path>"));
             assert!(usage().contains(
-                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>|drag-treebar-splitter:<dx>|colors:<item>=<index>[,...]|compose-text:<text>|compose-key:<format key>> (repeatable)"
+                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|dialog:opened|drag:<point>:<point>|drag-treebar-splitter:<dx>|colors:<item>=<index>[,...]|compose-text:<text>|compose-key:<format key>> (repeatable)"
             ));
             assert!(usage().contains(
                 "--expect-navigation-node <node>::<expanded|collapsed>::<event|message|highlight|none>"
@@ -1534,6 +1543,7 @@ mod cli {
                         options_page: None,
                     },
                 ),
+                ("dialog:opened", Action::OpenedDialog),
             ] {
                 let config = parse_args(
                     [
@@ -1628,6 +1638,8 @@ mod cli {
                 // The dialog disables the frame: nothing may follow it.
                 &["--action", "dialog:about", "--action", "arrange:cascade"],
                 &["--action", "dialog:about", "--action", "dialog:options"],
+                &["--action", "dialog:opened", "--action", "arrange:cascade"],
+                &["--action", "dialog:opened:IRC/Messages"],
                 &["--expect-dialog-title", "About mirx"],
                 &["--action", "dialog:about", "--expect-dialog-title"],
             ] {
@@ -2699,6 +2711,13 @@ mod windows_main {
                 } => {
                     opened_dialog = Some(open_dialog(&app, &config, *dialog, options_page)?);
                 }
+                Action::OpenedDialog => {
+                    let opened = app
+                        .wait_for_modal_dialog(config.find_timeout)
+                        .map_err(|error| format!("no dialog opened: {error}"))?;
+                    paint_dialog(&app, &config, &opened)?;
+                    opened_dialog = Some(opened);
+                }
                 Action::Drag { from, to } => {
                     drag_text(&app, *from, *to)?;
                 }
@@ -3695,11 +3714,16 @@ mod windows_main {
                 ));
             }
         }
+        paint_dialog(app, config, &opened)?;
+        Ok(opened)
+    }
+
+    /// Paints the open dialog, for the capture.
+    fn paint_dialog(app: &MirxApp, config: &Config, opened: &ModalDialog) -> Result<(), String> {
         app.redraw_window(opened.hwnd)
             .map_err(|error| format!("redrawing the dialog failed: {error}"))?;
         app.wait_idle(config.wait_idle)
-            .map_err(|error| format!("WAIT_IDLE after OPEN_DIALOG failed: {error}"))?;
-        Ok(opened)
+            .map_err(|error| format!("WAIT_IDLE after the dialog opened failed: {error}"))
     }
 
     fn find_view<'a>(ui_state: &'a UiState, identity: &ViewIdentity) -> Option<&'a MdiView> {

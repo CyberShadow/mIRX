@@ -1,0 +1,34 @@
+[
+  "Started",
+  {
+    "LoggedIn": {
+      "session": {
+        "user_id": "@me:example",
+        "device_id": "MIRXDEVICE",
+        "access_token": "fixture-access-token",
+        "refresh_token": null,
+        "auth": "Matrix"
+      },
+      "homeserver_url": "https://matrix.example/"
+    }
+  },
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!topic:example",
+        "display_name": "Topic Room",
+        "topic": "incident review",
+        "membership": "join",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": []
+      }
+    ]
+  }
+]

@@ -24,8 +24,8 @@ dpi144_prefix=
 # expectations, the default frame size (scaled, clamped to the screen) and
 # --expect-dpi 144.
 dpi144_cases=(multi-room image-message-loaded room-list-listing compose-color-index
-  dialog-options-display dialog-colors dialog-sign-out-session dialog-export-room-keys
-  toolbar-connected line-marker)
+  dialog-options-display dialog-colors dialog-sign-out-session dialog-log-out
+  dialog-export-room-keys toolbar-connected line-marker)
 
 die() {
   echo "ui-snapshot: $*" >&2
@@ -387,6 +387,13 @@ configure_case_expectations() {
             dialog:compose_return
           )
           expect_dialog_title='Sign Out Session'
+          ;;
+        dialog-log-out)
+          # The core's answer to File > Log Out without recovery: the
+          # warning opens by itself.
+          append_events_path="$root_dir/tests/ui-state-updates/dialog-log-out.json"
+          ordered_actions=(dialog:opened)
+          expect_dialog_title='Log Out'
           ;;
         dialog-export-room-keys)
           # A file given: the passphrase dialog, asked twice.
