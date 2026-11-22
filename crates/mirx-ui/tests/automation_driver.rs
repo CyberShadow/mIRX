@@ -4775,17 +4775,6 @@ fn wait_until_connected(app: &MirxApp) -> Result<(), Box<dyn std::error::Error>>
     }
 }
 
-/// `connect` is the `[connect]` section's keys after `startup`.
-fn write_connect_settings(
-    local_app_data: &Path,
-    connect: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let path = settings_file_path(local_app_data);
-    fs::create_dir_all(path.parent().ok_or("the settings file has a folder")?)?;
-    fs::write(path, format!("[connect]\r\nstartup=on\r\n{connect}"))?;
-    Ok(())
-}
-
 /// mirx with `connect` settings, connected to a mock homeserver and synced.
 fn reconnect_app(
     connect: &str,
@@ -7662,13 +7651,6 @@ fn automation_driver_irc_info_commands_echo_in_active_window()
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
-}
-
-fn settings_file_path(local_app_data: &Path) -> PathBuf {
-    local_app_data
-        .join("mirx")
-        .join("ui-shell")
-        .join("mirx.ini")
 }
 
 /// The window menu's Font... id.

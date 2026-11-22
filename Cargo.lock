@@ -2238,6 +2238,7 @@ dependencies = [
 name = "mirx-ui"
 version = "0.1.0"
 dependencies = [
+ "matrix-sdk",
  "miniz_oxide",
  "mirx-core",
  "mirx-testkit",

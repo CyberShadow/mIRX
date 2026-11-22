@@ -2,6 +2,7 @@
 
 use std::env;
 use std::ffi::OsString;
+use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -44,6 +45,24 @@ pub fn session_file_path(local_app_data: &Path) -> PathBuf {
         .join("mirx")
         .join("ui-shell")
         .join("session.json")
+}
+
+pub fn settings_file_path(local_app_data: &Path) -> PathBuf {
+    local_app_data
+        .join("mirx")
+        .join("ui-shell")
+        .join("mirx.ini")
+}
+
+/// `connect` is the `[connect]` section's keys after `startup`.
+pub fn write_connect_settings(
+    local_app_data: &Path,
+    connect: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let path = settings_file_path(local_app_data);
+    fs::create_dir_all(path.parent().ok_or("the settings file has a folder")?)?;
+    fs::write(path, format!("[connect]\r\nstartup=on\r\n{connect}"))?;
+    Ok(())
 }
 
 pub fn launch_options(local_app_data: Option<PathBuf>) -> LaunchOptions {

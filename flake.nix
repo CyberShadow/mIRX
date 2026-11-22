@@ -32,6 +32,13 @@
       ];
     in
     {
+      # scripts/live-lane.sh builds this, with the Windows binaries it built.
+      legacyPackages.${system}.liveLane =
+        { bins, filters ? [ ], nonce }:
+        import ./nix/live-lane.nix {
+          inherit pkgs wine wineFonts bins filters nonce;
+        };
+
       devShells.${system}.default = pkgs.mkShell {
         packages = [
           pkgs.coreutils
