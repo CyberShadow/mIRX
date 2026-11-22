@@ -752,9 +752,9 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
         let display_name = room.display_name().await.map_err(|err| {
             MatrixCoreError::new(format!("failed to read room display name: {err}"))
         })?;
-        let encrypted = room.latest_encryption_state().await.map_err(|err| {
-            MatrixCoreError::new(format!("failed to read room encryption state: {err}"))
-        })?;
+        // The invite's stripped state: a server refuses an invitee the
+        // room's state, so asking it (latest_encryption_state) would fail.
+        let encrypted = room.encryption_settings().is_some();
         let direct_user_ids = direct_user_ids_by_room
             .get(room.room_id().as_str())
             .cloned()
@@ -765,7 +765,7 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
             display_name: display_name.to_string(),
             topic: None,
             membership: RoomMembership::Invite,
-            encrypted: encrypted.is_encrypted(),
+            encrypted,
             is_space: room.is_space(),
             is_direct: !direct_user_ids.is_empty(),
             direct_user_ids,
@@ -13585,6 +13585,65 @@ mod tests {
                     // A group room under the server defaults.
                     (default.to_string(), Some(RoomNotificationMode::AllMessages)),
                     (invite.to_string(), None),
+                ]
+            );
+        });
+    }
+
+    /// A server refuses an invitee the room's state, so an invite's
+    /// encryption is what its invite's stripped state says.
+    #[test]
+    fn summarize_rooms_reads_an_invites_encryption_from_the_invite() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_room_state_encryption()
+                .respond_with(wiremock::ResponseTemplate::new(403).set_body_json(
+                    serde_json::json!({
+                        "errcode": "M_FORBIDDEN",
+                        "error": "You don't have permission to view the room state."
+                    }),
+                ))
+                .mount()
+                .await;
+            let encrypted = OwnedRoomId::try_from("!a-encrypted:example.org").expect("room id");
+            let plain = OwnedRoomId::try_from("!b-plain:example.org").expect("room id");
+            let encryption: Raw<matrix_sdk::ruma::events::AnyStrippedStateEvent> =
+                serde_json::from_value(serde_json::json!({
+                    "type": "m.room.encryption",
+                    "state_key": "",
+                    "sender": "@bob:example.org",
+                    "content": { "algorithm": "m.megolm.v1.aes-sha2" }
+                }))
+                .expect("stripped encryption event");
+
+            mock_server
+                .mock_sync()
+                .ok_and_run(&client, |builder| {
+                    builder
+                        .add_invited_room(
+                            InvitedRoomBuilder::new(&encrypted).add_state_event(encryption),
+                        )
+                        .add_invited_room(InvitedRoomBuilder::new(&plain));
+                })
+                .await;
+
+            let mut rooms = summarize_rooms(&client).await.expect("summarize rooms");
+            rooms.sort_by(|left, right| left.room_id.cmp(&right.room_id));
+            assert_eq!(
+                rooms
+                    .iter()
+                    .map(|room| (room.room_id.as_str(), room.membership, room.encrypted))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (encrypted.as_str(), crate::RoomMembership::Invite, true),
+                    (plain.as_str(), crate::RoomMembership::Invite, false),
                 ]
             );
         });
