@@ -15,8 +15,8 @@ use mirx_core::{
 use tempfile::TempDir;
 
 #[test]
-fn retrying_decryption_is_acked_at_once_and_refuses_a_bad_room() {
-    let harness = Harness::restored();
+fn retrying_decryption_answers_and_refuses_a_bad_room() {
+    let harness = Harness::restored_in_rooms(&["!room:example.org"], &[]);
     // The session's key backup became available: the lines that could not
     // be decrypted are worth another try.
     harness.wait_for("DecryptionRetryWanted", |event| {
@@ -25,17 +25,20 @@ fn retrying_decryption_is_acked_at_once_and_refuses_a_bad_room() {
 
     harness.send(Command::RetryDecryption(RetryDecryptionRequest {
         room_id: "!room:example.org".to_owned(),
-        session_ids: vec!["SESSION".to_owned()],
+        event_ids: vec!["$secret".to_owned()],
     }));
+    // The event cache does not have the event: nothing to report.
     let answer = harness.events_until("the retry's ack", |event| *event == Event::CommandHandled);
     assert!(
-        !answer.iter().any(|event| matches!(event, Event::Error(_))),
+        !answer
+            .iter()
+            .any(|event| matches!(event, Event::Error(_) | Event::RoomEventsDecrypted(_))),
         "{answer:#?}"
     );
 
     harness.send(Command::RetryDecryption(RetryDecryptionRequest {
         room_id: "room".to_owned(),
-        session_ids: vec!["SESSION".to_owned()],
+        event_ids: vec!["$secret".to_owned()],
     }));
     let answer = harness.events_until("the retry's ack", |event| *event == Event::CommandHandled);
     let [.., Event::Error(error), Event::CommandHandled] = &answer[..] else {
@@ -57,7 +60,7 @@ fn retrying_decryption_needs_a_session() {
 
     harness.send(Command::RetryDecryption(RetryDecryptionRequest {
         room_id: "!room:example.org".to_owned(),
-        session_ids: vec!["SESSION".to_owned()],
+        event_ids: vec!["$secret".to_owned()],
     }));
     let answer = harness.events_until("the retry's ack", |event| *event == Event::CommandHandled);
     assert_eq!(

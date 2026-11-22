@@ -168,29 +168,76 @@ async fn room_events_decrypted(
     }))
 }
 
-/// Hands the sessions to the SDK's redecryptor, which tries the room's
-/// events of them again (and asks the key backup for their keys); what it
-/// decrypts `room_decryption_task` reports.
-pub(crate) fn retry_decryption(
+/// Reads again the room's events the UI shows that could not be decrypted,
+/// as they are now: each still in the event cache (no network), oldest
+/// first, decrypted or still undecryptable with its current cause; `None`
+/// when none is. Their sessions also go to the SDK's redecryptor, which
+/// tries the room's other events of them (edits, reactions), and decrypting
+/// again asks the key backup for a missing key. An event the cache has
+/// decrypted already, the redecryptor reported (`room_decryption_task`).
+pub(crate) async fn retry_decryption(
     client: &Client,
     request: RetryDecryptionRequest,
-) -> Result<(), MatrixCoreError> {
+) -> Result<Option<RoomEventsDecrypted>, MatrixCoreError> {
     let room_id = OwnedRoomId::try_from(request.room_id.as_str()).map_err(|err| {
         MatrixCoreError::new(format!("invalid Matrix room ID {}: {err}", request.room_id))
     })?;
-    if request.session_ids.is_empty() {
+    if request.event_ids.is_empty() {
         return Err(MatrixCoreError::new(
-            "retrying decryption needs at least one session",
+            "retrying decryption needs at least one event",
         ));
     }
+    let event_ids = request
+        .event_ids
+        .iter()
+        .map(|event_id| {
+            OwnedEventId::try_from(event_id.as_str()).map_err(|err| {
+                MatrixCoreError::new(format!("invalid Matrix event ID {event_id}: {err}"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let room = client
+        .get_room(&room_id)
+        .ok_or_else(|| MatrixCoreError::new(format!("unknown Matrix room: {room_id}")))?;
+    let (cache, _handles) = room.event_cache().await.map_err(|err| {
+        MatrixCoreError::new(format!(
+            "failed to open the event cache of {room_id}: {err}"
+        ))
+    })?;
+    let mut undecrypted: Vec<TimelineEvent> = Vec::with_capacity(event_ids.len());
+    let mut utd_session_ids = BTreeSet::new();
+    for event_id in &event_ids {
+        let event = cache.find_event(event_id).await.map_err(|err| {
+            MatrixCoreError::new(format!("failed to read {event_id} in {room_id}: {err}"))
+        })?;
+        if let Some(event) = event
+            && let TimelineEventKind::UnableToDecrypt { utd_info, .. } = &event.kind
+        {
+            // An Olm event has no session, but can be read again.
+            utd_session_ids.extend(utd_info.session_id.clone());
+            undecrypted.push(event);
+        }
+    }
+    undecrypted.sort_by_key(|event| event.timestamp());
+
     client
         .event_cache()
         .request_decryption(DecryptionRetryRequest {
-            room_id,
-            utd_session_ids: request.session_ids.into_iter().collect(),
+            room_id: room_id.clone(),
+            utd_session_ids,
             refresh_info_session_ids: BTreeSet::new(),
         });
-    Ok(())
+    // The cache keeps the failure it first stored (the redecryptor does not
+    // refresh it when a retry fails too): decrypt each again for its
+    // current one.
+    let mut events = Vec::with_capacity(undecrypted.len());
+    for event in &undecrypted {
+        events.extend(undecrypted_sync_event(&room, event.raw().cast_ref_unchecked()).await?);
+    }
+    Ok((!events.is_empty()).then(|| RoomEventsDecrypted {
+        room_id: room_id.to_string(),
+        events,
+    }))
 }
 
 /// Writes every room key the session holds to `path`, encrypted with the
@@ -1164,32 +1211,131 @@ mod tests {
     fn retrying_decryption_checks_the_request() {
         block_on(async {
             let room = EncryptedRoom::new().await;
-            let bad_room = retry_decryption(
-                &room.bob,
-                RetryDecryptionRequest {
-                    room_id: "secret".to_owned(),
-                    session_ids: vec!["SESSION".to_owned()],
-                },
-            )
-            .expect_err("not a room ID");
+            let retry = |room_id: &str, event_ids: &[&str]| {
+                retry_decryption(
+                    &room.bob,
+                    RetryDecryptionRequest {
+                        room_id: room_id.to_owned(),
+                        event_ids: event_ids.iter().map(|id| (*id).to_owned()).collect(),
+                    },
+                )
+            };
+            let bad_room = retry("secret", &["$secret"])
+                .await
+                .expect_err("not a room ID");
             assert!(
                 bad_room
                     .to_string()
                     .starts_with("invalid Matrix room ID secret"),
                 "{bad_room}"
             );
-            let no_session = retry_decryption(
-                &room.bob,
-                RetryDecryptionRequest {
-                    room_id: room.room_id.to_string(),
-                    session_ids: Vec::new(),
-                },
-            )
-            .expect_err("no session");
+            let no_event = retry(room.room_id.as_str(), &[])
+                .await
+                .expect_err("no event");
             assert_eq!(
-                no_session.to_string(),
-                "retrying decryption needs at least one session"
+                no_event.to_string(),
+                "retrying decryption needs at least one event"
             );
+            let bad_event = retry(room.room_id.as_str(), &["secret"])
+                .await
+                .expect_err("not an event ID");
+            assert!(
+                bad_event
+                    .to_string()
+                    .starts_with("invalid Matrix event ID secret"),
+                "{bad_event}"
+            );
+            let unknown_room = retry("!elsewhere:example.org", &["$secret"])
+                .await
+                .expect_err("no such room");
+            assert_eq!(
+                unknown_room.to_string(),
+                "unknown Matrix room: !elsewhere:example.org"
+            );
+        });
+    }
+
+    fn retry_request(room: &EncryptedRoom, event_ids: &[&str]) -> RetryDecryptionRequest {
+        RetryDecryptionRequest {
+            room_id: room.room_id.to_string(),
+            event_ids: event_ids.iter().map(|id| (*id).to_owned()).collect(),
+        }
+    }
+
+    /// The SDK's event cache keeps the failure it first stored, and no
+    /// stream reports a withheld notice: only a retry tells the line's
+    /// current cause.
+    #[test]
+    fn a_retry_reports_a_line_still_undecryptable_with_its_current_cause() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+            let sent = room
+                .alice_sends_first("$secret", "m.room.message", text("psst"))
+                .await;
+            room.bob_syncs(&[], &[&sent.event]).await;
+            assert_eq!(room.utd_cause(), RoomUnableToDecryptCause::Unknown);
+            room.bob_syncs_withheld(&sent.event, "m.unverified").await;
+            assert!(activities(&room.drain()).is_empty());
+
+            let retried = retry_decryption(&room.bob, retry_request(&room, &["$secret"]))
+                .await
+                .expect("retry")
+                .expect("the line is still in the cache");
+
+            assert_eq!(retried.room_id, room.room_id.as_str());
+            let [RoomHistoryBackfillEvent::Activity(activity)] = &retried.events[..] else {
+                panic!("not one line: {retried:#?}");
+            };
+            assert_eq!(activity.activity_id, "event:$secret");
+            let RoomActivityKind::UnableToDecrypt(utd) = &activity.kind else {
+                panic!("not a UTD: {activity:#?}");
+            };
+            assert_eq!(utd.cause, RoomUnableToDecryptCause::WithheldUnverified);
+        });
+    }
+
+    /// A key that came is used by the retry, whether or not the SDK's
+    /// redecryptor got to the line first (then it reported it already, and
+    /// the retry skips it). With the mock server it always does, but the
+    /// line is never reported still undecryptable.
+    #[test]
+    fn a_retry_decrypts_a_line_whose_key_came() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+            let sent = room
+                .alice_sends_first("$late", "m.room.message", text("late"))
+                .await;
+            room.bob_syncs(&[], &[&sent.event]).await;
+            assert_eq!(room.utd_cause(), RoomUnableToDecryptCause::Unknown);
+            room.bob_syncs(&[&sent.room_key], &[]).await;
+
+            let retried = retry_decryption(&room.bob, retry_request(&room, &["$late"]))
+                .await
+                .expect("retry");
+
+            let decrypted = match retried {
+                Some(retried) => retried,
+                None => room.decrypted().await.0,
+            };
+            let [event] = &decrypted.events[..] else {
+                panic!("not one line: {decrypted:#?}");
+            };
+            let (activity, body) = decrypted_message(event);
+            assert_eq!(body, "late");
+            assert_eq!(activity.activity_id, "event:$late");
+        });
+    }
+
+    #[test]
+    fn a_retry_skips_events_the_cache_does_not_have() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+
+            let retried = retry_decryption(&room.bob, retry_request(&room, &["$unknown"]))
+                .await
+                .expect("retry");
+
+            assert_eq!(retried, None);
         });
     }
 

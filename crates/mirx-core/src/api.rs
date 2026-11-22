@@ -121,10 +121,14 @@ pub enum Command {
     CancelVerification(VerificationFlowId),
     ConfirmVerificationSas(VerificationFlowId),
     RejectVerificationSas(VerificationFlowId),
-    /// Asks the SDK to try again to decrypt the room's events of these
-    /// sessions: the answer to `DecryptionRetryWanted` for the lines that
-    /// could not be decrypted. Acked at once; what decrypts arrives later
-    /// as `RoomEventsDecrypted`.
+    /// Reads again the events the UI shows that could not be decrypted:
+    /// the answer to `DecryptionRetryWanted`, and to a change of this
+    /// session's verification or key backup, which their causes depend on.
+    /// Answered with one `RoomEventsDecrypted` of each still in the event
+    /// cache, as it is now: decrypted, or still undecryptable with its
+    /// current cause. The SDK also tries again the room's other events of
+    /// their sessions; what that decrypts arrives later, as
+    /// `RoomEventsDecrypted` too.
     RetryDecryption(RetryDecryptionRequest),
     Logout,
     Shutdown,
@@ -1477,18 +1481,20 @@ pub struct RoomHistoryBackfill {
 #[serde(deny_unknown_fields)]
 pub struct RetryDecryptionRequest {
     pub room_id: String,
-    /// The Megolm sessions of the room's lines that could not be decrypted
-    /// (`RoomUnableToDecryptActivity::session_id`); at least one.
-    pub session_ids: Vec<String>,
+    /// The events the room's window shows that could not be decrypted
+    /// (`RoomUnableToDecryptActivity::event_id`); at least one.
+    pub event_ids: Vec<String>,
 }
 
-/// Events of a room the core could not decrypt when they arrived and now
-/// could, because their keys came: each as backfill would map it, oldest
-/// first. An `Activity` is the line of the same event that could not be
-/// decrypted, which it replaces; an `ActivityUpdate` is what a decrypted
-/// event does to another: an edit, a reaction. An event can be reported again, decrypted all along, when the
-/// SDK refreshes its encryption info: replacing only lines that could not
-/// be decrypted and applying updates idempotently makes that a no-op.
+/// Events of a room the core could not decrypt when they arrived, read
+/// again: because their keys came, or for `RetryDecryption`. Each is as
+/// backfill would map it, oldest first. An `Activity` replaces the line of
+/// the same event that could not be decrypted: with its message, or, still
+/// undecryptable, with its current cause. An `ActivityUpdate` is what a
+/// decrypted event does to another: an edit, a reaction. An event can be
+/// reported again, decrypted all along, when the SDK refreshes its
+/// encryption info: replacing only lines that could not be decrypted and
+/// applying updates idempotently makes that a no-op.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoomEventsDecrypted {
@@ -2368,10 +2374,30 @@ mod tests {
             serde_json::from_str::<Event>(&json).unwrap(),
             Event::DecryptionRetryWanted
         );
+        let retry = RetryDecryptionRequest {
+            room_id: "!room:example.org".to_owned(),
+            event_ids: vec!["$secret".to_owned()],
+        };
+        let json = serde_json::to_string(&retry).unwrap();
+        assert_eq!(
+            json,
+            r#"{"room_id":"!room:example.org","event_ids":["$secret"]}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<RetryDecryptionRequest>(&json).unwrap(),
+            retry
+        );
         assert!(
             serde_json::from_value::<RetryDecryptionRequest>(serde_json::json!({
                 "room_id": "!room:example.org",
-                "session_ids": [],
+                "session_ids": ["SESSION"],
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<RetryDecryptionRequest>(serde_json::json!({
+                "room_id": "!room:example.org",
+                "event_ids": [],
                 "extra": true,
             }))
             .is_err()

@@ -910,8 +910,10 @@ async fn fetch_room_event(ctx: JobCtx, request: FetchRoomEventRequest) -> Follow
 async fn retry_decryption(ctx: JobCtx, request: RetryDecryptionRequest) -> Followup {
     let JobCtx { client, events, .. } = &ctx;
     let room_id = request.room_id.clone();
-    if let Err(err) = matrix::retry_decryption(client, request) {
-        emit_room_matrix_error(events, Operation::RetryDecryption, &room_id, err);
+    match matrix::retry_decryption(client, request).await {
+        Ok(Some(decrypted)) => emit_event(events, Event::RoomEventsDecrypted(decrypted)),
+        Ok(None) => {}
+        Err(err) => emit_room_matrix_error(events, Operation::RetryDecryption, &room_id, err),
     }
 
     Followup::Done

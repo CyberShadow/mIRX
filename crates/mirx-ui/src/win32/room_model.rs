@@ -995,36 +995,37 @@ impl RoomViewModel {
         }
     }
 
-    /// Whether the window shows the event as one that could not be
-    /// decrypted: as a line, or as the message a reply quotes.
-    pub(super) fn shows_undecrypted(&self, event_id: &str) -> bool {
-        let undecrypted =
-            |activity: &RoomActivity| matches!(activity.kind, RoomActivityKind::UnableToDecrypt(_));
-        match self.find_activity_index_by_event_id(event_id) {
-            Some(index) => undecrypted(&self.activities[index]),
-            None => matches!(
-                self.reply_targets.get(event_id),
-                Some(ReplyTargetState::Loaded(target)) if undecrypted(target)
-            ),
-        }
+    /// What the window shows of the event, if it shows it as one that
+    /// could not be decrypted: its line, or the message a reply quotes.
+    pub(super) fn shown_undecrypted(&self, event_id: &str) -> Option<&RoomActivity> {
+        let shown = match self.find_activity_index_by_event_id(event_id) {
+            Some(index) => &self.activities[index],
+            None => match self.reply_targets.get(event_id) {
+                Some(ReplyTargetState::Loaded(target)) => &**target,
+                Some(ReplyTargetState::Pending | ReplyTargetState::Failed) | None => return None,
+            },
+        };
+        matches!(shown.kind, RoomActivityKind::UnableToDecrypt(_)).then_some(shown)
     }
 
-    /// An event that could not be decrypted, decrypted
-    /// (`shows_undecrypted`): its line becomes the message in place, with
-    /// the same arrival, and a reply's quote of it quotes the message.
+    /// An event that could not be decrypted, read again
+    /// (`shown_undecrypted`): its line becomes what it is now in place,
+    /// with the same arrival, and a reply's quote of it follows. Decrypted,
+    /// it is the message; still undecryptable, its cause may have changed,
+    /// and an edit it holds waits on.
     pub(super) fn apply_decrypted(&mut self, activity: RoomActivity) {
         let event_id = room_activity_event_id(&activity)
             .expect("a decrypted activity is an event's")
             .to_owned();
         assert!(
-            self.shows_undecrypted(&event_id),
+            self.shown_undecrypted(&event_id).is_some(),
             "{event_id} is not shown as undecrypted"
         );
         let (shown, line) = match self.find_activity_index_by_event_id(&event_id) {
             Some(index) => (&mut self.activities[index], true),
             None => match self.reply_targets.get_mut(&event_id) {
                 Some(ReplyTargetState::Loaded(target)) => (&mut **target, false),
-                _ => unreachable!("shows_undecrypted found it"),
+                _ => unreachable!("shown_undecrypted found it"),
             },
         };
         // The core names both after the event: the arrival stays valid.
@@ -1033,6 +1034,10 @@ impl RoomViewModel {
             "a decrypted line keeps its activity"
         );
         *shown = activity;
+        if matches!(shown.kind, RoomActivityKind::UnableToDecrypt(_)) {
+            // Its cause is in no thread's name.
+            return;
+        }
         // An edit the line held applies to the message of its sender; one
         // of another kind cannot be edited (a quote holds no edits).
         if line
@@ -1047,9 +1052,10 @@ impl RoomViewModel {
         self.rebuild_threads();
     }
 
-    /// The Megolm sessions of what the window shows that could not be
-    /// decrypted (`shows_undecrypted`): the keys a retry asks for.
-    pub(super) fn undecrypted_session_ids(&self) -> BTreeSet<String> {
+    /// The events the window shows that could not be decrypted
+    /// (`shown_undecrypted`), with a Megolm session or without (an Olm
+    /// event's): what a retry reads again.
+    pub(super) fn undecrypted_event_ids(&self) -> BTreeSet<String> {
         let reply_targets = self
             .reply_targets
             .values()
@@ -1061,7 +1067,7 @@ impl RoomViewModel {
             .iter()
             .chain(reply_targets)
             .filter_map(|activity| match &activity.kind {
-                RoomActivityKind::UnableToDecrypt(utd) => utd.session_id.clone(),
+                RoomActivityKind::UnableToDecrypt(utd) => Some(utd.event_id.clone()),
                 _ => None,
             })
             .collect()
