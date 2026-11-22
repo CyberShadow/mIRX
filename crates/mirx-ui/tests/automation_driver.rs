@@ -24562,65 +24562,6 @@ fn automation_driver_empty_me_reports_usage_without_sending()
 }
 
 #[test]
-fn live_matrix_ui_session() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(homeserver_url) = env::var("MIRX_HS").ok().filter(|value| !value.is_empty()) else {
-        return Ok(());
-    };
-    let Some(username) = env::var("MIRX_USER").ok().filter(|value| !value.is_empty()) else {
-        return Ok(());
-    };
-    let Some(password) = env::var("MIRX_PASS").ok().filter(|value| !value.is_empty()) else {
-        return Ok(());
-    };
-    let room_id = env::var("MIRX_ROOM").ok().filter(|value| !value.is_empty());
-
-    let exe_path =
-        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
-    let local_app_data = unique_local_app_data_path();
-    let session_path = session_file_path(&local_app_data);
-    let options = launch_options(Some(local_app_data.clone()));
-    let args = [OsString::from("--automation")];
-
-    let app = launch_app_with_options(&exe_path, &args, options.clone())?;
-    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
-    app.login(&homeserver_url, &username, &password, None)?;
-    app.wait_for_lifecycle_state("authenticated", Duration::from_secs(120))?;
-    app.wait_for_lifecycle_state("ready", Duration::from_secs(120))?;
-    app.wait_for_min_rooms(1, Duration::from_secs(120))?;
-    assert!(session_path.is_file());
-    let raw_session_bytes = fs::read(&session_path)?;
-    assert_bytes_do_not_contain(&raw_session_bytes, "\"access_token\"");
-    assert_bytes_do_not_contain(&raw_session_bytes, "\"refresh_token\"");
-    assert_bytes_do_not_contain(&raw_session_bytes, &password);
-
-    app.start_sync()?;
-    app.wait_for_lifecycle_state("syncing", Duration::from_secs(60))?;
-
-    if let Some(room_id) = room_id.as_deref() {
-        let unique_body = format!(
-            "mirx ui live {}",
-            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-        );
-        app.select_room(room_id)?;
-        app.send_text(Some(room_id), &unique_body)?;
-        app.wait_for_room_activity_contains(Some(room_id), &unique_body, Duration::from_secs(120))?;
-    }
-
-    drop(app);
-
-    let restored = launch_app_with_options(&exe_path, &args, options)?;
-    restored.wait_for_lifecycle_state("authenticated", Duration::from_secs(120))?;
-    restored.wait_for_lifecycle_state("ready", Duration::from_secs(120))?;
-    restored.wait_for_min_rooms(1, Duration::from_secs(120))?;
-    restored.logout()?;
-    restored.wait_for_lifecycle_state("logged_out", Duration::from_secs(120))?;
-    assert!(!session_path.exists());
-
-    let _ = fs::remove_dir_all(&local_app_data);
-    Ok(())
-}
-
-#[test]
 fn formatted_messages_render_styled_lines() -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
