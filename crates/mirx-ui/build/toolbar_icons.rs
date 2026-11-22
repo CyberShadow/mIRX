@@ -38,19 +38,20 @@ pub struct Glyph {
     draw: fn(Pen) -> Vec<Layer>,
 }
 
-pub const GLYPHS: [Glyph; 12] = [
+pub const GLYPHS: [Glyph; 13] = [
     glyph(101, "connect", connect),
     glyph(102, "disconnect", disconnect),
     glyph(103, "options", options),
     glyph(104, "list", list),
     glyph(105, "join", join),
-    glyph(106, "colors", colors),
-    glyph(107, "sendfile", send_file),
-    glyph(108, "cascade", cascade),
-    glyph(109, "tileh", tile_horizontal),
-    glyph(110, "tilev", tile_vertical),
-    glyph(111, "arrange", arrange_icons),
-    glyph(112, "help", help),
+    glyph(106, "addressbook", address_book),
+    glyph(107, "colors", colors),
+    glyph(108, "sendfile", send_file),
+    glyph(109, "cascade", cascade),
+    glyph(110, "tileh", tile_horizontal),
+    glyph(111, "tilev", tile_vertical),
+    glyph(112, "arrange", arrange_icons),
+    glyph(113, "help", help),
 ];
 
 const fn glyph(id: u16, stem: &'static str, draw: fn(Pen) -> Vec<Layer>) -> Glyph {
@@ -196,6 +197,26 @@ fn join(pen: Pen) -> Vec<Layer> {
     let mut layers = pen.outlined(GOLD, FOLDER, move |p| tab(p).min(body(p)));
     // The open front's edge.
     layers.push((GOLD, Box::new(pen.rect((1.0, 6.0), (15.0, 7.0)))));
+    layers
+}
+
+/// The Address Book: a red book, its pages' edge showing, a person on
+/// its cover's label.
+fn address_book(pen: Pen) -> Vec<Layer> {
+    let mut layers = pen.outlined(DARK_GREY, WHITE, pen.rect((4.0, 2.0), (14.0, 15.0)));
+    layers.extend(pen.outlined(DARK_RED, RED, pen.rect((2.0, 1.0), (12.0, 14.0))));
+    // The spine.
+    layers.push((DARK_RED, Box::new(pen.rect((2.0, 1.0), (4.0, 14.0)))));
+    layers.push((WHITE, Box::new(pen.rect((5.0, 3.0), (11.0, 11.0)))));
+    let shoulders = (Point(6.8, 10.0), Point(9.2, 10.0));
+    layers.push((
+        NAVY,
+        Box::new(move |p| {
+            circle(p, Point(8.0, 5.6), 1.6)
+                .min(capsule(p, shoulders, 1.8))
+                .max(pen.rect((5.0, 3.0), (11.0, 11.0))(p))
+        }),
+    ));
     layers
 }
 

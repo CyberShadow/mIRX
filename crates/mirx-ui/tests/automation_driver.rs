@@ -5022,6 +5022,7 @@ fn toolbar_connect_button_follows_the_connection_and_clicks_through()
             "Options",
             "List Rooms",
             "Join Room",
+            "Address Book",
             "Colors",
             "Send File",
             "Cascade",
@@ -5063,13 +5064,19 @@ fn toolbar_connect_button_follows_the_connection_and_clicks_through()
 }
 
 #[test]
-fn toolbar_options_button_opens_options() -> Result<(), Box<dyn std::error::Error>> {
+fn toolbar_options_and_address_book_buttons_open_their_dialogs()
+-> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     click_toolbar_button(&app, "Options")?;
     let dialog = wait_for_options_dialog(&app)?;
     post_options_command(dialog, IDCANCEL)?;
     wait_for_window_gone(dialog, "Options dialog")?;
+    click_toolbar_button(&app, "Address Book")?;
+    let dialog = wait_for_address_book(&app)?;
+    assert_eq!(address_book(&app)?.tab, "Notify");
+    post_dialog_command(dialog, IDCANCEL as WPARAM);
+    wait_for_window_gone(dialog, "Address Book")?;
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
