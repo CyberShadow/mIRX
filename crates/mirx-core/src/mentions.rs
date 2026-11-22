@@ -24,8 +24,9 @@ pub(crate) struct BodyMentions {
 /// users name people: by typing a nick.
 ///
 /// - **Candidates.** Every member but the user (`own_user_id`) is named by
-///   their full user ID, and by their display name unless it is empty or
-///   has a line break, which no line typed can match.
+///   their full user ID, and by their nick (display name, else localpart;
+///   never empty) unless it has a line break, which no line typed can
+///   match.
 /// - **Matching.** A candidate matches where the body's text equals it,
 ///   ignoring case, between word boundaries: the start or end of the body,
 ///   or a character outside `[A-Za-z0-9_]`, as push rules define them.
@@ -41,15 +42,16 @@ pub(crate) struct BodyMentions {
 ///   (`.m.rule.is_room_mention` checks the power level), as in Element.
 pub(crate) fn body_mentions<'a>(
     body: &str,
-    members: impl IntoIterator<Item = (&'a UserId, Option<&'a str>)>,
+    members: impl IntoIterator<Item = (&'a UserId, &'a str)>,
     own_user_id: &UserId,
 ) -> BodyMentions {
     let candidates: Vec<(&str, &UserId)> = members
         .into_iter()
         .filter(|(user_id, _)| *user_id != own_user_id)
-        .flat_map(|(user_id, display_name)| {
-            let display_name = display_name.filter(|name| !name.is_empty() && !name.contains('\n'));
-            [Some(user_id.as_str()), display_name]
+        .flat_map(|(user_id, nick)| {
+            assert!(!nick.is_empty(), "a nick names someone");
+            let nick = (!nick.contains('\n')).then_some(nick);
+            [Some(user_id.as_str()), nick]
                 .into_iter()
                 .flatten()
                 .map(move |text| (text, user_id))
@@ -148,14 +150,11 @@ mod tests {
 
     const ME: &str = "@me:example.org";
 
-    /// The mentions of `body` among `members` (user ID, display name), as
-    /// user ID strings, with each pill's text.
-    fn named(
-        body: &str,
-        members: &[(&str, Option<&str>)],
-    ) -> (Vec<String>, Vec<(String, String)>, bool) {
-        let members: Vec<(OwnedUserId, Option<&str>)> =
-            members.iter().map(|(id, name)| (user(id), *name)).collect();
+    /// The mentions of `body` among `members` (user ID, nick), as user ID
+    /// strings, with each pill's text.
+    fn named(body: &str, members: &[(&str, &str)]) -> (Vec<String>, Vec<(String, String)>, bool) {
+        let members: Vec<(OwnedUserId, &str)> =
+            members.iter().map(|(id, nick)| (user(id), *nick)).collect();
         let mentions = body_mentions(
             body,
             members.iter().map(|(id, name)| (id.as_ref(), *name)),
@@ -184,11 +183,11 @@ mod tests {
             .collect()
     }
 
-    const ALICE: (&str, Option<&str>) = ("@alice:example.org", Some("Alice"));
-    const BOB: (&str, Option<&str>) = ("@bob:example.org", Some("Bob"));
+    const ALICE: (&str, &str) = ("@alice:example.org", "Alice");
+    const BOB: (&str, &str) = ("@bob:example.org", "Bob");
 
     #[test]
-    fn display_names_match_as_whole_words_in_any_case() {
+    fn nicks_match_as_whole_words_in_any_case() {
         assert_eq!(
             named("alice: hi, BOB!", &[ALICE, BOB]),
             (
@@ -217,7 +216,7 @@ mod tests {
         );
         let mentions = body_mentions(
             "one\ntwo Bob",
-            [(user("@bob:example.org").as_ref(), Some("Bob"))],
+            [(user("@bob:example.org").as_ref(), "Bob")],
             &user(ME),
         );
         assert_eq!(mentions.pills, vec![pill(8, 11, "@bob:example.org")]);
@@ -226,7 +225,7 @@ mod tests {
     #[test]
     fn full_user_ids_match_and_pill() {
         assert_eq!(
-            named("ping @Carol:example.org!", &[("@carol:example.org", None)]),
+            named("ping @Carol:example.org!", &[("@carol:example.org", "Caz")]),
             (
                 ids(&["@carol:example.org"]),
                 pills(&[("@Carol:example.org", "@carol:example.org")]),
@@ -234,7 +233,7 @@ mod tests {
             )
         );
         assert_eq!(
-            named("x@carol:example.org", &[("@carol:example.org", None)]),
+            named("x@carol:example.org", &[("@carol:example.org", "Caz")]),
             (Vec::new(), Vec::new(), false)
         );
     }
@@ -242,28 +241,52 @@ mod tests {
     #[test]
     fn the_user_is_never_named() {
         assert_eq!(
-            named("Me and @me:example.org", &[(ME, Some("Me")), ALICE]),
+            named("Me and @me:example.org", &[(ME, "Me"), ALICE]),
             (Vec::new(), Vec::new(), false)
         );
     }
 
     #[test]
-    fn empty_and_multi_line_display_names_name_nobody() {
+    fn multi_line_nicks_name_nobody() {
+        assert_eq!(
+            named("a b", &[("@nl:example.org", "a\nb")]),
+            (Vec::new(), Vec::new(), false)
+        );
+    }
+
+    #[test]
+    fn a_nameless_member_is_named_by_localpart() {
+        assert_eq!(
+            named("ghost: hi", &[("@ghost:example.org", "ghost"), ALICE]),
+            (
+                ids(&["@ghost:example.org"]),
+                pills(&[("ghost", "@ghost:example.org")]),
+                false
+            )
+        );
+    }
+
+    #[test]
+    fn a_localpart_equal_to_another_members_name_names_both_without_a_pill() {
         assert_eq!(
             named(
-                "a b",
+                "ghost: hi",
                 &[
-                    ("@empty:example.org", Some("")),
-                    ("@nl:example.org", Some("a\nb"))
+                    ("@ghost:example.org", "ghost"),
+                    ("@casper:example.org", "Ghost")
                 ]
             ),
-            (Vec::new(), Vec::new(), false)
+            (
+                ids(&["@casper:example.org", "@ghost:example.org"]),
+                Vec::new(),
+                false
+            )
         );
     }
 
     #[test]
     fn the_longest_match_at_a_position_wins() {
-        let bob_smith = ("@smith:example.org", Some("Bob Smith"));
+        let bob_smith = ("@smith:example.org", "Bob Smith");
         assert_eq!(
             named("Bob Smith, Bob", &[BOB, bob_smith]),
             (
@@ -288,8 +311,8 @@ mod tests {
 
     #[test]
     fn an_ambiguous_name_names_everyone_with_it_without_a_pill() {
-        let sam1 = ("@sam1:example.org", Some("Sam"));
-        let sam2 = ("@sam2:example.org", Some("sam"));
+        let sam1 = ("@sam1:example.org", "Sam");
+        let sam2 = ("@sam2:example.org", "sam");
         assert_eq!(
             named("Sam: hi", &[sam1, sam2]),
             (
@@ -311,7 +334,7 @@ mod tests {
 
     #[test]
     fn case_folding_keeps_byte_offsets_into_the_typed_text() {
-        let aerger = ("@aerger:example.org", Some("Ärger"));
+        let aerger = ("@aerger:example.org", "Ärger");
         let mentions = body_mentions(
             "größe ärger",
             [(user(aerger.0).as_ref(), aerger.1)],

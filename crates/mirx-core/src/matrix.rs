@@ -5133,9 +5133,12 @@ async fn message_mentions(
         })?;
     let named = body_mentions(
         body,
-        members
-            .iter()
-            .map(|member| (member.user_id(), member.display_name())),
+        members.iter().map(|member| {
+            (
+                member.user_id(),
+                member_nick(member.display_name(), member.user_id()),
+            )
+        }),
         own_user_id,
     );
     let mut user_ids = named.user_ids;
@@ -16110,11 +16113,21 @@ mod tests {
         runtime.block_on(async {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
+            let mut state_events = profile_test_state_events();
+            // A member without a display name goes by their localpart.
+            state_events
+                .as_array_mut()
+                .expect("state events")
+                .push(serde_json::json!({
+                    "type": "m.room.member", "state_key": "@ghost:localhost",
+                    "sender": "@ghost:localhost", "event_id": "$ghost:localhost",
+                    "origin_server_ts": 6u64, "content": { "membership": "join" }
+                }));
             mock_server
                 .sync_room(
                     &client,
                     JoinedRoomBuilder::new(room_id().as_ref())
-                        .add_state_bulk(raw_sync_state_events(&profile_test_state_events())),
+                        .add_state_bulk(raw_sync_state_events(&state_events)),
                 )
                 .await;
             mock_server
@@ -16162,20 +16175,23 @@ mod tests {
             send(RoomMessagePresentationKind::Notice, "@room: Me here", None)
                 .await
                 .expect("send the notice");
+            send(text, "ghost: look", None)
+                .await
+                .expect("send the line naming a nameless member");
 
             // The send queue sends in the background, in order.
             let bodies = tokio::time::timeout(Duration::from_secs(10), async {
                 loop {
                     let bodies =
                         request_bodies_containing(&mock_server, "/send/m.room.message/").await;
-                    if bodies.len() == 5 {
+                    if bodies.len() == 6 {
                         return bodies;
                     }
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
             })
             .await
-            .expect("all five messages are sent");
+            .expect("all six messages are sent");
             // Two members are named Sam: both are named, and neither pilled.
             assert_eq!(
                 bodies[0],
@@ -16222,6 +16238,17 @@ mod tests {
                     "msgtype": "m.notice",
                     "body": "@room: Me here",
                     "m.mentions": { "room": true },
+                })
+            );
+            assert_eq!(
+                bodies[5],
+                serde_json::json!({
+                    "msgtype": "m.text",
+                    "body": "ghost: look",
+                    "format": "org.matrix.custom.html",
+                    "formatted_body":
+                        "<a href=\"https://matrix.to/#/@ghost:localhost\">ghost</a>: look",
+                    "m.mentions": { "user_ids": ["@ghost:localhost"] },
                 })
             );
         });
