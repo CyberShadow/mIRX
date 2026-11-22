@@ -33,6 +33,7 @@ use matrix_sdk::ruma::api::client::uiaa::{
     AuthData, Dummy, MatrixUserIdentifier, Password, UserIdentifier,
 };
 use matrix_sdk::ruma::events::InitialStateEvent;
+use matrix_sdk::ruma::events::ignored_user_list::IgnoredUserListEventContent;
 use matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent;
 use matrix_sdk::ruma::events::room::member::MembershipState;
 use matrix_sdk::ruma::events::room::message::{
@@ -267,6 +268,24 @@ impl Peer<'_> {
                 .find(|text| text.room_id == room_id && text.body == body)
                 .map(|text| text.sender.clone())
                 .ok_or_else(|| format!("{texts:?}"))
+        })
+    }
+
+    /// The user's ignore list as the server has it, sorted.
+    fn ignored_users(&self) -> Vec<String> {
+        self.homeserver.runtime.block_on(async {
+            let raw = self
+                .client
+                .account()
+                .fetch_account_data_static::<IgnoredUserListEventContent>()
+                .await
+                .expect("reading the ignore list succeeds");
+            raw.map(|raw| raw.deserialize().expect("the ignore list decodes"))
+                .unwrap_or_default()
+                .ignored_users
+                .keys()
+                .map(ToString::to_string)
+                .collect()
         })
     }
 
@@ -959,6 +978,64 @@ fn recovery_carries_the_room_keys_across_log_out() -> Result<(), Box<dyn Error>>
             .any(|line| line.contains("could not be decrypted")),
         "{lines:?}"
     );
+
+    finish(app, &local_app_data)
+}
+
+/// Waits until mirx's ignore list, the server's last echo, is `expected`.
+fn wait_for_ignored_users(app: &MirxApp, expected: &[String]) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let ignored_users = app.dump_ui_state()?.ignored_users;
+        if ignored_users.as_deref() == Some(expected) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "the ignore list never became {expected:?}: {ignored_users:?}; Status: {:?}",
+                status_texts(app)?
+            )
+            .into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Two ignore-list changes typed in a row both stay: the second is sent
+/// before the server's echo of the first reaches mirx, so it must not edit
+/// the stored copy of the list.
+#[test]
+fn ignoring_two_users_in_a_row_keeps_both() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let bob = homeserver.register("bob", "Bob");
+    let carol = homeserver.register("carol", "Carol");
+    let alice = homeserver.register("alice", "Alice");
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_live_app(&local_app_data)?;
+    sign_in(&app, &homeserver, &alice)?;
+    wait_for_ignored_users(&app, &[])?;
+
+    app.select_status_view()?;
+    type_commands(
+        &app,
+        &[
+            &format!("/ignore {}", bob.user_id()),
+            &format!("/ignore {}", carol.user_id()),
+        ],
+    )?;
+    let both = vec![bob.user_id().to_string(), carol.user_id().to_string()];
+    let deadline = Instant::now() + TIMEOUT;
+    let mut on_the_server = alice.ignored_users();
+    while !on_the_server.contains(&carol.user_id().to_string()) {
+        assert!(
+            Instant::now() < deadline,
+            "the server never listed Carol: {on_the_server:?}"
+        );
+        std::thread::sleep(POLL_INTERVAL);
+        on_the_server = alice.ignored_users();
+    }
+    assert_eq!(on_the_server, both, "Status: {:?}", status_texts(&app)?);
+    wait_for_ignored_users(&app, &both)?;
 
     finish(app, &local_app_data)
 }
