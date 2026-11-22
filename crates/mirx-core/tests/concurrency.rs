@@ -549,6 +549,7 @@ fn a_failed_logout_keeps_the_session_whole() {
     seen.until("SyncConnected", |event| *event == Event::SyncConnected);
 
     harness.send(common::log_out_anyway());
+    seen.until("LoggingOut", |event| *event == Event::LoggingOut);
     seen.until("the logout error", |event| {
         is_error_of(event, Operation::Logout)
     });

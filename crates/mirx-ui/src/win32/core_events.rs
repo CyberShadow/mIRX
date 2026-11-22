@@ -690,6 +690,14 @@ pub(super) fn apply_core_event(
             state.log_out_warning = Some(risk);
             state.model.status = "log out: room keys at risk".to_owned();
         }
+        Event::LoggingOut => {
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::LOGGING_OUT.to_owned(),
+            );
+            state.model.status = "logging out".to_owned();
+        }
         Event::LoggedOut => {
             state.reconnect.reset();
             // A warning not shown yet was about this session.
@@ -1495,10 +1503,22 @@ mod tests {
                     Event::LogoutWouldLoseRoomKeys(RoomKeysAtRisk::RecoveryOff),
                     ConnectionState::Syncing,
                 ),
+                // A Log Out the server refuses: the session goes on syncing.
+                (Event::LoggingOut, ConnectionState::LoggingOut),
+                (
+                    Event::Error(CoreErrorEvent {
+                        operation: Operation::Logout,
+                        room_id: None,
+                        message: "failed to log out of Matrix: busy".to_owned(),
+                    }),
+                    ConnectionState::SignedIn,
+                ),
+                (Event::SyncStarted, ConnectionState::Syncing),
                 (
                     Event::SyncStopped(SyncStopReason::Requested),
                     ConnectionState::SignedIn,
                 ),
+                (Event::LoggingOut, ConnectionState::LoggingOut),
                 (Event::LoggedOut, ConnectionState::SignedOut),
             ] {
                 apply_core_event(&mut state, event.clone()).unwrap();
@@ -3295,6 +3315,25 @@ mod tests {
 
         with_local_app_data(|_| apply_core_event(&mut state, Event::LoggedOut).unwrap());
         assert_eq!(state.log_out_warning, None);
+    }
+
+    /// A Log Out under way says so, in Status and the status bar.
+    #[test]
+    fn a_log_out_under_way_says_so() {
+        let mut state = test_state();
+        state.model.connection = ConnectionState::Syncing;
+        let lines = status_log_lines(&state);
+
+        apply_core_event(&mut state, Event::LoggingOut).unwrap();
+
+        assert_eq!(state.model.connection, ConnectionState::LoggingOut);
+        assert_eq!(state.model.status, "logging out");
+        let new_lines = &status_log_lines(&state)[lines.len()..];
+        assert_eq!(new_lines.len(), 1, "{new_lines:?}");
+        assert!(
+            new_lines[0].ends_with(status_log::LOGGING_OUT),
+            "{new_lines:?}"
+        );
     }
 
     #[test]

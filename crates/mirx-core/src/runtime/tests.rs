@@ -1708,7 +1708,7 @@ fn logging_out_removes_the_sessions_store() {
 
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LoggedOut]
+            vec![Event::LoggingOut, Event::LoggedOut]
         );
         assert!(!store.exists());
         core.stop().await;
@@ -1726,7 +1726,7 @@ fn signing_in_after_logging_out_starts_a_new_session() {
         run(&mut core, log_out_anyway()).await;
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LoggedOut]
+            vec![Event::LoggingOut, Event::LoggedOut]
         );
         let second_server = MatrixMockServer::new().await;
         mount_sign_in(&second_server, "NEWDEVICE", false, |_| {}).await;
@@ -1818,7 +1818,7 @@ fn logging_out_a_session_the_server_ended_logs_out() {
 
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LoggedOut]
+            vec![Event::LoggingOut, Event::LoggedOut]
         );
         core.stop().await;
     });
@@ -1878,7 +1878,7 @@ fn logging_out_closes_the_sessions_store() {
         run(&mut core, log_out_anyway()).await;
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LoggedOut]
+            vec![Event::LoggingOut, Event::LoggedOut]
         );
 
         // The SQLite pools close on blocking threads.
@@ -1912,7 +1912,7 @@ fn logging_out_with_a_dead_refresh_token_logs_out() {
 
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LoggedOut]
+            vec![Event::LoggingOut, Event::LoggedOut]
         );
         core.stop().await;
     });
@@ -2748,7 +2748,7 @@ fn logging_out_saves_the_room_keys_to_the_backup_first() {
 
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LoggedOut]
+            vec![Event::LoggingOut, Event::LoggedOut]
         );
         let arrivals = arrivals.lock().expect("the arrivals lock").clone();
         let [("upload", uploaded), ("logout", logged_out)] = arrivals.as_slice() else {
@@ -2790,11 +2790,12 @@ fn a_failed_key_backup_keeps_the_session() {
 
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LogoutWouldLoseRoomKeys(
-                crate::api::RoomKeysAtRisk::BackupFailed(
+            vec![
+                Event::LoggingOut,
+                Event::LogoutWouldLoseRoomKeys(crate::api::RoomKeysAtRisk::BackupFailed(
                     "your server could not be reached or refused them".to_owned()
-                )
-            )]
+                ))
+            ]
         );
         assert!(arrivals.lock().expect("the arrivals lock").is_empty());
         // Still in the session.
@@ -2803,7 +2804,7 @@ fn a_failed_key_backup_keeps_the_session() {
         run(&mut core, log_out_anyway()).await;
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LoggedOut]
+            vec![Event::LoggingOut, Event::LoggedOut]
         );
         core.stop().await;
     });

@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 81;
+pub(crate) const PROTOCOL_VERSION: u32 = 82;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1883,6 +1883,9 @@ pub(crate) enum ConnectionState {
     /// `Retry...` delay between attempts.
     WaitingToReconnect,
     Syncing,
+    /// A Log Out is under way: the core waits for the key backup and the
+    /// server, with sync stopped.
+    LoggingOut,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4038,8 +4041,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_81() {
-        assert_eq!(PROTOCOL_VERSION, 81);
+    fn protocol_version_is_82() {
+        assert_eq!(PROTOCOL_VERSION, 82);
     }
 
     #[test]
@@ -6077,7 +6080,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":81,
+                    "protocol_version":82,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })

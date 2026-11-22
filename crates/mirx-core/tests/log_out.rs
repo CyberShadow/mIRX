@@ -44,6 +44,7 @@ fn logging_out_without_recovery_asks_first() {
             matches!(
                 event,
                 Event::LogoutWouldLoseRoomKeys(_)
+                    | Event::LoggingOut
                     | Event::LoggedOut
                     | Event::SyncStarted
                     | Event::SyncStopped(_)
@@ -72,7 +73,9 @@ fn logging_out_anyway_logs_out_without_recovery() {
     harness.wait_for_recovery(E2eeRecoveryState::Disabled);
 
     harness.send(log_out_anyway());
-    harness.wait_for("LoggedOut", |event| *event == Event::LoggedOut);
+    let events = harness.events_until("LoggedOut", |event| *event == Event::LoggedOut);
+    let logging_out = events.iter().filter(|event| **event == Event::LoggingOut);
+    assert_eq!(logging_out.count(), 1, "{events:#?}");
     assert_eq!(harness.requests("POST", "/logout").len(), 1);
 
     harness.shut_down();
@@ -103,14 +106,18 @@ fn a_logout_the_server_answers_with_errors_fails_in_seconds() {
         .filter(|event| {
             matches!(
                 event,
-                Event::LoggedOut | Event::SyncStarted | Event::SyncStopped(_) | Event::Error(_)
+                Event::LoggingOut
+                    | Event::LoggedOut
+                    | Event::SyncStarted
+                    | Event::SyncStopped(_)
+                    | Event::Error(_)
             )
         })
         .collect();
     assert!(
         matches!(
             answers[..],
-            [Event::Error(error), Event::SyncStarted]
+            [Event::LoggingOut, Event::Error(error), Event::SyncStarted]
                 if error.operation == Operation::Logout && error.message.contains("restarting")
         ),
         "{events:#?}"

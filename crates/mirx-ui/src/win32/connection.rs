@@ -20,7 +20,21 @@ pub(super) fn after_event(connection: ConnectionState, event: &Event) -> Connect
         Event::LoggedIn { .. } | Event::RestoredSession => ConnectionState::SignedIn,
         Event::SyncStarted => ConnectionState::Syncing,
         Event::SyncStopped(_) => ConnectionState::SignedIn,
+        Event::LoggingOut => ConnectionState::LoggingOut,
         Event::LoggedOut => ConnectionState::SignedOut,
+        // The Log Out under way failed: the session stands, and the core
+        // starts sync again if it ran (`SyncStarted`). From another state
+        // this is the refusal of a Log Out that never started, which
+        // changes nothing.
+        Event::LogoutWouldLoseRoomKeys(_) if connection == ConnectionState::LoggingOut => {
+            ConnectionState::SignedIn
+        }
+        Event::Error(error)
+            if error.operation == Operation::Logout
+                && connection == ConnectionState::LoggingOut =>
+        {
+            ConnectionState::SignedIn
+        }
         // Signed in already, this is the initial room sync failing after
         // LoggedIn or RestoredSession: the session stands.
         Event::Error(error)
@@ -143,6 +157,7 @@ pub(super) fn connect_action(
             Err("already connecting")
         }
         (ConnectionState::Syncing, _) => Err("already connected"),
+        (ConnectionState::LoggingOut, _) => Err("logging out"),
         (ConnectionState::SignedIn, None) => Ok(ConnectAction::StartSync),
         (ConnectionState::WaitingToReconnect, None) => Ok(ConnectAction::RetryNow),
         (ConnectionState::SignedIn | ConnectionState::WaitingToReconnect, Some(_)) => {
@@ -181,6 +196,7 @@ pub(super) fn disconnect_action(
             Ok(DisconnectAction::CancelSignIn)
         }
         ConnectionState::WaitingToReconnect => Ok(DisconnectAction::CancelReconnect),
+        ConnectionState::LoggingOut => Err("logging out"),
         ConnectionState::SignedOut | ConnectionState::SignedIn => Err("not connected"),
     }
 }
@@ -193,6 +209,7 @@ pub(super) fn check_sign_in(connection: ConnectionState) -> Result<(), &'static 
         ConnectionState::SigningIn | ConnectionState::WaitingForBrowser => {
             Err("already connecting")
         }
+        ConnectionState::LoggingOut => Err("logging out"),
         ConnectionState::SignedIn
         | ConnectionState::WaitingToReconnect
         | ConnectionState::Syncing => Err("already signed in; log out first"),
@@ -207,16 +224,17 @@ mod tests {
     use super::*;
 
     use ConnectionState::{
-        SignedIn, SignedOut, SigningIn, Syncing, WaitingForBrowser, WaitingToReconnect,
+        LoggingOut, SignedIn, SignedOut, SigningIn, Syncing, WaitingForBrowser, WaitingToReconnect,
     };
 
-    const ALL: [ConnectionState; 6] = [
+    const ALL: [ConnectionState; 7] = [
         SignedOut,
         SigningIn,
         WaitingForBrowser,
         SignedIn,
         WaitingToReconnect,
         Syncing,
+        LoggingOut,
     ];
 
     fn error(operation: Operation) -> Event {
@@ -309,6 +327,27 @@ mod tests {
     }
 
     #[test]
+    fn a_log_out_under_way_ends_signed_out_or_signed_in() {
+        for connection in [SignedIn, Syncing] {
+            assert_eq!(after_event(connection, &Event::LoggingOut), LoggingOut);
+        }
+        assert_eq!(after_event(LoggingOut, &Event::LoggedOut), SignedOut);
+        let refusal = Event::LogoutWouldLoseRoomKeys(mirx_core::RoomKeysAtRisk::RecoveryOff);
+        assert_eq!(after_event(LoggingOut, &refusal), SignedIn);
+        assert_eq!(after_event(LoggingOut, &error(Operation::Logout)), SignedIn);
+        // The core starts the sync the Log Out stopped again.
+        assert_eq!(after_event(SignedIn, &Event::SyncStarted), Syncing);
+        // A refusal before any Log Out started keeps the connection.
+        for connection in [SignedIn, WaitingToReconnect, Syncing] {
+            assert_eq!(after_event(connection, &refusal), connection);
+            assert_eq!(
+                after_event(connection, &error(Operation::Logout)),
+                connection
+            );
+        }
+    }
+
+    #[test]
     fn logout_signs_out_from_anywhere() {
         for connection in ALL {
             assert_eq!(after_event(connection, &Event::LoggedOut), SignedOut);
@@ -367,6 +406,7 @@ mod tests {
                 connect_action(Syncing, server, true),
                 Err("already connected")
             );
+            assert_eq!(connect_action(LoggingOut, server, true), Err("logging out"));
         }
     }
 
@@ -386,7 +426,9 @@ mod tests {
         for connection in [SignedOut, SignedIn] {
             assert_eq!(disconnect_action(connection), Err("not connected"));
         }
+        assert_eq!(disconnect_action(LoggingOut), Err("logging out"));
         assert_eq!(check_sign_in(SignedOut), Ok(()));
+        assert_eq!(check_sign_in(LoggingOut), Err("logging out"));
         for connecting in [SigningIn, WaitingForBrowser] {
             assert_eq!(check_sign_in(connecting), Err("already connecting"));
         }

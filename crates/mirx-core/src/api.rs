@@ -131,8 +131,9 @@ pub enum Command {
     /// `RoomEventsDecrypted` too.
     RetryDecryption(RetryDecryptionRequest),
     /// Ends the session on the server and removes its data from this
-    /// computer. Answered by `LoggedOut`, by `LogoutWouldLoseRoomKeys`
-    /// (the session stays, as it was), or by a `Logout` error.
+    /// computer. Answered by `LogoutWouldLoseRoomKeys` at once (the
+    /// session stays, as it was), or by `LoggingOut` and then `LoggedOut`,
+    /// `LogoutWouldLoseRoomKeys` or a `Logout` error (the session stays).
     Logout(LogoutRequest),
     Shutdown,
 }
@@ -2356,6 +2357,11 @@ pub enum Event {
     /// would lose room keys, for this reason. The session stays signed in,
     /// syncing as before.
     LogoutWouldLoseRoomKeys(RoomKeysAtRisk),
+    /// A `Logout` went past its checks: the core waits for the key backup
+    /// and then the server, with sync stopped. `LoggedOut`,
+    /// `LogoutWouldLoseRoomKeys` or a `Logout` error follows. Commands
+    /// sent meanwhile wait for its end.
+    LoggingOut,
     LoggedOut,
     Stopped,
     Error(CoreErrorEvent),
@@ -2417,10 +2423,11 @@ mod tests {
         assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), imported);
     }
 
-    /// Fixtures replay Log Out's refusal.
+    /// Fixtures replay Log Out's refusal and the logout under way.
     #[test]
-    fn logout_refusals_round_trip_through_serde() {
+    fn logout_events_round_trip_through_serde() {
         for (event, wire) in [
+            (Event::LoggingOut, r#""LoggingOut""#),
             (
                 Event::LogoutWouldLoseRoomKeys(RoomKeysAtRisk::RecoveryOff),
                 r#"{"LogoutWouldLoseRoomKeys":"recovery_off"}"#,

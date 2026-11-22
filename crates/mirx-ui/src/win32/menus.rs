@@ -751,6 +751,15 @@ mod tests {
                 log_out: true,
             }
         );
+        assert_eq!(
+            file_menu_state(ConnectionState::LoggingOut),
+            FileMenuState {
+                connect: false,
+                disconnect: false,
+                select_server: false,
+                log_out: false,
+            }
+        );
     }
 
     #[test]

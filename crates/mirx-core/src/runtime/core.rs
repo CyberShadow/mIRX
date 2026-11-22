@@ -469,6 +469,7 @@ impl Core {
         // before the server ends the session: a sync racing it would report
         // `SyncStopped(SessionEnded)` first.
         let resume_sync = session.stop_sync_quietly().await;
+        emit_event(&self.events, Event::LoggingOut);
         let client = session.client().clone();
         let transition = Box::pin(async move {
             if !discard_room_keys {
