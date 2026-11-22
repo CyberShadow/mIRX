@@ -3677,7 +3677,6 @@ fn automation_driver_lifecycle_commands_are_submitted_in_render_state_mode()
     Ok(())
 }
 
-const MENU_ID_FILE_DISCONNECT: usize = 40031;
 const LOGIN_DIALOG_CANCEL_ID: usize = 5006;
 const CONNECT_HINT: &str = "* Not connected. Use File > Select Server... (Alt+E) or /server to connect to a Matrix homeserver";
 

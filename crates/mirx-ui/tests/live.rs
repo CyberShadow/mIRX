@@ -662,6 +662,150 @@ fn a_restart_with_connect_on_startup_off_shows_the_rooms_it_had() -> Result<(), 
     finish(app, &local_app_data)
 }
 
+/// Status's lines, without their timestamps.
+fn status_texts(app: &MirxApp) -> Result<Vec<String>, Box<dyn Error>> {
+    Ok(status_view_lines(app)?
+        .into_iter()
+        .map(|line| {
+            line.split_once("] ")
+                .map_or(line.as_str(), |(_, text)| text)
+                .to_owned()
+        })
+        .collect())
+}
+
+/// Waits out what background tasks still have to say: the SDK's E2EE
+/// state streams tick within moments of a sign-in, a restore and a sync.
+fn let_background_tasks_settle(app: &MirxApp) -> Result<(), Box<dyn Error>> {
+    app.wait_idle(Duration::from_secs(5))?;
+    std::thread::sleep(Duration::from_secs(2));
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+/// How soon a connect on a quiet account must be through: a few
+/// requests answered at once, against a 30 s long poll.
+const CONNECT_AT_ONCE: Duration = Duration::from_secs(10);
+
+/// Waits until the status bar says the session is connected, and checks
+/// it took less than `CONNECT_AT_ONCE`, saying how long it took either way.
+fn assert_connects_at_once(app: &MirxApp, what: &str) -> Result<(), Box<dyn Error>> {
+    let start = Instant::now();
+    loop {
+        let status = app.dump_model()?.status;
+        if status == "connected to localhost" {
+            let took = start.elapsed();
+            eprintln!("{what} connected after {took:?}");
+            assert!(took < CONNECT_AT_ONCE, "{what} connected after {took:?}");
+            return Ok(());
+        }
+        if start.elapsed() >= TIMEOUT {
+            return Err(format!(
+                "{what}: never connected; status {status:?}; Status: {:?}",
+                status_texts(app)?
+            )
+            .into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Conduit answers a `/sync` whose device and `since` equal a request it
+/// is still working on with that request's answer: one mirx gave up on
+/// (closed, or File > Disconnect) goes on for its 30 s long poll, and a
+/// connect within it waits for its end, whatever its own `timeout`
+/// (`sync_receivers` in Conduit's `sync_events_route`). A user who
+/// reconnects later is not held: wait it out.
+fn outlast_the_abandoned_long_poll() {
+    std::thread::sleep(Duration::from_secs(31));
+}
+
+/// A connect on a quiet account is answered at once, not after the
+/// server's 30 s long poll; and Status says each thing once, at a
+/// sign-in, a restart and a Disconnect/Connect.
+#[test]
+fn a_restart_connects_at_once_and_status_says_each_thing_once() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let bob = homeserver.register("bob", "Bob");
+    let alice = homeserver.register("alice", "Alice");
+    let alias_localpart = unique_name("lobby");
+    let room_id = bob.create_public_room("Lobby", &alias_localpart);
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_live_app(&local_app_data)?;
+    let device = sign_in(&app, &homeserver, &alice)?;
+    wait_for_status_line(&app, "* Syncing with the homeserver", TIMEOUT)?;
+    let_background_tasks_settle(&app)?;
+    // A new account: the sign-in made its identity and key backup, and
+    // recovery is not set up.
+    let e2ee = "* E2EE: recovery disabled, local backup enabled, server backup exists, cross-signing complete, this session verified";
+    let setup_hint = "* Use /e2ee setup to enable recovery";
+    assert_eq!(
+        status_texts(&app)?,
+        [
+            "* Not connected. Use File > Select Server... (Alt+E) or /server to connect to a Matrix homeserver".to_owned(),
+            format!("* Connecting to {} as {}", homeserver.url, alice.localpart),
+            format!("* Logged in as {} (device {device})", alice.user_id()),
+            "* Synced rooms: 0 joined, 0 invited".to_owned(),
+            e2ee.to_owned(),
+            setup_hint.to_owned(),
+            "* Syncing with the homeserver".to_owned(),
+        ]
+    );
+    // A join lists the rooms again: no news for Status.
+    join_by_address(&app, &format!("#{alias_localpart}:localhost"), &room_id)?;
+    let_background_tasks_settle(&app)?;
+    let lines = status_texts(&app)?;
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("* Synced rooms: "))
+            .count(),
+        1,
+        "{lines:?}"
+    );
+    assert!(app.close(Duration::from_secs(30))?.success());
+    outlast_the_abandoned_long_poll();
+
+    // Not launch_live_app: the restore starts before the core reports
+    // Started, so the lifecycle never shows core_started.
+    let app = launch_app_with_options(
+        &mirx_ui_exe(),
+        &["--automation".into()],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    assert_connects_at_once(&app, "the restart")?;
+    let_background_tasks_settle(&app)?;
+    assert_eq!(
+        status_texts(&app)?,
+        [
+            format!(
+                "* Restoring session for {} on {}/",
+                alice.user_id(),
+                homeserver.url
+            ),
+            "* Session restored".to_owned(),
+            "* Synced rooms: 1 joined, 0 invited".to_owned(),
+            "* Syncing with the homeserver".to_owned(),
+            e2ee.to_owned(),
+            setup_hint.to_owned(),
+        ]
+    );
+
+    invoke_account_menu_command(&app, MENU_ID_FILE_DISCONNECT)?;
+    wait_for_status_line(&app, "* Disconnected", TIMEOUT)?;
+    let before = status_texts(&app)?.len() - 1;
+    outlast_the_abandoned_long_poll();
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+    assert_connects_at_once(&app, "File > Connect")?;
+    let_background_tasks_settle(&app)?;
+    assert_eq!(
+        status_texts(&app)?[before..],
+        ["* Disconnected", "* Syncing with the homeserver"]
+    );
+
+    finish(app, &local_app_data)
+}
+
 /// The recovery passphrase L6 sets up and recovers with.
 const RECOVERY_PASSPHRASE: &str = "live lane recovery passphrase";
 

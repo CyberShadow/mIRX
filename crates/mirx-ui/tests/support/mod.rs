@@ -181,6 +181,7 @@ pub fn wide_null(text: &str) -> Vec<u16> {
 }
 
 pub const MENU_ID_FILE_CONNECT: usize = 40030;
+pub const MENU_ID_FILE_DISCONNECT: usize = 40031;
 pub const MENU_ID_FILE_SELECT_SERVER: usize = 40032;
 pub const MENU_ID_FILE_LOG_OUT: usize = 40004;
 pub const LOGIN_DIALOG_SERVER_ID: i32 = 5001;
