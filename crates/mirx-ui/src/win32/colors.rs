@@ -225,7 +225,8 @@ impl ColorItem {
     }
 }
 
-/// The item an event line takes: a membership, mode or topic change.
+/// The item an event line takes: a membership, mode or topic change, or a
+/// notify list user coming or going.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum EventItem {
     Join,
@@ -235,6 +236,7 @@ pub(super) enum EventItem {
     Nick,
     Topic,
     Invite,
+    Notify,
 }
 
 impl EventItem {
@@ -247,6 +249,7 @@ impl EventItem {
             Self::Nick => ColorItem::Nick,
             Self::Topic => ColorItem::Topic,
             Self::Invite => ColorItem::Invite,
+            Self::Notify => ColorItem::Notify,
         }
     }
 }

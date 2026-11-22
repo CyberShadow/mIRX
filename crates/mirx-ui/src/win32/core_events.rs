@@ -573,7 +573,10 @@ pub(super) fn apply_core_event(
             echo_lines_in_active_view(state, commands::away_lines(&changed));
             state.model.status = commands::away_status(&changed);
         }
-        Event::PresenceChanged(changes) => state.model.presence.apply(changes),
+        Event::PresenceChanged(changes) => {
+            state.model.presence.apply(changes);
+            announce_notify_changes(state);
+        }
         Event::UserDevices(devices) => {
             let lines = devices_lines(&state.model, &devices, state.local_time);
             echo_lines_in_active_view(state, lines);
@@ -731,6 +734,7 @@ pub(super) fn apply_core_event(
             state.model.highlight_words = None;
             state.model.ignored_users = None;
             state.model.presence.clear();
+            state.notify_watch.disconnected();
             state.room_activity.clear();
             state.sent_receipts.clear();
             state.find_states.clear();
@@ -766,6 +770,9 @@ pub(super) fn apply_core_event(
             // a /join before the drop) is past, and stays in Status or its
             // window. The bar's error segment says what is wrong now.
             state.model.last_error = None;
+            // mIRC's notify on connect: who on the list is on.
+            state.notify_watch.connected();
+            announce_notify_changes(state);
         }
         Event::SyncStopped(reason) => {
             let (kind, line) = match reason {
@@ -780,6 +787,7 @@ pub(super) fn apply_core_event(
             };
             log_status(state, kind, line);
             state.model.status = "continuous sync stopped".to_owned();
+            state.notify_watch.disconnected();
         }
         Event::Error(error) => {
             if error.operation == Operation::BackfillRoomHistory {
@@ -816,6 +824,25 @@ pub(super) fn apply_core_event(
 }
 
 /// The server the signed-in session is on, as connection lines name it.
+/// Says in Status which notify list users came or went since the last
+/// time, by the presence the server shared; nothing while not connected.
+pub(super) fn announce_notify_changes(state: &mut WindowState) {
+    let presence = &state.model.presence;
+    let changes = state
+        .notify_watch
+        .update(&state.settings.settings().notify, |user_id| {
+            presence.is_on(user_id) == Some(true)
+        });
+    for (user_id, on) in changes {
+        let name = known_nick(&state.model, &user_id).unwrap_or(user_id);
+        log_status(
+            state,
+            StatusLineKind::Notify,
+            notify::change_text(&name, on),
+        );
+    }
+}
+
 fn session_server(state: &WindowState) -> &str {
     own_server(&state.model).expect("a session that syncs is signed in")
 }
@@ -4878,6 +4905,109 @@ mod tests {
 
             apply_core_event(&mut state, Event::LoggedOut).unwrap();
             assert_eq!(state.model.presence.kind("@bob:example"), None);
+        });
+    }
+
+    fn presence(user_id: &str, kind: PresenceKind) -> Event {
+        Event::PresenceChanged(vec![PresenceChange {
+            user_id: user_id.to_owned(),
+            kind,
+            status_msg: None,
+        }])
+    }
+
+    /// The Status lines after the first `from`, with their kinds.
+    fn status_lines_since(state: &WindowState, from: usize) -> Vec<(StatusLineKind, &str)> {
+        state.model.status_log.lines()[from..]
+            .iter()
+            .map(|line| (line.kind, line.text.as_str()))
+            .collect()
+    }
+
+    /// Listed users' comings and goings print in Status, by state, only
+    /// while connected: the stored presence before the connection says
+    /// nothing, the connection calls the roll, a disconnect stops them
+    /// and a reconnect calls the roll again.
+    #[test]
+    fn notify_lines_follow_presence_while_connected() {
+        with_local_app_data(|_| {
+            let mut state = test_state();
+            state
+                .settings
+                .update(|settings| {
+                    for user_id in ["@carol:example", "@bob:example", "@dave:example"] {
+                        settings.notify.add(user_id.to_owned(), None);
+                    }
+                })
+                .unwrap();
+            apply_core_event(
+                &mut state,
+                Event::LoggedIn {
+                    session: stored_session(),
+                    homeserver_url: "https://matrix.example".to_owned(),
+                },
+            )
+            .unwrap();
+            apply_core_event(
+                &mut state,
+                Event::RoomMembers(RoomMembers {
+                    room_id: "!ops:example".to_owned(),
+                    members: vec![member_summary("@bob:example", "Bob", false)],
+                }),
+            )
+            .unwrap();
+            let start = state.model.status_log.lines().len();
+            // The store's presence of the last run.
+            apply_core_event(&mut state, presence("@bob:example", PresenceKind::Online)).unwrap();
+            apply_core_event(
+                &mut state,
+                presence("@carol:example", PresenceKind::Unavailable),
+            )
+            .unwrap();
+            apply_core_event(&mut state, presence("@dave:example", PresenceKind::Offline)).unwrap();
+            apply_core_event(&mut state, Event::SyncStarted).unwrap();
+            assert_eq!(status_lines_since(&state, start).len(), 1);
+
+            let connected = state.model.status_log.lines().len();
+            apply_core_event(&mut state, Event::SyncConnected).unwrap();
+            // Repeats, and online <-> away, say nothing.
+            apply_core_event(&mut state, presence("@bob:example", PresenceKind::Online)).unwrap();
+            apply_core_event(&mut state, presence("@carol:example", PresenceKind::Online)).unwrap();
+            apply_core_event(&mut state, presence("@bob:example", PresenceKind::Offline)).unwrap();
+            apply_core_event(&mut state, presence("@dave:example", PresenceKind::Online)).unwrap();
+            // Not listed.
+            apply_core_event(&mut state, presence("@erin:example", PresenceKind::Online)).unwrap();
+            assert_eq!(
+                status_lines_since(&state, connected),
+                [
+                    (StatusLineKind::Notify, "* @carol:example is on Matrix"),
+                    (StatusLineKind::Notify, "* Bob is on Matrix"),
+                    (StatusLineKind::Notify, "* Bob has left Matrix"),
+                    (StatusLineKind::Notify, "* @dave:example is on Matrix"),
+                ]
+            );
+
+            apply_core_event(&mut state, Event::SyncStopped(SyncStopReason::Requested)).unwrap();
+            let stopped = state.model.status_log.lines().len();
+            apply_core_event(&mut state, presence("@bob:example", PresenceKind::Online)).unwrap();
+            apply_core_event(&mut state, Event::SyncStarted).unwrap();
+            apply_core_event(&mut state, Event::SyncConnected).unwrap();
+            assert_eq!(
+                status_lines_since(&state, stopped),
+                [
+                    (StatusLineKind::Info, "* Syncing with the homeserver"),
+                    (StatusLineKind::Notify, "* @carol:example is on Matrix"),
+                    (StatusLineKind::Notify, "* Bob is on Matrix"),
+                    (StatusLineKind::Notify, "* @dave:example is on Matrix"),
+                ]
+            );
+
+            apply_core_event(&mut state, Event::LoggedOut).unwrap();
+            let logged_out = state.model.status_log.lines().len();
+            apply_core_event(&mut state, presence("@bob:example", PresenceKind::Offline)).unwrap();
+            assert_eq!(status_lines_since(&state, logged_out), []);
+            // The list is the user's: it stays.
+            assert_eq!(state.settings.settings().notify.entries().len(), 3);
         });
     }
 

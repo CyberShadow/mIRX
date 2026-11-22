@@ -1137,6 +1137,9 @@ fn log_line_row(
     let row_kind = match kind {
         StatusLineKind::Info => TimelineRowKind::Info,
         StatusLineKind::Error => TimelineRowKind::Error,
+        StatusLineKind::Notify => TimelineRowKind::Event {
+            item: EventItem::Notify,
+        },
         StatusLineKind::Echo { color, timestamp } => {
             let prefix = if timestamp {
                 timestamps.prefix(timestamp_ms)
@@ -2946,6 +2949,20 @@ mod tests {
                     .to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn notify_status_lines_are_event_rows_in_the_notify_colour() {
+        let mut status_log = StatusLog::default();
+        status_log.push(0, StatusLineKind::Notify, "* Bob is on Matrix".to_owned());
+        let rows = build_status_timeline_rows(&status_log, test_state().timestamps());
+        assert_eq!(
+            rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
+            [TimelineRowKind::Event {
+                item: EventItem::Notify,
+            }]
+        );
+        assert_eq!(EventItem::Notify.color_item(), ColorItem::Notify);
     }
 
     #[test]

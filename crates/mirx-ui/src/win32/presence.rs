@@ -54,6 +54,14 @@ impl PresenceBook {
         self.users.get(user_id).map(|presence| presence.kind)
     }
 
+    /// Whether the user is on, as IRC's notify means it: online or away
+    /// (`unavailable`: Element marks idle users away). `None`: the server
+    /// shared no presence of theirs.
+    pub(super) fn is_on(&self, user_id: &str) -> Option<bool> {
+        self.kind(user_id)
+            .map(|kind| matches!(kind, PresenceKind::Online | PresenceKind::Unavailable))
+    }
+
     /// The away line for a message sent to `room_id`, the query with
     /// `user_id`, who goes by `nick`; `None` unless they are away, and once
     /// per query for each away status. mIRC prints the server's `RPL_AWAY`
@@ -107,6 +115,16 @@ mod tests {
         assert_eq!(book.kind("@bob:example.org"), Some(PresenceKind::Online));
         assert_eq!(book.kind("@carol:example.org"), Some(PresenceKind::Offline));
         assert_eq!(book.kind("@dave:example.org"), None);
+
+        assert_eq!(book.is_on("@bob:example.org"), Some(true));
+        assert_eq!(book.is_on("@carol:example.org"), Some(false));
+        assert_eq!(book.is_on("@dave:example.org"), None);
+        book.apply(vec![change(
+            "@bob:example.org",
+            PresenceKind::Unavailable,
+            None,
+        )]);
+        assert_eq!(book.is_on("@bob:example.org"), Some(true));
 
         book.clear();
         assert_eq!(book.kind("@carol:example.org"), None);

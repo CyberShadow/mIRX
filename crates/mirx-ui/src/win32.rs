@@ -329,9 +329,9 @@ use connection::{ConnectAction, DisconnectAction};
 #[cfg(test)]
 use core_events::apply_core_event;
 use core_events::{
-    apply_event_load, apply_events_and_refresh, drain_core_events_and_refresh, handle_core_events,
-    handle_view_activation, operation_name, resolve_timeline_room_id, submit_mark_room_read,
-    submit_set_read_marker,
+    announce_notify_changes, apply_event_load, apply_events_and_refresh,
+    drain_core_events_and_refresh, handle_core_events, handle_view_activation, operation_name,
+    resolve_timeline_room_id, submit_mark_room_read, submit_set_read_marker,
 };
 #[cfg(test)]
 use dialogs::{
@@ -821,6 +821,8 @@ struct WindowState {
     tray: TrayState,
     /// The retry bookkeeping; `reconnect` and the sync events move it.
     reconnect: connection::Reconnect,
+    /// Which notify list users Status said are on, while connected.
+    notify_watch: notify::NotifyWatch,
     /// The core's refusal to log out, waiting for its Log Out dialog: only
     /// the posted open (`WM_LOG_OUT_WARNING`) takes it.
     log_out_warning: Option<RoomKeysAtRisk>,
@@ -1073,6 +1075,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         colors_dialog: None,
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
+        notify_watch: notify::NotifyWatch::default(),
         log_out_warning: None,
         refresh_counters: RefreshCounters::default(),
         painted_presence_revision: 0,
@@ -1353,7 +1356,9 @@ fn log_status(state: &mut WindowState, kind: StatusLineKind, text: String) {
         .push(state.clock.now_ms(), kind, context_line(&text));
     if state.active_view != ViewId::Status {
         let level = match kind {
-            StatusLineKind::Info | StatusLineKind::Echo { .. } => ViewActivityLevel::Event,
+            StatusLineKind::Info | StatusLineKind::Notify | StatusLineKind::Echo { .. } => {
+                ViewActivityLevel::Event
+            }
             StatusLineKind::Error => ViewActivityLevel::Message,
         };
         raise_view_activity(state, ViewId::Status, level);

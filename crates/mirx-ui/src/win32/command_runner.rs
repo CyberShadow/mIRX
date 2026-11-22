@@ -242,9 +242,17 @@ pub(super) unsafe fn run_slash_command(
         SlashCommand::Notify(NotifyCommand::List) => {
             let lines = {
                 let state = state_ref(hwnd);
-                notify::list_lines(&state.settings.settings().notify, |user_id| {
-                    known_nick(&state.model, user_id)
-                })
+                notify::list_lines(
+                    &state.settings.settings().notify,
+                    |user_id| {
+                        state
+                            .notify_watch
+                            .is_connected()
+                            .then(|| state.model.presence.is_on(user_id))
+                            .flatten()
+                    },
+                    |user_id| known_nick(&state.model, user_id),
+                )
             };
             echo_in_active_view(hwnd, lines)?;
             Ok(None)
@@ -259,6 +267,8 @@ pub(super) unsafe fn run_slash_command(
                 notify::added_line(added, &user_id, |user_id| known_nick(&state.model, user_id))
             };
             echo_in_active_view(hwnd, [line])?;
+            // As mIRC asks the server at once: a user on now is news.
+            announce_notify_changes(state_mut(hwnd));
             Ok(Some("notify list saved".to_owned()))
         }
         SlashCommand::Notify(NotifyCommand::Remove { target }) => {
@@ -1442,8 +1452,8 @@ fn submit_topic_slash_command(
 #[cfg(test)]
 mod tests {
     use mirx_core::{
-        DeviceSummary, IdentityChange, IdentityTrust, RoomIdentityChanges, RoomMemberRank,
-        UserIdentityState,
+        DeviceSummary, IdentityChange, IdentityTrust, PresenceChange, PresenceKind,
+        RoomIdentityChanges, RoomMemberRank, UserIdentityState,
     };
 
     use super::super::notify::NotifyList;
@@ -1979,6 +1989,60 @@ mod tests {
                         "[22:12] * Removed @carol:remote from notify list",
                         "[22:12] * Notify list:",
                         "[22:12] *   Bob (@bob:example)",
+                    ]
+                );
+            });
+        }
+        stop_test_core(handle);
+    }
+
+    /// Connected, a user added while the server says they are on is
+    /// announced at once, and the listing says who is on.
+    #[test]
+    fn notify_announces_a_user_added_while_on() {
+        let (mut state, handle) = irc_command_state();
+        state.notify_watch.connected();
+        state.model.presence.apply(vec![
+            PresenceChange {
+                user_id: "@bob:example".to_owned(),
+                kind: PresenceKind::Unavailable,
+                status_msg: None,
+            },
+            PresenceChange {
+                user_id: "@alice:example".to_owned(),
+                kind: PresenceKind::Offline,
+                status_msg: None,
+            },
+        ]);
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                let status_lines = state_ref(hwnd).model.status_log.lines().len();
+                for input in [
+                    "/notify bob",
+                    "/notify alice",
+                    "/notify @carol:remote friend",
+                    "/notify Bob lunch",
+                    "/notify",
+                ] {
+                    type_compose_line(hwnd, input);
+                }
+                let status = &state_ref(hwnd).model.status_log.lines()[status_lines..];
+                assert_eq!(
+                    status
+                        .iter()
+                        .map(|line| (line.kind, line.text.as_str()))
+                        .collect::<Vec<_>>(),
+                    [(StatusLineKind::Notify, "* Bob is on Matrix")]
+                );
+                let lines = render_room_lines(state_ref(hwnd), "!ops:example");
+                assert_eq!(
+                    &lines[lines.len() - 4..],
+                    [
+                        "[22:12] * Notify list:",
+                        "[22:12] *   Bob (@bob:example) is on Matrix - lunch",
+                        "[22:12] *   Alice (@alice:example) is not on Matrix",
+                        "[22:12] *   @carol:remote - friend",
                     ]
                 );
             });

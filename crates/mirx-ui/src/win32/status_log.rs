@@ -23,6 +23,8 @@ use super::{
 pub(super) enum StatusLineKind {
     Info,
     Error,
+    /// A notify list user came or went: in the Notify colour.
+    Notify,
     /// `/echo`'s line: its text holds mIRC codes, it is in the Normal
     /// colour or `color`, and has a timestamp only with `-t`.
     Echo {
