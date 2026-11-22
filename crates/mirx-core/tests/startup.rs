@@ -8,7 +8,9 @@ use common::{Harness, alice_member_event};
 use matrix_sdk::ruma::OwnedRoomId;
 use matrix_sdk::ruma::serde::Raw;
 use matrix_sdk_test::{JoinedRoomBuilder, SyncResponseBuilder};
-use mirx_core::{Command, Event, Operation, RoomMemberRank, SyncStopReason};
+use std::time::Duration;
+
+use mirx_core::{Command, E2eeStatus, Event, Operation, RoomMemberRank, SyncStopReason};
 use serde_json::json;
 
 const ROOM: &str = "!a:example.org";
@@ -302,6 +304,88 @@ fn a_first_restore_lists_the_rooms_once_after_announcing_the_session() {
         [(ROOM, true)],
         "{restore:#?}"
     );
+
+    harness.shut_down();
+}
+
+/// Long enough for the SDK's state streams, which tick within
+/// milliseconds of the restore and of the first sync.
+const QUIET: Duration = Duration::from_secs(2);
+
+/// The E2EE statuses among `events`.
+fn e2ee_statuses(events: &[Event]) -> Vec<&E2eeStatus> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::E2eeStatus(status) => Some(status),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_restarted_session_tells_its_e2ee_status_once() {
+    let (harness, _) = synced_once();
+    let (harness, mut events) = harness.restarted();
+
+    harness.send(Command::StartSync);
+    events.extend(harness.events_until("SyncConnected", |event| *event == Event::SyncConnected));
+    events.extend(harness.events_for(QUIET));
+
+    // The first contact's, from the server; none before it, none after.
+    let statuses = e2ee_statuses(&events);
+    let [status] = statuses.as_slice() else {
+        panic!("one E2EE status in {events:#?}");
+    };
+    assert!(status.backup.exists_on_server.is_some(), "{events:#?}");
+    let position = |wanted: &Event| {
+        events
+            .iter()
+            .position(|event| event == wanted)
+            .unwrap_or_else(|| panic!("no {wanted:?} in {events:#?}"))
+    };
+    let told = events
+        .iter()
+        .position(|event| matches!(event, Event::E2eeStatus(_)))
+        .expect("the status");
+    assert!(
+        position(&Event::SyncStarted) < told && told < position(&Event::SyncConnected),
+        "{events:#?}"
+    );
+
+    harness.shut_down();
+}
+
+#[test]
+fn a_restart_not_connecting_tells_no_e2ee_status() {
+    let (harness, _) = synced_once();
+    let (harness, mut events) = harness.restarted();
+
+    events.extend(harness.events_for(QUIET));
+
+    assert_eq!(
+        e2ee_statuses(&events),
+        Vec::<&E2eeStatus>::new(),
+        "{events:#?}"
+    );
+
+    harness.shut_down();
+}
+
+#[test]
+fn a_first_restore_tells_its_e2ee_status_once() {
+    let (harness, mut events) = Harness::restored_with_sync(add_room);
+
+    harness.send(Command::StartSync);
+    events.extend(harness.events_until("SyncConnected", |event| *event == Event::SyncConnected));
+    events.extend(harness.events_for(QUIET));
+
+    // The entry's, from the server: its sync got through.
+    let statuses = e2ee_statuses(&events);
+    let [status] = statuses.as_slice() else {
+        panic!("one E2EE status in {events:#?}");
+    };
+    assert!(status.backup.exists_on_server.is_some(), "{events:#?}");
 
     harness.shut_down();
 }

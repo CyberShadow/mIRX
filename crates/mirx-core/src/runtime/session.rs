@@ -12,9 +12,10 @@ use matrix_sdk::ruma::api::client::uiaa::AuthData;
 use tokio::task::{JoinHandle, JoinSet};
 
 use super::{
-    EventSender, FirstContact, RoomSnapshot, RoomSnapshots, emit_event, emit_matrix_error,
+    E2eeStatusWatch, EventSender, FirstContact, FirstE2eeStatus, RoomSnapshot, RoomSnapshots,
+    emit_event, emit_matrix_error,
 };
-use crate::api::{E2eeStatus, Event, Operation, VerificationFlowId};
+use crate::api::{Event, Operation, VerificationFlowId};
 use crate::matrix::{self, AwayFlag, MatrixCoreError, PausedSendRooms};
 
 /// What a job takes from the session: it owns clones, never the session.
@@ -23,6 +24,8 @@ pub(super) struct JobCtx {
     pub(super) client: Client,
     pub(super) events: EventSender,
     pub(super) snapshots: RoomSnapshots,
+    /// Told a command's answer that asked the server.
+    pub(super) e2ee_status: E2eeStatusWatch,
 }
 
 /// What a job leaves for the actor to apply to the session, before the
@@ -56,7 +59,10 @@ pub(super) struct EnteredSession {
     pub(super) snapshot: Result<RoomSnapshot, MatrixCoreError>,
     /// What the server said, if the entry asked it (it synced); `None`:
     /// the first sync that gets through asks.
-    pub(super) e2ee_status: Option<Result<E2eeStatus, MatrixCoreError>>,
+    pub(super) e2ee_status: Option<FirstE2eeStatus>,
+    /// Watched by the update tasks, which tell its changes once the
+    /// session's first status is out.
+    pub(super) e2ee_status_watch: E2eeStatusWatch,
     pub(super) snapshots: RoomSnapshots,
     pub(super) paused_sends: PausedSendRooms,
     /// The update tasks, which subscribed to what they follow when they
@@ -119,6 +125,7 @@ impl Session {
             operation,
             snapshot,
             e2ee_status,
+            e2ee_status_watch,
             snapshots,
             paused_sends,
             tasks,
@@ -136,17 +143,17 @@ impl Session {
             }
         };
         let e2ee_status_pending = match e2ee_status {
-            Some(Ok(status)) => {
-                emit_event(events, Event::E2eeStatus(status));
-                false
-            }
-            Some(Err(err)) => {
-                emit_matrix_error(events, Operation::E2eeStatus, err);
+            Some(first) => {
+                e2ee_status_watch.report_first(events, first);
                 false
             }
             None => true,
         };
-        let first_contact = FirstContact::pending(snapshot_pending, e2ee_status_pending);
+        let first_contact = FirstContact::pending(
+            snapshot_pending,
+            e2ee_status_pending,
+            e2ee_status_watch.clone(),
+        );
         let mut background = JoinSet::new();
         for task in tasks {
             background.spawn_local(task);
@@ -156,6 +163,7 @@ impl Session {
                 client,
                 events: events.clone(),
                 snapshots,
+                e2ee_status: e2ee_status_watch,
             },
             first_contact,
             paused_sends,
@@ -182,8 +190,9 @@ impl Session {
                 client,
                 events: events.clone(),
                 snapshots: RoomSnapshots::default(),
+                e2ee_status: E2eeStatusWatch::default(),
             },
-            first_contact: FirstContact::pending(false, false),
+            first_contact: FirstContact::pending(false, false, E2eeStatusWatch::default()),
             paused_sends: PausedSendRooms::default(),
             away: AwayFlag::default(),
             sync: None,

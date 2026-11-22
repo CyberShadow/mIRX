@@ -7,12 +7,10 @@ use futures_util::future::LocalBoxFuture;
 use matrix_sdk::Client;
 
 use super::session::EnteredSession;
-use super::{EventSender, RoomSnapshot, RoomSnapshots};
+use super::{E2eeStatusWatch, EventSender, FirstE2eeStatus, RoomSnapshot, RoomSnapshots};
 use crate::api::{CoreConfig, Event, LoginMethod, LoginRequest, Operation, RestoreSessionRequest};
 use crate::loopback::{self, LoopbackListener, LoopbackRedirect};
-use crate::matrix::{
-    self, BackupServerStatusMode, BrowserFlow, HomeserverSpec, MatrixCoreError, PausedSendRooms,
-};
+use crate::matrix::{self, BrowserFlow, HomeserverSpec, MatrixCoreError, PausedSendRooms};
 
 /// How a sign-in or restore ended.
 pub(super) enum SignInEnd {
@@ -233,6 +231,7 @@ async fn read_session(
         .expect("a signed-in client knows its user")
         .to_string();
     let paused_sends = PausedSendRooms::default();
+    let e2ee_status_watch = E2eeStatusWatch::default();
     let mut tasks: Vec<LocalBoxFuture<'static, ()>> = vec![
         Box::pin(matrix::session_update_task(client.clone(), events.clone())),
         Box::pin(matrix::send_queue_update_task(
@@ -281,22 +280,23 @@ async fn read_session(
     tasks.push(Box::pin(matrix::e2ee_session_state_task(
         client.clone(),
         events.clone(),
+        e2ee_status_watch.clone(),
     )));
     // The server answered the sign-in's sync: ask it now. Otherwise the
     // session's first contact does.
     let e2ee_status = match entry {
-        Entry::Synced(_) => {
-            Some(matrix::summarize_e2ee_status(&client, BackupServerStatusMode::Fetch).await)
-        }
+        Entry::Synced(_) => Some(FirstE2eeStatus::read(&client).await),
         Entry::Stored(_) | Entry::SyncFailed(_) => None,
     };
     tasks.push(Box::pin(matrix::e2ee_recovery_state_task(
         client.clone(),
         events.clone(),
+        e2ee_status_watch.clone(),
     )));
     tasks.push(Box::pin(matrix::e2ee_backup_state_task(
         client.clone(),
         events.clone(),
+        e2ee_status_watch.clone(),
     )));
     tasks.push(Box::pin(matrix::room_identity_task(
         client.clone(),
@@ -308,6 +308,7 @@ async fn read_session(
         operation,
         snapshot: entry.into_snapshot(),
         e2ee_status,
+        e2ee_status_watch,
         snapshots,
         paused_sends,
         tasks,

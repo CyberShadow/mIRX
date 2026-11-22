@@ -2333,6 +2333,10 @@ pub enum Event {
         device_id: String,
         display_name: String,
     },
+    /// The session's E2EE status: its first from the server (once the
+    /// session reached it), a command's answer, or a change since the last
+    /// one told. A change read without asking the server keeps the last
+    /// answer's `exists_on_server`.
     E2eeStatus(E2eeStatus),
     E2eeRecoverySetupSucceeded(E2eeRecoverySetupSucceeded),
     E2eeRecoverySucceeded(E2eeRecoverySucceeded),

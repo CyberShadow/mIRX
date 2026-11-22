@@ -590,6 +590,7 @@ async fn emit_snapshot_then_room_joined(ctx: &JobCtx, operation: Operation, room
         client,
         events,
         snapshots,
+        ..
     } = ctx;
     match matrix::emit_room_snapshot(client, snapshots, events).await {
         Ok(()) => emit_event(events, Event::RoomJoined(RoomJoined { room_id })),
@@ -941,9 +942,14 @@ async fn list_public_rooms(ctx: JobCtx, request: ListPublicRoomsRequest) -> Foll
 }
 
 async fn refresh_e2ee_status(ctx: JobCtx) -> Followup {
-    let JobCtx { client, events, .. } = &ctx;
+    let JobCtx {
+        client,
+        events,
+        e2ee_status,
+        ..
+    } = &ctx;
     match matrix::summarize_e2ee_status(client, BackupServerStatusMode::Fetch).await {
-        Ok(status) => emit_event(events, Event::E2eeStatus(status)),
+        Ok(status) => e2ee_status.report(events, status),
         Err(err) => emit_matrix_error(events, Operation::E2eeStatus, err),
     }
 
@@ -951,7 +957,12 @@ async fn refresh_e2ee_status(ctx: JobCtx) -> Followup {
 }
 
 async fn recover_e2ee(ctx: JobCtx, request: RecoverE2eeRequest) -> Followup {
-    let JobCtx { client, events, .. } = &ctx;
+    let JobCtx {
+        client,
+        events,
+        e2ee_status,
+        ..
+    } = &ctx;
     match matrix::recover_e2ee(client, &request).await {
         Ok(status) => {
             emit_event(
@@ -960,7 +971,7 @@ async fn recover_e2ee(ctx: JobCtx, request: RecoverE2eeRequest) -> Followup {
                     operation: E2eeRecoveryOperation::Recover,
                 }),
             );
-            emit_event(events, Event::E2eeStatus(status));
+            e2ee_status.report(events, status);
         }
         Err(err) => emit_matrix_error(events, Operation::RecoverE2ee, err),
     }
@@ -996,14 +1007,19 @@ async fn import_room_keys(ctx: JobCtx, request: ImportRoomKeysRequest) -> Follow
 }
 
 async fn setup_e2ee_recovery(ctx: JobCtx, request: SetupE2eeRecoveryRequest) -> Followup {
-    let JobCtx { client, events, .. } = &ctx;
+    let JobCtx {
+        client,
+        events,
+        e2ee_status,
+        ..
+    } = &ctx;
     match matrix::setup_e2ee_recovery(client, &request).await {
         Ok((recovery_key, status)) => {
             emit_event(
                 events,
                 Event::E2eeRecoverySetupSucceeded(E2eeRecoverySetupSucceeded { recovery_key }),
             );
-            emit_event(events, Event::E2eeStatus(status));
+            e2ee_status.report(events, status);
         }
         Err(err) => emit_matrix_error(events, Operation::SetupE2eeRecovery, err),
     }
@@ -1148,7 +1164,12 @@ pub(super) fn identity_reset_ended(end: IdentityResetEnd) -> Work<Session, Follo
 /// about this session: the backup and recovery are off even when the
 /// identity did not change.
 async fn end_identity_reset(ctx: JobCtx, end: IdentityResetEnd) -> Followup {
-    let JobCtx { client, events, .. } = &ctx;
+    let JobCtx {
+        client,
+        events,
+        e2ee_status,
+        ..
+    } = &ctx;
     match end {
         IdentityResetEnd::Uploaded => emit_identity_reset(events, E2eeIdentityResetOutcome::Done),
         IdentityResetEnd::Cancelled => match matrix::settle_identity_reset(client).await {
@@ -1177,7 +1198,7 @@ async fn end_identity_reset(ctx: JobCtx, end: IdentityResetEnd) -> Followup {
         }
     }
     match matrix::summarize_e2ee_status(client, BackupServerStatusMode::Fetch).await {
-        Ok(status) => emit_event(events, Event::E2eeStatus(status)),
+        Ok(status) => e2ee_status.report(events, status),
         Err(err) => emit_matrix_error(events, Operation::E2eeStatus, err),
     }
     Followup::Done

@@ -169,7 +169,7 @@ use crate::api::{
 };
 use crate::mentions::body_mentions;
 use crate::rich_text::{StyledText, html_from_styled_text, styled_text_from_html};
-use crate::runtime::{EventSender, FirstContact, RoomSnapshots, emit_event};
+use crate::runtime::{E2eeStatusWatch, EventSender, FirstContact, RoomSnapshots, emit_event};
 
 mod room_keys;
 
@@ -183,7 +183,7 @@ pub(crate) struct MatrixCoreError {
 }
 
 impl MatrixCoreError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
         }
@@ -2332,51 +2332,45 @@ pub(crate) fn room_list_update_is_relevant(reasons: RoomInfoNotableUpdateReasons
     )
 }
 
+/// Tells the E2EE status when recovery's state changes (set up, recovered,
+/// turned off, here or on another session).
 pub(crate) fn e2ee_recovery_state_task(
     client: Client,
     events: EventSender,
+    watch: E2eeStatusWatch,
 ) -> impl Future<Output = ()> {
     let mut states = client.encryption().recovery().state_stream();
 
     async move {
         while states.next().await.is_some() {
-            emit_cached_e2ee_status(&client, &events).await;
+            tell_changed_e2ee_status(&client, &events, &watch).await;
         }
     }
 }
 
-/// Emits the E2EE status whenever this session's verification state
-/// changes: once verified from another session, or after recovery signs
-/// it. The SDK sets its state after every query of your own keys,
-/// changed or not, and an identity can appear with it.
+/// Tells the E2EE status when this session's verification state changes:
+/// once verified from another session, or after recovery signs it. The
+/// SDK sets its state after every query of your own keys, changed or not,
+/// and an identity can appear with it.
 pub(crate) fn e2ee_session_state_task(
     client: Client,
     events: EventSender,
+    watch: E2eeStatusWatch,
 ) -> impl Future<Output = ()> {
     let mut states = client.encryption().verification_state();
 
     async move {
-        // The first value is the current one, which the sign-in summary
-        // reports.
-        let mut last = None;
         while states.next().await.is_some() {
-            match summarize_e2ee_status(&client, BackupServerStatusMode::Cached).await {
-                Ok(status) => {
-                    let changed = last.is_some_and(|last| last != status.session);
-                    last = Some(status.session);
-                    if changed {
-                        emit_event(&events, Event::E2eeStatus(status));
-                    }
-                }
-                Err(err) => emit_e2ee_status_error(&events, err),
-            }
+            tell_changed_e2ee_status(&client, &events, &watch).await;
         }
     }
 }
 
-async fn emit_cached_e2ee_status(client: &Client, events: &EventSender) {
+/// After a state stream's tick: the status as the SDK has it, if it
+/// changed since the UI was last told (`E2eeStatusWatch::changed`).
+async fn tell_changed_e2ee_status(client: &Client, events: &EventSender, watch: &E2eeStatusWatch) {
     match summarize_e2ee_status(client, BackupServerStatusMode::Cached).await {
-        Ok(status) => emit_event(events, Event::E2eeStatus(status)),
+        Ok(status) => watch.changed(events, status),
         Err(err) => emit_e2ee_status_error(events, err),
     }
 }
@@ -2392,16 +2386,18 @@ fn emit_e2ee_status_error(events: &EventSender, err: MatrixCoreError) {
     );
 }
 
+/// Tells the E2EE status when the key backup's state changes.
 pub(crate) fn e2ee_backup_state_task(
     client: Client,
     events: EventSender,
+    watch: E2eeStatusWatch,
 ) -> impl Future<Output = ()> {
     let mut states = client.encryption().backups().state_stream();
 
     async move {
         while let Some(state) = states.next().await {
             match state {
-                Ok(_) => emit_cached_e2ee_status(&client, &events).await,
+                Ok(_) => tell_changed_e2ee_status(&client, &events, &watch).await,
                 Err(_) => emit_event(
                     &events,
                     Event::Error(CoreErrorEvent {
@@ -17797,8 +17793,8 @@ mod tests {
         use matrix_sdk::ruma::{owned_device_id, owned_user_id};
 
         use super::super::{
-            BackupServerStatusMode, e2ee_session_state_task, list_user_devices, sorted_devices,
-            summarize_e2ee_status, user_identity_state,
+            BackupServerStatusMode, E2eeStatusWatch, e2ee_session_state_task, list_user_devices,
+            sorted_devices, summarize_e2ee_status, user_identity_state,
         };
         use super::*;
         use crate::api::{DeviceSummary, E2eeSessionState, UserDevices, UserIdentityState};
@@ -18028,7 +18024,17 @@ mod tests {
                 );
 
                 let (events, event_rx) = mpsc::channel();
-                let task = tokio::task::spawn_local(e2ee_session_state_task(phone.clone(), events));
+                // The session's first status is out: changes are told.
+                let watch = E2eeStatusWatch::default();
+                watch.report(
+                    &events,
+                    summarize_e2ee_status(&phone, BackupServerStatusMode::Cached)
+                        .await
+                        .expect("summarize"),
+                );
+                event_rx.try_iter().for_each(drop);
+                let task =
+                    tokio::task::spawn_local(e2ee_session_state_task(phone.clone(), events, watch));
                 let statuses = || async {
                     // Let the task see the SDK's update.
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;

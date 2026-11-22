@@ -280,6 +280,21 @@ impl Harness {
         }
     }
 
+    /// Every event that comes within `period`: what background tasks say
+    /// after a moment.
+    pub fn events_for(&self, period: Duration) -> Vec<Event> {
+        let deadline = Instant::now() + period;
+        let mut events = Vec::new();
+        while let Ok(event) = self
+            .core
+            .events()
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            events.push(event);
+        }
+        events
+    }
+
     pub fn wait_for(&self, what: &str, matches: impl Fn(&Event) -> bool) -> Event {
         self.events_until(what, matches)
             .pop()
