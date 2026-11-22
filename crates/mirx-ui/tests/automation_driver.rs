@@ -1474,6 +1474,14 @@ fn base_events() -> Vec<Event> {
     ]
 }
 
+/// `base_events` after a restore, as the core sends them: Status counts
+/// the session's first room list.
+fn restored_base_events() -> Vec<Event> {
+    let mut events = base_events();
+    events.insert(1, Event::RestoredSession);
+    events
+}
+
 fn invite_events() -> Vec<Event> {
     vec![
         Event::Started,
@@ -6129,7 +6137,7 @@ fn automation_driver_dumps_typed_e2ee_status_from_synthetic_events()
     ));
     assert!(view_contains(
         status_view,
-        "* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys",
+        "* Use /e2ee recover to restore keys",
     ));
     assert!(
         ui_state
@@ -24285,7 +24293,7 @@ fn automation_driver_slash_clear_in_status_view_empties_the_log()
 
     let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
-    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.load_events(&serde_json::to_string(&restored_base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     app.set_compose_text("/status")?;
@@ -24328,7 +24336,7 @@ fn automation_driver_status_window_is_a_timestamped_log() -> Result<(), Box<dyn 
 {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
-    let mut events = base_events();
+    let mut events = restored_base_events();
     events.push(Event::VerificationRequest(mirx_core::VerificationRequest {
         flow_id: "flow-status-log".to_owned(),
         user_id: "@alice:example".to_owned(),

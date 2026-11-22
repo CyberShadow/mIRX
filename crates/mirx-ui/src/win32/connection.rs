@@ -132,6 +132,12 @@ impl Reconnect {
     pub(super) fn attempts(&self) -> u32 {
         self.attempts
     }
+
+    /// The connection was lost and is being brought back: the reconnect's
+    /// `Reconnecting to` or the retry's `Connect retry #n` said so.
+    pub(super) fn reconnecting(&self) -> bool {
+        self.lost
+    }
 }
 
 /// What File > Connect or `/server` does.

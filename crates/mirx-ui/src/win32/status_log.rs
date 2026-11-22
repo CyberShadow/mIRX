@@ -7,8 +7,8 @@
 //! may print other lines too, such as `-> *Alice* hi`.
 
 use mirx_core::{
-    E2eeIdentityResetOutcome, E2eeSessionState, E2eeStatus, VerificationDirection,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    E2eeIdentityResetOutcome, E2eeRecoveryState, E2eeSessionState, E2eeStatus,
+    VerificationDirection, VerificationRequest, VerificationState, VerificationStateEvent,
 };
 
 use super::colors::PaletteIndex;
@@ -220,27 +220,40 @@ pub(super) fn synced(joined: usize, invited: usize) -> String {
     format!("Synced rooms: {joined} joined, {invited} invited")
 }
 
-/// The E2EE summary and the commands, then, when this session needs
-/// verifying, a warning saying how.
+/// The E2EE summary, the commands that apply to it, then, when this
+/// session needs verifying, a warning saying how.
 pub(super) fn e2ee_status(status: &E2eeStatus) -> Vec<(StatusLineKind, String)> {
-    let mut lines = vec![
+    let mut lines = vec![(
+        StatusLineKind::Info,
+        format!(
+            "E2EE: recovery {}, local backup {}, server backup {}, cross-signing {}, this session {}",
+            e2ee_recovery_state_label(status.recovery),
+            e2ee_local_backup_label(&status.backup),
+            e2ee_server_backup_label(status.backup.exists_on_server),
+            e2ee_cross_signing_label(status.cross_signing.as_ref()),
+            e2ee_session_label(status.session),
+        ),
+    )];
+    let commands = [
         (
-            StatusLineKind::Info,
-            format!(
-                "E2EE: recovery {}, local backup {}, server backup {}, cross-signing {}, this session {}",
-                e2ee_recovery_state_label(status.recovery),
-                e2ee_local_backup_label(&status.backup),
-                e2ee_server_backup_label(status.backup.exists_on_server),
-                e2ee_cross_signing_label(status.cross_signing.as_ref()),
-                e2ee_session_label(status.session),
-            ),
+            status.backup.exists_on_server.is_none(),
+            "/e2ee refresh to check server backup",
         ),
         (
-            StatusLineKind::Info,
-            "Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys"
-                .to_owned(),
+            status.recovery == E2eeRecoveryState::Disabled,
+            "/e2ee setup to enable recovery",
         ),
-    ];
+        (
+            status.recovery == E2eeRecoveryState::Incomplete,
+            "/e2ee recover to restore keys",
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(applies, command)| applies.then_some(command))
+    .collect::<Vec<_>>();
+    if !commands.is_empty() {
+        lines.push((StatusLineKind::Info, format!("Use {}", commands.join(", "))));
+    }
     if session_needs_verifying(status) {
         lines.push((StatusLineKind::Error, SESSION_UNVERIFIED_WARNING.to_owned()));
     }
@@ -377,8 +390,8 @@ pub(super) fn error(operation_name: &str, message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use mirx_core::{
-        E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState,
-        E2eeSessionState, VerificationDecimals, VerificationEmoji,
+        E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeSessionState,
+        VerificationDecimals, VerificationEmoji,
     };
 
     use super::*;
@@ -504,9 +517,8 @@ mod tests {
             session,
         };
         let info = |line: &str| (StatusLineKind::Info, line.to_owned());
-        let commands = info(
-            "Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys",
-        );
+        let commands =
+            info("Use /e2ee refresh to check server backup, /e2ee setup to enable recovery");
         assert_eq!(
             e2ee_status(&status(E2eeSessionState::Verified, Some(keys(true)))),
             vec![
@@ -568,6 +580,58 @@ mod tests {
             SESSION_UNVERIFIED_WARNING,
             "This session is not verified: /verify to verify it from another of your sessions, /e2ee recover with your recovery key, or /e2ee reset if you have neither"
         );
+    }
+
+    #[test]
+    fn the_e2ee_hint_names_only_what_applies() {
+        let status = |recovery, exists_on_server| E2eeStatus {
+            recovery,
+            backup: E2eeBackupStatus {
+                state: E2eeBackupState::Enabled,
+                enabled_locally: true,
+                exists_on_server,
+            },
+            cross_signing: None,
+            session: E2eeSessionState::Verified,
+        };
+        let hint = |status: &E2eeStatus| {
+            e2ee_status(status)
+                .into_iter()
+                .skip(1)
+                .map(|(_, line)| line)
+                .collect::<Vec<_>>()
+        };
+        for (recovery, exists_on_server, expected) in [
+            (E2eeRecoveryState::Enabled, Some(true), None),
+            (E2eeRecoveryState::Enabled, Some(false), None),
+            (E2eeRecoveryState::Unknown, Some(true), None),
+            (
+                E2eeRecoveryState::Enabled,
+                None,
+                Some("Use /e2ee refresh to check server backup"),
+            ),
+            (
+                E2eeRecoveryState::Disabled,
+                Some(true),
+                Some("Use /e2ee setup to enable recovery"),
+            ),
+            (
+                E2eeRecoveryState::Incomplete,
+                Some(true),
+                Some("Use /e2ee recover to restore keys"),
+            ),
+            (
+                E2eeRecoveryState::Incomplete,
+                None,
+                Some("Use /e2ee refresh to check server backup, /e2ee recover to restore keys"),
+            ),
+        ] {
+            assert_eq!(
+                hint(&status(recovery, exists_on_server)),
+                Vec::from_iter(expected.map(str::to_owned)),
+                "{recovery:?} {exists_on_server:?}"
+            );
+        }
     }
 
     fn verification_event(state: VerificationState) -> VerificationStateEvent {

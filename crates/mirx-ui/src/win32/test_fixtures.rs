@@ -992,6 +992,7 @@ pub(super) fn test_state() -> WindowState {
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
         notify_watch: notify::NotifyWatch::default(),
+        room_count_due: false,
         log_out_warning: None,
         refresh_counters: RefreshCounters::default(),
         painted_presence_revision: 0,

@@ -427,6 +427,7 @@ pub(super) fn apply_core_event(
             });
             state.model.status = "authenticated".to_owned();
             state.model.lifecycle_state = LifecycleState::Authenticated;
+            state.room_count_due = true;
         }
         Event::SignInUrl { url } => {
             log_status(
@@ -465,11 +466,12 @@ pub(super) fn apply_core_event(
             );
             state.model.status = "restored saved session".to_owned();
             state.model.lifecycle_state = LifecycleState::Authenticated;
+            state.room_count_due = true;
         }
         Event::SyncedRooms(rooms) => {
             // The core re-sends the room list on every change; only the
-            // first one after connecting is news.
-            if state.model.lifecycle_state != LifecycleState::Ready {
+            // session's first is news.
+            if std::mem::take(&mut state.room_count_due) {
                 let invited = rooms.iter().filter(|room| is_invited_room(room)).count();
                 log_status(
                     state,
@@ -718,6 +720,7 @@ pub(super) fn apply_core_event(
             delete_saved_session()?;
             state.current_session_homeserver_url = None;
             state.model.own_account = None;
+            state.room_count_due = false;
             state.model.status = "logged out".to_owned();
             state.model.lifecycle_state = LifecycleState::LoggedOut;
             state.model.rooms.clear();
@@ -751,11 +754,13 @@ pub(super) fn apply_core_event(
             state.model.lifecycle_state = LifecycleState::Stopped;
         }
         Event::SyncStarted => {
-            log_status(
-                state,
-                StatusLineKind::Info,
-                status_log::SYNC_STARTED.to_owned(),
-            );
+            if !state.reconnect.reconnecting() {
+                log_status(
+                    state,
+                    StatusLineKind::Info,
+                    status_log::SYNC_STARTED.to_owned(),
+                );
+            }
             state.model.status = "continuous sync started".to_owned();
             state.model.lifecycle_state = LifecycleState::Syncing;
             state.reconnect.sync_started();
@@ -2898,7 +2903,7 @@ mod tests {
             vec![
                 "[22:12] * E2EE: recovery incomplete, local backup disabled, server backup exists, cross-signing incomplete, this session not verified"
                     .to_owned(),
-                "[22:12] * Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys"
+                "[22:12] * Use /e2ee recover to restore keys"
                     .to_owned(),
                 format!("[22:12] * {}", status_log::SESSION_UNVERIFIED_WARNING),
             ]
@@ -5332,13 +5337,72 @@ mod tests {
                 vec![
                     "[22:12] * Logged in as @alice:example (device DEVICE)".to_owned(),
                     "[22:12] * Syncing with the homeserver".to_owned(),
+                    // The reconnect's and the retry's own lines (the
+                    // frame's) say it syncs again.
                     "[22:12] * Disconnected: reset".to_owned(),
-                    "[22:12] * Syncing with the homeserver".to_owned(),
                     "[22:12] * Disconnected: refused".to_owned(),
-                    "[22:12] * Syncing with the homeserver".to_owned(),
                     "[22:12] * Reconnected to example".to_owned(),
                 ]
             );
+
+            // Back: the user's next Connect says it syncs.
+            apply_core_event(&mut state, Event::SyncStopped(SyncStopReason::Requested)).unwrap();
+            state.reconnect.reset();
+            let stopped = state.model.status_log.lines().len();
+            apply_core_event(&mut state, Event::SyncStarted).unwrap();
+            assert_eq!(
+                status_lines_since(&state, stopped),
+                [(StatusLineKind::Info, "* Syncing with the homeserver")]
+            );
+        });
+    }
+
+    /// The core lists the rooms again on every change; Status counts the
+    /// session's first list only, whatever came between.
+    #[test]
+    fn synced_rooms_is_logged_once_per_session() {
+        with_local_app_data(|_| {
+            let mut state = test_state();
+            state.synthetic_load_in_progress = true;
+            let rooms = || vec![room("!room:example", "Room", false)];
+            let counted = |state: &WindowState| {
+                status_log_lines(state)
+                    .into_iter()
+                    .filter(|line| line.contains("* Synced rooms: "))
+                    .count()
+            };
+
+            apply_core_event(&mut state, Event::RestoredSession).unwrap();
+            apply_core_event(&mut state, Event::SyncedRooms(rooms())).unwrap();
+            assert_eq!(counted(&state), 1);
+            // The first sync's list, a /join's, after an error line.
+            apply_core_event(&mut state, Event::SyncStarted).unwrap();
+            apply_core_event(&mut state, Event::SyncedRooms(rooms())).unwrap();
+            apply_core_event(
+                &mut state,
+                Event::Error(CoreErrorEvent {
+                    operation: Operation::JoinRoom,
+                    room_id: None,
+                    message: "no such room".to_owned(),
+                }),
+            )
+            .unwrap();
+            apply_core_event(&mut state, Event::SyncedRooms(rooms())).unwrap();
+            assert_eq!(counted(&state), 1);
+
+            // The next session's first list is news again.
+            apply_core_event(&mut state, Event::LoggedOut).unwrap();
+            apply_core_event(
+                &mut state,
+                Event::LoggedIn {
+                    session: stored_session(),
+                    homeserver_url: "https://matrix.example".to_owned(),
+                },
+            )
+            .unwrap();
+            apply_core_event(&mut state, Event::SyncedRooms(rooms())).unwrap();
+            apply_core_event(&mut state, Event::SyncedRooms(rooms())).unwrap();
+            assert_eq!(counted(&state), 2);
         });
     }
 

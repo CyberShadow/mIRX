@@ -1622,7 +1622,7 @@ configure_case_expectations() {
       status_view_expect_args=(
         --expect-status-view '[22:12] * E2EE: recovery incomplete, local backup disabled, server backup exists, cross-signing incomplete, this session not verified'
         --expect-status-view '[22:12] * This session is not verified: /verify to verify it from another of your sessions, /e2ee recover with your recovery key, or /e2ee reset if you have neither'
-        --expect-status-view '* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
+        --expect-status-view '* Use /e2ee recover to restore keys'
       )
       status_view_forbid_args=(
         --expect-no-status-view 'recovery_secret'
@@ -1647,9 +1647,9 @@ configure_case_expectations() {
       expect_active_view='status'
       status_view_expect_args=(
         --expect-status-view '[22:12] * E2EE: recovery enabled, local backup enabled, server backup exists, cross-signing complete, this session verified'
-        --expect-status-view '* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
       )
       status_view_forbid_args=(
+        --expect-no-status-view '* Use /e2ee'
         --expect-no-status-view 'recovery_secret'
         --expect-no-status-view 'passphrase='
       )
@@ -1674,7 +1674,7 @@ configure_case_expectations() {
       status_view_expect_args=(
         --expect-status-view '[22:12] * E2EE: recovery incomplete, local backup disabled, server backup exists, cross-signing incomplete, this session not verified'
         --expect-status-view '[22:12] * This session is not verified: /verify to verify it from another of your sessions, /e2ee recover with your recovery key, or /e2ee reset if you have neither'
-        --expect-status-view '* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
+        --expect-status-view '* Use /e2ee recover to restore keys'
         --expect-status-view '[22:12] * Error during e2ee recovery: failed to recover E2EE secrets: invalid recovery key or passphrase'
       )
       status_view_forbid_args=(
@@ -1701,9 +1701,9 @@ configure_case_expectations() {
       expect_active_view='status'
       status_view_expect_args=(
         --expect-status-view '[22:12] * E2EE: recovery enabled, local backup enabled, server backup missing, cross-signing complete, this session verified'
-        --expect-status-view '* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
       )
       status_view_forbid_args=(
+        --expect-no-status-view '* Use /e2ee'
         --expect-no-status-view 'recovery_secret'
         --expect-no-status-view 'passphrase='
       )

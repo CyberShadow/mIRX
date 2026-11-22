@@ -823,6 +823,9 @@ struct WindowState {
     reconnect: connection::Reconnect,
     /// Which notify list users Status said are on, while connected.
     notify_watch: notify::NotifyWatch,
+    /// The session's first room list is still to come: Status counts it
+    /// (`* Synced rooms:`); the later ones, every change, it does not.
+    room_count_due: bool,
     /// The core's refusal to log out, waiting for its Log Out dialog: only
     /// the posted open (`WM_LOG_OUT_WARNING`) takes it.
     log_out_warning: Option<RoomKeysAtRisk>,
@@ -1076,6 +1079,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
         notify_watch: notify::NotifyWatch::default(),
+        room_count_due: false,
         log_out_warning: None,
         refresh_counters: RefreshCounters::default(),
         painted_presence_revision: 0,
