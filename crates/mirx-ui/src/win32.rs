@@ -83,11 +83,11 @@ use windows_sys::Win32::UI::Controls::Dialogs::{
 use windows_sys::Win32::UI::Controls::{
     BTNS_CHECK, BTNS_SHOWTEXT, CCS_NOPARENTALIGN, CCS_NORESIZE, CDDS_ITEMPREPAINT, CDDS_PREPAINT,
     CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL, EM_SETSEL, HDM_GETITEMCOUNT,
-    HDM_GETITEMRECT, I_IMAGENONE, ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_TREEVIEW_CLASSES,
-    INITCOMMONCONTROLSEX, InitCommonControlsEx, LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCFMT_LEFT,
-    LVCFMT_RIGHT, LVCOLUMNW, LVIF_TEXT, LVIR_LABEL, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW,
-    LVM_GETCOLUMNW, LVM_GETCOUNTPERPAGE, LVM_GETHEADER, LVM_GETITEMCOUNT, LVM_GETITEMRECT,
-    LVM_GETITEMTEXTW, LVM_GETNEXTITEM, LVM_GETTOPINDEX, LVM_INSERTCOLUMNW,
+    HDM_GETITEMRECT, I_IMAGENONE, ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES,
+    ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, LVCF_FMT, LVCF_TEXT,
+    LVCF_WIDTH, LVCFMT_LEFT, LVCFMT_RIGHT, LVCOLUMNW, LVIF_TEXT, LVIR_LABEL, LVIS_FOCUSED,
+    LVIS_SELECTED, LVITEMW, LVM_GETCOLUMNW, LVM_GETCOUNTPERPAGE, LVM_GETHEADER, LVM_GETITEMCOUNT,
+    LVM_GETITEMRECT, LVM_GETITEMTEXTW, LVM_GETNEXTITEM, LVM_GETTOPINDEX, LVM_INSERTCOLUMNW,
     LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMCOUNT, LVM_SETITEMSTATE, LVN_COLUMNCLICK,
     LVN_GETDISPINFOW, LVNI_SELECTED, LVS_EX_FULLROWSELECT, LVS_OWNERDATA, LVS_REPORT,
     LVS_SHOWSELALWAYS, LVS_SINGLESEL, LVSICF_NOSCROLL, MEASUREITEMSTRUCT, NM_CUSTOMDRAW, NM_DBLCLK,
@@ -187,6 +187,8 @@ use crate::{
 };
 
 mod account;
+mod address_book;
+mod address_book_dialog;
 mod aliases;
 mod aliases_dialog;
 mod app_icon;
@@ -278,6 +280,7 @@ use account::{
 };
 #[cfg(test)]
 use account::{SAVED_SESSION_VERSION, SESSION_FILE_NAME, SavedSession, load_saved_session};
+use address_book::AddressBookTab;
 use aliases::{ALIASES_FILE_NAME, AliasStore};
 use attachments::{
     AttachmentSaveResult, PendingAttachmentSave, apply_attachment_save_media_event,
@@ -410,14 +413,14 @@ use menus::{
     MENU_ID_MESSAGE_REDACT, MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_SAVE_ATTACHMENT,
     MENU_ID_RECOVER_E2EE, MENU_ID_RESET_E2EE, MENU_ID_ROOM_ACCEPT_INVITE, MENU_ID_ROOM_NOTIFY_ALL,
     MENU_ID_ROOM_NOTIFY_MENTIONS, MENU_ID_ROOM_NOTIFY_MUTE, MENU_ID_ROOM_PART,
-    MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_TOOLS_ALIASES,
-    MENU_ID_TOOLS_COLORS, MENU_ID_TOOLS_OPTIONS, MENU_ID_TOOLS_SESSIONS, MENU_ID_VERIFY_ACCEPT,
-    MENU_ID_VERIFY_CANCEL, MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS,
-    MENU_ID_VERIFY_THIS_SESSION, MENU_ID_VIEW_SWITCHBAR, MENU_ID_VIEW_TOOLBAR,
-    MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE,
-    MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry,
-    ROOM_NOTIFICATIONS_MENU, TOOLBAR_ID_SEND_FILE, TOOLS_MENU, VIEW_MENU, WINDOW_MENU, WindowKey,
-    commands_menu_item, commands_menu_line, commands_menu_title, file_menu_state,
+    MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_TOOLS_ADDRESS_BOOK,
+    MENU_ID_TOOLS_ALIASES, MENU_ID_TOOLS_COLORS, MENU_ID_TOOLS_OPTIONS, MENU_ID_TOOLS_SESSIONS,
+    MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL, MENU_ID_VERIFY_CONFIRM_SAS,
+    MENU_ID_VERIFY_REJECT_SAS, MENU_ID_VERIFY_THIS_SESSION, MENU_ID_VIEW_SWITCHBAR,
+    MENU_ID_VIEW_TOOLBAR, MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS,
+    MENU_ID_WINDOW_CASCADE, MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL,
+    MenuEntry, ROOM_NOTIFICATIONS_MENU, TOOLBAR_ID_SEND_FILE, TOOLS_MENU, VIEW_MENU, WINDOW_MENU,
+    WindowKey, commands_menu_item, commands_menu_line, commands_menu_title, file_menu_state,
     member_menu_command, member_menu_item_enabled, member_menu_item_ids, notification_menu_id,
     notification_menu_mode, notification_mode_label, verification_menu_action_enabled,
     view_menu_bar, view_menu_checks, window_key,
@@ -818,6 +821,8 @@ struct WindowState {
     options_dialog: Option<HWND>,
     /// The Colors dialog while it is open, for the automation dump.
     colors_dialog: Option<HWND>,
+    /// The Address Book while it is open, for the automation dump.
+    address_book_dialog: Option<HWND>,
     tray: TrayState,
     /// The retry bookkeeping; `reconnect` and the sync events move it.
     reconnect: connection::Reconnect,
@@ -1076,6 +1081,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         last_attachment_save: None,
         options_dialog: None,
         colors_dialog: None,
+        address_book_dialog: None,
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
         notify_watch: notify::NotifyWatch::default(),

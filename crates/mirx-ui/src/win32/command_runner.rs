@@ -305,6 +305,11 @@ pub(super) unsafe fn run_slash_command(
             echo_in_active_view(hwnd, [line])?;
             Ok(Some("notify list saved".to_owned()))
         }
+        SlashCommand::AddressBook { tab } => {
+            // Modal: it says what it saved itself.
+            address_book_dialog::run_address_book_dialog(hwnd, tab)?;
+            Ok(None)
+        }
         SlashCommand::Close => {
             let state = state_ref(hwnd);
             if close_action(&state.model, &state.active_view) == CloseAction::Refuse {

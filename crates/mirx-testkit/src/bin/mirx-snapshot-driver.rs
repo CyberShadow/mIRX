@@ -1523,6 +1523,13 @@ mod cli {
                     },
                 ),
                 (
+                    "dialog:address_book",
+                    Action::Dialog {
+                        dialog: AutomationDialog::AddressBook,
+                        options_page: None,
+                    },
+                ),
+                (
                     "dialog:select_server",
                     Action::Dialog {
                         dialog: AutomationDialog::SelectServer,

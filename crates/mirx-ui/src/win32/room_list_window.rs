@@ -300,7 +300,7 @@ pub(super) unsafe fn dump_room_list(list: HWND) -> UiRoomList {
 }
 
 /// The text before the NUL a control wrote into `buffer`.
-fn wide_buffer_text(buffer: &[u16]) -> String {
+pub(super) fn wide_buffer_text(buffer: &[u16]) -> String {
     let len = buffer
         .iter()
         .position(|&unit| unit == 0)
@@ -308,7 +308,7 @@ fn wide_buffer_text(buffer: &[u16]) -> String {
     String::from_utf16_lossy(&buffer[..len])
 }
 
-fn rect_center(rect: &RECT) -> UiPoint {
+pub(super) fn rect_center(rect: &RECT) -> UiPoint {
     UiPoint {
         x: (rect.left + rect.right) / 2,
         y: (rect.top + rect.bottom) / 2,

@@ -238,7 +238,7 @@ pub(super) struct SingleFieldDialogState {
 }
 
 /// Every mirx dialog's class and window procedure.
-const DIALOG_CLASSES: [(&str, WNDPROC); 13] = [
+const DIALOG_CLASSES: [(&str, WNDPROC); 15] = [
     (LOGIN_DIALOG_CLASS_NAME, Some(login_dialog_window_proc)),
     (
         RECOVER_E2EE_DIALOG_CLASS_NAME,
@@ -276,6 +276,8 @@ const DIALOG_CLASSES: [(&str, WNDPROC); 13] = [
     ),
     colors_dialog::DIALOG_CLASS,
     aliases_dialog::DIALOG_CLASS,
+    address_book_dialog::DIALOG_CLASSES[0],
+    address_book_dialog::DIALOG_CLASSES[1],
 ];
 
 /// Registers every dialog class on the button face, the colour labels and
@@ -491,7 +493,7 @@ impl DialogColumn {
     }
 
     /// A label as tall as its text wrapped to the column; `style` aligns it.
-    unsafe fn label(&mut self, text: &str, id: u16, style: u32) -> Result<HWND, String> {
+    pub(super) unsafe fn label(&mut self, text: &str, id: u16, style: u32) -> Result<HWND, String> {
         let (_, height) = dialog_text_size(text, self.width);
         self.add(
             (STATIC_CLASS_NAME, text, style, 0, id),
@@ -510,7 +512,7 @@ impl DialogColumn {
         )
     }
 
-    unsafe fn edit(&mut self, id: u16, text: &str, style: u32) -> Result<HWND, String> {
+    pub(super) unsafe fn edit(&mut self, id: u16, text: &str, style: u32) -> Result<HWND, String> {
         self.add(
             (
                 EDIT_CLASS_NAME,
@@ -524,7 +526,7 @@ impl DialogColumn {
         )
     }
 
-    unsafe fn checkbox(&mut self, id: u16, text: &str) -> Result<HWND, String> {
+    pub(super) unsafe fn checkbox(&mut self, id: u16, text: &str) -> Result<HWND, String> {
         self.add(
             (
                 BUTTON_CLASS_NAME,

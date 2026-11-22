@@ -12,6 +12,7 @@ use mirx_core::{
     RoomMessagePresentationKind, UserDevices, UserIdentityState, UserProfile,
 };
 
+use super::address_book::AddressBookTab;
 use super::aliases::Aliases;
 use super::colors::PaletteIndex;
 use super::settings::{Bar, FontSetting, parse_palette_index, parse_points};
@@ -115,6 +116,10 @@ pub(super) enum SlashCommand {
     },
     /// `/notify`: mIRC's notify list.
     Notify(NotifyCommand),
+    /// `/abook [-n|-c]`: the Address Book at its Notify or Control tab.
+    AddressBook {
+        tab: AddressBookTab,
+    },
     Close,
     Exit,
     /// `/server [server]`: connect, as File > Connect does.
@@ -381,6 +386,7 @@ impl SlashCommand {
             Self::Ignore { .. } => "ignore",
             Self::Unignore { .. } => "unignore",
             Self::Notify(_) => "notify",
+            Self::AddressBook { .. } => "abook",
             Self::Close => "close",
             Self::Exit => "exit",
             Self::Server { .. } => "server",
@@ -934,6 +940,7 @@ fn parse_named(name: &str, argument: &str) -> Result<SlashCommand, CommandError>
             target: single_word(&name, argument)?,
         }),
         "notify" => parse_notify(argument).map(SlashCommand::Notify),
+        "abook" => parse_abook(argument),
         "close" => no_parameters(SlashCommand::Close),
         "exit" => no_parameters(SlashCommand::Exit),
         "server" => Ok(SlashCommand::Server {
@@ -1328,6 +1335,28 @@ fn parse_notify(argument: &str) -> Result<NotifyCommand, CommandError> {
             })
         }
     }
+}
+
+/// `[-n|-c]`: mIRC's switches for the tabs mirx has (`-wlh` open tabs it
+/// has not); no switch opens Notify. mIRC's nickname, which opens the
+/// user's entry, is not mirx's yet.
+fn parse_abook(argument: &str) -> Result<SlashCommand, CommandError> {
+    let (first, rest) = split_word(argument);
+    let tab = match first {
+        "" | "-n" => AddressBookTab::Notify,
+        "-c" => AddressBookTab::Control,
+        switch if switch.starts_with('-') => {
+            return Err(CommandError::new(
+                "abook",
+                format!("unknown switch {switch}"),
+            ));
+        }
+        _ => return Err(CommandError::new("abook", "too many parameters")),
+    };
+    if !rest.is_empty() {
+        return Err(CommandError::new("abook", "too many parameters"));
+    }
+    Ok(SlashCommand::AddressBook { tab })
 }
 
 /// `accept <nick>`, the one action yet.
@@ -3046,6 +3075,16 @@ mod tests {
             })
         );
         assert_eq!(parse("/notify +"), insufficient("notify"));
+        let abook = |tab| Ok(SlashCommand::AddressBook { tab });
+        assert_eq!(parse("/abook"), abook(AddressBookTab::Notify));
+        assert_eq!(parse("/ABOOK -n"), abook(AddressBookTab::Notify));
+        assert_eq!(parse("/abook -c "), abook(AddressBookTab::Control));
+        assert_eq!(parse("/abook -w"), error("abook", "unknown switch -w"));
+        assert_eq!(parse("/abook bob"), error("abook", "too many parameters"));
+        assert_eq!(
+            parse("/abook -c bob"),
+            error("abook", "too many parameters")
+        );
         assert_eq!(parse("/notify + bob"), insufficient("notify"));
         assert_eq!(
             parse("/notify -r bob"),

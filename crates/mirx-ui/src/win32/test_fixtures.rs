@@ -989,6 +989,7 @@ pub(super) fn test_state() -> WindowState {
         last_attachment_save: None,
         options_dialog: None,
         colors_dialog: None,
+        address_book_dialog: None,
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
         notify_watch: notify::NotifyWatch::default(),

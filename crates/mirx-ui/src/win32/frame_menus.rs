@@ -222,6 +222,11 @@ pub(super) unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
             key: u16::from(b'A'),
             cmd: MENU_ID_TOOLS_ALIASES as u16,
         },
+        ACCEL {
+            fVirt: FALT | FVIRTKEY,
+            key: u16::from(b'B'),
+            cmd: MENU_ID_TOOLS_ADDRESS_BOOK as u16,
+        },
     ]
     .into_iter()
     .chain(window_key_accelerators())
@@ -809,6 +814,11 @@ unsafe fn menu_command_result(
         MENU_ID_HELP_ABOUT => ("Help", show_about_dialog(hwnd).map(|()| Some(()))),
         MENU_ID_TOOLS_OPTIONS => ("Options", run_options_dialog(hwnd).map(|()| Some(()))),
         MENU_ID_TOOLS_COLORS => ("Colors", run_colors_dialog(hwnd).map(|()| Some(()))),
+        MENU_ID_TOOLS_ADDRESS_BOOK => (
+            "Address Book",
+            address_book_dialog::run_address_book_dialog(hwnd, AddressBookTab::Notify)
+                .map(|()| Some(())),
+        ),
         MENU_ID_TOOLS_ALIASES => (
             "Aliases",
             aliases_dialog::run_aliases_dialog(hwnd).map(|()| Some(())),
@@ -944,6 +954,7 @@ pub(super) fn dialog_gesture(dialog: AutomationDialog) -> DialogGesture {
         AutomationDialog::Options => DialogGesture::MenuCommand(MENU_ID_TOOLS_OPTIONS),
         AutomationDialog::Colors => DialogGesture::MenuCommand(MENU_ID_TOOLS_COLORS),
         AutomationDialog::Aliases => DialogGesture::MenuCommand(MENU_ID_TOOLS_ALIASES),
+        AutomationDialog::AddressBook => DialogGesture::MenuCommand(MENU_ID_TOOLS_ADDRESS_BOOK),
         AutomationDialog::SelectServer => DialogGesture::MenuCommand(MENU_ID_FILE_SELECT_SERVER),
         AutomationDialog::About => DialogGesture::MenuCommand(MENU_ID_HELP_ABOUT),
         AutomationDialog::CommandsJoin => DialogGesture::MenuCommand(MENU_ID_COMMANDS_JOIN),
@@ -1440,6 +1451,10 @@ mod tests {
             (
                 AutomationDialog::Aliases,
                 DialogGesture::MenuCommand(MENU_ID_TOOLS_ALIASES),
+            ),
+            (
+                AutomationDialog::AddressBook,
+                DialogGesture::MenuCommand(MENU_ID_TOOLS_ADDRESS_BOOK),
             ),
             (
                 AutomationDialog::SelectServer,

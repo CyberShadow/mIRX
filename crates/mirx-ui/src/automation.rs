@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 82;
+pub(crate) const PROTOCOL_VERSION: u32 = 83;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -697,6 +697,8 @@ pub(crate) enum AutomationDialog {
     Colors,
     /// Tools > Aliases...
     Aliases,
+    /// Tools > Address Book...
+    AddressBook,
     /// File > Select Server...
     SelectServer,
     /// Help > About mirx
@@ -1124,6 +1126,8 @@ pub(crate) struct UiState {
     pub(crate) options_dialog: Option<UiOptionsDialog>,
     /// The Colors dialog while it is open.
     pub(crate) colors_dialog: Option<UiColorsDialog>,
+    /// The Address Book while it is open, read back from its controls.
+    pub(crate) address_book: Option<UiAddressBook>,
     /// The colour index while it shows.
     pub(crate) color_index: Option<UiColorIndex>,
     /// The tray icon and the frame's place behind it.
@@ -1472,6 +1476,36 @@ pub(crate) struct UiColorsDialog {
     pub(crate) palette_cells: Vec<UiRect>,
     /// Where a click in the preview picks each item, in its order.
     pub(crate) preview_items: Vec<UiColorsPreviewItem>,
+}
+
+/// The Address Book: its tabs, which shows, and each tab's list and
+/// buttons.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiAddressBook {
+    /// The tab shown: `Notify` or `Control`.
+    pub(crate) tab: String,
+    /// Where a click selects each tab, in the tab control's client
+    /// coordinates.
+    pub(crate) tab_click_points: Vec<UiPoint>,
+    /// The IDs of the shown page's controls.
+    pub(crate) visible_controls: Vec<u16>,
+    /// The Notify list's rows: Nickname and Note.
+    pub(crate) notify_rows: Vec<Vec<String>>,
+    /// In the Notify list's client coordinates.
+    pub(crate) notify_row_click_points: Vec<UiPoint>,
+    /// Show notifies in active window.
+    pub(crate) notify_active: bool,
+    pub(crate) notify_edit_enabled: bool,
+    pub(crate) notify_delete_enabled: bool,
+    /// The ignore list's rows.
+    pub(crate) control_rows: Vec<String>,
+    /// In the ignore list's client coordinates.
+    pub(crate) control_row_click_points: Vec<UiPoint>,
+    /// The ignore list and its Add: greyed while the list is not known.
+    pub(crate) control_enabled: bool,
+    pub(crate) control_delete_enabled: bool,
+    pub(crate) control_note: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4041,8 +4075,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_82() {
-        assert_eq!(PROTOCOL_VERSION, 82);
+    fn protocol_version_is_83() {
+        assert_eq!(PROTOCOL_VERSION, 83);
     }
 
     #[test]
@@ -5430,6 +5464,7 @@ mod tests {
             ("options", AutomationDialog::Options),
             ("colors", AutomationDialog::Colors),
             ("aliases", AutomationDialog::Aliases),
+            ("address_book", AutomationDialog::AddressBook),
             ("select_server", AutomationDialog::SelectServer),
             ("about", AutomationDialog::About),
             ("commands_join", AutomationDialog::CommandsJoin),
@@ -6080,7 +6115,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":82,
+                    "protocol_version":83,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6812,6 +6847,24 @@ mod tests {
                             click_point: super::UiPoint { x: 80, y: 11 },
                         }],
                     }),
+                    address_book: Some(super::UiAddressBook {
+                        tab: "Notify".to_owned(),
+                        tab_click_points: vec![super::UiPoint { x: 20, y: 10 }],
+                        visible_controls: vec![7101],
+                        notify_rows: vec![vec![
+                            "+Bob (@bob:example)".to_owned(),
+                            "lunch".to_owned()
+                        ]],
+                        notify_row_click_points: vec![super::UiPoint { x: 40, y: 30 }],
+                        notify_active: true,
+                        notify_edit_enabled: false,
+                        notify_delete_enabled: false,
+                        control_rows: vec!["@spam:example".to_owned()],
+                        control_row_click_points: vec![super::UiPoint { x: 40, y: 12 }],
+                        control_enabled: true,
+                        control_delete_enabled: false,
+                        control_note: "Connect to edit the ignore list.".to_owned(),
+                    }),
                     color_index: Some(super::UiColorIndex {
                         part: super::UiColorCodePart::Background,
                         rect: super::UiRect {
@@ -7055,6 +7108,21 @@ mod tests {
                         "items":[{"item":"normal","index":1,"color":"#000000"}],
                         "palette_cells":[{"x":0,"y":0,"width":20,"height":20}],
                         "preview_items":[{"item":"join","click_point":{"x":80,"y":11}}]
+                    },
+                    "address_book":{
+                        "tab":"Notify",
+                        "tab_click_points":[{"x":20,"y":10}],
+                        "visible_controls":[7101],
+                        "notify_rows":[["+Bob (@bob:example)","lunch"]],
+                        "notify_row_click_points":[{"x":40,"y":30}],
+                        "notify_active":true,
+                        "notify_edit_enabled":false,
+                        "notify_delete_enabled":false,
+                        "control_rows":["@spam:example"],
+                        "control_row_click_points":[{"x":40,"y":12}],
+                        "control_enabled":true,
+                        "control_delete_enabled":false,
+                        "control_note":"Connect to edit the ignore list."
                     },
                     "color_index":{
                         "part":"background",

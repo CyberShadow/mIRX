@@ -22,7 +22,7 @@ const SWITCHBAR_ID: u16 = 1005;
 pub(super) fn init_common_controls() -> Result<(), String> {
     let controls = INITCOMMONCONTROLSEX {
         dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
-        dwICC: ICC_TREEVIEW_CLASSES | ICC_BAR_CLASSES | ICC_LISTVIEW_CLASSES,
+        dwICC: ICC_TREEVIEW_CLASSES | ICC_BAR_CLASSES | ICC_LISTVIEW_CLASSES | ICC_TAB_CLASSES,
     };
     let success = unsafe { InitCommonControlsEx(&controls) };
     if success == 0 {

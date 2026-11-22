@@ -622,6 +622,9 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         colors_dialog: state
             .colors_dialog
             .map(|dialog| colors_dialog::dump(dialog)),
+        address_book: state
+            .address_book_dialog
+            .map(|dialog| address_book_dialog::dump(dialog)),
         color_index: color_index::dump(hwnd),
         tray: dump_tray(hwnd),
         ignored_users: state.model.ignored_users.clone(),

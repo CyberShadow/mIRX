@@ -1423,6 +1423,8 @@ pub struct UiState {
     pub options_dialog: Option<UiOptionsDialog>,
     /// The Colors dialog while it is open.
     pub colors_dialog: Option<UiColorsDialog>,
+    /// The Address Book while it is open, read back from its controls.
+    pub address_book: Option<UiAddressBook>,
     /// The colour index while it shows.
     pub color_index: Option<UiColorIndex>,
     /// The tray icon and the frame's place behind it.
@@ -1767,6 +1769,36 @@ pub struct UiColorItem {
     pub index: u8,
     /// `#rrggbb`.
     pub color: String,
+}
+
+/// The Address Book: its tabs, which shows, and each tab's list and
+/// buttons.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiAddressBook {
+    /// The tab shown: `Notify` or `Control`.
+    pub tab: String,
+    /// Where a click selects each tab, in the tab control's client
+    /// coordinates.
+    pub tab_click_points: Vec<UiPoint>,
+    /// The IDs of the shown page's controls.
+    pub visible_controls: Vec<u16>,
+    /// The Notify list's rows: Nickname and Note.
+    pub notify_rows: Vec<Vec<String>>,
+    /// In the Notify list's client coordinates.
+    pub notify_row_click_points: Vec<UiPoint>,
+    /// Show notifies in active window.
+    pub notify_active: bool,
+    pub notify_edit_enabled: bool,
+    pub notify_delete_enabled: bool,
+    /// The ignore list's rows.
+    pub control_rows: Vec<String>,
+    /// In the ignore list's client coordinates.
+    pub control_row_click_points: Vec<UiPoint>,
+    /// The ignore list and its Add: greyed while the list is not known.
+    pub control_enabled: bool,
+    pub control_delete_enabled: bool,
+    pub control_note: String,
 }
 
 /// The Colors dialog: what it shows, and where to click it.
@@ -2266,6 +2298,8 @@ pub enum AutomationDialog {
     Colors,
     /// Tools > Aliases...
     Aliases,
+    /// Tools > Address Book...
+    AddressBook,
     /// File > Select Server...
     SelectServer,
     /// Help > About mirx

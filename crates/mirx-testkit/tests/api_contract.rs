@@ -1016,6 +1016,7 @@ fn data_models_round_trip_through_json() {
             top_row: 0,
         }),
         colors_dialog: None,
+        address_book: None,
         color_index: None,
         options_dialog: Some(UiOptionsDialog {
             tree: vec!["Display".to_owned()],
@@ -1398,6 +1399,7 @@ fn data_models_round_trip_through_json() {
                 "tips": {"highlights": false, "queries": true, "channels": false},
             },
             "colors_dialog": null,
+            "address_book": null,
             "color_index": null,
             "active_timeline": {
                 "top_line": 0,
@@ -7363,6 +7365,7 @@ fn switchbar_helpers_find_items_and_active_item() {
         room_list: None,
         options_dialog: None,
         colors_dialog: None,
+        address_book: None,
         color_index: None,
         tray: UiTray {
             icon: false,
@@ -7944,6 +7947,7 @@ fn non_windows_new_methods_report_unsupported_driver() {
 fn automation_dialog_round_trips_and_rejects_unknown_values() {
     for (dialog, text) in [
         (AutomationDialog::Options, "options"),
+        (AutomationDialog::AddressBook, "address_book"),
         (AutomationDialog::SelectServer, "select_server"),
         (AutomationDialog::About, "about"),
         (AutomationDialog::CommandsJoin, "commands_join"),

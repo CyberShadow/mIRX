@@ -83,6 +83,8 @@ pub(super) const TOOLBAR_ID_SEND_FILE: usize = 40059;
 /// Aliases..., which Alt+A sends, as mIRC's Scripts Editor at its
 /// Aliases tab.
 pub(super) const MENU_ID_TOOLS_ALIASES: usize = 40060;
+/// Address Book..., which Alt+B sends, as in mIRC.
+pub(super) const MENU_ID_TOOLS_ADDRESS_BOOK: usize = 40061;
 /// The window keys' command ids: accelerators with no menu item, in the
 /// gap below the Commands menu's. Alt+n sends `ACCEL_ID_WINDOW_FIRST + n - 1`.
 pub(super) const ACCEL_ID_WINDOW_FIRST: usize = 40080;
@@ -265,6 +267,10 @@ pub(super) const TOOLS_MENU: &[MenuEntry] = &[
     },
     Separator,
     Item {
+        id: MENU_ID_TOOLS_ADDRESS_BOOK,
+        label: "Address &Book...\tAlt+B",
+    },
+    Item {
         id: MENU_ID_TOOLS_COLORS,
         label: "&Colors...\tAlt+K",
     },
@@ -341,9 +347,10 @@ pub(super) fn window_key(command_id: usize) -> Option<WindowKey> {
     })
 }
 
-/// The menubar's menus, left to right. No mnemonic is `E`, `K`, `L`, `O`,
-/// `X` or a digit: Alt+E is Select Server, Alt+K Colors, Alt+L List rooms,
-/// Alt+O Options, Alt+X maximizes and Alt+1..9 switch windows, as in mIRC.
+/// The menubar's menus, left to right. No mnemonic is `A`, `B`, `E`, `K`,
+/// `L`, `O`, `X` or a digit: Alt+A is Aliases, Alt+B the Address Book,
+/// Alt+E Select Server, Alt+K Colors, Alt+L List rooms, Alt+O Options,
+/// Alt+X maximizes and Alt+1..9 switch windows, as in mIRC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BarMenu {
     File,
@@ -835,11 +842,15 @@ mod tests {
     }
 
     #[test]
-    fn tools_ends_with_colors_options_and_aliases() {
+    fn tools_ends_with_address_book_colors_options_and_aliases() {
         assert_eq!(
-            TOOLS_MENU[TOOLS_MENU.len() - 4..],
+            TOOLS_MENU[TOOLS_MENU.len() - 5..],
             [
                 Separator,
+                Item {
+                    id: MENU_ID_TOOLS_ADDRESS_BOOK,
+                    label: "Address &Book...\tAlt+B",
+                },
                 Item {
                     id: MENU_ID_TOOLS_COLORS,
                     label: "&Colors...\tAlt+K",

@@ -49,13 +49,13 @@ use mirx_testkit::{
     SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSessionCommand,
     SubmittedSetupRecoveryCommand, SubmittedTypingCommand, SubmittedUserCommand,
     SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem, TestkitError,
-    UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
-    UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
-    UiFindState, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
-    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
-    UiTimelineLink, UiTimestamp, UiTipsOptions, UiTrayOptions, UnsupportedRoomMessageActivity,
-    UserCommandAction, Verification, VerificationActionKind, VerificationState, ViewActivityLevel,
-    ViewIdentity,
+    UiActiveTimeline, UiActivityColors, UiAddressBook, UiColorCodePart, UiColorItem,
+    UiColorsDialog, UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError,
+    UiFindHistorySearchState, UiFindState, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem,
+    UiOptionsDialog, UiPoint, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+    UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiTipsOptions, UiTrayOptions,
+    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionKind,
+    VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -73,9 +73,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_X,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BM_CLICK, BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, DM_GETDEFID, EnumThreadWindows,
-    FindWindowExW, FindWindowW, GCL_STYLE, GUITHREADINFO, GW_CHILD, GW_HWNDNEXT, GW_OWNER,
-    GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect, GetDlgCtrlID, GetDlgItem,
+    BM_CLICK, BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, DM_GETDEFID, ES_READONLY,
+    EnumThreadWindows, FindWindowExW, FindWindowW, GCL_STYLE, GUITHREADINFO, GW_CHILD, GW_HWNDNEXT,
+    GW_OWNER, GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect, GetDlgCtrlID, GetDlgItem,
     GetForegroundWindow, GetGUIThreadInfo, GetLastActivePopup, GetScrollInfo, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES,
     IsIconic, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN,
@@ -3425,7 +3425,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 82);
+    assert_eq!(version.protocol_version, 83);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -18064,6 +18064,7 @@ fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
                 ("Confirm &SAS", false),
                 ("Re&ject SAS", false),
                 ("&Cancel Verification", false),
+                ("Address &Book...\tAlt+B", true),
                 ("&Colors...\tAlt+K", true),
                 ("&Options...\tAlt+O", true),
                 ("A&liases...\tAlt+A", true),
@@ -18971,6 +18972,339 @@ fn aliases_dialog_edits_aliases_ini() -> Result<(), Box<dyn std::error::Error>> 
         app.wait_idle(Duration::from_secs(5))?;
         assert_eq!(app.dump_ui_state()?.aliases, lines, "{close}");
     }
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+const ADDRESS_BOOK_TAB_ID: i32 = 7001;
+const ADDRESS_BOOK_NOTIFY_LIST_ID: i32 = 7101;
+const ADDRESS_BOOK_NOTIFY_ADD_ID: WPARAM = 7102;
+const ADDRESS_BOOK_NOTIFY_EDIT_ID: WPARAM = 7103;
+const ADDRESS_BOOK_NOTIFY_DELETE_ID: WPARAM = 7104;
+const ADDRESS_BOOK_NOTIFY_ACTIVE_ID: i32 = 7105;
+const ADDRESS_BOOK_CONTROL_LIST_ID: i32 = 7202;
+const ADDRESS_BOOK_CONTROL_ADD_ID: WPARAM = 7203;
+const ADDRESS_BOOK_CONTROL_DELETE_ID: WPARAM = 7204;
+const ADDRESS_ENTRY_NICKNAME_ID: i32 = 7301;
+const ADDRESS_ENTRY_NOTE_ID: i32 = 7302;
+const ADDRESS_ENTRY_WHOIS_ID: i32 = 7303;
+const ADDRESS_ENTRY_OK_ID: WPARAM = 7304;
+const ADDRESS_ENTRY_CANCEL_ID: WPARAM = 7305;
+
+fn wait_for_address_book(app: &MirxApp) -> Result<HWND, Box<dyn std::error::Error>> {
+    let dialog = wait_for_window(&wide_null("mirxWin32AddressBookDialog"), "Address Book")?;
+    assert_eq!(unsafe { read_window_text(dialog) }, "Address Book");
+    app.wait_for_ui_state("the Address Book", Duration::from_secs(5), |ui_state| {
+        ui_state.address_book.is_some()
+    })?;
+    Ok(dialog)
+}
+
+fn address_book(app: &MirxApp) -> Result<UiAddressBook, Box<dyn std::error::Error>> {
+    Ok(app
+        .dump_ui_state()?
+        .address_book
+        .ok_or("the Address Book is open")?)
+}
+
+/// Posts a button's click to a dialog.
+fn post_dialog_command(dialog: HWND, id: WPARAM) {
+    assert_ne!(unsafe { PostMessageW(dialog, WM_COMMAND, id, 0) }, 0);
+}
+
+fn set_dialog_text(dialog: HWND, id: i32, text: &str) {
+    let text = wide_null(text);
+    unsafe {
+        SendMessageW(
+            GetDlgItem(dialog, id),
+            WM_SETTEXT,
+            0,
+            text.as_ptr() as isize,
+        )
+    };
+}
+
+/// Opens an Address Book entry dialog with the button `add_or_edit`.
+fn open_address_entry(
+    dialog: HWND,
+    add_or_edit: WPARAM,
+    title: &str,
+) -> Result<HWND, Box<dyn std::error::Error>> {
+    post_dialog_command(dialog, add_or_edit);
+    let entry = wait_for_window(&wide_null("mirxWin32AddressEntryDialog"), title)?;
+    assert_eq!(unsafe { read_window_text(entry) }, title);
+    assert_eq!(unsafe { GetWindow(entry, GW_OWNER) }, dialog);
+    Ok(entry)
+}
+
+/// OK in an entry dialog whose fields `refusal` refuses: the message box
+/// says why, and the entry stays open.
+fn refused_address_entry(
+    app: &MirxApp,
+    entry: HWND,
+    refusal: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    post_dialog_command(entry, ADDRESS_ENTRY_OK_ID);
+    let (message_box, text) = wait_for_owned_message_box(entry);
+    assert_eq!(text, refusal);
+    answer_message_box(app, message_box, IDOK)?;
+    assert_eq!(unsafe { IsWindow(entry) }, 1);
+    Ok(())
+}
+
+fn accept_address_entry(app: &MirxApp, entry: HWND) -> Result<(), Box<dyn std::error::Error>> {
+    post_dialog_command(entry, ADDRESS_ENTRY_OK_ID);
+    wait_for_window_gone(entry, "the entry dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+/// Selects a list's row with a click, and waits for its buttons to say so.
+fn select_address_book_row(
+    app: &MirxApp,
+    list: HWND,
+    point: &UiPoint,
+) -> Result<(), Box<dyn std::error::Error>> {
+    post_left_click(list, point, false);
+    app.wait_for_ui_state("a selected row", Duration::from_secs(5), |ui_state| {
+        ui_state
+            .address_book
+            .as_ref()
+            .is_some_and(|book| book.notify_delete_enabled || book.control_delete_enabled)
+    })?;
+    Ok(())
+}
+
+/// mIRC's Address Book, Notify tab (Alt+B): Add, Edit and Delete with
+/// nicks resolved and refused as `/notify` does them, Perform /whois and
+/// Show notifies in active window; OK saves to mirx.ini at once and prints
+/// nothing, Cancel drops every edit.
+#[test]
+fn address_book_edits_the_notify_list() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let mut events = base_events();
+    events.push(room_members_event(
+        "!beta:example",
+        &[("@alice:example", "Alice"), ("@bob:example", "Bob")],
+    ));
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+    let beta_lines = find_view(&app.dump_ui_state()?, &beta).lines.len();
+
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe { SetForegroundWindow(frame) };
+    press_keys(&[VK_MENU, u16::from(b'B')]);
+    let dialog = wait_for_address_book(&app)?;
+    let book = address_book(&app)?;
+    assert_eq!(book.tab, "Notify");
+    assert_eq!(book.visible_controls, [7101, 7102, 7103, 7104, 7105]);
+    assert!(book.notify_rows.is_empty());
+    assert!(!book.notify_edit_enabled && !book.notify_delete_enabled);
+    assert!(!book.notify_active);
+
+    let entry = open_address_entry(dialog, ADDRESS_BOOK_NOTIFY_ADD_ID, "Add Notify")?;
+    // No nickname, no OK.
+    let ok = unsafe { GetDlgItem(entry, ADDRESS_ENTRY_OK_ID as i32) };
+    assert_eq!(unsafe { IsWindowEnabled(ok) }, 0);
+    set_dialog_text(entry, ADDRESS_ENTRY_NICKNAME_ID, "dave");
+    assert_ne!(unsafe { IsWindowEnabled(ok) }, 0);
+    refused_address_entry(&app, entry, "no such nick: dave")?;
+    set_dialog_text(entry, ADDRESS_ENTRY_NICKNAME_ID, "bob");
+    set_dialog_text(entry, ADDRESS_ENTRY_NOTE_ID, "lunch");
+    unsafe { SendMessageW(GetDlgItem(entry, ADDRESS_ENTRY_WHOIS_ID), BM_SETCHECK, 1, 0) };
+    accept_address_entry(&app, entry)?;
+    let entry = open_address_entry(dialog, ADDRESS_BOOK_NOTIFY_ADD_ID, "Add Notify")?;
+    set_dialog_text(entry, ADDRESS_ENTRY_NICKNAME_ID, "Bob");
+    refused_address_entry(&app, entry, "Bob is already on the notify list")?;
+    set_dialog_text(entry, ADDRESS_ENTRY_NICKNAME_ID, "@carol:remote");
+    accept_address_entry(&app, entry)?;
+    let book = address_book(&app)?;
+    assert_eq!(
+        book.notify_rows,
+        [
+            vec!["+Bob (@bob:example)".to_owned(), "lunch".to_owned()],
+            vec!["@carol:remote".to_owned(), String::new()],
+        ]
+    );
+
+    // Edit: the nickname names the entry, and stays.
+    let list = unsafe { GetDlgItem(dialog, ADDRESS_BOOK_NOTIFY_LIST_ID) };
+    select_address_book_row(&app, list, &book.notify_row_click_points[0])?;
+    let book = address_book(&app)?;
+    assert!(book.notify_edit_enabled && book.notify_delete_enabled);
+    let entry = open_address_entry(dialog, ADDRESS_BOOK_NOTIFY_EDIT_ID, "Edit Notify")?;
+    let nickname = unsafe { GetDlgItem(entry, ADDRESS_ENTRY_NICKNAME_ID) };
+    assert_eq!(unsafe { read_window_text(nickname) }, "Bob (@bob:example)");
+    assert_ne!(
+        unsafe { GetWindowLongPtrW(nickname, GWL_STYLE) } as u32 & ES_READONLY as u32,
+        0
+    );
+    set_dialog_text(entry, ADDRESS_ENTRY_NOTE_ID, "lunch box");
+    accept_address_entry(&app, entry)?;
+    let book = address_book(&app)?;
+    select_address_book_row(&app, list, &book.notify_row_click_points[1])?;
+    post_dialog_command(dialog, ADDRESS_BOOK_NOTIFY_DELETE_ID);
+    unsafe {
+        SendMessageW(
+            GetDlgItem(dialog, ADDRESS_BOOK_NOTIFY_ACTIVE_ID),
+            BM_SETCHECK,
+            1,
+            0,
+        )
+    };
+    app.wait_idle(Duration::from_secs(5))?;
+    let book = address_book(&app)?;
+    assert_eq!(
+        book.notify_rows,
+        [vec![
+            "+Bob (@bob:example)".to_owned(),
+            "lunch box".to_owned()
+        ]]
+    );
+    assert!(book.notify_active);
+    // Nothing applies before OK.
+    assert!(!settings_file_path(&local_app_data).exists());
+
+    post_dialog_command(dialog, IDOK as WPARAM);
+    wait_for_window_gone(dialog, "Address Book")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let saved = "[notify]\r\nactive=on\r\nn0=+@bob:example lunch box\r\n";
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    assert!(ini.ends_with(saved), "{ini}");
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.status_bar.text, "address book saved");
+    assert_eq!(find_view(&ui_state, &beta).lines.len(), beta_lines);
+
+    // Cancel drops the edits.
+    app.open_dialog(AutomationDialog::AddressBook)?;
+    let dialog = wait_for_address_book(&app)?;
+    let book = address_book(&app)?;
+    assert!(book.notify_active);
+    let list = unsafe { GetDlgItem(dialog, ADDRESS_BOOK_NOTIFY_LIST_ID) };
+    select_address_book_row(&app, list, &book.notify_row_click_points[0])?;
+    post_dialog_command(dialog, ADDRESS_BOOK_NOTIFY_DELETE_ID);
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(address_book(&app)?.notify_rows.is_empty());
+    post_dialog_command(dialog, IDCANCEL as WPARAM);
+    wait_for_window_gone(dialog, "Address Book")?;
+    assert!(fs::read_to_string(settings_file_path(&local_app_data))?.ends_with(saved));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The Control tab: greyed until the server's ignore list is known, a
+/// click on the tab shows it; `/abook -c` opens it. Adds are refused as
+/// `/ignore` refuses them, and OK sends one command per change, adds
+/// first. (The core here has no session and answers them with errors, so
+/// the status bar it then shows is pinned by the live lane.)
+#[test]
+fn address_book_control_tab_sends_the_changes() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let mut events = base_events();
+    events.insert(
+        1,
+        Event::LoggedIn {
+            session: core_stored_session(),
+            homeserver_url: "https://matrix.example/".to_owned(),
+        },
+    );
+    events.push(room_members_event(
+        "!beta:example",
+        &[("@alice:example", "Alice"), ("@bob:example", "Bob")],
+    ));
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_view(room_identity("!beta:example"))?;
+
+    // Before the server's list: greyed, and says why.
+    app.open_dialog(AutomationDialog::AddressBook)?;
+    let dialog = wait_for_address_book(&app)?;
+    let book = address_book(&app)?;
+    let tab_control = unsafe { GetDlgItem(dialog, ADDRESS_BOOK_TAB_ID) };
+    post_left_click(tab_control, &book.tab_click_points[1], false);
+    app.wait_for_ui_state("the Control tab", Duration::from_secs(5), |ui_state| {
+        ui_state
+            .address_book
+            .as_ref()
+            .is_some_and(|book| book.tab == "Control")
+    })?;
+    let book = address_book(&app)?;
+    assert_eq!(book.visible_controls, [7201, 7202, 7203, 7204, 7205]);
+    assert!(!book.control_enabled && !book.control_delete_enabled);
+    assert_eq!(book.control_note, "Connect to edit the ignore list.");
+    post_dialog_command(dialog, IDCANCEL as WPARAM);
+    wait_for_window_gone(dialog, "Address Book")?;
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::IgnoredUsers(vec![
+        "@spam:remote".to_owned(),
+    ])])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.set_compose_text("/abook -c")?;
+    app.open_dialog(AutomationDialog::ComposeReturn)?;
+    let dialog = wait_for_address_book(&app)?;
+    let book = address_book(&app)?;
+    assert_eq!(book.tab, "Control");
+    assert_eq!(book.control_rows, ["@spam:remote"]);
+    assert!(book.control_enabled && !book.control_delete_enabled);
+    assert!(
+        book.control_note
+            .starts_with("Your ignore list is kept on your Matrix server")
+    );
+
+    let entry = open_address_entry(dialog, ADDRESS_BOOK_CONTROL_ADD_ID, "Add Ignore")?;
+    // Only a nickname.
+    assert!(unsafe { GetDlgItem(entry, ADDRESS_ENTRY_NOTE_ID) }.is_null());
+    set_dialog_text(entry, ADDRESS_ENTRY_NICKNAME_ID, "Alice");
+    refused_address_entry(&app, entry, "you cannot ignore yourself")?;
+    set_dialog_text(entry, ADDRESS_ENTRY_NICKNAME_ID, "Bob");
+    accept_address_entry(&app, entry)?;
+    let entry = open_address_entry(dialog, ADDRESS_BOOK_CONTROL_ADD_ID, "Add Ignore")?;
+    set_dialog_text(entry, ADDRESS_ENTRY_NICKNAME_ID, "bob");
+    refused_address_entry(&app, entry, "Bob is already ignored")?;
+    post_dialog_command(entry, ADDRESS_ENTRY_CANCEL_ID);
+    wait_for_window_gone(entry, "the entry dialog")?;
+    let book = address_book(&app)?;
+    assert_eq!(book.control_rows, ["@spam:remote", "Bob (@bob:example)"]);
+    let list = unsafe { GetDlgItem(dialog, ADDRESS_BOOK_CONTROL_LIST_ID) };
+    select_address_book_row(&app, list, &book.control_row_click_points[0])?;
+    post_dialog_command(dialog, ADDRESS_BOOK_CONTROL_DELETE_ID);
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(address_book(&app)?.control_rows, ["Bob (@bob:example)"]);
+    // Nothing is sent before OK.
+    assert!(app.dump_model()?.submitted_user_commands.is_empty());
+
+    post_dialog_command(dialog, IDOK as WPARAM);
+    wait_for_window_gone(dialog, "Address Book")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_model()?.submitted_user_commands,
+        [
+            SubmittedUserCommand {
+                action: UserCommandAction::Ignore,
+                user_id: "@bob:example".to_owned(),
+            },
+            SubmittedUserCommand {
+                action: UserCommandAction::Unignore,
+                user_id: "@spam:remote".to_owned(),
+            },
+        ]
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
