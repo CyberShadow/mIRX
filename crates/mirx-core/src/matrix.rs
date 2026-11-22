@@ -1926,6 +1926,22 @@ pub(crate) async fn emit_joined_room_members_snapshot(
     Ok(())
 }
 
+/// An account data handler's room list (`m.direct`, `m.tag`,
+/// `m.push_rules`), once the session's first is out. Before it, the
+/// handlers run in the sync of a sign-in or a first restore, before the
+/// session is announced, and the session's first list, read later, has
+/// what changed. (The push rules' `HighlightWords` and the ignore list's
+/// `IgnoredUsers` still come then: the UI keeps them and shows nothing.)
+async fn relist_rooms_after_account_data(
+    client: &Client,
+    snapshots: &RoomSnapshots,
+    events: &EventSender,
+) {
+    if snapshots.listed() {
+        emit_room_snapshot_or_room_list_error(client, snapshots, events).await;
+    }
+}
+
 async fn emit_room_snapshot_or_room_list_error(
     client: &Client,
     snapshots: &RoomSnapshots,
@@ -2636,7 +2652,7 @@ pub(crate) fn register_event_handlers(
         let events = direct_account_data_events.clone();
         let snapshots = direct_snapshots.clone();
         async move {
-            emit_room_snapshot_or_room_list_error(&client, &snapshots, &events).await;
+            relist_rooms_after_account_data(&client, &snapshots, &events).await;
         }
     });
 
@@ -2646,7 +2662,7 @@ pub(crate) fn register_event_handlers(
         let events = tag_account_data_events.clone();
         let snapshots = tag_snapshots.clone();
         async move {
-            emit_room_snapshot_or_room_list_error(&client, &snapshots, &events).await;
+            relist_rooms_after_account_data(&client, &snapshots, &events).await;
         }
     });
 
@@ -2659,7 +2675,7 @@ pub(crate) fn register_event_handlers(
         let events = push_rules_events.clone();
         let snapshots = push_rules_snapshots.clone();
         async move {
-            emit_room_snapshot_or_room_list_error(&client, &snapshots, &events).await;
+            relist_rooms_after_account_data(&client, &snapshots, &events).await;
             emit_event(
                 &events,
                 Event::HighlightWords(highlight_words_from_ruleset(&event.content.global)),
@@ -13976,7 +13992,13 @@ mod tests {
                 })
                 .await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events, &RoomSnapshots::default());
+            let snapshots = RoomSnapshots::default();
+            register_event_handlers(&client, events.clone(), &snapshots);
+            // The session's first room list is out: the handler re-lists.
+            super::emit_room_snapshot(&client, &snapshots, &events)
+                .await
+                .expect("the first room list");
+            drain_events(&event_rx);
 
             let mut ruleset = notification_mode_ruleset(&client, &muted, &mentions);
             ruleset

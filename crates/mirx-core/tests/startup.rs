@@ -259,3 +259,49 @@ fn a_restarted_session_reads_its_e2ee_status_once_connected() {
 
     harness.shut_down();
 }
+
+#[test]
+fn a_first_restore_lists_the_rooms_once_after_announcing_the_session() {
+    // The restore's sync carries account data whose handlers re-list the
+    // rooms: they come before the session is announced, and its first
+    // room list already has what they changed.
+    let (harness, restore) = Harness::restored_with_sync(|sync| {
+        add_room(sync);
+        sync.add_custom_global_account_data(json!({
+            "type": "m.direct",
+            "content": { "@bob:example.org": [ROOM] },
+        }));
+        sync.add_custom_global_account_data(json!({
+            "type": "m.push_rules",
+            "content": { "global": {} },
+        }));
+    });
+
+    let announced = restore
+        .iter()
+        .position(|event| *event == Event::RestoredSession)
+        .unwrap_or_else(|| panic!("no RestoredSession in {restore:#?}"));
+    let listed = restore
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| matches!(event, Event::SyncedRooms(_)))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let [listed] = listed.as_slice() else {
+        panic!("one SyncedRooms in {restore:#?}");
+    };
+    assert!(announced < *listed, "{restore:#?}");
+    let Event::SyncedRooms(rooms) = &restore[*listed] else {
+        unreachable!()
+    };
+    assert_eq!(
+        rooms
+            .iter()
+            .map(|room| (room.room_id.as_str(), room.is_direct))
+            .collect::<Vec<_>>(),
+        [(ROOM, true)],
+        "{restore:#?}"
+    );
+
+    harness.shut_down();
+}

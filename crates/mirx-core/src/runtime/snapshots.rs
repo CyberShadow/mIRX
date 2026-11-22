@@ -35,6 +35,12 @@ impl RoomSnapshots {
     pub(crate) fn supersede(&self, snapshot: SnapshotStart) -> bool {
         self.0.emitted.fetch_max(snapshot.0, Ordering::Relaxed) < snapshot.0
     }
+
+    /// Whether the session's first snapshot was emitted (snapshots are
+    /// numbered from 1).
+    pub(crate) fn listed(&self) -> bool {
+        self.0.emitted.load(Ordering::Relaxed) > 0
+    }
 }
 
 #[cfg(test)]
@@ -51,5 +57,14 @@ mod tests {
         assert!(!snapshots.supersede(a));
         let c = snapshots.start();
         assert!(snapshots.supersede(c));
+    }
+
+    #[test]
+    fn the_rooms_are_listed_once_a_snapshot_is_emitted() {
+        let snapshots = RoomSnapshots::default();
+        let a = snapshots.start();
+        assert!(!snapshots.listed());
+        assert!(snapshots.supersede(a));
+        assert!(snapshots.listed());
     }
 }
