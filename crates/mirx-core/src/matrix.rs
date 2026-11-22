@@ -1737,6 +1737,19 @@ pub(crate) async fn rename_device(
     }
 }
 
+/// Queries your own keys: the SDK says whether this session is verified
+/// from the signatures it last saw, and it sees the one its cross-signing
+/// bootstrap made only at the next query.
+pub(crate) async fn query_own_identity(client: &Client) -> Result<(), MatrixCoreError> {
+    let user_id = client.user_id().expect("E2EE status runs signed in");
+    client
+        .encryption()
+        .request_user_identity(user_id)
+        .await
+        .map(drop)
+        .map_err(|err| MatrixCoreError::new(format!("failed to query your E2EE identity: {err}")))
+}
+
 /// Reads your identity back from the server after a reset that did not
 /// finish, and returns whether the server holds the new one. A reset
 /// creates its keys before it asks the server: until your own keys are

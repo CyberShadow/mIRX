@@ -47,14 +47,18 @@ impl E2eeStatusWatch {
 
     /// A summary read after a state change, without asking the server:
     /// told only once there is a baseline, and only if it differs from it.
-    /// The read cannot know whether the server has a backup: it keeps the
-    /// server's last answer.
+    /// The read cannot know whether the server has a backup: while this
+    /// session's backup is as it was, it keeps the server's last answer;
+    /// once the backup changed, that answer may be stale, and it is not
+    /// checked.
     pub(crate) fn changed(&self, events: &EventSender, mut status: E2eeStatus) {
         let mut last = self.0.borrow_mut();
         let Some(last) = last.as_mut() else {
             return;
         };
-        if status.backup.exists_on_server.is_none() {
+        if status.backup.state == last.backup.state
+            && status.backup.enabled_locally == last.backup.enabled_locally
+        {
             status.backup.exists_on_server = last.backup.exists_on_server;
         }
         if *last != status {
@@ -64,17 +68,35 @@ impl E2eeStatusWatch {
     }
 }
 
-/// The session's first E2EE summary, read once the server answered a sync.
+/// The session's first E2EE summary, read once the server answered a sync
+/// and the SDK's E2EE setup of the session is done.
 pub(crate) struct FirstE2eeStatus {
-    /// Why the server could not be asked whether it has a backup.
+    /// Why the server could not be asked for your keys or its backup.
     fetch_error: Option<MatrixCoreError>,
     /// The server's summary, or after a `fetch_error` the cached one.
     status: Result<E2eeStatus, MatrixCoreError>,
 }
 
 impl FirstE2eeStatus {
+    /// After the SDK's E2EE setup, which it starts at the sign-in or the
+    /// restore: it bootstraps cross-signing, creates or resumes the key
+    /// backup and reads recovery's state, asking the server. Read before it
+    /// ends, the summary is of a session half set up (`local backup
+    /// unknown, server backup missing`), and its changes follow it at once.
+    /// The server answers now, so the setup's requests end soon. Then your
+    /// keys are queried, so whether this session is verified is the
+    /// server's say, its own signature from a bootstrap included (else
+    /// `this session not verified`, then `verified` at the sync's query).
     pub(crate) async fn read(client: &Client) -> Self {
-        match matrix::summarize_e2ee_status(client, BackupServerStatusMode::Fetch).await {
+        client
+            .encryption()
+            .wait_for_e2ee_initialization_tasks()
+            .await;
+        let fetched = match matrix::query_own_identity(client).await {
+            Ok(()) => matrix::summarize_e2ee_status(client, BackupServerStatusMode::Fetch).await,
+            Err(err) => Err(err),
+        };
+        match fetched {
             Ok(status) => Self {
                 fetch_error: None,
                 status: Ok(status),
@@ -134,7 +156,16 @@ mod tests {
         let disabled = status(E2eeRecoveryState::Disabled, Some(true));
         watch.changed(&tx, status(E2eeRecoveryState::Disabled, None));
         assert_eq!(told(&rx), [Event::E2eeStatus(disabled.clone())]);
-        watch.changed(&tx, disabled);
+        watch.changed(&tx, disabled.clone());
+        assert_eq!(told(&rx), []);
+
+        // The backup changed: whether the server has one is not known.
+        let mut backup_off = status(E2eeRecoveryState::Disabled, None);
+        backup_off.backup.state = E2eeBackupState::Unknown;
+        backup_off.backup.enabled_locally = false;
+        watch.changed(&tx, backup_off.clone());
+        assert_eq!(told(&rx), [Event::E2eeStatus(backup_off.clone())]);
+        watch.changed(&tx, backup_off);
         assert_eq!(told(&rx), []);
 
         // A server's answer is told, changed or not.
