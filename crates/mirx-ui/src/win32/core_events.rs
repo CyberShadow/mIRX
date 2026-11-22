@@ -698,6 +698,16 @@ pub(super) fn apply_core_event(
             );
             state.model.status = "logging out".to_owned();
         }
+        Event::LogoutCancelled => {
+            // The user's Disconnect: as after it, retries start over.
+            state.reconnect.reset();
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::LOG_OUT_CANCELLED.to_owned(),
+            );
+            state.model.status = "log out cancelled".to_owned();
+        }
         Event::LoggedOut => {
             state.reconnect.reset();
             // A warning not shown yet was about this session.
@@ -1518,6 +1528,9 @@ mod tests {
                     Event::SyncStopped(SyncStopReason::Requested),
                     ConnectionState::SignedIn,
                 ),
+                // Disconnect stops a Log Out: still signed in.
+                (Event::LoggingOut, ConnectionState::LoggingOut),
+                (Event::LogoutCancelled, ConnectionState::SignedIn),
                 (Event::LoggingOut, ConnectionState::LoggingOut),
                 (Event::LoggedOut, ConnectionState::SignedOut),
             ] {
@@ -3332,6 +3345,23 @@ mod tests {
         assert_eq!(new_lines.len(), 1, "{new_lines:?}");
         assert!(
             new_lines[0].ends_with(status_log::LOGGING_OUT),
+            "{new_lines:?}"
+        );
+
+        // Disconnect stopped it: signed in, and retries start over.
+        let settings = state.settings.settings().connect.clone();
+        state.reconnect.sync_started();
+        state.reconnect.sync_lost(&settings);
+        state.reconnect.retry();
+        apply_core_event(&mut state, Event::LogoutCancelled).unwrap();
+
+        assert_eq!(state.model.connection, ConnectionState::SignedIn);
+        assert_eq!(state.model.status, "log out cancelled");
+        assert_eq!(state.reconnect.attempts(), 0);
+        let new_lines = &status_log_lines(&state)[lines.len() + 1..];
+        assert_eq!(new_lines.len(), 1, "{new_lines:?}");
+        assert!(
+            new_lines[0].ends_with(status_log::LOG_OUT_CANCELLED),
             "{new_lines:?}"
         );
     }

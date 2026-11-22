@@ -135,7 +135,8 @@ pub(super) const STARTUP_CONNECT_OFF: &str =
 pub(super) const SESSION_RESTORED: &str = "Session restored";
 pub(super) const SYNC_STARTED: &str = "Syncing with the homeserver";
 /// The core waits for the key backup and the server.
-pub(super) const LOGGING_OUT: &str = "Logging out";
+pub(super) const LOGGING_OUT: &str = "Logging out; File > Disconnect stops it";
+pub(super) const LOG_OUT_CANCELLED: &str = "Log Out cancelled; still signed in";
 pub(super) const LOGGED_OUT: &str = "Logged out";
 pub(super) const STOPPED: &str = "Disconnected";
 pub(super) const E2EE_RECOVERY_SET_UP: &str =

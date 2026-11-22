@@ -3,9 +3,10 @@
 //!
 //! In a session, a command runs as a job on its lane (`jobs`), beside the
 //! actor. Signing in, restoring and logging out are transitions: futures
-//! the actor polls beside the commands, so `CancelLogin` and `Shutdown`
-//! cut them short. The commands that come during a transition wait in
-//! `deferred` and run, in order, when it ends.
+//! the actor polls beside the commands, so they can be cut short:
+//! `CancelLogin` a sign-in, `StopSync` a logout, and `Shutdown` either.
+//! The other commands that come during a transition wait in `deferred`
+//! and run, in order, when it ends.
 //!
 //! The actor answers every command with exactly one `CommandHandled`,
 //! after the command's own events: an immediate command after its
@@ -62,7 +63,8 @@ enum Lifecycle {
     AwaitingBrowser(Box<PendingBrowserLogin>),
     Ready(Session),
     /// A logout waits for the key backup, then for the server. Its jobs
-    /// go on; the session stays whole if either fails.
+    /// go on; the session stays whole if either fails, or if `StopSync`
+    /// stops it.
     LoggingOut(LoggingOut),
 }
 
@@ -76,8 +78,8 @@ struct SigningIn {
 
 struct LoggingOut {
     session: Session,
-    /// Dropping it mid-wait (`Shutdown`) is safe: the SDK's upload task
-    /// goes on until the client drops.
+    /// Dropping it mid-wait (`StopSync`, `Shutdown`) is safe: the SDK's
+    /// upload task goes on until the client drops.
     transition: LocalBoxFuture<'static, Result<(), LogoutFailure>>,
     /// Sync ran before the logout stopped it.
     resume_sync: bool,
@@ -219,6 +221,7 @@ impl Core {
                 return ControlFlow::Break(());
             }
             (Route::CancelLogin, Lifecycle::SigningIn(_)) => self.cancel_sign_in(),
+            (Route::StopSync, Lifecycle::LoggingOut(_)) => self.cancel_log_out(),
             (route, Lifecycle::SigningIn(_) | Lifecycle::LoggingOut(_)) => {
                 self.deferred.push_back(route);
             }
@@ -484,6 +487,27 @@ impl Core {
             transition,
             resume_sync,
         });
+    }
+
+    /// `StopSync` during a logout, mIRC's Disconnect: drops the logout
+    /// under way and keeps the session, with sync stopped even if it ran
+    /// before. If the server's answer was on its way, the server may have
+    /// ended the session already; the next sync then says so.
+    fn cancel_log_out(&mut self) {
+        let Lifecycle::LoggingOut(LoggingOut {
+            session,
+            transition,
+            resume_sync: _,
+        }) = std::mem::replace(&mut self.state, Lifecycle::Idle)
+        else {
+            unreachable!("only a logout is stopped");
+        };
+        drop(transition);
+        self.state = Lifecycle::Ready(session);
+        emit_event(&self.events, Event::LogoutCancelled);
+        // The `Logout`'s, then the `StopSync`'s.
+        ack(&self.events);
+        ack(&self.events);
     }
 
     /// The logout under way ended.

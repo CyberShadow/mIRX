@@ -19,6 +19,8 @@ pub enum Command {
     CancelLogin,
     RestoreSession(RestoreSessionRequest),
     StartSync,
+    /// Stops continuous sync and keeps the session. During a logout, it
+    /// stops the logout instead (`LogoutCancelled`).
     StopSync,
     JoinRoom(JoinRoomRequest),
     AcceptRoomInvite(AcceptRoomInviteRequest),
@@ -133,7 +135,8 @@ pub enum Command {
     /// Ends the session on the server and removes its data from this
     /// computer. Answered by `LogoutWouldLoseRoomKeys` at once (the
     /// session stays, as it was), or by `LoggingOut` and then `LoggedOut`,
-    /// `LogoutWouldLoseRoomKeys` or a `Logout` error (the session stays).
+    /// `LogoutWouldLoseRoomKeys` or a `Logout` error (the session stays),
+    /// or `LogoutCancelled` when a `StopSync` stops it.
     Logout(LogoutRequest),
     Shutdown,
 }
@@ -2360,8 +2363,13 @@ pub enum Event {
     /// A `Logout` went past its checks: the core waits for the key backup
     /// and then the server, with sync stopped. `LoggedOut`,
     /// `LogoutWouldLoseRoomKeys` or a `Logout` error follows. Commands
-    /// sent meanwhile wait for its end.
+    /// sent meanwhile wait for its end, but `StopSync`, which stops it:
+    /// then `LogoutCancelled` follows.
     LoggingOut,
+    /// The answer to a `StopSync` during a logout: the logout stopped, and
+    /// the session stays signed in with sync stopped. The server may have
+    /// ended the session already, if its answer was on its way.
+    LogoutCancelled,
     LoggedOut,
     Stopped,
     Error(CoreErrorEvent),
@@ -2428,6 +2436,7 @@ mod tests {
     fn logout_events_round_trip_through_serde() {
         for (event, wire) in [
             (Event::LoggingOut, r#""LoggingOut""#),
+            (Event::LogoutCancelled, r#""LogoutCancelled""#),
             (
                 Event::LogoutWouldLoseRoomKeys(RoomKeysAtRisk::RecoveryOff),
                 r#"{"LogoutWouldLoseRoomKeys":"recovery_off"}"#,

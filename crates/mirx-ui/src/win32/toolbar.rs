@@ -319,7 +319,7 @@ mod tests {
                     (ConnectionState::WaitingToReconnect, true, true),
                     (ConnectionState::SignedIn, false, true),
                     (ConnectionState::SignedOut, false, true),
-                    (ConnectionState::LoggingOut, false, false),
+                    (ConnectionState::LoggingOut, true, false),
                 ] {
                     state_mut(hwnd).model.connection = connection;
                     refresh_status_bar(hwnd).unwrap();

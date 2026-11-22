@@ -21,6 +21,7 @@ pub(super) fn after_event(connection: ConnectionState, event: &Event) -> Connect
         Event::SyncStarted => ConnectionState::Syncing,
         Event::SyncStopped(_) => ConnectionState::SignedIn,
         Event::LoggingOut => ConnectionState::LoggingOut,
+        Event::LogoutCancelled => ConnectionState::SignedIn,
         Event::LoggedOut => ConnectionState::SignedOut,
         // The Log Out under way failed: the session stands, and the core
         // starts sync again if it ran (`SyncStarted`). From another state
@@ -185,6 +186,8 @@ pub(super) enum DisconnectAction {
     CancelSignIn,
     /// Stop retrying, as mIRC's `/quit` does.
     CancelReconnect,
+    /// Stop the Log Out under way, keeping the session, disconnected.
+    StopLogOut,
 }
 
 pub(super) fn disconnect_action(
@@ -196,7 +199,7 @@ pub(super) fn disconnect_action(
             Ok(DisconnectAction::CancelSignIn)
         }
         ConnectionState::WaitingToReconnect => Ok(DisconnectAction::CancelReconnect),
-        ConnectionState::LoggingOut => Err("logging out"),
+        ConnectionState::LoggingOut => Ok(DisconnectAction::StopLogOut),
         ConnectionState::SignedOut | ConnectionState::SignedIn => Err("not connected"),
     }
 }
@@ -335,6 +338,8 @@ mod tests {
         let refusal = Event::LogoutWouldLoseRoomKeys(mirx_core::RoomKeysAtRisk::RecoveryOff);
         assert_eq!(after_event(LoggingOut, &refusal), SignedIn);
         assert_eq!(after_event(LoggingOut, &error(Operation::Logout)), SignedIn);
+        // Disconnect stopped it.
+        assert_eq!(after_event(LoggingOut, &Event::LogoutCancelled), SignedIn);
         // The core starts the sync the Log Out stopped again.
         assert_eq!(after_event(SignedIn, &Event::SyncStarted), Syncing);
         // A refusal before any Log Out started keeps the connection.
@@ -426,7 +431,10 @@ mod tests {
         for connection in [SignedOut, SignedIn] {
             assert_eq!(disconnect_action(connection), Err("not connected"));
         }
-        assert_eq!(disconnect_action(LoggingOut), Err("logging out"));
+        assert_eq!(
+            disconnect_action(LoggingOut),
+            Ok(DisconnectAction::StopLogOut)
+        );
         assert_eq!(check_sign_in(SignedOut), Ok(()));
         assert_eq!(check_sign_in(LoggingOut), Err("logging out"));
         for connecting in [SigningIn, WaitingForBrowser] {

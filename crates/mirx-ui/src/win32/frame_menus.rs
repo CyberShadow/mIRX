@@ -1277,10 +1277,11 @@ pub(super) unsafe fn connect(hwnd: HWND, server: Option<&str>) -> Result<bool, S
 }
 
 /// File > Disconnect and `/quit`: stop syncing and keep the session, stop
-/// a sign-in in progress, or stop retrying.
+/// a sign-in or a Log Out in progress, or stop retrying.
 pub(super) unsafe fn disconnect(hwnd: HWND) -> Result<(), String> {
     let command = match connection::disconnect_action(state_ref(hwnd).model.connection)? {
-        DisconnectAction::StopSync => Command::StopSync,
+        // The core stops the Log Out under way: `LogoutCancelled`.
+        DisconnectAction::StopSync | DisconnectAction::StopLogOut => Command::StopSync,
         DisconnectAction::CancelSignIn => Command::CancelLogin,
         DisconnectAction::CancelReconnect => {
             reconnect::cancel(hwnd);

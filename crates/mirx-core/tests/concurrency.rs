@@ -579,6 +579,74 @@ fn a_failed_logout_keeps_the_session_whole() {
     harness.join_stopped();
 }
 
+/// File > Disconnect during a Log Out the server does not answer: the
+/// logout stops, the session stays signed in with sync stopped, and the
+/// commands that waited for the logout run.
+#[test]
+fn disconnecting_stops_a_logout_under_way() {
+    let harness = Harness::restored_in_rooms(&[ROOM], &[]);
+    harness.hang("POST", r"^/_matrix/client/v3/logout$");
+    mount_bob_profile(&harness);
+    let mut seen = Seen::new(&harness);
+    harness.send(Command::StartSync);
+    seen.until("SyncConnected", |event| *event == Event::SyncConnected);
+    seen.until_acks(1);
+
+    harness.send(common::log_out_anyway());
+    seen.until("LoggingOut", |event| *event == Event::LoggingOut);
+    harness.wait_for_requests("POST", "/logout", 1);
+    // Waits for the logout's end.
+    harness.send(Command::FetchUserProfile("@bob:example.org".to_owned()));
+    harness.send(Command::StopSync);
+    let from = seen.events.len();
+    seen.until("LogoutCancelled", |event| *event == Event::LogoutCancelled);
+    // The logout's ack, the stop's, then the profile's after its answer.
+    seen.until("the profile", |event| {
+        matches!(event, Event::UserProfile(_))
+    });
+    seen.until_acks(4);
+    let answers: Vec<_> = seen.events[from..]
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::LogoutCancelled | Event::CommandHandled | Event::UserProfile(_)
+            )
+        })
+        .collect();
+    assert!(
+        matches!(
+            answers[..],
+            [
+                Event::LogoutCancelled,
+                Event::CommandHandled,
+                Event::CommandHandled,
+                Event::UserProfile(_),
+                Event::CommandHandled,
+            ]
+        ),
+        "{answers:#?}"
+    );
+
+    // Sync stays stopped: nothing started it again.
+    assert!(
+        !seen.events[from..]
+            .iter()
+            .any(|event| matches!(event, Event::SyncStarted | Event::LoggedOut)),
+        "{:#?}",
+        seen.events
+    );
+    // Still in the session: Connect syncs again.
+    harness.send(Command::StartSync);
+    seen.until("SyncConnected again", |event| {
+        *event == Event::SyncConnected
+    });
+
+    let events = seen.shut_down();
+    assert!(!events.contains(&Event::LoggedOut), "{events:#?}");
+    harness.join_stopped();
+}
+
 fn password_login(harness: &Harness) -> Command {
     Command::Login(LoginRequest {
         server: harness.server.uri(),
