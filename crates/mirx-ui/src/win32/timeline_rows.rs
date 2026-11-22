@@ -618,6 +618,30 @@ fn member_change_item(change: &RoomMemberChange) -> EventItem {
     }
 }
 
+/// What a line that could not be decrypted says after its sender: why,
+/// as mIRC notes a kick's reason, and what can be done, when anything can.
+fn unable_to_decrypt_text(cause: mirx_core::RoomUnableToDecryptCause) -> String {
+    use mirx_core::RoomUnableToDecryptCause as Cause;
+    let note = match cause {
+        Cause::Unknown => "",
+        Cause::SentBeforeYouJoined => " (sent before you joined)",
+        Cause::HistoricalNoBackup => {
+            " (sent before this session existed, and you have no key backup)"
+        }
+        Cause::HistoricalUnverified => {
+            " (sent before this session existed: /verify this session or /e2ee recover to read it)"
+        }
+        Cause::WithheldUnverified => {
+            " (the sender shares keys only with verified sessions: /verify this session)"
+        }
+        Cause::WithheldBySender => " (the sender withheld its key)",
+        Cause::SenderIdentityChanged => " (the sender's verified identity has changed)",
+        Cause::UnsignedDevice => " (sent from a session its owner has not verified)",
+        Cause::UnknownDevice => " (sent from an unknown session)",
+    };
+    format!("sent an encrypted message that could not be decrypted{note}")
+}
+
 /// `own_user_id` is the signed-in user's, `None` while signed out.
 fn activity_line_text(
     room_view: &RoomViewModel,
@@ -819,7 +843,7 @@ fn activity_line_text(
             action_line_with_link(
                 timestamp,
                 &message.sender,
-                "sent an encrypted message that could not be decrypted",
+                &unable_to_decrypt_text(message.cause),
             ),
             None,
         ),
@@ -2994,6 +3018,66 @@ mod tests {
                 "[16:00] * @alice:example.org sent an encrypted message that could not be decrypted"
                     .to_owned(),
             ]
+        );
+    }
+
+    /// Each cause notes why, and what to do when something can be done.
+    #[test]
+    fn a_line_that_could_not_be_decrypted_says_why() {
+        use mirx_core::RoomUnableToDecryptCause as Cause;
+        let causes = [
+            (Cause::Unknown, ""),
+            (Cause::SentBeforeYouJoined, " (sent before you joined)"),
+            (
+                Cause::HistoricalNoBackup,
+                " (sent before this session existed, and you have no key backup)",
+            ),
+            (
+                Cause::HistoricalUnverified,
+                " (sent before this session existed: /verify this session or /e2ee recover to read it)",
+            ),
+            (
+                Cause::WithheldUnverified,
+                " (the sender shares keys only with verified sessions: /verify this session)",
+            ),
+            (Cause::WithheldBySender, " (the sender withheld its key)"),
+            (
+                Cause::SenderIdentityChanged,
+                " (the sender's verified identity has changed)",
+            ),
+            (
+                Cause::UnsignedDevice,
+                " (sent from a session its owner has not verified)",
+            ),
+            (Cause::UnknownDevice, " (sent from an unknown session)"),
+        ];
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", true)];
+        for (index, (cause, _)) in causes.iter().enumerate() {
+            let mut event = unable_to_decrypt_activity(
+                "!ops:example",
+                &format!("$encrypted{index}:example.org"),
+                "@alice:example.org",
+                1_710_000_000_000,
+            );
+            let Event::RoomActivity(activity) = &mut event else {
+                unreachable!("a room activity");
+            };
+            let RoomActivityKind::UnableToDecrypt(utd) = &mut activity.kind else {
+                unreachable!("a UTD");
+            };
+            utd.cause = *cause;
+            apply_core_event(&mut state, event).unwrap();
+        }
+
+        assert_eq!(
+            render_room_lines(&state, "!ops:example")[2..],
+            causes
+                .iter()
+                .map(|(_, note)| format!(
+                    "[16:00] * @alice:example.org sent an encrypted message that could not be decrypted{note}"
+                ))
+                .collect::<Vec<_>>()
         );
     }
 
