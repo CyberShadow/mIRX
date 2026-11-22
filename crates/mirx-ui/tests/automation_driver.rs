@@ -25444,10 +25444,16 @@ fn an_open_thread_window_keeps_its_lines_in_the_room_window()
 fn the_status_window_keeps_the_buffer() -> Result<(), Box<dyn std::error::Error>> {
     let (app, _server, local_app_data) = launch_buffered_beta_room(100, 0)?;
     app.select_view(ViewIdentity::Status)?;
+    // Without their timestamps: the minute may turn during the test.
     let status_lines = |app: &MirxApp| -> Result<Vec<String>, Box<dyn std::error::Error>> {
         Ok(find_view(&app.dump_ui_state()?, &ViewIdentity::Status)
             .lines
-            .clone())
+            .iter()
+            .map(|line| {
+                let (_timestamp, text) = line.split_once("] ").expect("a timestamped line");
+                text.to_owned()
+            })
+            .collect())
     };
     let before = status_lines(&app)?;
     type_commands(&app, &["/help"])?;
