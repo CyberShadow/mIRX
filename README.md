@@ -24,6 +24,7 @@ nix develop -c ./scripts/wine-smoke.sh
 nix develop -c ./scripts/windows-ui-tests.sh
 nix develop -c ./scripts/ui-snapshot.sh
 nix develop -c ./scripts/dll-gate.sh
+nix develop -c ./scripts/live-lane.sh
 nix develop -c ./scripts/measure.sh
 ```
 
@@ -41,29 +42,23 @@ mirx is a Windows GUI program: started from Explorer or a shortcut, no console w
 
 ## Live Matrix Checks
 
-Live Matrix checks are opt-in and use:
+`live-lane.sh` runs the live lane: the release `mirx-ui.exe`, driven through its GUI under Wine by the `live` suite (`crates/mirx-ui/tests/live.rs`), against a real Conduit homeserver, all inside a NixOS VM (`nix/live-lane.nix`). matrix-sdk clients in the test process play the other users, and every test registers users of its own. The tests: messages both ways in a room joined by its address and in an encrypted room; Log Out, which ends the device on the server, and signing in again as a new device; a session signed out from another device; and a restart that restores the session and catches up on what was said meanwhile. The script builds the Windows binaries with the dev shell's toolchain, adds them to the Nix store, and builds the VM test, which runs the tests every time; `-- <filter>...` picks tests by name. The VM test is built by the Nix daemon, which needs the `kvm` and `nixos-test` system features. A run takes 5 minutes or more once the VM's system is built (the first build takes much longer): 2 to 3 minutes in the VM (booting it and a Wine prefix, then about a minute of tests), the rest staging the binaries and waiting for the Nix daemon, which queues the build when it is busy. What Conduit lacks (refresh tokens, soft logout, OAuth) stays covered by the mock homeserver tests.
+
+`mirx-core` also has live Matrix checks of its own, opt-in through:
 
 - `MIRX_HS`
 - `MIRX_USER`
 - `MIRX_PASS`
 - optional `MIRX_ROOM`
 
-Missing or empty `MIRX_HS`, `MIRX_USER`, or `MIRX_PASS` makes the live Matrix tests return early without network access.
-
-Supported live checks:
+Missing or empty `MIRX_HS`, `MIRX_USER`, or `MIRX_PASS` makes them return early without network access.
 
 ```sh
 MIRX_HS=... MIRX_USER=... MIRX_PASS=... MIRX_ROOM=... \
   nix develop -c cargo test -p mirx-core --test live_matrix
-
-MIRX_HS=... MIRX_USER=... MIRX_PASS=... \
-  nix develop -c cargo test -p mirx-core --test live_matrix
-
-MIRX_HS=... MIRX_USER=... MIRX_PASS=... MIRX_ROOM=... \
-  nix develop -c cargo test --target x86_64-pc-windows-gnu -p mirx-ui --test automation_driver live_matrix_ui_session
 ```
 
-`MIRX_ROOM` is optional for the existing login, restore, sync, and logout coverage. It is required for send coverage and for the fully-read marker verification in `live_matrix`. `MIRX_ROOM` must be a room the account has already joined; the live test creates the event-backed message itself before issuing `MarkRoomRead`.
+`MIRX_ROOM` is optional for the login, restore, sync, and logout coverage. It is required for send coverage and for the fully-read marker verification. `MIRX_ROOM` must be a room the account has already joined; the test creates the event-backed message itself before issuing `MarkRoomRead`.
 
 The UI session file still lives at `%LOCALAPPDATA%\mirx\ui-shell\session.json`, but its payload is now DPAPI-protected binary data rather than cleartext JSON. The Matrix SDK SQLite store passphrase is generated per profile and persisted separately in `%LOCALAPPDATA%\mirx\ui-shell\store-passphrase.dpapi`, and refreshed Matrix access/refresh tokens are written back through the same protected session store. A browser sign-in's OAuth 2.0 tokens and client ID are saved the same way, and its refreshed tokens are saved again as the server rotates them. The password is never persisted.
 
