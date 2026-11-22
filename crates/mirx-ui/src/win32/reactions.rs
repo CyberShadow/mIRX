@@ -1,12 +1,13 @@
 //! The reaction summary row under a message. mIRC has no reactions, so
 //! mirx shows them on one dim, indented line that names who reacted, the
-//! way mIRC lists nicks: `    reactions: 👍 Alice, Bob  heart Carol +2`.
+//! way mIRC lists nicks: `    reactions: 👍 Alice, Bob  heart Carol and 2 more`.
 //!
 //! Pure code: the row's text from the message's reaction groups.
 
 use crate::automation::DumpRoomReactionSummary;
 
-/// How many reactors a group names before it counts the rest as `+N`.
+/// How many reactors a group names before it counts the rest as
+/// `and N more` (`+N` would read as a reaction key).
 pub(super) const REACTORS_SHOWN: usize = 3;
 
 /// The reaction summary row's text. Each group is its key and its first
@@ -33,7 +34,7 @@ pub(super) fn summary_line(
                 .join(", ");
             match summary.senders.len().saturating_sub(REACTORS_SHOWN) {
                 0 => format!("{} {shown}", summary.key),
-                rest => format!("{} {shown} +{rest}", summary.key),
+                rest => format!("{} {shown} and {rest} more", summary.key),
             }
         })
         .collect::<Vec<_>>();
@@ -108,7 +109,7 @@ mod tests {
                 )],
                 nick
             ),
-            "    reactions: heart Carol, Dave, Erin +2"
+            "    reactions: heart Carol, Dave, Erin and 2 more"
         );
     }
 

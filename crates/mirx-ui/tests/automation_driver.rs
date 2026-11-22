@@ -13502,7 +13502,7 @@ fn automation_driver_loads_receive_side_reactions() -> Result<(), Box<dyn std::e
     // @dave:example is not a member.
     assert!(view_contains(
         room_view,
-        "    reactions: +1 Alice, Bob, Carol +2  heart Carol"
+        "    reactions: +1 Alice, Bob, Carol and 2 more  heart Carol"
     ));
 
     let thread_view_identity = thread_identity("!reactions:example", "$react-thread-root");
@@ -13600,7 +13600,7 @@ fn automation_driver_applies_receive_side_reactions_redactions()
     let room_view = find_view(&ui_state, &room_identity("!reactions:example"));
     assert!(view_contains(
         room_view,
-        "    reactions: +1 Bob, Carol, @dave:example +1"
+        "    reactions: +1 Bob, Carol, @dave:example and 1 more"
     ));
     assert!(!view_contains(room_view, "heart"));
 
