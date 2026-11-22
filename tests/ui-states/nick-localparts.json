@@ -1,0 +1,222 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!nicks:example",
+        "display_name": "Nicks",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!nicks:example",
+      "members": [
+        {
+          "user_id": "@mod:example",
+          "nick": "mod",
+          "nick_ambiguous": false,
+          "is_own_user": false,
+          "rank": "moderator",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@casper:example",
+          "nick": "Ghost",
+          "nick_ambiguous": true,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@ghost:example",
+          "nick": "ghost",
+          "nick_ambiguous": true,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@me:example",
+          "nick": "Me",
+          "nick_ambiguous": false,
+          "is_own_user": true,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@zed:example",
+          "nick": "zed",
+          "nick_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        }
+      ]
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!nicks:example",
+      "activity_id": "state:$nicks-zed-joins",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$nicks-zed-joins",
+        "sender": {
+          "user_id": "@zed:example",
+          "nick": "zed",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "joined"
+          },
+          "target": {
+            "user_id": "@zed:example",
+            "nick": "zed",
+            "nick_ambiguous": false
+          },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!nicks:example",
+      "activity_id": "event:$nicks-boo",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$nicks-boo",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@ghost:example",
+          "nick": "ghost",
+          "nick_ambiguous": true
+        },
+        "presentation": "text",
+        "body": "boo",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!nicks:example",
+      "activity_id": "event:$nicks-civil",
+      "timestamp_ms": 1700000120000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$nicks-civil",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@mod:example",
+          "nick": "mod",
+          "nick_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "keep it civil",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!nicks:example",
+      "target": {
+        "type": "event",
+        "event_id": "$nicks-civil"
+      },
+      "kind": {
+        "type": "reaction_added",
+        "reaction_event_id": "$nicks-react-zed",
+        "sender": "@zed:example",
+        "timestamp_ms": 1700000150000,
+        "key": "👍"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!nicks:example",
+      "target": {
+        "type": "event",
+        "event_id": "$nicks-civil"
+      },
+      "kind": {
+        "type": "reaction_added",
+        "reaction_event_id": "$nicks-react-mod",
+        "sender": "@mod:example",
+        "timestamp_ms": 1700000160000,
+        "key": "👍"
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!nicks:example",
+      "activity_id": "event:$nicks-stranger",
+      "timestamp_ms": 1700000180000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$nicks-stranger",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@stranger:example",
+          "nick": null,
+          "nick_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "not a member",
+        "styles": [],
+        "user_links": [],
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomTyping": {
+      "room_id": "!nicks:example",
+      "user_ids": [
+        "@zed:example"
+      ]
+    }
+  }
+]

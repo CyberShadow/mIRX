@@ -2850,6 +2850,41 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!membership:example'
       ;;
+    nick-localparts)
+      expect_selected='!nicks:example'
+      expect_active_view='room:!nicks:example'
+      room_expect_args=(
+        --expect-room '!nicks:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!nicks:example::* Now talking in Nicks (!nicks:example)'
+        --expect-room-view '!nicks:example::[22:13] * Joins: zed (@zed:example)'
+        --expect-room-view '!nicks:example::[22:14] <ghost (@ghost:example)> boo'
+        --expect-room-view '!nicks:example::[22:15] <mod> keep it civil'
+        --expect-room-view '!nicks:example::    reactions: 👍 zed, mod'
+        --expect-room-view '!nicks:example::[22:16] <@stranger:example> not a member'
+        --expect-room-view '!nicks:example::* zed is typing'
+      )
+      room_member_expect_args=(
+        --expect-room-member '!nicks:example::mod'
+        --expect-room-member '!nicks:example::Ghost (@casper:example)'
+        --expect-room-member '!nicks:example::ghost (@ghost:example)'
+        --expect-room-member '!nicks:example::Me'
+        --expect-room-member '!nicks:example::zed'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!nicks:example::Nicks'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!nicks:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!nicks:example'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'keep it civil'
+      )
+      ;;
     typing-indicator)
       expect_selected='!typing:example'
       expect_active_view='room:!typing:example'
