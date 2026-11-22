@@ -4316,7 +4316,9 @@ fn map_decimals((first, second, third): (u16, u16, u16)) -> VerificationDecimals
 /// The loop is the SDK's `sync_stream` (one `sync_once` after another, the
 /// first reusing the stored token, then `next_batch`, at most one a second
 /// when the server answers at once), run by mirx because each request says
-/// the presence it sets, and that changes while the loop runs.
+/// the presence it sets, and that changes while the loop runs. As the SDK's
+/// `ignore_timeout_on_first_sync`, the first request asks for an answer at
+/// once (`timeout=0`); the later ones long-poll for 30 s.
 pub(crate) async fn sync_task(
     client: Client,
     events: EventSender,
@@ -4332,6 +4334,14 @@ pub(crate) async fn sync_task(
         let settings = SyncSettings::default()
             .token(token)
             .set_presence(away.sync_presence());
+        // The first request of a connect asks the server not to wait for
+        // news: with a token and nothing new it would hold it for the long
+        // poll's 30 s, and the session would not count as connected.
+        let settings = if connected {
+            settings
+        } else {
+            settings.timeout(Duration::ZERO)
+        };
         let response = match client.sync_once(settings).await {
             Ok(response) => response,
             Err(err) => break err,

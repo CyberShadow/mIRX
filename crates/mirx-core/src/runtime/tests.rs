@@ -1108,6 +1108,49 @@ fn sync_requests_reuse_the_token_and_say_no_presence() {
     });
 }
 
+#[test]
+fn the_first_sync_of_a_connect_answers_at_once() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        let client = mock_server.client_builder().build().await;
+        mock_server.mock_sync().ok(|_| {}).mount().await;
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut core = Core::for_client(client, event_tx.clone());
+        let timeouts = |queries: &[Vec<(String, String)>]| -> Vec<Option<String>> {
+            queries
+                .iter()
+                .map(|query| query_value(query, "timeout").map(str::to_owned))
+                .collect()
+        };
+
+        run(&mut core, Command::StartSync).await;
+        wait_for_sync_requests(&mock_server, 3).await;
+        // The first asks the server not to wait for news, so the session
+        // is connected at once; the later ones long-poll.
+        let queries = sync_queries(&mock_server).await;
+        assert_eq!(timeouts(&queries[..1]), [Some("0".to_owned())]);
+        assert!(
+            timeouts(&queries[1..])
+                .iter()
+                .all(|timeout| timeout.as_deref() == Some("30000")),
+            "{queries:?}"
+        );
+
+        // Every connect, not only the session's first.
+        run(&mut core, Command::StopSync).await;
+        let before_restart = sync_queries(&mock_server).await.len();
+        run(&mut core, Command::StartSync).await;
+        wait_for_sync_requests(&mock_server, before_restart + 2).await;
+        let queries = sync_queries(&mock_server).await;
+        assert_eq!(
+            timeouts(&queries[before_restart..before_restart + 2]),
+            [Some("0".to_owned()), Some("30000".to_owned())]
+        );
+        drain_events(&event_rx);
+        core.stop().await;
+    });
+}
+
 const OWN_PRESENCE_PATH: &str = "/_matrix/client/v3/presence/@example:localhost/status";
 
 /// Answers `PUT` of the own presence with `put_status`, and `GET` with
