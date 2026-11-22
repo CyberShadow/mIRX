@@ -3,6 +3,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -220,11 +221,50 @@ pub(crate) enum HomeserverSpec<'a> {
     Url(&'a str),
 }
 
+/// Where the SDK keeps a session's state, crypto, event cache and media
+/// stores. They belong to one session: one device.
+fn store_path(config: &CoreConfig) -> PathBuf {
+    config.profile_dir.join("matrix-store")
+}
+
+/// How long `remove_store` waits for the last client's files to close.
+const STORE_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Removes the session's stores: its messages, room keys and sync state. A
+/// profile that was never signed in has none.
+///
+/// The client that had them open must be gone. Even so its SQLite
+/// connections close a moment later, each in a `spawn_blocking` that
+/// nothing waits for (deadpool-sync's `SyncWrapper::drop`), and Windows
+/// refuses to delete an open file. So while a file is in use, the removal
+/// is tried again, for a while.
+pub(crate) async fn remove_store(config: &CoreConfig) -> Result<(), MatrixCoreError> {
+    let path = store_path(config);
+    let deadline = tokio::time::Instant::now() + STORE_CLOSE_TIMEOUT;
+    loop {
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => return Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) if file_in_use(&err) && tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(err) => return Err(MatrixCoreError::new(format!("{}: {err}", path.display()))),
+        }
+    }
+}
+
+/// Whether a removal failed because a file is still open: Windows
+/// (`ERROR_SHARING_VIOLATION`) refuses that, POSIX systems do not.
+fn file_in_use(err: &std::io::Error) -> bool {
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    cfg!(windows) && err.raw_os_error() == Some(ERROR_SHARING_VIOLATION)
+}
+
 pub(crate) async fn build_client(
     config: &CoreConfig,
     homeserver: HomeserverSpec<'_>,
 ) -> Result<Client, MatrixCoreError> {
-    let store_path = config.profile_dir.join("matrix-store");
+    let store_path = store_path(config);
     std::fs::create_dir_all(&store_path)
         .map_err(|err| MatrixCoreError::new(format!("failed to create store directory: {err}")))?;
 

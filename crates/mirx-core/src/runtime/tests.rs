@@ -1578,14 +1578,12 @@ async fn mock_dead_refresh(mock_server: &MatrixMockServer) {
         .await;
 }
 
-/// A core signed in with a password, without sync; the server's login
-/// answer has a refresh token if `refresh_token`.
-async fn signed_in_core(
-    mock_server: &MatrixMockServer,
-    refresh_token: bool,
-) -> (tempfile::TempDir, Core, mpsc::Receiver<Event>) {
+/// A server that signs `example` in as this device, with a refresh token
+/// if `refresh_token`, and answers every `/sync` with nothing.
+async fn mount_sign_in(mock_server: &MatrixMockServer, device_id: &str, refresh_token: bool) {
     mock_server.mock_versions().ok().mount().await;
     let mut login = (*matrix_sdk_test::test_json::LOGIN).clone();
+    login["device_id"] = serde_json::json!(device_id);
     if refresh_token {
         login["refresh_token"] = serde_json::json!("RT1");
     }
@@ -1595,22 +1593,122 @@ async fn signed_in_core(
         .mount()
         .await;
     mock_server.mock_sync().ok(|_| {}).mount().await;
-    let profile = tempfile::TempDir::new().expect("temporary profile directory");
-    let config = CoreConfig {
+}
+
+fn profile_config(profile: &tempfile::TempDir) -> CoreConfig {
+    CoreConfig {
         profile_dir: profile.path().join("profile"),
         store_passphrase: "test-store-passphrase".to_owned(),
-    };
+    }
+}
+
+/// Signs `core` in with a password, without sync, and returns the device
+/// the sign-in made.
+async fn sign_in(
+    core: &mut Core,
+    event_rx: &mpsc::Receiver<Event>,
+    mock_server: &MatrixMockServer,
+) -> String {
+    run(core, Command::Login(login_request(mock_server, false))).await;
+    let events = without_e2ee_status(drain_events(event_rx));
+    let errors: Vec<_> = events
+        .iter()
+        .filter(|event| matches!(event, Event::Error(error) if error.operation == Operation::Login))
+        .collect();
+    assert_eq!(errors, Vec::<&Event>::new(), "{events:?}");
+    events
+        .iter()
+        .find_map(|event| match event {
+            Event::LoggedIn { session, .. } => Some(session.device_id.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("LoggedIn in {events:?}"))
+}
+
+/// A core signed in with a password, without sync; the server's login
+/// answer has a refresh token if `refresh_token`.
+async fn signed_in_core(
+    mock_server: &MatrixMockServer,
+    refresh_token: bool,
+) -> (tempfile::TempDir, Core, mpsc::Receiver<Event>) {
+    mount_sign_in(mock_server, "GHTYAJCE", refresh_token).await;
+    let profile = tempfile::TempDir::new().expect("temporary profile directory");
     let (event_tx, event_rx) = mpsc::channel::<Event>();
-    let mut core = Core::new(config, event_tx);
-    run(&mut core, Command::Login(login_request(mock_server, false))).await;
-    let events = drain_events(&event_rx);
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, Event::LoggedIn { .. })),
-        "{events:?}"
-    );
+    let mut core = Core::new(profile_config(&profile), event_tx);
+    sign_in(&mut core, &event_rx, mock_server).await;
     (profile, core, event_rx)
+}
+
+fn logged_out() -> wiremock::ResponseTemplate {
+    wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({}))
+}
+
+/// Log Out removes the session's messages, room keys and sync state.
+#[test]
+fn logging_out_removes_the_sessions_store() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        let (profile, mut core, event_rx) = signed_in_core(&mock_server, false).await;
+        mock_logout(&mock_server, logged_out()).await;
+        let store = profile.path().join("profile").join("matrix-store");
+        assert!(store.is_dir());
+
+        run(&mut core, Command::Logout).await;
+
+        assert_eq!(
+            without_e2ee_status(drain_events(&event_rx)),
+            vec![Event::LoggedOut]
+        );
+        assert!(!store.exists());
+        core.stop().await;
+    });
+}
+
+/// Every sign-in makes a new device, which the last one's store would not
+/// match.
+#[test]
+fn signing_in_after_logging_out_starts_a_new_session() {
+    run_local(async {
+        let first_server = MatrixMockServer::new().await;
+        let (_profile, mut core, event_rx) = signed_in_core(&first_server, false).await;
+        mock_logout(&first_server, logged_out()).await;
+        run(&mut core, Command::Logout).await;
+        assert_eq!(
+            without_e2ee_status(drain_events(&event_rx)),
+            vec![Event::LoggedOut]
+        );
+        let second_server = MatrixMockServer::new().await;
+        mount_sign_in(&second_server, "NEWDEVICE", false).await;
+
+        let device_id = sign_in(&mut core, &event_rx, &second_server).await;
+
+        assert_eq!(device_id, "NEWDEVICE");
+        core.stop().await;
+    });
+}
+
+/// A store can outlive its session without a Log Out: an install that
+/// logged out before Log Out removed stores, a session file deleted by
+/// hand, a crash. A sign-in starts afresh.
+#[test]
+fn a_sign_in_clears_a_store_left_without_its_session() {
+    run_local(async {
+        let profile = tempfile::TempDir::new().expect("temporary profile directory");
+        let first_server = MatrixMockServer::new().await;
+        mount_sign_in(&first_server, "GHTYAJCE", false).await;
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut core = Core::new(profile_config(&profile), event_tx.clone());
+        sign_in(&mut core, &event_rx, &first_server).await;
+        core.stop().await;
+        let second_server = MatrixMockServer::new().await;
+        mount_sign_in(&second_server, "NEWDEVICE", false).await;
+        let mut core = Core::new(profile_config(&profile), event_tx);
+
+        let device_id = sign_in(&mut core, &event_rx, &second_server).await;
+
+        assert_eq!(device_id, "NEWDEVICE");
+        core.stop().await;
+    });
 }
 
 /// A session the server ended still has its room keys here: exporting

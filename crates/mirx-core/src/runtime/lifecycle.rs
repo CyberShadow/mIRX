@@ -41,6 +41,16 @@ pub(super) async fn log_in(
     events: EventSender,
     request: LoginRequest,
 ) -> SignInEnd {
+    // A sign-in makes a new device, which no store from before matches. One
+    // can outlive its session without a Log Out (a session file deleted by
+    // hand, a crash, a failed removal), and no client has it open: the core
+    // is idle.
+    if let Err(err) = matrix::remove_store(&config).await {
+        return SignInEnd::Failed(
+            Operation::Login,
+            format!("could not remove the previous session's data in {err}"),
+        );
+    }
     let client =
         match matrix::build_client(&config, HomeserverSpec::Discover(&request.server)).await {
             Ok(client) => client,

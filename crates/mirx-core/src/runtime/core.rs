@@ -465,11 +465,22 @@ impl Core {
             unreachable!("only a logout ends a logout");
         };
         match result {
+            // The session's client is gone with it: its store can go too.
             Ok(()) => {
                 let dropped = self.jobs.abort_all().await;
                 session.shut_down().await;
                 acks(&self.events, dropped);
+                let removed = matrix::remove_store(&self.config).await;
+                // The server's session is gone either way: the UI forgets it.
                 emit_event(&self.events, Event::LoggedOut);
+                if let Err(err) = removed {
+                    emit_error(
+                        &self.events,
+                        Operation::Logout,
+                        None,
+                        format!("logged out, but could not remove the session's data in {err}"),
+                    );
+                }
             }
             // The session stays whole.
             Err(err) => {

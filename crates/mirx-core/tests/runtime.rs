@@ -1094,8 +1094,10 @@ fn login_store_initialization_failure_emits_typed_error_event() {
     match next_answer(&handle, "login error") {
         Event::Error(err) => {
             assert_eq!(err.operation, Operation::Login);
+            // The profile is a file: clearing the store in it fails first.
             assert!(
-                err.message.contains("failed to create store directory"),
+                err.message
+                    .contains("could not remove the previous session's data in"),
                 "unexpected login error: {}",
                 err.message
             );
