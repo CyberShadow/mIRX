@@ -2330,6 +2330,42 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!ops:example'
       ;;
+    aliases-and-echo)
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      # Nothing here reaches the core, which is not signed in: /echo and
+      # the alias's commands print locally, and /x stops at its bad second
+      # command.
+      ordered_actions=(
+        'input:/echo plain echo'
+        'input:/echo 4 -t red with a stamp'
+        $'input:/echo \x02bold\x02 and \x034,1colour\x03 codes'
+        'input:/alias x echo first $1 | bogus | echo never'
+        'input:/x one'
+        'input:/alias'
+      )
+      room_expect_args=(
+        --expect-room '!ops:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::plain echo'
+        --expect-room-view '!ops:example::[22:12] red with a stamp'
+        --expect-room-view '!ops:example::bold and colour codes'
+        --expect-room-view '!ops:example::first one'
+        --expect-room-view '!ops:example::[22:12] * /bogus: unknown command (in alias /x)'
+        --expect-room-view '!ops:example::[22:12] * Aliases:'
+        --expect-room-view '!ops:example::[22:12] *   /j /join #$$1'
+        --expect-room-view '!ops:example::[22:12] *   /x echo first $1 | bogus | echo never'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar '* /bogus: unknown command (in alias /x)'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+      )
+      expect_switchbar_active='room:!ops:example'
+      ;;
     room-list|room-list-listing)
       expect_active_view='room_list'
       # `/list` opens the Rooms List over the room; the directory's one
