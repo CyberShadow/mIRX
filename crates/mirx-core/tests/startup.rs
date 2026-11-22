@@ -1,0 +1,261 @@
+//! A restart: the store has the rooms of the last sync, so the restore
+//! shows them at once, offline too, and asks the server nothing until the
+//! session syncs.
+
+mod common;
+
+use common::{Harness, alice_member_event};
+use matrix_sdk::ruma::OwnedRoomId;
+use matrix_sdk::ruma::serde::Raw;
+use matrix_sdk_test::{JoinedRoomBuilder, SyncResponseBuilder};
+use mirx_core::{Command, Event, Operation, RoomMemberRank, SyncStopReason};
+use serde_json::json;
+
+const ROOM: &str = "!a:example.org";
+
+/// `ROOM`, named and with a topic, with alice and bob (a moderator) in it.
+fn add_room(sync: &mut SyncResponseBuilder) {
+    let state = [
+        json!({
+            "type": "m.room.create",
+            "state_key": "",
+            "sender": "@alice:example.org",
+            "event_id": "$create",
+            "origin_server_ts": 0,
+            "content": { "creator": "@alice:example.org", "room_version": "10" },
+        }),
+        json!({
+            "type": "m.room.name",
+            "state_key": "",
+            "sender": "@alice:example.org",
+            "event_id": "$name",
+            "origin_server_ts": 1,
+            "content": { "name": "Lobby" },
+        }),
+        json!({
+            "type": "m.room.topic",
+            "state_key": "",
+            "sender": "@alice:example.org",
+            "event_id": "$topic",
+            "origin_server_ts": 2,
+            "content": { "topic": "Say hello" },
+        }),
+        json!({
+            "type": "m.room.power_levels",
+            "state_key": "",
+            "sender": "@alice:example.org",
+            "event_id": "$power",
+            "origin_server_ts": 3,
+            "content": { "users": { "@alice:example.org": 100, "@bob:example.org": 50 } },
+        }),
+        alice_member_event(),
+        json!({
+            "type": "m.room.member",
+            "state_key": "@bob:example.org",
+            "sender": "@bob:example.org",
+            "event_id": "$bob-join",
+            "origin_server_ts": 4,
+            "content": { "membership": "join", "displayname": "bob" },
+        }),
+    ];
+    sync.add_joined_room(
+        JoinedRoomBuilder::new(&OwnedRoomId::try_from(ROOM).expect("a room ID")).add_state_bulk(
+            state.map(|event| Raw::from_json_string(event.to_string()).expect("a raw event")),
+        ),
+    );
+}
+
+/// A session in `ROOM`, restored once (its store has synced), and the
+/// number of requests the server got so far.
+fn synced_once() -> (Harness, usize) {
+    let (harness, _) = Harness::restored_with_sync(add_room);
+    let requests = harness.requests("", "").len();
+    (harness, requests)
+}
+
+/// The paths of the requests the server got after the first `since`.
+fn paths_since(harness: &Harness, since: usize) -> Vec<String> {
+    harness
+        .requests("", "")
+        .into_iter()
+        .skip(since)
+        .map(|request| format!("{} {}", request.method, request.url.path()))
+        .collect()
+}
+
+/// What the stored rooms are: the room list, the members with their ranks
+/// and the read state of `ROOM`; and no error.
+fn assert_stored_rooms(events: &[Event]) {
+    let rooms = events
+        .iter()
+        .find_map(|event| match event {
+            Event::SyncedRooms(rooms) => Some(rooms),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no SyncedRooms in {events:#?}"));
+    let [room] = rooms.as_slice() else {
+        panic!("one room in {events:#?}");
+    };
+    assert_eq!(
+        (
+            room.room_id.as_str(),
+            room.display_name.as_str(),
+            room.topic.as_deref()
+        ),
+        (ROOM, "Lobby", Some("Say hello")),
+        "{events:#?}"
+    );
+    let members = events
+        .iter()
+        .find_map(|event| match event {
+            Event::RoomMembers(members) if members.room_id == ROOM => Some(members),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no members of {ROOM} in {events:#?}"));
+    let mut ranks = members
+        .members
+        .iter()
+        .map(|member| (member.user_id.as_str(), member.rank))
+        .collect::<Vec<_>>();
+    ranks.sort_by_key(|(user_id, _)| *user_id);
+    assert_eq!(
+        ranks,
+        [
+            ("@alice:example.org", RoomMemberRank::Administrator),
+            ("@bob:example.org", RoomMemberRank::Moderator),
+        ],
+        "{events:#?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::RoomReadState(state) if state.room_id == ROOM)),
+        "{events:#?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(event, Event::Error(_))),
+        "{events:#?}"
+    );
+}
+
+/// What the SDK asks by itself when a session is restored: recovery
+/// reads whether secret storage is set up. Not mirx's to stop; offline it
+/// fails quietly.
+fn is_the_sdks_own_request(path: &str) -> bool {
+    path.ends_with("/account_data/m.secret_storage.default_key")
+}
+
+#[test]
+fn a_restart_reads_the_rooms_from_the_store_and_asks_the_server_nothing() {
+    let (harness, since) = synced_once();
+
+    let (harness, restore) = harness.restarted();
+
+    assert_eq!(
+        restore.first(),
+        Some(&Event::RestoredSession),
+        "{restore:#?}"
+    );
+    assert_stored_rooms(&restore);
+    assert!(
+        !restore
+            .iter()
+            .any(|event| matches!(event, Event::E2eeStatus(_))),
+        "{restore:#?}"
+    );
+    let asked = paths_since(&harness, since);
+    assert_eq!(
+        asked
+            .iter()
+            .filter(|path| !is_the_sdks_own_request(path))
+            .collect::<Vec<_>>(),
+        Vec::<&String>::new(),
+        "every request after the restart: {asked:#?}"
+    );
+
+    harness.shut_down();
+}
+
+#[test]
+fn a_restart_offline_shows_the_rooms_and_loses_only_the_sync() {
+    let (harness, _) = synced_once();
+
+    let (harness, restore) = harness.restarted_offline();
+
+    assert_eq!(
+        restore.first(),
+        Some(&Event::RestoredSession),
+        "{restore:#?}"
+    );
+    assert_stored_rooms(&restore);
+    harness.send(Command::StartSync);
+    let events = harness.events_until("SyncStopped", |event| {
+        matches!(event, Event::SyncStopped(_))
+    });
+    // Background events of the restore may come first.
+    assert!(events.contains(&Event::SyncStarted), "{events:#?}");
+    assert!(
+        matches!(
+            events.last(),
+            Some(Event::SyncStopped(SyncStopReason::Lost(_)))
+        ),
+        "{events:#?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            Event::Error(error)
+                if matches!(error.operation, Operation::RestoreSession | Operation::E2eeStatus)
+        )),
+        "{events:#?}"
+    );
+
+    harness.shut_down();
+}
+
+#[test]
+fn a_restarted_session_reads_its_e2ee_status_once_connected() {
+    let (harness, since) = synced_once();
+    let (harness, _) = harness.restarted();
+
+    harness.send(Command::StartSync);
+    let mut events = harness.events_until("SyncConnected", |event| *event == Event::SyncConnected);
+    // A second response.
+    let syncs = paths_since(&harness, since)
+        .iter()
+        .filter(|path| path.ends_with("/sync"))
+        .count();
+    harness.wait_for_requests("GET", "/sync", syncs + 1);
+    harness.send(Command::RefreshE2eeStatus);
+    events
+        .extend(harness.events_until("the status's ack", |event| *event == Event::CommandHandled));
+
+    let started = events
+        .iter()
+        .position(|event| *event == Event::SyncStarted)
+        .unwrap_or_else(|| panic!("no SyncStarted in {events:#?}"));
+    let connected = events
+        .iter()
+        .position(|event| *event == Event::SyncConnected)
+        .expect("SyncConnected");
+    // The server's statuses: the first contact's, then the refresh's.
+    let fetched = events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| {
+            matches!(event, Event::E2eeStatus(status) if status.backup.exists_on_server.is_some())
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let [first, refreshed] = fetched.as_slice() else {
+        panic!("two fetched E2EE statuses in {events:#?}");
+    };
+    assert!(started < *first && *first < connected, "{events:#?}");
+    assert!(connected < *refreshed, "{events:#?}");
+    assert!(
+        !events.iter().any(|event| matches!(event, Event::Error(_))),
+        "{events:#?}"
+    );
+
+    harness.shut_down();
+}

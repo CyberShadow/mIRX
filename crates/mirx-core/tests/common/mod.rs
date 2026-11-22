@@ -184,8 +184,25 @@ impl Harness {
 
     /// Shuts the core down and starts another on the same profile,
     /// restored into the same session, as the app is after a restart; and
-    /// the events of the restore.
+    /// the events of the restore, up to its ack. The store has synced, so
+    /// the restore reads it and asks the server nothing: its E2EE status
+    /// comes once a sync reaches the server.
     pub fn restarted(self) -> (Self, Vec<Event>) {
+        let harness = self.restarted_core();
+        let events = harness.restore_stored(&harness.server.uri());
+        (harness, events)
+    }
+
+    /// The same, with the network down: the restore's homeserver URL is a
+    /// port nothing listens on, so every request is refused.
+    pub fn restarted_offline(self) -> (Self, Vec<Event>) {
+        let harness = self.restarted_core();
+        let events = harness.restore_stored(&closed_port_url());
+        (harness, events)
+    }
+
+    /// Shuts the core down and starts another on the same profile.
+    fn restarted_core(self) -> Self {
         self.send(Command::Shutdown);
         self.wait_for("Stopped", |event| *event == Event::Stopped);
         let Self {
@@ -196,25 +213,20 @@ impl Harness {
             profile,
         } = self;
         core.join().expect("join core");
-        let harness = Self {
+        Self {
             runtime,
             server,
             core: start_core(&profile),
             session,
             profile,
-        };
-        let events = harness.restore();
-        (harness, events)
+        }
     }
 
-    /// Every event of the restore, up to its ack.
+    /// Every event of the restore of a new profile, up to its ack: its
+    /// store has never synced, so the restore syncs once and reads the
+    /// E2EE status before the ack.
     fn restore(&self) -> Vec<Event> {
-        self.wait_for("Started", |event| *event == Event::Started);
-        self.send(Command::RestoreSession(RestoreSessionRequest {
-            homeserver_url: self.server.uri(),
-            session: self.session.clone().expect("a restored harness's session"),
-            start_sync: false,
-        }));
+        self.send_restore(&self.server.uri());
         let mut events =
             self.events_until("RestoredSession", |event| *event == Event::RestoredSession);
         events.extend(self.events_until("the session's E2EE status", |event| {
@@ -224,6 +236,22 @@ impl Harness {
             self.events_until("the restore's ack", |event| *event == Event::CommandHandled),
         );
         events
+    }
+
+    /// Every event of the restore of a profile whose store has synced, up
+    /// to its ack.
+    fn restore_stored(&self, homeserver_url: &str) -> Vec<Event> {
+        self.send_restore(homeserver_url);
+        self.events_until("the restore's ack", |event| *event == Event::CommandHandled)
+    }
+
+    fn send_restore(&self, homeserver_url: &str) {
+        self.wait_for("Started", |event| *event == Event::Started);
+        self.send(Command::RestoreSession(RestoreSessionRequest {
+            homeserver_url: homeserver_url.to_owned(),
+            session: self.session.clone().expect("a restored harness's session"),
+            start_sync: false,
+        }));
     }
 
     pub fn send(&self, command: Command) {
@@ -337,6 +365,14 @@ impl Harness {
         // The mocks' expectations are checked as the server drops.
         self.runtime.block_on(async move { drop(self.server) });
     }
+}
+
+/// A URL of a local port nothing listens on: the network is down.
+fn closed_port_url() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a local port");
+    let port = listener.local_addr().expect("the bound address").port();
+    drop(listener);
+    format!("http://127.0.0.1:{port}")
 }
 
 fn start_core(profile: &TempDir) -> CoreHandle {

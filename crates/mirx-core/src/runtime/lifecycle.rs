@@ -10,7 +10,9 @@ use super::session::EnteredSession;
 use super::{EventSender, RoomSnapshot, RoomSnapshots};
 use crate::api::{CoreConfig, Event, LoginMethod, LoginRequest, Operation, RestoreSessionRequest};
 use crate::loopback::{self, LoopbackListener, LoopbackRedirect};
-use crate::matrix::{self, BackupServerStatusMode, BrowserFlow, HomeserverSpec, PausedSendRooms};
+use crate::matrix::{
+    self, BackupServerStatusMode, BrowserFlow, HomeserverSpec, MatrixCoreError, PausedSendRooms,
+};
 
 /// How a sign-in or restore ended.
 pub(super) enum SignInEnd {
@@ -68,7 +70,7 @@ pub(super) async fn log_in(
                         session,
                         homeserver_url: client.homeserver().to_string(),
                     };
-                    let entered = read_session(
+                    read_session(
                         client,
                         signed_in,
                         Operation::Login,
@@ -76,8 +78,7 @@ pub(super) async fn log_in(
                         snapshots,
                         request.start_sync,
                     )
-                    .await;
-                    SignInEnd::Entered(Box::new(entered))
+                    .await
                 }
                 Err(err) => SignInEnd::Failed(Operation::Login, err.to_string()),
             }
@@ -164,7 +165,7 @@ pub(super) async fn finish_browser_login(
                 session,
                 homeserver_url: client.homeserver().to_string(),
             };
-            let entered = read_session(
+            read_session(
                 client,
                 signed_in,
                 Operation::Login,
@@ -172,8 +173,7 @@ pub(super) async fn finish_browser_login(
                 snapshots,
                 start_sync,
             )
-            .await;
-            SignInEnd::Entered(Box::new(entered))
+            .await
         }
         Err(err) => SignInEnd::Failed(Operation::Login, err.to_string()),
     }
@@ -195,7 +195,7 @@ pub(super) async fn restore(
     if let Err(err) = matrix::restore_session(&client, request.session).await {
         return SignInEnd::Failed(Operation::RestoreSession, err.to_string());
     }
-    let entered = read_session(
+    read_session(
         client,
         Event::RestoredSession,
         Operation::RestoreSession,
@@ -203,16 +203,19 @@ pub(super) async fn restore(
         snapshots,
         request.start_sync,
     )
-    .await;
-    SignInEnd::Entered(Box::new(entered))
+    .await
 }
 
-/// Reads a signed-in client's session: the initial sync, the first room
-/// snapshot and the E2EE status. Each update task is made (and so
+/// Reads a signed-in client's session: the first room snapshot, and the
+/// E2EE status if the server was asked. A store that has synced has the
+/// rooms of that sync: they are read from it, and the server is asked
+/// nothing until the session's first sync gets through. A store that has
+/// not (a sign-in, a restore whose store was lost) has nothing to show:
+/// the session syncs once first. Each update task is made (and so
 /// subscribes) at the point where it must start listening; the session
-/// spawns them. Initial sync failures are errors of `operation`; the
+/// spawns them. A failed initial sync is an error of `operation`; the
 /// session stands either way, and the first sync task response emits the
-/// snapshot instead.
+/// snapshot instead. A store that cannot be read fails the sign-in.
 async fn read_session(
     client: Client,
     signed_in: Event,
@@ -220,7 +223,11 @@ async fn read_session(
     events: EventSender,
     snapshots: RoomSnapshots,
     start_sync: bool,
-) -> EnteredSession {
+) -> SignInEnd {
+    let store_has_synced = match matrix::store_has_synced(&client).await {
+        Ok(synced) => synced,
+        Err(err) => return SignInEnd::Failed(operation, err.to_string()),
+    };
     let current_user_id = client
         .user_id()
         .expect("a signed-in client knows its user")
@@ -257,9 +264,13 @@ async fn read_session(
         events.clone(),
         client.room_info_notable_update_receiver(),
     )));
-    let snapshot = match matrix::initial_room_sync(&client).await {
-        Ok(()) => RoomSnapshot::read(&client, &snapshots).await,
-        Err(err) => Err(err),
+    let entry = if store_has_synced {
+        Entry::Stored(RoomSnapshot::read(&client, &snapshots).await)
+    } else {
+        match matrix::initial_room_sync(&client).await {
+            Ok(()) => Entry::Synced(RoomSnapshot::read(&client, &snapshots).await),
+            Err(err) => Entry::SyncFailed(err),
+        }
     };
     tasks.push(Box::pin(matrix::room_list_update_task(
         client.clone(),
@@ -271,7 +282,14 @@ async fn read_session(
         client.clone(),
         events.clone(),
     )));
-    let e2ee_status = matrix::summarize_e2ee_status(&client, BackupServerStatusMode::Fetch).await;
+    // The server answered the sign-in's sync: ask it now. Otherwise the
+    // session's first contact does.
+    let e2ee_status = match entry {
+        Entry::Synced(_) => {
+            Some(matrix::summarize_e2ee_status(&client, BackupServerStatusMode::Fetch).await)
+        }
+        Entry::Stored(_) | Entry::SyncFailed(_) => None,
+    };
     tasks.push(Box::pin(matrix::e2ee_recovery_state_task(
         client.clone(),
         events.clone(),
@@ -284,15 +302,34 @@ async fn read_session(
         client.clone(),
         events.clone(),
     )));
-    EnteredSession {
+    SignInEnd::Entered(Box::new(EnteredSession {
         client,
         signed_in,
         operation,
-        snapshot,
+        snapshot: entry.into_snapshot(),
         e2ee_status,
         snapshots,
         paused_sends,
         tasks,
         start_sync,
+    }))
+}
+
+/// How the session's entry got its first room snapshot.
+enum Entry {
+    /// From a store that had synced, without asking the server.
+    Stored(Result<RoomSnapshot, MatrixCoreError>),
+    /// After the sign-in's sync.
+    Synced(Result<RoomSnapshot, MatrixCoreError>),
+    /// The sign-in's sync failed: there is no snapshot.
+    SyncFailed(MatrixCoreError),
+}
+
+impl Entry {
+    fn into_snapshot(self) -> Result<RoomSnapshot, MatrixCoreError> {
+        match self {
+            Self::Stored(snapshot) | Self::Synced(snapshot) => snapshot,
+            Self::SyncFailed(err) => Err(err),
+        }
     }
 }

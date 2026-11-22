@@ -17,7 +17,7 @@ use crate::api::{
     Command, CoreConfig, CoreErrorEvent, Event, HighlightWord, Operation, RoomMembers,
     RoomMembership, RoomReadState, RoomSummary,
 };
-use crate::matrix::{self, MatrixCoreError};
+use crate::matrix::{self, BackupServerStatusMode, MatrixCoreError};
 
 mod commands;
 mod core;
@@ -204,7 +204,8 @@ pub(super) struct RoomSnapshot {
 }
 
 impl RoomSnapshot {
-    /// After a successful sync: the store has the rooms.
+    /// From the store, which has the rooms of the last sync processed into
+    /// it; it asks the server nothing for a room it has summarized before.
     pub(super) async fn read(
         client: &Client,
         snapshots: &RoomSnapshots,
@@ -261,34 +262,52 @@ impl RoomSnapshot {
     }
 }
 
-/// Whether the session's first room snapshot is still to come: its initial
-/// sync, or reading the snapshot, failed. Shared by the session's sync
-/// tasks, one at a time.
+/// What a session does once it first reaches the server, if its entry
+/// did not: the first room snapshot, if its initial sync or reading it
+/// failed; and the E2EE status, which asks the server, if the entry did
+/// not sync (it read a store that had synced, or the sync failed). Shared
+/// by the session's sync tasks, one at a time.
 #[derive(Clone)]
-pub(crate) struct InitialSnapshot(Rc<Cell<bool>>);
+pub(crate) struct FirstContact(Rc<FirstContactDuties>);
 
-impl InitialSnapshot {
-    pub(super) fn pending(pending: bool) -> Self {
-        Self(Rc::new(Cell::new(pending)))
+struct FirstContactDuties {
+    snapshot: Cell<bool>,
+    e2ee_status: Cell<bool>,
+}
+
+impl FirstContact {
+    pub(super) fn pending(snapshot: bool, e2ee_status: bool) -> Self {
+        Self(Rc::new(FirstContactDuties {
+            snapshot: Cell::new(snapshot),
+            e2ee_status: Cell::new(e2ee_status),
+        }))
     }
 
-    /// At a sync task's first successful response: emits the snapshot if it
-    /// is still to come. Failing to read it leaves it to the next task.
-    pub(crate) async fn emit_if_pending(
+    /// At a sync task's first successful response: emits the snapshot if
+    /// it is still to come, then the E2EE status. Failing to read the
+    /// snapshot leaves it to the next task. The E2EE status is asked once:
+    /// the server answered the sync, so its error is the server's answer,
+    /// and `RefreshE2eeStatus` asks again.
+    pub(crate) async fn complete(
         &self,
         client: &Client,
         snapshots: &RoomSnapshots,
         event_tx: &EventSender,
     ) {
-        if !self.0.get() {
-            return;
-        }
-        match RoomSnapshot::read(client, snapshots).await {
-            Ok(snapshot) => {
-                snapshot.emit(snapshots, event_tx);
-                self.0.set(false);
+        if self.0.snapshot.get() {
+            match RoomSnapshot::read(client, snapshots).await {
+                Ok(snapshot) => {
+                    snapshot.emit(snapshots, event_tx);
+                    self.0.snapshot.set(false);
+                }
+                Err(err) => emit_matrix_error(event_tx, Operation::RoomList, err),
             }
-            Err(err) => emit_matrix_error(event_tx, Operation::RoomList, err),
+        }
+        if self.0.e2ee_status.replace(false) {
+            match matrix::summarize_e2ee_status(client, BackupServerStatusMode::Fetch).await {
+                Ok(status) => emit_event(event_tx, Event::E2eeStatus(status)),
+                Err(err) => emit_matrix_error(event_tx, Operation::E2eeStatus, err),
+            }
         }
     }
 }

@@ -119,7 +119,7 @@ use matrix_sdk::{
         serde::Raw,
     },
     send_queue::{LocalEcho, LocalEchoContent, RoomSendQueueUpdate, SendQueueUpdate},
-    store::{RoomLoadSettings, SerializableEventContent},
+    store::{RoomLoadSettings, SerializableEventContent, StateStoreDataKey},
     sync::{JoinedRoomUpdate, State, SyncResponse},
     utils::UrlOrQuery,
 };
@@ -169,7 +169,7 @@ use crate::api::{
 };
 use crate::mentions::body_mentions;
 use crate::rich_text::{StyledText, html_from_styled_text, styled_text_from_html};
-use crate::runtime::{EventSender, InitialSnapshot, RoomSnapshots, emit_event};
+use crate::runtime::{EventSender, FirstContact, RoomSnapshots, emit_event};
 
 mod room_keys;
 
@@ -520,7 +520,21 @@ pub(crate) async fn finish_browser_login(
     Ok(stored_session(client))
 }
 
-/// The session's first sync; the runtime then reads the room snapshot.
+/// Whether the store holds a sync token: a sync was processed into it, so
+/// it has that sync's rooms, members and state.
+pub(crate) async fn store_has_synced(client: &Client) -> Result<bool, MatrixCoreError> {
+    let token = client
+        .state_store()
+        .get_kv_data(StateStoreDataKey::SyncToken)
+        .await
+        .map_err(|err| {
+            MatrixCoreError::new(format!("failed to read the stored sync token: {err}"))
+        })?;
+    Ok(token.is_some())
+}
+
+/// The first sync of a session whose store has never synced; the runtime
+/// then reads the room snapshot.
 pub(crate) async fn initial_room_sync(client: &Client) -> Result<(), MatrixCoreError> {
     // No `emit_member_snapshots_after_sync`: the snapshot has every joined
     // room's members.
@@ -4278,9 +4292,9 @@ fn map_decimals((first, second, third): (u16, u16, u16)) -> VerificationDecimals
     }
 }
 
-/// Runs continuous sync until it fails: the initial snapshot if it is still
-/// to come and `SyncConnected` at the first response, then `SyncStopped`
-/// with why it ended.
+/// Runs continuous sync until it fails: the session's first contact (see
+/// `FirstContact`) and `SyncConnected` at the first response, then
+/// `SyncStopped` with why it ended.
 ///
 /// The loop is the SDK's `sync_stream` (one `sync_once` after another, the
 /// first reusing the stored token, then `next_batch`, at most one a second
@@ -4290,7 +4304,7 @@ pub(crate) async fn sync_task(
     client: Client,
     events: EventSender,
     snapshots: RoomSnapshots,
-    initial_snapshot: InitialSnapshot,
+    first_contact: FirstContact,
     paused_sends: PausedSendRooms,
     away: AwayFlag,
 ) {
@@ -4309,10 +4323,8 @@ pub(crate) async fn sync_task(
         if !connected {
             connected = true;
             // Before SyncConnected: the UI's connected session has its
-            // rooms.
-            initial_snapshot
-                .emit_if_pending(&client, &snapshots, &events)
-                .await;
+            // rooms and its E2EE status.
+            first_contact.complete(&client, &snapshots, &events).await;
             emit_event(&events, Event::SyncConnected);
         }
         // The server answers again.

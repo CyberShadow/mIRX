@@ -12,7 +12,7 @@ use matrix_sdk::ruma::api::client::uiaa::AuthData;
 use tokio::task::{JoinHandle, JoinSet};
 
 use super::{
-    EventSender, InitialSnapshot, RoomSnapshot, RoomSnapshots, emit_event, emit_matrix_error,
+    EventSender, FirstContact, RoomSnapshot, RoomSnapshots, emit_event, emit_matrix_error,
 };
 use crate::api::{E2eeStatus, Event, Operation, VerificationFlowId};
 use crate::matrix::{self, AwayFlag, MatrixCoreError, PausedSendRooms};
@@ -42,18 +42,21 @@ pub(super) struct StartedReset {
     pub(super) auth: Option<AuthData>,
 }
 
-/// A session just signed in or restored, read from the server, with
-/// nothing announced and nothing spawned yet.
+/// A session just signed in or restored, read from the store or the
+/// server, with nothing announced and nothing spawned yet.
 pub(super) struct EnteredSession {
     pub(super) client: Client,
     /// `LoggedIn{..}` or `RestoredSession`.
     pub(super) signed_in: Event,
     /// `Login` or `RestoreSession`: the operation of the snapshot's error.
     pub(super) operation: Operation,
-    /// Offline, or the server is down: the first sync that gets through
-    /// emits the snapshot.
+    /// An error if the initial sync failed (offline, or the server is
+    /// down) or the snapshot could not be read: the first sync that gets
+    /// through emits the snapshot.
     pub(super) snapshot: Result<RoomSnapshot, MatrixCoreError>,
-    pub(super) e2ee_status: Result<E2eeStatus, MatrixCoreError>,
+    /// What the server said, if the entry asked it (it synced); `None`:
+    /// the first sync that gets through asks.
+    pub(super) e2ee_status: Option<Result<E2eeStatus, MatrixCoreError>>,
     pub(super) snapshots: RoomSnapshots,
     pub(super) paused_sends: PausedSendRooms,
     /// The update tasks, which subscribed to what they follow when they
@@ -91,8 +94,8 @@ pub(super) enum IdentityResetEnd {
 
 pub(super) struct Session {
     ctx: JobCtx,
-    /// Given to every sync task, which emits it if it is pending.
-    initial_snapshot: InitialSnapshot,
+    /// Given to every sync task, which completes it at its first response.
+    first_contact: FirstContact,
     /// Shared by the send queue's update task and every sync task.
     paused_sends: PausedSendRooms,
     /// For the session's life: it outlasts its sync tasks.
@@ -107,8 +110,8 @@ pub(super) struct Session {
 
 impl Session {
     /// Announces the session: `signed_in`, the room snapshot or its error,
-    /// and the E2EE status or its error. Then starts its update tasks, and
-    /// sync if asked (`SyncStarted`).
+    /// and the E2EE status or its error if the entry asked the server.
+    /// Then starts its update tasks, and sync if asked (`SyncStarted`).
     pub(super) fn start(entered: EnteredSession, events: &EventSender) -> Self {
         let EnteredSession {
             client,
@@ -122,7 +125,7 @@ impl Session {
             start_sync,
         } = entered;
         emit_event(events, signed_in);
-        let initial_snapshot = InitialSnapshot::pending(match snapshot {
+        let snapshot_pending = match snapshot {
             Ok(snapshot) => {
                 snapshot.emit(&snapshots, events);
                 false
@@ -131,11 +134,19 @@ impl Session {
                 emit_matrix_error(events, operation, err);
                 true
             }
-        });
-        match e2ee_status {
-            Ok(status) => emit_event(events, Event::E2eeStatus(status)),
-            Err(err) => emit_matrix_error(events, Operation::E2eeStatus, err),
-        }
+        };
+        let e2ee_status_pending = match e2ee_status {
+            Some(Ok(status)) => {
+                emit_event(events, Event::E2eeStatus(status));
+                false
+            }
+            Some(Err(err)) => {
+                emit_matrix_error(events, Operation::E2eeStatus, err);
+                false
+            }
+            None => true,
+        };
+        let first_contact = FirstContact::pending(snapshot_pending, e2ee_status_pending);
         let mut background = JoinSet::new();
         for task in tasks {
             background.spawn_local(task);
@@ -146,7 +157,7 @@ impl Session {
                 events: events.clone(),
                 snapshots,
             },
-            initial_snapshot,
+            first_contact,
             paused_sends,
             away: AwayFlag::default(),
             sync: None,
@@ -172,7 +183,7 @@ impl Session {
                 events: events.clone(),
                 snapshots: RoomSnapshots::default(),
             },
-            initial_snapshot: InitialSnapshot::pending(false),
+            first_contact: FirstContact::pending(false, false),
             paused_sends: PausedSendRooms::default(),
             away: AwayFlag::default(),
             sync: None,
@@ -209,7 +220,7 @@ impl Session {
             self.ctx.client.clone(),
             self.ctx.events.clone(),
             self.ctx.snapshots.clone(),
-            self.initial_snapshot.clone(),
+            self.first_contact.clone(),
             self.paused_sends.clone(),
             self.away.clone(),
         )));
