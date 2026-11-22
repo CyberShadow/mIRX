@@ -1675,6 +1675,56 @@ fn logging_out_a_session_the_server_ended_logs_out() {
     });
 }
 
+/// The files this process has open under `dir`.
+#[cfg(target_os = "linux")]
+fn open_files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir("/proc/self/fd")
+        .expect("list the open files")
+        .map(|entry| entry.expect("an open file").path())
+        .filter_map(|fd| std::fs::read_link(fd).ok())
+        .filter(|target| target.starts_with(dir))
+        .collect()
+}
+
+/// A logged-out session's client is gone, so its store is closed: Windows
+/// would refuse to delete open files. (matrix-sdk 0.18 kept every client
+/// that synced with the event cache subscribed: see vendor/.)
+#[cfg(target_os = "linux")]
+#[test]
+fn logging_out_closes_the_sessions_store() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        let (profile, mut core, event_rx) = signed_in_core(&mock_server, false).await;
+        mock_logout(
+            &mock_server,
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({})),
+        )
+        .await;
+        assert!(!open_files_under(profile.path()).is_empty());
+
+        run(&mut core, Command::Logout).await;
+        assert_eq!(
+            without_e2ee_status(drain_events(&event_rx)),
+            vec![Event::LoggedOut]
+        );
+
+        // The SQLite pools close on blocking threads.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let open = open_files_under(profile.path());
+            if open.is_empty() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "still open: {open:#?}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        core.stop().await;
+    });
+}
+
 /// The SDK tries the refresh token on the logout's 401; the server refuses
 /// it too.
 #[test]

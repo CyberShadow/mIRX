@@ -111,10 +111,16 @@ impl LatestEvents {
 
         // The task listening to the event cache, the send queue, and the room infos
         // updates.
+        //
+        // Note: we spawn the send queue observer here, instead of holding onto
+        // the `SendQueue` in the `listen_to_updates_task`, which would
+        // lead to a `Client` leak (since it's a field of
+        // the `SendQueue`).
+        let send_queue_generic_updates_subscriber = send_queue.subscribe();
         let listen_task_handle = spawn(listen_to_updates_task(
             registered_rooms.clone(),
             event_cache,
-            send_queue,
+            send_queue_generic_updates_subscriber,
             room_info_updates,
             latest_event_queue_sender,
         ))
@@ -463,13 +469,12 @@ enum LatestEventQueueUpdate {
 async fn listen_to_updates_task(
     registered_rooms: Arc<RegisteredRooms>,
     event_cache: EventCache,
-    send_queue: SendQueue,
+    mut send_queue_generic_updates_subscriber: broadcast::Receiver<SendQueueUpdate>,
     room_info_updates: broadcast::Receiver<RoomInfoNotableUpdate>,
     latest_event_queue_sender: mpsc::UnboundedSender<LatestEventQueueUpdate>,
 ) {
     let mut event_cache_generic_updates_subscriber =
         event_cache.subscribe_to_room_generic_updates();
-    let mut send_queue_generic_updates_subscriber = send_queue.subscribe();
     let mut room_info_updates_subscriber = room_info_updates.resubscribe();
 
     loop {
