@@ -849,17 +849,22 @@ impl SettingsStore {
     }
 }
 
-/// Writes a temporary file and renames it over `path`, which replaces it
-/// atomically: a crash leaves the old file or the new one.
 fn save(path: &Path, settings: &Settings) -> Result<(), String> {
+    write_atomically(path, &to_ini(settings))
+}
+
+/// Writes a profile `.ini` file: a temporary file renamed over `path`,
+/// which replaces it atomically, so a crash leaves the old file or the new
+/// one.
+pub(super) fn write_atomically(path: &Path, text: &str) -> Result<(), String> {
     let failed = |err: io::Error| format!("failed to save {}: {err}", path.display());
     let parent = path
         .parent()
-        .expect("the settings file must be inside the profile directory");
-    // Settings may change before anything else created the profile.
+        .expect("a profile file must be inside the profile directory");
+    // A file may change before anything else created the profile.
     fs::create_dir_all(parent).map_err(failed)?;
     let temporary = path.with_extension("ini.tmp");
-    fs::write(&temporary, to_ini(settings)).map_err(failed)?;
+    fs::write(&temporary, text).map_err(failed)?;
     fs::rename(&temporary, path).map_err(failed)
 }
 

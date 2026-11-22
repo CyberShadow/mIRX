@@ -13,6 +13,7 @@ use mirx_core::{
     RoomMessagePresentationKind, UserDevices, UserIdentityState, UserProfile,
 };
 
+use super::aliases::Aliases;
 use super::nick_completion::member_mention_text;
 use super::settings::{Bar, FontSetting, parse_points};
 use super::timeline_text::{context_line, rank_prefix, topic_is_text};
@@ -25,6 +26,11 @@ pub(super) enum ComposeSubmission<'a> {
         body: Cow<'a, str>,
     },
     LocalCommand(Result<SlashCommand, CommandError>),
+    /// `/name args` naming an alias (`aliases.rs`), run by `script.rs`.
+    Alias {
+        name: &'a str,
+        args: &'a str,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,6 +197,8 @@ pub(super) enum SlashCommand {
     Help {
         topic: Option<String>,
     },
+    /// `/alias [name [command]]`.
+    Alias(AliasCommand),
     Timestamp(TimestampCommand),
     Log(LogCommand),
     Font(FontCommand),
@@ -210,6 +218,15 @@ pub(super) struct ClearAll {
     pub(super) channels: bool,
     pub(super) queries: bool,
     pub(super) invites: bool,
+}
+
+/// `/alias` lists the aliases, `/alias name` removes one, `/alias name
+/// command` sets one. The name is without its `/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AliasCommand {
+    List,
+    Remove(String),
+    Set { name: String, command: String },
 }
 
 /// `/switchbar [on|off]`, `/treebar [on|off]`: show the setting, or show or
@@ -355,6 +372,7 @@ impl SlashCommand {
             Self::E2ee(_) => "e2ee",
             Self::Verify { .. } | Self::VerifyStart { .. } => "verify",
             Self::Help { .. } => "help",
+            Self::Alias(_) => "alias",
             Self::Timestamp(_) => "timestamp",
             Self::Log(_) => "log",
             Self::Font(_) => "font",
@@ -407,6 +425,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "accept",
         usage: "[room]",
         summary: "accept a room invite",
+    },
+    CommandSpec {
+        name: "alias",
+        usage: "[name [command]]",
+        summary: "add, remove or list aliases",
     },
     CommandSpec {
         name: "ame",
@@ -609,6 +632,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         summary: "save this window's lines to a file (no file: choose one)",
     },
     CommandSpec {
+        name: "say",
+        usage: "<text>",
+        summary: "send text to this window",
+    },
+    CommandSpec {
         name: "sendfile",
         usage: "[path]",
         summary: "send a file to this room (no path: choose one)",
@@ -685,9 +713,9 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
 ];
 
-/// Classifies editbox input: text, `//text` (literal slash), `/me`, or a
-/// command.
-pub(super) fn parse_compose_submission(input: &str) -> ComposeSubmission<'_> {
+/// Classifies editbox input: text, `//text` (literal slash), or a command
+/// line (`classify_command`).
+pub(super) fn classify_input<'a>(input: &'a str, aliases: &Aliases) -> ComposeSubmission<'a> {
     if !input.starts_with('/') {
         return ComposeSubmission::Message {
             presentation: RoomMessagePresentationKind::Text,
@@ -702,20 +730,47 @@ pub(super) fn parse_compose_submission(input: &str) -> ComposeSubmission<'_> {
         };
     }
 
-    let (name, argument) = split_command(input);
-    if name.eq_ignore_ascii_case("me") {
-        if argument.is_empty() {
-            return ComposeSubmission::LocalCommand(Err(CommandError::insufficient_parameters(
-                "me",
-            )));
-        }
-        return ComposeSubmission::Message {
-            presentation: RoomMessagePresentationKind::Emote,
-            body: Cow::Borrowed(argument),
+    classify_command(input, |name| aliases.get(name).is_some())
+}
+
+/// Classifies a command line, `/name arguments`: `/!name` is always the
+/// built-in `name`; otherwise a name `is_alias` takes is an alias call.
+/// The rest are built-ins: `/me` and `/say` are messages, anything else a
+/// command.
+pub(super) fn classify_command<'a>(
+    line: &'a str,
+    is_alias: impl Fn(&str) -> bool,
+) -> ComposeSubmission<'a> {
+    let (name, argument) = split_command(line);
+    if let Some(name) = name.strip_prefix('!').filter(|name| !name.is_empty()) {
+        return classify_builtin(name, argument);
+    }
+    if is_alias(name) {
+        return ComposeSubmission::Alias {
+            name,
+            args: argument,
         };
     }
+    classify_builtin(name, argument)
+}
 
-    ComposeSubmission::LocalCommand(parse(input))
+fn classify_builtin<'a>(name: &str, argument: &'a str) -> ComposeSubmission<'a> {
+    let presentation = if name.eq_ignore_ascii_case("me") {
+        RoomMessagePresentationKind::Emote
+    } else if name.eq_ignore_ascii_case("say") {
+        RoomMessagePresentationKind::Text
+    } else {
+        return ComposeSubmission::LocalCommand(parse_named(name, argument));
+    };
+    if argument.is_empty() {
+        return ComposeSubmission::LocalCommand(Err(CommandError::insufficient_parameters(
+            name.to_ascii_lowercase(),
+        )));
+    }
+    ComposeSubmission::Message {
+        presentation,
+        body: Cow::Borrowed(argument),
+    }
 }
 
 /// The command name after the `/`, and the trimmed argument text.
@@ -743,6 +798,11 @@ fn split_word(text: &str) -> (&str, &str) {
 /// Parses `/name arguments`. The input starts with a single `/`.
 pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
     let (name, argument) = split_command(input);
+    parse_named(name, argument)
+}
+
+/// Parses the built-in command `name` with its trimmed `argument` text.
+fn parse_named(name: &str, argument: &str) -> Result<SlashCommand, CommandError> {
     let name = name.to_ascii_lowercase();
     let required = |argument: &str| {
         if argument.is_empty() {
@@ -924,6 +984,20 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         "help" => Ok(SlashCommand::Help {
             topic: optional(argument),
         }),
+        "alias" => {
+            let (name, command) = split_word(argument);
+            let name = name.strip_prefix('/').unwrap_or(name).to_owned();
+            Ok(SlashCommand::Alias(
+                match (argument.is_empty(), command.is_empty()) {
+                    (true, _) => AliasCommand::List,
+                    (false, true) => AliasCommand::Remove(name),
+                    (false, false) => AliasCommand::Set {
+                        name,
+                        command: command.to_owned(),
+                    },
+                },
+            ))
+        }
         "timestamp" => parse_timestamp(argument).map(SlashCommand::Timestamp),
         "log" => parse_log(argument).map(SlashCommand::Log),
         "font" => parse_font(argument).map(SlashCommand::Font),
@@ -1681,6 +1755,10 @@ mod tests {
         error(command, "insufficient parameters")
     }
 
+    fn classify(input: &str) -> ComposeSubmission<'_> {
+        classify_input(input, &Aliases::defaults())
+    }
+
     fn text(body: &str) -> ComposeSubmission<'static> {
         ComposeSubmission::Message {
             presentation: RoomMessagePresentationKind::Text,
@@ -1731,7 +1809,7 @@ mod tests {
     #[test]
     fn parse_compose_submission_distinguishes_text_emote_literal_slash_and_commands() {
         assert_eq!(
-            parse_compose_submission("hello"),
+            classify("hello"),
             ComposeSubmission::Message {
                 presentation: RoomMessagePresentationKind::Text,
                 body: Cow::Borrowed("hello"),
@@ -1739,7 +1817,7 @@ mod tests {
         );
         for input in ["/me waves", "/ME    waves"] {
             assert_eq!(
-                parse_compose_submission(input),
+                classify(input),
                 ComposeSubmission::Message {
                     presentation: RoomMessagePresentationKind::Emote,
                     body: Cow::Borrowed("waves"),
@@ -1748,7 +1826,7 @@ mod tests {
         }
         for input in ["/me", "/me    "] {
             assert_eq!(
-                parse_compose_submission(input),
+                classify(input),
                 ComposeSubmission::LocalCommand(insufficient("me"))
             );
         }
@@ -1766,15 +1844,116 @@ mod tests {
             ("//reject", "/reject"),
             ("///status", "//status"),
         ] {
-            assert_eq!(parse_compose_submission(input), text(body), "{input}");
+            assert_eq!(classify(input), text(body), "{input}");
         }
         assert_eq!(
-            parse_compose_submission("/status"),
+            classify("/status"),
             ComposeSubmission::LocalCommand(Ok(SlashCommand::Status))
         );
         assert_eq!(
-            parse_compose_submission("/"),
+            classify("/"),
             ComposeSubmission::LocalCommand(error("", "unknown command"))
+        );
+    }
+
+    #[test]
+    fn aliases_come_before_built_ins_except_after_a_bang() {
+        let aliases =
+            Aliases::from_source(vec!["/j /join #$$1".to_owned(), "/me say I am".to_owned()])
+                .unwrap();
+        let classify = |input| classify_input(input, &aliases);
+        assert_eq!(
+            classify("/j #ops"),
+            ComposeSubmission::Alias {
+                name: "j",
+                args: "#ops"
+            }
+        );
+        assert_eq!(
+            classify("/J   #ops  x "),
+            ComposeSubmission::Alias {
+                name: "J",
+                args: "#ops  x"
+            }
+        );
+        assert_eq!(
+            classify("/!j x"),
+            ComposeSubmission::LocalCommand(error("j", "unknown command"))
+        );
+        assert_eq!(
+            classify("/!JOIN x"),
+            ComposeSubmission::LocalCommand(Ok(SlashCommand::Join {
+                target: "x".to_owned()
+            }))
+        );
+        assert_eq!(
+            classify("/me hi"),
+            ComposeSubmission::Alias {
+                name: "me",
+                args: "hi"
+            }
+        );
+        assert_eq!(
+            classify("/!me waves"),
+            ComposeSubmission::Message {
+                presentation: RoomMessagePresentationKind::Emote,
+                body: Cow::Borrowed("waves"),
+            }
+        );
+        for input in ["/!", "/! j"] {
+            assert_eq!(
+                classify(input),
+                ComposeSubmission::LocalCommand(error("!", "unknown command")),
+                "{input}"
+            );
+        }
+        for input in ["/say hi there", "/SAY   hi there"] {
+            assert_eq!(classify(input), text_borrowed("hi there"), "{input}");
+        }
+        assert_eq!(
+            classify("/say /not a command"),
+            text_borrowed("/not a command")
+        );
+        assert_eq!(
+            classify("/say"),
+            ComposeSubmission::LocalCommand(insufficient("say"))
+        );
+        assert_eq!(classify("plain"), text_borrowed("plain"));
+        // An alias is called only with is_alias's leave.
+        assert_eq!(
+            classify_command("/j x", |_| false),
+            ComposeSubmission::LocalCommand(error("j", "unknown command"))
+        );
+    }
+
+    fn text_borrowed(body: &str) -> ComposeSubmission<'_> {
+        ComposeSubmission::Message {
+            presentation: RoomMessagePresentationKind::Text,
+            body: Cow::Borrowed(body),
+        }
+    }
+
+    #[test]
+    fn alias_lists_removes_or_sets() {
+        let alias = |command| Ok(SlashCommand::Alias(command));
+        assert_eq!(parse("/alias"), alias(AliasCommand::List));
+        assert_eq!(
+            parse("/ALIAS j"),
+            alias(AliasCommand::Remove("j".to_owned()))
+        );
+        assert_eq!(
+            parse("/alias /j /join #$$1"),
+            alias(AliasCommand::Set {
+                name: "j".to_owned(),
+                command: "/join #$$1".to_owned()
+            })
+        );
+        assert_eq!(
+            parse("/alias x { say a | say b }"),
+            alias(AliasCommand::Set {
+                name: "x".to_owned(),
+                command: "{ say a | say b }".to_owned()
+            })
         );
     }
 
@@ -2204,7 +2383,7 @@ mod tests {
             "/e2ee setup wait passphrase secret phrase",
             "/e2ee setup passphrase secret phrase",
         ] {
-            let ComposeSubmission::LocalCommand(command) = parse_compose_submission(input) else {
+            let ComposeSubmission::LocalCommand(command) = classify(input) else {
                 panic!("expected a command: {input}");
             };
             assert_eq!(
@@ -2214,7 +2393,7 @@ mod tests {
             );
         }
         for input in ["/e2ee setup wait", "/e2ee", "/kick", "/find needle"] {
-            let ComposeSubmission::LocalCommand(command) = parse_compose_submission(input) else {
+            let ComposeSubmission::LocalCommand(command) = classify(input) else {
                 panic!("expected a command: {input}");
             };
             assert_eq!(
@@ -2233,7 +2412,7 @@ mod tests {
         );
         for spec in COMMANDS {
             let input = format!("/{}", spec.name);
-            if let ComposeSubmission::LocalCommand(Err(error)) = parse_compose_submission(&input) {
+            if let ComposeSubmission::LocalCommand(Err(error)) = classify(&input) {
                 assert_ne!(error.reason, "unknown command", "{input}");
             }
         }
@@ -2285,6 +2464,7 @@ mod tests {
             "/voice x",
             "/devoice x",
             "/nick x",
+            "/alias",
         ];
         for input in samples {
             let name = parse(input).expect(input).name();
@@ -2427,10 +2607,10 @@ mod tests {
         let lines = help_lines(None).unwrap();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with(
-            "* Commands: /accept /ame /amsg /away /back /ban /clear /clearall /close /create /deop /describe /devices /devoice /e2ee"
+            "* Commands: /accept /alias /ame /amsg /away /back /ban /clear /clearall /close /create /deop /describe /devices /devoice /e2ee"
         ));
         assert!(lines[0].contains(" /help /identity /ignore "));
-        assert!(lines[0].contains(" /reply /savebuf /sendfile "));
+        assert!(lines[0].contains(" /reply /savebuf /say /sendfile "));
         assert!(lines[0].contains(" /timestamp /toolbar /topic /treebar "));
         assert_eq!(lines[1], "* /help <command> for usage");
         assert_eq!(

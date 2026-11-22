@@ -1,5 +1,6 @@
 //! Running parsed slash commands; the parser is `commands.rs`.
 
+use super::aliases::Aliases;
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,7 +22,7 @@ pub(super) unsafe fn run_local_command(hwnd: HWND, command: SlashCommand) -> Res
 
 /// Runs a typed command. `Ok(Some(status))` is feedback for the status bar;
 /// `Ok(None)` means the command reported (or needs) nothing.
-unsafe fn execute_slash_command(
+pub(super) unsafe fn execute_slash_command(
     hwnd: HWND,
     command: SlashCommand,
 ) -> Result<Option<String>, CommandError> {
@@ -541,6 +542,20 @@ pub(super) unsafe fn run_slash_command(
             echo_in_active_view(hwnd, commands::help_lines(topic.as_deref())?)?;
             Ok(None)
         }
+        SlashCommand::Alias(AliasCommand::List) => {
+            echo_in_active_view(hwnd, alias_list_lines(state_ref(hwnd).aliases.aliases()))?;
+            Ok(None)
+        }
+        SlashCommand::Alias(AliasCommand::Remove(name)) => {
+            let aliases = state_ref(hwnd).aliases.aliases().remove(&name)?;
+            state_mut(hwnd).aliases.replace(aliases)?;
+            Ok(Some(format!("alias removed: /{name}")))
+        }
+        SlashCommand::Alias(AliasCommand::Set { name, command }) => {
+            let aliases = state_ref(hwnd).aliases.aliases().set(&name, &command)?;
+            state_mut(hwnd).aliases.replace(aliases)?;
+            Ok(Some(format!("alias set: /{name}")))
+        }
         SlashCommand::Log(command) => {
             let (target, on) = match command {
                 LogCommand::Show => (None, None),
@@ -629,6 +644,17 @@ pub(super) unsafe fn run_slash_command(
             )))
         }
     }
+}
+
+/// What `/alias` alone prints: every alias's lines, as written.
+fn alias_list_lines(aliases: &Aliases) -> Vec<String> {
+    let lines = aliases.list_lines();
+    if lines.is_empty() {
+        return vec!["* No aliases".to_owned()];
+    }
+    std::iter::once("* Aliases:".to_owned())
+        .chain(lines.into_iter().map(|line| format!("*   {line}")))
+        .collect()
 }
 
 /// The window `/log` acts on: the active one (a thread window's room), or
@@ -2000,7 +2026,7 @@ mod tests {
                 type_compose_line(hwnd, "/help nope");
                 let lines = render_room_lines(state_ref(hwnd), "!room:example");
                 let echo = &lines[lines.len() - 4..];
-                assert!(echo[0].starts_with("[22:12] * Commands: /accept /ame /amsg /away /back /ban /clear /clearall /close "));
+                assert!(echo[0].starts_with("[22:12] * Commands: /accept /alias /ame /amsg /away /back /ban /clear /clearall /close "));
                 assert_eq!(echo[1], "[22:12] * /help <command> for usage");
                 assert_eq!(echo[2], "[22:12] * /clear - clear this window");
                 assert_eq!(echo[3], "[22:12] * /help: no such command: nope");

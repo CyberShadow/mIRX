@@ -3361,7 +3361,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 75);
+    assert_eq!(version.protocol_version, 76);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -20565,6 +20565,94 @@ fn amsg_ame_and_describe_send_to_channels_and_one_target() -> Result<(), Box<dyn
         only_view_line_containing(find_view(&ui_state, &alpha), "-> Beta")
             .ends_with("-> Beta * nods")
     );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn typed_aliases_run_their_commands() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+    let aliases_ini = local_app_data
+        .join("mirx")
+        .join("ui-shell")
+        .join("aliases.ini");
+
+    // mIRC's default aliases, with no aliases.ini.
+    type_commands(&app, &["/j gamma:example", "/w @alice:example.org", "/w"])?;
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_membership_commands,
+        [SubmittedMembershipCommand {
+            action: MembershipCommandAction::Join,
+            target: "#gamma:example".to_owned(),
+        }]
+    );
+    assert_eq!(
+        model
+            .submitted_user_commands
+            .iter()
+            .map(|command| (command.action, command.user_id.as_str()))
+            .collect::<Vec<_>>(),
+        [(UserCommandAction::FetchProfile, "@alice:example.org")]
+    );
+    assert!(!aliases_ini.exists());
+
+    type_commands(
+        &app,
+        &["/alias hi say hello $1 | say bye", "/hi there", "/!j x"],
+    )?;
+    let sent: Vec<_> = app
+        .dump_model()?
+        .submitted_message_commands
+        .into_iter()
+        .map(|command| (command.room_id, command.body))
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            ("!beta:example".to_owned(), "hello there".to_owned()),
+            ("!beta:example".to_owned(), "bye".to_owned()),
+        ]
+    );
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(
+        ui_state.aliases.last().map(String::as_str),
+        Some("/hi say hello $1 | say bye")
+    );
+    assert_eq!(ui_state.aliases.len(), 9);
+    assert!(
+        only_view_line_containing(find_view(&ui_state, &beta), "/j:")
+            .ends_with("] * /j: unknown command")
+    );
+    let ini = fs::read_to_string(&aliases_ini)?;
+    assert!(
+        ini.starts_with("[aliases]\r\nn0=/dop /deop $$1\r\n"),
+        "{ini:?}"
+    );
+    assert!(
+        ini.ends_with("n7=/s /server $$1\r\nn8=/hi say hello $1 | say bye\r\n"),
+        "{ini:?}"
+    );
+
+    type_commands(&app, &["/alias hi", "/hi"])?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.aliases.len(), 8);
+    assert!(
+        only_view_line_containing(find_view(&ui_state, &beta), "/hi:")
+            .ends_with("] * /hi: unknown command")
+    );
+    assert!(!fs::read_to_string(&aliases_ini)?.contains("/hi"));
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

@@ -1433,6 +1433,8 @@ pub struct UiState {
     /// The account's ignore list as the server last listed it; `None`
     /// until the first list.
     pub ignored_users: Option<Vec<String>>,
+    /// The alias lines of `aliases.ini`, as the Aliases editor shows them.
+    pub aliases: Vec<String>,
     /// How much refresh work the UI has done since it started.
     pub refresh_counters: UiRefreshCounters,
 }

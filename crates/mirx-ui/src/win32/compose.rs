@@ -352,7 +352,7 @@ pub(super) unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> 
             .record_submission(entry);
     };
     let empty = wide_null("");
-    match parse_compose_submission(&input) {
+    match classify_input(&input, state_ref(hwnd).aliases.aliases()) {
         ComposeSubmission::Message { presentation, body } => {
             let target = state_ref(hwnd).views[&view].compose().target.clone();
             match &target {
@@ -377,6 +377,14 @@ pub(super) unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> 
                     .target = None;
                 refresh_view_content(hwnd, &view)?;
             }
+        }
+        ComposeSubmission::Alias { name, args } => {
+            // The line as typed, as a command's: an alias that wraps a
+            // secret (`/e2ee setup passphrase`) records it, since the user
+            // wrote that alias.
+            record(input.clone());
+            SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
+            script::run_alias_call(hwnd, name, args)?;
         }
         ComposeSubmission::LocalCommand(parsed) => {
             if let Some(entry) = local_command_history_entry(&input, &parsed) {
@@ -501,7 +509,7 @@ pub(super) fn message_text_from_input(input: &str) -> Result<(String, Vec<TextSt
     Ok((body, styles))
 }
 
-fn submit_compose(
+pub(super) fn submit_compose(
     state: &mut WindowState,
     presentation: RoomMessagePresentationKind,
     input: &str,
@@ -1109,9 +1117,7 @@ mod tests {
     fn invalid_e2ee_recover_form_is_not_recorded_or_recalled_in_compose_history() {
         let mut history = ComposeHistory::default();
         let input = "/e2ee recover secret phrase".to_owned();
-        let ComposeSubmission::LocalCommand(command) = parse_compose_submission(&input) else {
-            panic!("expected local command submission");
-        };
+        let command = commands::parse(&input);
 
         let history_entry = local_command_history_entry(&input, &command);
         assert_eq!(history_entry, None);
@@ -1133,9 +1139,7 @@ mod tests {
     fn invalid_e2ee_setup_form_is_not_recorded_or_recalled_in_compose_history() {
         let mut history = ComposeHistory::default();
         let malformed = "/e2ee setup wait passphrases secret phrase";
-        let ComposeSubmission::LocalCommand(command) = parse_compose_submission(malformed) else {
-            panic!("expected local command submission");
-        };
+        let command = commands::parse(malformed);
         assert_eq!(local_command_history_entry(malformed, &command), None);
         history.record_submission("safe draft".to_owned());
         assert!(!history.entries.iter().any(|entry| entry.contains("secret")));
@@ -1145,9 +1149,7 @@ mod tests {
     fn valid_e2ee_setup_passphrase_form_is_not_recorded_in_compose_history() {
         let mut history = ComposeHistory::default();
         let input = "/e2ee setup wait passphrase secret phrase";
-        let ComposeSubmission::LocalCommand(command) = parse_compose_submission(input) else {
-            panic!("expected local command submission");
-        };
+        let command = commands::parse(input);
 
         assert_eq!(local_command_history_entry(input, &command), None);
         history.record_submission("safe draft".to_owned());

@@ -186,6 +186,7 @@ use crate::{
 };
 
 mod account;
+mod aliases;
 mod app_icon;
 #[cfg(test)]
 mod app_resources;
@@ -240,6 +241,7 @@ mod room_list_window;
 mod room_model;
 mod room_targets;
 mod save_buffer;
+mod script;
 mod self_test;
 mod send_file;
 mod settings;
@@ -272,6 +274,7 @@ use account::{
 };
 #[cfg(test)]
 use account::{SAVED_SESSION_VERSION, SESSION_FILE_NAME, SavedSession, load_saved_session};
+use aliases::{ALIASES_FILE_NAME, AliasStore};
 use attachments::{
     AttachmentSaveResult, PendingAttachmentSave, apply_attachment_save_media_event,
     save_selected_message_attachment,
@@ -302,9 +305,9 @@ use command_runner::{
     submit_room_notification_mode, whois_lines,
 };
 use commands::{
-    BarCommand, CommandError, ComposeSubmission, CreateRoomArgs, E2eeSlashCommand, FontCommand,
-    LogCommand, RoomKeyTransfer, SlashCommand, TimestampCommand, VerificationAction,
-    local_command_history_entry, parse_compose_submission,
+    AliasCommand, BarCommand, CommandError, ComposeSubmission, CreateRoomArgs, E2eeSlashCommand,
+    FontCommand, LogCommand, RoomKeyTransfer, SlashCommand, TimestampCommand, VerificationAction,
+    classify_input, local_command_history_entry,
 };
 #[cfg(test)]
 use compose::submit_compose_from_edit;
@@ -732,6 +735,7 @@ struct WindowState {
     render_state_mode: bool,
     clock: UiClock,
     settings: SettingsStore,
+    aliases: AliasStore,
     /// The time zone timestamps are shown in.
     local_time: LocalTimeFn,
     text_font: TextFont,
@@ -988,6 +992,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     let event_queue = Arc::new(Mutex::new(VecDeque::new()));
     let (gdiplus_session, gdiplus_startup_error) = initialize_gdiplus_state();
     let settings = load_settings(render_state_mode)?;
+    let aliases = load_aliases(render_state_mode)?;
     // The frame does not exist yet; it will be laid out at the system DPI.
     let text_font = unsafe { TextFont::create(&settings.settings().text_font, Dpi::system())? };
     let scheme_brushes = unsafe { SchemeBrushes::create(&settings.settings().colors) };
@@ -1005,6 +1010,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
             UiClock::System
         },
         settings,
+        aliases,
         local_time: system_local_time,
         text_font,
         scheme_brushes,
@@ -1161,6 +1167,14 @@ fn load_settings(render_state_mode: bool) -> Result<SettingsStore, String> {
         return Ok(SettingsStore::in_memory());
     }
     SettingsStore::load(profile_dir()?.join(SETTINGS_FILE_NAME))
+}
+
+/// The user's `aliases.ini`, as `load_settings` loads `mirx.ini`.
+fn load_aliases(render_state_mode: bool) -> Result<AliasStore, String> {
+    if render_state_mode {
+        return Ok(AliasStore::in_memory());
+    }
+    AliasStore::load(profile_dir()?.join(ALIASES_FILE_NAME))
 }
 
 fn start_core_bridge(hwnd: HWND, queue: Arc<Mutex<VecDeque<Event>>>) -> Result<CoreBridge, String> {
@@ -1531,6 +1545,25 @@ mod tests {
                     .err()
                     .unwrap()
                     .ends_with("mirx.ini line 1: unknown section [bogus]")
+            );
+        });
+    }
+
+    #[test]
+    fn aliases_load_from_the_profile_except_in_render_state_mode() {
+        with_local_app_data(|root| {
+            let profile = root.join("mirx").join("ui-shell");
+            fs::create_dir_all(&profile).unwrap();
+            assert!(load_aliases(false).unwrap().aliases().get("j").is_some());
+            fs::write(profile.join(ALIASES_FILE_NAME), "[aliases]\nn0=/x say x\n").unwrap();
+            assert!(load_aliases(false).unwrap().aliases().get("j").is_none());
+            assert!(load_aliases(true).unwrap().aliases().get("j").is_some());
+
+            fs::write(profile.join(ALIASES_FILE_NAME), "[aliases]\nn0=/x\n").unwrap();
+            let error = load_aliases(false).err().unwrap();
+            assert!(
+                error.ends_with("aliases.ini line 2 (n0): /x has no commands"),
+                "{error}"
             );
         });
     }

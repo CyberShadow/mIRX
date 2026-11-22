@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 75;
+pub(crate) const PROTOCOL_VERSION: u32 = 76;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1131,6 +1131,8 @@ pub(crate) struct UiState {
     /// The account's ignore list as the server last listed it; `None`
     /// until the first list.
     pub(crate) ignored_users: Option<Vec<String>>,
+    /// The alias lines of `aliases.ini`, as the Aliases editor shows them.
+    pub(crate) aliases: Vec<String>,
     /// How much refresh work the UI has done since it started.
     pub(crate) refresh_counters: UiRefreshCounters,
 }
@@ -4028,8 +4030,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_75() {
-        assert_eq!(PROTOCOL_VERSION, 75);
+    fn protocol_version_is_76() {
+        assert_eq!(PROTOCOL_VERSION, 76);
     }
 
     #[test]
@@ -5048,6 +5050,7 @@ mod tests {
             "active_system_menu_disabled":[],
             "menu_bar":[],
             "tray":{"icon":false,"hidden":false,"menu":[]},
+            "aliases":[],
             "refresh_counters":{"timeline_row_builds":0,"rows_wrapped":0,"treebar_rebuilds":0,"switchbar_rebuilds":0}
         }))
         .unwrap();
@@ -5079,6 +5082,7 @@ mod tests {
             "active_system_menu_disabled":[],
             "menu_bar":[],
             "tray":{"icon":false,"hidden":false,"menu":[]},
+            "aliases":[],
             "refresh_counters":{"timeline_row_builds":0,"rows_wrapped":0,"treebar_rebuilds":0,"switchbar_rebuilds":0}
         }))
         .unwrap();
@@ -6064,7 +6068,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":75,
+                    "protocol_version":76,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6837,6 +6841,7 @@ mod tests {
                         }],
                     },
                     ignored_users: Some(vec!["@spam:example".to_owned()]),
+                    aliases: vec!["/j /join #$$1".to_owned()],
                     refresh_counters: super::UiRefreshCounters {
                         timeline_row_builds: 5,
                         rows_wrapped: 6,
@@ -7057,6 +7062,7 @@ mod tests {
                     },
                     "tray":{"icon":true,"hidden":false,"menu":[{"label":"Status","checked":false}]},
                     "ignored_users":["@spam:example"],
+                    "aliases":["/j /join #$$1"],
                     "refresh_counters":{
                         "timeline_row_builds":5,
                         "rows_wrapped":6,

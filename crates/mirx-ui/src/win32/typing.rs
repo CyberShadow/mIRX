@@ -10,8 +10,9 @@ use std::collections::HashMap;
 use mirx_core::{Command, SetTypingRequest};
 use windows_sys::Win32::Foundation::HWND;
 
+use super::aliases::Aliases;
 use super::command_runner::enqueue_command;
-use super::commands::{ComposeSubmission, parse_compose_submission};
+use super::commands::{ComposeSubmission, classify_input};
 use super::room_model::sendable_room_by_id;
 use super::{ConnectionState, ViewId, mdi_child_edit, read_window_text, state_mut};
 
@@ -62,10 +63,11 @@ impl TypingNotices {
 }
 
 /// Whether the editbox's text would go out as a message on Enter: text,
-/// `//text` or `/me action`, not a command or nothing.
-pub(super) fn composes_a_message(text: &str) -> bool {
+/// `//text`, `/me action` or `/say text`, not a command, an alias or
+/// nothing.
+pub(super) fn composes_a_message(text: &str, aliases: &Aliases) -> bool {
     matches!(
-        parse_compose_submission(text),
+        classify_input(text, aliases),
         ComposeSubmission::Message { body, .. } if !body.is_empty()
     )
 }
@@ -81,7 +83,10 @@ pub(super) unsafe fn editbox_changed(frame: HWND, child: HWND) -> Result<(), Str
         ViewId::Status => return Ok(()),
         ViewId::RoomList => unreachable!("the Rooms List has no editbox"),
     };
-    let composing = composes_a_message(&read_window_text(mdi_child_edit(child)));
+    let composing = composes_a_message(
+        &read_window_text(mdi_child_edit(child)),
+        state.aliases.aliases(),
+    );
     let may_send = state.settings.settings().typing.send
         && state.model.connection == ConnectionState::Syncing
         && sendable_room_by_id(&state.model.rooms, &room_id).is_some();
@@ -140,11 +145,25 @@ mod tests {
 
     #[test]
     fn only_what_would_be_sent_as_a_message_is_typing() {
-        for text in ["hi", "//x", "/me x", " "] {
-            assert!(composes_a_message(text), "{text:?}");
+        let defaults = Aliases::defaults();
+        for text in ["hi", "//x", "/me x", "/say x", "/!me x", " "] {
+            assert!(composes_a_message(text, &defaults), "{text:?}");
         }
-        for text in ["", "/m", "/me", "/me ", "/msg bob hi", "/away", "/"] {
-            assert!(!composes_a_message(text), "{text:?}");
+        for text in [
+            "",
+            "/m",
+            "/me",
+            "/me ",
+            "/say",
+            "/msg bob hi",
+            "/away",
+            "/",
+            "/j x",
+        ] {
+            assert!(!composes_a_message(text, &defaults), "{text:?}");
         }
+        let me_alias = Aliases::from_source(vec!["/me say me".to_owned()]).unwrap();
+        assert!(!composes_a_message("/me x", &me_alias));
+        assert!(composes_a_message("/!me x", &me_alias));
     }
 }

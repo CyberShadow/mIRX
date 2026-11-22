@@ -622,6 +622,7 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         color_index: color_index::dump(hwnd),
         tray: dump_tray(hwnd),
         ignored_users: state.model.ignored_users.clone(),
+        aliases: state.aliases.aliases().source().to_vec(),
         refresh_counters: UiRefreshCounters {
             timeline_row_builds: state.refresh_counters.timeline_row_builds(),
             rows_wrapped: state.refresh_counters.rows_wrapped(),

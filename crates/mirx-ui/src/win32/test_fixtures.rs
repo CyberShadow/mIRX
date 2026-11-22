@@ -945,6 +945,7 @@ pub(super) fn test_state() -> WindowState {
         render_state_mode: false,
         clock: UiClock::Fixed(RENDER_STATE_CLOCK_MS),
         settings: SettingsStore::in_memory(),
+        aliases: AliasStore::in_memory(),
         local_time: timestamp::utc_local_time,
         text_font: unsafe { TextFont::create(&FontSetting::default(), Dpi::STANDARD).unwrap() },
         scheme_brushes: unsafe { SchemeBrushes::create(&Default::default()) },

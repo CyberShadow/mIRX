@@ -1098,6 +1098,7 @@ fn data_models_round_trip_through_json() {
             }],
         },
         ignored_users: Some(vec!["@spam:example".to_owned()]),
+        aliases: vec!["/j /join #$$1".to_owned()],
         refresh_counters: UiRefreshCounters {
             timeline_row_builds: 5,
             rows_wrapped: 6,
@@ -1422,6 +1423,7 @@ fn data_models_round_trip_through_json() {
             },
             "tray": {"icon": true, "hidden": true, "menu": [{"label": "Room", "checked": true}]},
             "ignored_users": ["@spam:example"],
+            "aliases": ["/j /join #$$1"],
             "refresh_counters": {
                 "timeline_row_builds": 5u64,
                 "rows_wrapped": 6u64,
@@ -7304,6 +7306,7 @@ fn switchbar_helpers_find_items_and_active_item() {
         },
         active_timeline: None,
         ignored_users: None,
+        aliases: Vec::new(),
         refresh_counters: UiRefreshCounters {
             timeline_row_builds: 0,
             rows_wrapped: 0,
