@@ -320,6 +320,17 @@ struct MockBackfillHomeserver {
     typing: Arc<Mutex<Vec<serde_json::Value>>>,
     /// The `/logout` requests it got.
     logouts: Arc<AtomicUsize>,
+    /// Other users' presence, which every `/sync` serves.
+    presence: Arc<Mutex<MockPresence>>,
+}
+
+/// The presence events every `/sync` serves, and how often they changed:
+/// that is part of the sync token, since the SDK skips a response whose
+/// token it already has.
+#[derive(Default)]
+struct MockPresence {
+    events: Vec<serde_json::Value>,
+    changes: usize,
 }
 
 /// What the mock homeserver fails, as the network would: a failed request
@@ -437,10 +448,29 @@ impl MockBackfillHomeserver {
     }
 
     /// Beta's timeline goes empty from the next `/sync` on. Returns once the
-    /// client asked twice since, so it took every sync that had the old
-    /// events (it asks again only after it handled an answer).
+    /// client took every sync that had the old events.
     fn clear_timeline(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.timeline.lock().expect("the timeline").clear();
+        self.wait_for_two_syncs()
+    }
+
+    /// Every `/sync` serves `events` as its presence from the next on.
+    /// Returns once the client took them, as `clear_timeline`.
+    fn serve_presence(
+        &self,
+        events: Vec<serde_json::Value>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        {
+            let mut presence = self.presence.lock().expect("the presence");
+            presence.events = events;
+            presence.changes += 1;
+        }
+        self.wait_for_two_syncs()
+    }
+
+    /// Returns once the client asked twice from now: it took every answer
+    /// before (it asks again only after it handled an answer).
+    fn wait_for_two_syncs(&self) -> Result<(), Box<dyn std::error::Error>> {
         let after = self.sync_count();
         let deadline = Instant::now() + Duration::from_secs(30);
         while self.sync_count() < after + 2 {
@@ -555,6 +585,8 @@ fn spawn_mock_homeserver_with_auth(
     let mock_typing = Arc::clone(&typing);
     let logouts = Arc::new(AtomicUsize::new(0));
     let mock_logouts = Arc::clone(&logouts);
+    let presence = Arc::new(Mutex::new(MockPresence::default()));
+    let mock_presence = Arc::clone(&presence);
     let room_account_data = fully_read
         .into_iter()
         .map(|event_id| {
@@ -764,12 +796,17 @@ fn spawn_mock_homeserver_with_auth(
                     std::thread::sleep(Duration::from_millis(500));
                 }
                 let timeline = mock_timeline.lock().expect("the timeline").clone();
+                let (presence, presence_changes) = {
+                    let presence = mock_presence.lock().expect("the presence");
+                    (presence.events.clone(), presence.changes)
+                };
                 respond_json(
                     &mut stream,
                     200,
                     &serde_json::json!({
-                        // A new token for every timeline.
-                        "next_batch": format!("s-sync-{}", timeline.len()),
+                        // A new token for every timeline and presence.
+                        "next_batch": format!("s-sync-{}-{presence_changes}", timeline.len()),
+                        "presence": { "events": presence },
                         "device_one_time_keys_count": {
                             "signed_curve25519": 0
                         },
@@ -1149,6 +1186,7 @@ fn spawn_mock_homeserver_with_auth(
         sync_presence,
         typing,
         logouts,
+        presence,
     })
 }
 
@@ -3700,6 +3738,72 @@ fn activity_colours_come_back_after_a_restart() -> Result<(), Box<dyn std::error
     // The colour comes from the stored read state, not from new lines.
     let beta_view = find_view(&ui_state, &beta);
     assert!(!view_contains(beta_view, "<Bob>"), "{:?}", beta_view.lines);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The server's presence of Bob reaches Beta's nick list, and the store
+/// keeps it: after a restart, with nothing new from the server, Bob is
+/// still away.
+#[test]
+fn presence_from_the_sync_reaches_the_nick_list_and_survives_a_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let bob_presence = |presence: &str| {
+        serde_json::json!({
+            "type": "m.presence",
+            "sender": "@bob:example",
+            "content": { "presence": presence, "status_msg": "lunch" }
+        })
+    };
+    let wait_for_bob = |app: &MirxApp, presence| -> Result<(), Box<dyn std::error::Error>> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let ui_state = app.dump_ui_state()?;
+            let members = &find_view(&ui_state, &room_identity("!beta:example")).members;
+            if members
+                .iter()
+                .any(|member| member.user_id == "@bob:example" && member.presence == presence)
+            {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("Bob is not {presence:?} in {members:?}").into());
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
+    };
+    let launch = || {
+        // Not launch_automation_app: the restore starts before the core
+        // reports Started, so the lifecycle never shows core_started.
+        let app = launch_app_with_options(
+            &exe_path,
+            &[OsString::from("--automation")],
+            launch_options(Some(local_app_data.clone())),
+        )?;
+        app.wait_for_connection("syncing", Duration::from_secs(30))?;
+        Ok::<_, Box<dyn std::error::Error>>(app)
+    };
+
+    let server = spawn_mock_backfill_homeserver()?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch()?;
+    server.serve_presence(vec![bob_presence("unavailable")])?;
+    wait_for_bob(&app, Some(mirx_core::PresenceKind::Unavailable))?;
+    // From now on the server says nothing of it.
+    server.serve_presence(Vec::new())?;
+    let status = app.close(Duration::from_secs(30))?;
+    assert!(status.success(), "mirx exited with {status}");
+
+    let app = launch()?;
+    app.wait_idle(Duration::from_secs(5))?;
+    wait_for_bob(&app, Some(mirx_core::PresenceKind::Unavailable))?;
+    server.serve_presence(vec![bob_presence("online")])?;
+    wait_for_bob(&app, Some(mirx_core::PresenceKind::Online))?;
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
