@@ -2118,7 +2118,8 @@ async fn room_users_default_power_level(room: &Room) -> Int {
 /// Every joined room's members, from the store. mirx syncs without lazy
 /// loading members, so the store has every member the sync sent; the SDK's
 /// `members()` would instead ask the server for each room whose list it
-/// never fetched, which offline fails the whole snapshot.
+/// never fetched, which offline fails the whole snapshot. A room whose state
+/// no sync has brought yet is left out: it has no members yet.
 pub(crate) async fn summarize_joined_room_members(
     client: &Client,
 ) -> Result<Vec<RoomMembers>, MatrixCoreError> {
@@ -2129,6 +2130,22 @@ pub(crate) async fn summarize_joined_room_members(
     let mut room_members = Vec::with_capacity(joined_rooms.len());
 
     for room in joined_rooms {
+        // Joined here, but no sync brought the room's state yet (mirx
+        // exited, or the network went, right after the join): the store
+        // has none of its members, not even the user's own. The sync that
+        // brings its state brings them.
+        let own_member = room
+            .get_member_no_sync(authenticated_user_id)
+            .await
+            .map_err(|err| {
+                MatrixCoreError::new(format!(
+                    "failed to read your membership of {}: {err}",
+                    room.room_id()
+                ))
+            })?;
+        if own_member.is_none() {
+            continue;
+        }
         room_members.push(joined_room_members_no_sync(authenticated_user_id, &room).await?);
     }
 
@@ -6350,6 +6367,62 @@ mod tests {
                     .map(|member| member.user_id.as_str())
                     .collect::<Vec<_>>(),
                 ["@example:localhost", "@bob:localhost"]
+            );
+        });
+    }
+
+    /// A room this client joined whose state no sync has brought yet (mirx
+    /// exited, or the network went, right after the join): the store has
+    /// none of its members, not even the user. It has no member list yet;
+    /// the sync that brings its state brings them. The other rooms' members
+    /// are read as usual.
+    #[test]
+    fn a_room_snapshot_has_no_members_of_a_room_joined_but_not_synced() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let state_events = serde_json::json!([{
+                "type": "m.room.member",
+                "state_key": "@example:localhost",
+                "sender": "@example:localhost",
+                "event_id": "$actor:localhost",
+                "origin_server_ts": 1u64,
+                "content": { "membership": "join", "displayname": "Actor" }
+            }]);
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&state_events)),
+                )
+                .await;
+            let joined = matrix_sdk::ruma::owned_room_id!("!joined:example.org");
+            mock_server.mock_room_join(&joined).ok().mount().await;
+            client
+                .join_room_by_id(&joined)
+                .await
+                .expect("join the room");
+            assert!(
+                client
+                    .get_room(&joined)
+                    .is_some_and(|room| room.state() == RoomState::Joined)
+            );
+
+            let snapshot = super::summarize_joined_room_members(&client)
+                .await
+                .expect("the stored members");
+
+            assert_eq!(
+                snapshot
+                    .iter()
+                    .map(|members| members.room_id.as_str())
+                    .collect::<Vec<_>>(),
+                ["!room:example.org"]
             );
         });
     }
