@@ -2037,6 +2037,17 @@ pub struct AwayChanged {
     pub seen_as: PresenceKind,
 }
 
+/// A user's presence as the sync reports it: their state and status
+/// message, without the times, which age as soon as they are read.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PresenceChange {
+    pub user_id: String,
+    pub kind: PresenceKind,
+    /// `None` without a status message, or with an empty one.
+    pub status_msg: Option<String>,
+}
+
 /// A user's global profile, as their homeserver gives it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct UserProfile {
@@ -2294,6 +2305,10 @@ pub enum Event {
     /// The answer to `FetchUserProfile`.
     UserProfile(UserProfile),
     AwayChanged(AwayChanged),
+    /// Users' presence: from each sync that carries some, and with the
+    /// session's first room snapshot for every joined room's members the
+    /// store has presence for. Never empty.
+    PresenceChanged(Vec<PresenceChange>),
     /// The answer to `ListUserDevices`.
     UserDevices(UserDevices),
     RoomIdentityChanges(RoomIdentityChanges),

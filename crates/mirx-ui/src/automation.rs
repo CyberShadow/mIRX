@@ -3,20 +3,20 @@
 use std::fmt;
 
 use mirx_core::{
-    CoreErrorEvent, E2eeStatus, Event, HistoryFrom, Operation, RoomActivity, RoomActivityKind,
-    RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
-    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberChange, RoomMemberRank,
-    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomNotificationMode, RoomPowerLevelValueChange, RoomReadState, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
-    RoomVideoActivity, RoomVideoInfo, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationState, VerificationStateEvent,
+    CoreErrorEvent, E2eeStatus, Event, HistoryFrom, Operation, PresenceKind, RoomActivity,
+    RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomFileActivity,
+    RoomFileInfo, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberChange,
+    RoomMemberRank, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomNotificationMode, RoomPowerLevelValueChange, RoomReadState,
+    RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary,
+    RoomTagSummary, RoomVideoActivity, RoomVideoInfo, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 80;
+pub(crate) const PROTOCOL_VERSION: u32 = 81;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1790,6 +1790,9 @@ pub(crate) struct RoomMemberView {
     pub(crate) rank: RoomMemberRank,
     pub(crate) can_kick: bool,
     pub(crate) can_ban: bool,
+    /// The member's presence as the sync last reported it; `None` when the
+    /// server shared none.
+    pub(crate) presence: Option<PresenceKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3496,10 +3499,10 @@ mod tests {
     use mirx_core::{
         CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
         E2eeRecoveryState, E2eeSessionState, E2eeStatus, Event, HistoryFrom, Operation,
-        RoomActivity, RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo,
-        RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
-        RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberRank, RoomMembership,
-        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+        PresenceKind, RoomActivity, RoomActivityKind, RoomActivityRelation, RoomAudioActivity,
+        RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity,
+        RoomFileInfo, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberRank,
+        RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
         RoomNotificationMode, RoomPollActivity, RoomReadState, RoomRedactedActivity, RoomSummary,
         RoomTagSummary, RoomVideoActivity, RoomVideoInfo, SessionAuth, SpaceChildSummary,
         StoredSession, UnsupportedRoomMessageActivity, VerificationDirection, VerificationRequest,
@@ -4035,8 +4038,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_80() {
-        assert_eq!(PROTOCOL_VERSION, 80);
+    fn protocol_version_is_81() {
+        assert_eq!(PROTOCOL_VERSION, 81);
     }
 
     #[test]
@@ -6074,7 +6077,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":80,
+                    "protocol_version":81,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6550,6 +6553,7 @@ mod tests {
                                     rank: RoomMemberRank::Moderator,
                                     can_kick: true,
                                     can_ban: false,
+                                    presence: Some(PresenceKind::Unavailable),
                                 }],
                                 log: None,
                             },
@@ -6898,7 +6902,8 @@ mod tests {
                                         "label":"Alice",
                                         "rank":"moderator",
                                         "can_kick":true,
-                                        "can_ban":false
+                                        "can_ban":false,
+                                        "presence":"unavailable"
                                     }
                                 ],
                                 "log":null

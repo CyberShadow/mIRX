@@ -8,6 +8,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 
 use matrix_sdk::Client;
+use matrix_sdk::ruma::{events::presence::PresenceEvent, serde::Raw};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::task::LocalSet;
@@ -196,6 +197,8 @@ pub(super) struct RoomSnapshot {
     start: SnapshotStart,
     rooms: Vec<RoomSummary>,
     room_members: Vec<RoomMembers>,
+    /// The store's presence of `room_members`' users.
+    presence: Vec<Raw<PresenceEvent>>,
     room_read_states: Vec<RoomReadState>,
     account_lists: AccountLists,
 }
@@ -206,10 +209,12 @@ impl RoomSnapshot {
         client: &Client,
         snapshots: &RoomSnapshots,
     ) -> Result<Self, MatrixCoreError> {
+        let room_members = matrix::summarize_joined_room_members(client).await?;
         Ok(Self {
             start: snapshots.start(),
             rooms: matrix::summarize_rooms(client).await?,
-            room_members: matrix::summarize_joined_room_members(client).await?,
+            presence: matrix::stored_presence(client, &room_members).await?,
+            room_members,
             room_read_states: matrix::summarize_joined_room_read_states(client).await,
             account_lists: AccountLists::read(client).await,
         })
@@ -221,6 +226,7 @@ impl RoomSnapshot {
             start,
             rooms,
             room_members,
+            presence,
             room_read_states,
             account_lists,
         } = self;
@@ -246,6 +252,7 @@ impl RoomSnapshot {
                 emit_event(event_tx, Event::RoomMembers(members));
             }
         }
+        matrix::emit_presence_changes(event_tx, &presence);
         for read_state in room_read_states {
             if joined_room_ids.contains(&read_state.room_id) {
                 emit_event(event_tx, Event::RoomReadState(read_state));

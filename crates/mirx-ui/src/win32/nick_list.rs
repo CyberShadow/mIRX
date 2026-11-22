@@ -6,7 +6,10 @@ pub(super) fn room_member_nick(member: &RoomMemberSummary) -> String {
     nick_label(&member.user_id, Some(&member.nick), member.nick_ambiguous)
 }
 
-pub(super) fn room_member_view_rows(members: &[RoomMemberSummary]) -> Vec<RoomMemberView> {
+pub(super) fn room_member_view_rows(
+    members: &[RoomMemberSummary],
+    presence: &PresenceBook,
+) -> Vec<RoomMemberView> {
     members
         .iter()
         .map(|member| RoomMemberView {
@@ -16,6 +19,7 @@ pub(super) fn room_member_view_rows(members: &[RoomMemberSummary]) -> Vec<RoomMe
             rank: member.rank,
             can_kick: member.can_kick,
             can_ban: member.can_ban,
+            presence: presence.kind(&member.user_id),
         })
         .collect()
 }
@@ -258,7 +262,8 @@ pub(super) fn active_view_members(state: &WindowState) -> &[RoomMemberSummary] {
 }
 
 unsafe fn active_member_rows(hwnd: HWND) -> Vec<RoomMemberView> {
-    room_member_view_rows(active_view_members(state_ref(hwnd)))
+    let state = state_ref(hwnd);
+    room_member_view_rows(active_view_members(state), &state.model.presence)
 }
 
 unsafe fn active_member_list(hwnd: HWND) -> Option<HWND> {
@@ -347,21 +352,24 @@ pub(super) unsafe fn select_member_for_automation(hwnd: HWND, user_id: &str) -> 
 
 #[cfg(test)]
 mod tests {
-    use mirx_core::RoomMemberRank;
+    use mirx_core::{PresenceChange, PresenceKind, RoomMemberRank};
 
     use super::super::test_fixtures::*;
     use super::*;
 
     #[test]
     fn member_view_rows_disambiguate_by_the_core_ambiguity_flag() {
-        let labels = room_member_view_rows(&[
-            member_summary("@alex:example", "Alex", true),
-            member_summary("@bo1:example", "Bo", false),
-            member_summary("@bo2:example", "Bo", false),
-            // The core names a member without a display name by localpart.
-            member_summary("@nameless:example", "nameless", false),
-            member_summary("@ghost:example", "ghost", true),
-        ])
+        let labels = room_member_view_rows(
+            &[
+                member_summary("@alex:example", "Alex", true),
+                member_summary("@bo1:example", "Bo", false),
+                member_summary("@bo2:example", "Bo", false),
+                // The core names a member without a display name by localpart.
+                member_summary("@nameless:example", "nameless", false),
+                member_summary("@ghost:example", "ghost", true),
+            ],
+            &PresenceBook::default(),
+        )
         .into_iter()
         .map(|member| member.label)
         .collect::<Vec<_>>();
@@ -384,10 +392,13 @@ mod tests {
             rank,
             ..member_summary(user_id, name, false)
         };
-        let rows = room_member_view_rows(&[
-            ranked("@zed:example", "Zed", RoomMemberRank::Moderator),
-            ranked("@amy:example", "Amy", RoomMemberRank::Voiced),
-        ]);
+        let rows = room_member_view_rows(
+            &[
+                ranked("@zed:example", "Zed", RoomMemberRank::Moderator),
+                ranked("@amy:example", "Amy", RoomMemberRank::Voiced),
+            ],
+            &PresenceBook::default(),
+        );
 
         assert_eq!(
             rows.iter()
@@ -403,15 +414,41 @@ mod tests {
     /// The list draws `@mod`: the op prefix, then the nick, as on IRC.
     #[test]
     fn a_nameless_moderator_reads_as_an_op_named_by_localpart() {
-        let rows = room_member_view_rows(&[RoomMemberSummary {
-            rank: RoomMemberRank::Moderator,
-            ..member_summary("@mod:example", "mod", false)
-        }]);
+        let rows = room_member_view_rows(
+            &[RoomMemberSummary {
+                rank: RoomMemberRank::Moderator,
+                ..member_summary("@mod:example", "mod", false)
+            }],
+            &PresenceBook::default(),
+        );
         assert_eq!(
             rows.iter()
                 .map(|row| (row.label.as_str(), row.rank))
                 .collect::<Vec<_>>(),
             vec![("mod", RoomMemberRank::Moderator)]
+        );
+    }
+
+    #[test]
+    fn member_view_rows_carry_each_members_presence() {
+        let mut presence = PresenceBook::default();
+        presence.apply(vec![PresenceChange {
+            user_id: "@bob:example".to_owned(),
+            kind: PresenceKind::Unavailable,
+            status_msg: Some("lunch".to_owned()),
+        }]);
+        let rows = room_member_view_rows(
+            &[
+                member_summary("@bob:example", "Bob", false),
+                member_summary("@erin:example", "Erin", false),
+            ],
+            &presence,
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.label.as_str(), row.presence))
+                .collect::<Vec<_>>(),
+            vec![("Bob", Some(PresenceKind::Unavailable)), ("Erin", None)]
         );
     }
 }

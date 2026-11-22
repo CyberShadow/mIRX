@@ -1323,7 +1323,7 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
                 .unwrap_or_default();
             // An invite's window lists nobody: its room is not joined yet.
             if is_sendable_room(room) {
-                room_member_view_rows(members)
+                room_member_view_rows(members, &state.model.presence)
             } else {
                 Vec::new()
             }

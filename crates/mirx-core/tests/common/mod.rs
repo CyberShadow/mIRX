@@ -39,7 +39,9 @@ pub struct Harness {
     pub runtime: tokio::runtime::Runtime,
     pub server: MatrixMockServer,
     pub core: CoreHandle,
-    _profile: TempDir,
+    /// The restored session; `None` for a core that never had one.
+    session: Option<StoredSession>,
+    profile: TempDir,
 }
 
 impl Harness {
@@ -62,16 +64,13 @@ impl Harness {
             server
         });
         let profile = TempDir::new().expect("temporary profile directory");
-        let core = start(CoreConfig {
-            profile_dir: profile.path().join("profile"),
-            store_passphrase: "test-store-passphrase".to_owned(),
-        })
-        .expect("start core");
+        let core = start_core(&profile);
         let harness = Self {
             runtime,
             server,
             core,
-            _profile: profile,
+            session: None,
+            profile,
         };
         harness.wait_for("Started", |event| *event == Event::Started);
         harness
@@ -112,7 +111,20 @@ impl Harness {
         })
     }
 
+    /// A password session, and the events of its restore; every `/sync`
+    /// answers with what `sync` builds.
+    pub fn restored_with_sync(sync: impl FnOnce(&mut SyncResponseBuilder)) -> (Self, Vec<Event>) {
+        Self::restored_with_events(SessionAuth::Matrix, sync)
+    }
+
     fn restored_with(auth: SessionAuth, sync: impl FnOnce(&mut SyncResponseBuilder)) -> Self {
+        Self::restored_with_events(auth, sync).0
+    }
+
+    fn restored_with_events(
+        auth: SessionAuth,
+        sync: impl FnOnce(&mut SyncResponseBuilder),
+    ) -> (Self, Vec<Event>) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -159,36 +171,67 @@ impl Harness {
             (server, "TOKEN_1".to_owned())
         });
         let profile = TempDir::new().expect("temporary profile directory");
-        let core = start(CoreConfig {
-            profile_dir: profile.path().join("profile"),
-            store_passphrase: "test-store-passphrase".to_owned(),
-        })
-        .expect("start core");
+        let core = start_core(&profile);
         let harness = Self {
             runtime,
             server,
             core,
-            _profile: profile,
-        };
-        harness.wait_for("Started", |event| *event == Event::Started);
-        harness.send(Command::RestoreSession(RestoreSessionRequest {
-            homeserver_url: harness.server.uri(),
-            session: StoredSession {
+            session: Some(StoredSession {
                 user_id: alice.to_string(),
                 device_id: "MIRX".to_owned(),
                 access_token,
                 refresh_token: matches!(auth, SessionAuth::OAuth { .. })
                     .then(|| "REFRESH".to_owned()),
                 auth,
-            },
+            }),
+            profile,
+        };
+        let events = harness.restore();
+        (harness, events)
+    }
+
+    /// Shuts the core down and starts another on the same profile,
+    /// restored into the same session, as the app is after a restart; and
+    /// the events of the restore.
+    pub fn restarted(self) -> (Self, Vec<Event>) {
+        self.send(Command::Shutdown);
+        self.wait_for("Stopped", |event| *event == Event::Stopped);
+        let Self {
+            runtime,
+            server,
+            core,
+            session,
+            profile,
+        } = self;
+        core.join().expect("join core");
+        let harness = Self {
+            runtime,
+            server,
+            core: start_core(&profile),
+            session,
+            profile,
+        };
+        let events = harness.restore();
+        (harness, events)
+    }
+
+    /// Every event of the restore, up to its ack.
+    fn restore(&self) -> Vec<Event> {
+        self.wait_for("Started", |event| *event == Event::Started);
+        self.send(Command::RestoreSession(RestoreSessionRequest {
+            homeserver_url: self.server.uri(),
+            session: self.session.clone().expect("a restored harness's session"),
             start_sync: false,
         }));
-        harness.wait_for("RestoredSession", |event| *event == Event::RestoredSession);
-        harness.wait_for("the session's E2EE status", |event| {
+        let mut events =
+            self.events_until("RestoredSession", |event| *event == Event::RestoredSession);
+        events.extend(self.events_until("the session's E2EE status", |event| {
             matches!(event, Event::E2eeStatus(_))
-        });
-        harness.wait_for("the restore's ack", |event| *event == Event::CommandHandled);
-        harness
+        }));
+        events.extend(
+            self.events_until("the restore's ack", |event| *event == Event::CommandHandled),
+        );
+        events
     }
 
     pub fn send(&self, command: Command) {
@@ -304,7 +347,15 @@ impl Harness {
     }
 }
 
-fn alice_member_event() -> serde_json::Value {
+fn start_core(profile: &TempDir) -> CoreHandle {
+    start(CoreConfig {
+        profile_dir: profile.path().join("profile"),
+        store_passphrase: "test-store-passphrase".to_owned(),
+    })
+    .expect("start core")
+}
+
+pub fn alice_member_event() -> serde_json::Value {
     json!({
         "type": "m.room.member",
         "state_key": "@alice:example.org",

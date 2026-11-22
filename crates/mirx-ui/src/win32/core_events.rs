@@ -573,6 +573,7 @@ pub(super) fn apply_core_event(
             echo_lines_in_active_view(state, commands::away_lines(&changed));
             state.model.status = commands::away_status(&changed);
         }
+        Event::PresenceChanged(changes) => state.model.presence.apply(changes),
         Event::UserDevices(devices) => {
             let lines = devices_lines(&state.model, &devices, state.local_time);
             echo_lines_in_active_view(state, lines);
@@ -711,6 +712,7 @@ pub(super) fn apply_core_event(
             state.model.room_list = None;
             state.model.highlight_words = None;
             state.model.ignored_users = None;
+            state.model.presence.clear();
             state.room_activity.clear();
             state.sent_receipts.clear();
             state.find_states.clear();
@@ -1170,6 +1172,8 @@ pub(super) fn operation_name(operation: Operation) -> &'static str {
 mod tests {
     use std::fs;
     use std::time::Duration;
+
+    use mirx_core::{PresenceChange, PresenceKind};
 
     use super::super::connection::AfterSyncLost;
     use super::super::test_fixtures::*;
@@ -4779,6 +4783,33 @@ mod tests {
             status_log_texts(&state).last(),
             Some(&"* Error during fetch message: offline")
         );
+    }
+
+    /// Presence prints nothing; Log Out forgets it with the session.
+    #[test]
+    fn presence_changes_fill_the_book_until_logout() {
+        with_local_app_data(|_| {
+            let mut state = test_state();
+            state.active_view = ViewId::Status;
+            let status_lines = status_log_texts(&state).len();
+            apply_core_event(
+                &mut state,
+                Event::PresenceChanged(vec![PresenceChange {
+                    user_id: "@bob:example".to_owned(),
+                    kind: PresenceKind::Unavailable,
+                    status_msg: Some("lunch".to_owned()),
+                }]),
+            )
+            .unwrap();
+            assert_eq!(
+                state.model.presence.kind("@bob:example"),
+                Some(PresenceKind::Unavailable)
+            );
+            assert_eq!(status_log_texts(&state).len(), status_lines);
+
+            apply_core_event(&mut state, Event::LoggedOut).unwrap();
+            assert_eq!(state.model.presence.kind("@bob:example"), None);
+        });
     }
 
     #[test]

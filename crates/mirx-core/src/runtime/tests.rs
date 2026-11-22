@@ -9,9 +9,9 @@ use crate::api::CoreConfig;
 use crate::api::{
     AcceptRoomInviteRequest, AwayChanged, BanRoomMemberRequest, Command, CreateDirectRoomRequest,
     CreateRoomRequest, CreateRoomVisibility, Event, ExportRoomKeysRequest, HighlightWord,
-    JoinRoomRequest, KickRoomMemberRequest, LoginMethod, LoginRequest, Operation, PresenceKind,
-    RestoreSessionRequest, RoomJoined, RoomMemberRank, RoomMemberSummary, RoomMembers,
-    RoomMembership, RoomNotificationMode, RoomReadState, RoomSummary, SyncStopReason,
+    JoinRoomRequest, KickRoomMemberRequest, LoginMethod, LoginRequest, Operation, PresenceChange,
+    PresenceKind, RestoreSessionRequest, RoomJoined, RoomMemberRank, RoomMemberSummary,
+    RoomMembers, RoomMembership, RoomNotificationMode, RoomReadState, RoomSummary, SyncStopReason,
 };
 use crate::api::{
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
@@ -644,7 +644,7 @@ fn duplicate_start_sync_emits_typed_error_event() {
 }
 
 #[test]
-fn initial_room_members_and_read_states_follow_joined_synced_rooms() {
+fn initial_room_members_presence_and_read_states_follow_joined_synced_rooms() {
     let (event_tx, event_rx) = mpsc::channel::<Event>();
     let rooms = vec![
         room_summary("!ops:example.org", "Ops", RoomMembership::Join),
@@ -682,6 +682,17 @@ fn initial_room_members_and_read_states_follow_joined_synced_rooms() {
         start: snapshots.start(),
         rooms: rooms.clone(),
         room_members: room_members.clone(),
+        presence: vec![
+            Raw::from_json_string(
+                serde_json::json!({
+                    "type": "m.presence",
+                    "sender": "@bob:example.org",
+                    "content": { "presence": "unavailable", "status_msg": "lunch" },
+                })
+                .to_string(),
+            )
+            .expect("a raw presence event"),
+        ],
         room_read_states: read_states.clone(),
         account_lists: AccountLists {
             highlight_words: Ok(vec![HighlightWord {
@@ -722,6 +733,16 @@ fn initial_room_members_and_read_states_follow_joined_synced_rooms() {
             Event::RoomMembers(members)
         );
     }
+    assert_eq!(
+        event_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("presence event"),
+        Event::PresenceChanged(vec![PresenceChange {
+            user_id: "@bob:example.org".to_owned(),
+            kind: PresenceKind::Unavailable,
+            status_msg: Some("lunch".to_owned()),
+        }])
+    );
     for read_state in read_states.into_iter().take(2) {
         assert_eq!(
             event_rx
@@ -733,7 +754,7 @@ fn initial_room_members_and_read_states_follow_joined_synced_rooms() {
     assert_eq!(
         event_rx.try_recv(),
         Err(TryRecvError::Empty),
-        "initial snapshot must only emit synced rooms, highlight words, room members, and room read states"
+        "initial snapshot must only emit synced rooms, highlight words, room members, presence, and room read states"
     );
 }
 

@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use mirx_core::{E2eeStatus, RoomMemberRank, RoomMembership, RoomNotificationMode};
+use mirx_core::{E2eeStatus, PresenceKind, RoomMemberRank, RoomMembership, RoomNotificationMode};
 #[cfg(windows)]
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -2217,6 +2217,9 @@ pub struct RoomMemberView {
     pub rank: RoomMemberRank,
     pub can_kick: bool,
     pub can_ban: bool,
+    /// The member's presence as the sync last reported it; `None` when the
+    /// server shared none.
+    pub presence: Option<PresenceKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

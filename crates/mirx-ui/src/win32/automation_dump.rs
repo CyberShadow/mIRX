@@ -208,6 +208,7 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                                     .get(room_id)
                                     .map(|room_view| room_view.members.as_slice())
                                     .unwrap_or_default(),
+                                &state_ref(hwnd).model.presence,
                             )
                         })
                         .unwrap_or_default(),
@@ -218,6 +219,7 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                             .get(room_id)
                             .map(|room_view| room_view.members.as_slice())
                             .unwrap_or_default(),
+                        &state_ref(hwnd).model.presence,
                     ),
                 },
                 log: view_log_path(state_ref(hwnd), &view_id),

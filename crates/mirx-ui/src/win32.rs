@@ -234,6 +234,7 @@ mod notifications;
 mod open_link;
 mod options;
 mod options_dialog;
+mod presence;
 mod reactions;
 mod read_receipts;
 mod reconnect;
@@ -440,6 +441,7 @@ use nick_list::{
     room_member_view_rows, run_selected_member_command, select_member_for_automation,
     set_room_member_list, show_member_context_menu, text_font_item_height,
 };
+use presence::PresenceBook;
 use replies::ComposeTarget;
 use room_list::{PageApplied, RoomListColumn, RoomListQuery, RoomListState};
 use room_list_window::{
@@ -703,6 +705,8 @@ struct UiModel {
     /// The account's ignore list as the server last listed it, sorted;
     /// `None` until the first list after signing in, and after logout.
     ignored_users: Option<Vec<String>>,
+    /// Other users' presence, as the session's sync reported it.
+    presence: PresenceBook,
 }
 
 /// Who is signed in, and how the session authenticates: a reset of the

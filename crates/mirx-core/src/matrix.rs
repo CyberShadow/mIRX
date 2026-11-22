@@ -84,6 +84,7 @@ use matrix_sdk::{
             },
             message::TextContentBlock,
             poll::{start::PollKind, unstable_start::UnstablePollStartEventContent},
+            presence::PresenceEvent,
             push_rules::PushRulesEvent,
             reaction::{OriginalSyncReactionEvent, ReactionEventContent},
             relation::{Annotation, RelationType, Reply, Thread},
@@ -163,7 +164,8 @@ use crate::api::{
     VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::api::{
-    PresenceKind, TextStyleSpan, UserLinkSpan, check_text_styles, validate_highlight_word,
+    PresenceChange, PresenceKind, TextStyleSpan, UserLinkSpan, check_text_styles,
+    validate_highlight_word,
 };
 use crate::mentions::body_mentions;
 use crate::rich_text::{StyledText, html_from_styled_text, styled_text_from_html};
@@ -1228,10 +1230,7 @@ fn user_presence_from_response(
 ) -> Result<UserPresence, MatrixCoreError> {
     Ok(UserPresence {
         kind: presence_kind(&response.presence)?,
-        status_msg: response
-            .status_msg
-            .clone()
-            .filter(|message| !message.is_empty()),
+        status_msg: presence_status(response.status_msg.clone()),
         last_active_ago_ms: response.last_active_ago.map(|ago| {
             u64::try_from(ago.as_millis()).expect("a server's idle time fits in u64 milliseconds")
         }),
@@ -4298,6 +4297,7 @@ pub(crate) async fn sync_task(
         // The server answers again.
         paused_sends.resume(&client);
         emit_member_snapshots_after_sync(&client, &response, &events).await;
+        emit_presence_changes(&events, &response.presence);
         // As the SDK's loop: not more than a request a second when the
         // server does not wait for news.
         let now = tokio::time::Instant::now();
@@ -4388,6 +4388,63 @@ pub(crate) async fn fetch_own_presence(client: &Client) -> Result<PresenceKind, 
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to read back your presence: {err}")))?;
     presence_kind(&response.presence)
+}
+
+/// A status message as the user set it: an empty one is none.
+fn presence_status(status_msg: Option<String>) -> Option<String> {
+    status_msg.filter(|message| !message.is_empty())
+}
+
+/// A presence event, as the sync or the store has it. A presence mirx
+/// does not know (MSC3026's `busy`) is an error naming the user.
+fn presence_change(raw: &Raw<PresenceEvent>) -> Result<PresenceChange, MatrixCoreError> {
+    let event = raw
+        .deserialize()
+        .map_err(|err| MatrixCoreError::new(format!("invalid presence event: {err}")))?;
+    let kind = presence_kind(&event.content.presence)
+        .map_err(|err| MatrixCoreError::new(format!("{err} of {}", event.sender)))?;
+    Ok(PresenceChange {
+        user_id: event.sender.to_string(),
+        kind,
+        status_msg: presence_status(event.content.status_msg),
+    })
+}
+
+/// Emits `PresenceChanged` with the users' presence in `raws`, if any is
+/// valid; each invalid one is a sync error, the others still go out.
+pub(crate) fn emit_presence_changes(events: &EventSender, raws: &[Raw<PresenceEvent>]) {
+    let mut changes = Vec::with_capacity(raws.len());
+    for raw in raws {
+        match presence_change(raw) {
+            Ok(change) => changes.push(change),
+            Err(err) => emit_sync_error(events, err),
+        }
+    }
+    if !changes.is_empty() {
+        emit_event(events, Event::PresenceChanged(changes));
+    }
+}
+
+/// The presence events the store holds for the members of `rooms`: the
+/// SDK stores those of every sync.
+pub(crate) async fn stored_presence(
+    client: &Client,
+    rooms: &[RoomMembers],
+) -> Result<Vec<Raw<PresenceEvent>>, MatrixCoreError> {
+    let user_ids = rooms
+        .iter()
+        .flat_map(|room| &room.members)
+        .map(|member| {
+            OwnedUserId::try_from(member.user_id.as_str()).expect("the SDK's members have user IDs")
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    client
+        .state_store()
+        .get_presence_events(&user_ids)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to read stored presence: {err}")))
 }
 
 fn presence_kind(presence: &PresenceState) -> Result<PresenceKind, MatrixCoreError> {
@@ -6070,6 +6127,7 @@ mod tests {
         unban_room_member, unignore_user, user_presence_from_response,
     };
     use super::{MarkRoomReadRequest, SetReadMarkerRequest, mark_room_read, set_read_marker};
+    use super::{PresenceChange, presence_change};
     use super::{RoomKeysAtRisk, SteadyStateError, backup_failure_risk};
     use crate::api::PresenceKind;
     use crate::api::{
@@ -14418,6 +14476,52 @@ mod tests {
                 r#"invalid user ID "ghost": leading sigil is incorrect or missing"#
             );
         });
+    }
+
+    #[test]
+    fn presence_change_reads_the_event() {
+        let change = |content: serde_json::Value| {
+            presence_change(
+                &matrix_sdk::ruma::serde::Raw::from_json_string(
+                    serde_json::json!({
+                        "type": "m.presence",
+                        "sender": "@bob:example.org",
+                        "content": content,
+                    })
+                    .to_string(),
+                )
+                .expect("a raw presence event"),
+            )
+            .map_err(|err| err.to_string())
+        };
+        assert_eq!(
+            change(serde_json::json!({
+                "presence": "unavailable",
+                "status_msg": "lunch",
+                "last_active_ago": 5,
+            })),
+            Ok(PresenceChange {
+                user_id: "@bob:example.org".to_owned(),
+                kind: PresenceKind::Unavailable,
+                status_msg: Some("lunch".to_owned()),
+            })
+        );
+        // An empty status is none, as in the server's answer to a GET.
+        assert_eq!(
+            change(serde_json::json!({ "presence": "online", "status_msg": "" })),
+            Ok(PresenceChange {
+                user_id: "@bob:example.org".to_owned(),
+                kind: PresenceKind::Online,
+                status_msg: None,
+            })
+        );
+        assert_eq!(
+            change(serde_json::json!({ "presence": "busy" })),
+            Err(r#"unknown presence "busy" of @bob:example.org"#.to_owned())
+        );
+        let invalid = change(serde_json::json!({ "status_msg": "no state" }))
+            .expect_err("a presence event without a state");
+        assert!(invalid.starts_with("invalid presence event: "), "{invalid}");
     }
 
     #[test]

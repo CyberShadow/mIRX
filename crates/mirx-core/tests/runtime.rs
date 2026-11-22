@@ -9,25 +9,25 @@ use mirx_core::{
     E2eeStatus, EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
     HighlightWord, HistoryFrom, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
     LeaveRoomRequest, ListPublicRoomsRequest, LoginMethod, LoginRequest, MarkRoomReadRequest,
-    MemberPowerRole, Operation, PresenceKind, PublicRoom, PublicRoomsPage, PublicRoomsResult,
-    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest,
-    RedactEventRequest, RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
-    RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
-    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
-    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat,
-    RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank, RoomMemberSummary,
-    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomNotificationMode, RoomReadState, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    RoomUserProfile, SendFileRequest, SendMessageRequest, SendReactionRequest, SessionAuth,
-    SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,
-    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetTypingRequest,
-    SetupE2eeRecoveryRequest, SignOutDeviceRequest, SpaceChildSummary, StoredSession,
-    SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserDevices,
-    UserIdentityState, UserPresence, UserProfile, VerificationDecimals, VerificationDirection,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start, validate_highlight_word,
+    MemberPowerRole, Operation, PresenceChange, PresenceKind, PublicRoom, PublicRoomsPage,
+    PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX,
+    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RenameDeviceRequest,
+    RequestVerificationRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
+    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
+    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
+    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomReadState,
+    RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary,
+    RoomTagSummary, RoomTyping, RoomUserProfile, SendFileRequest, SendMessageRequest,
+    SendReactionRequest, SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest,
+    SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
+    SetTypingRequest, SetupE2eeRecoveryRequest, SignOutDeviceRequest, SpaceChildSummary,
+    StoredSession, SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity,
+    UserDevices, UserIdentityState, UserPresence, UserProfile, VerificationDecimals,
+    VerificationDirection, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, start, validate_highlight_word,
 };
 use tempfile::TempDir;
 
@@ -779,6 +779,21 @@ fn ignored_users_event_round_trips() {
     let event = Event::IgnoredUsers(vec!["@bob:example.org".to_owned()]);
     let json = serde_json::to_string(&event).unwrap();
     assert_eq!(json, r#"{"IgnoredUsers":["@bob:example.org"]}"#);
+    assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), event);
+}
+
+#[test]
+fn presence_changed_event_round_trips() {
+    let event = Event::PresenceChanged(vec![PresenceChange {
+        user_id: "@bob:example.org".to_owned(),
+        kind: PresenceKind::Unavailable,
+        status_msg: Some("lunch".to_owned()),
+    }]);
+    let json = serde_json::to_string(&event).unwrap();
+    assert_eq!(
+        json,
+        r#"{"PresenceChanged":[{"user_id":"@bob:example.org","kind":"unavailable","status_msg":"lunch"}]}"#
+    );
     assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), event);
 }
 
