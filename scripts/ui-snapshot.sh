@@ -1064,6 +1064,34 @@ configure_case_expectations() {
       )
       expect_switchbar_active='status'
       ;;
+    notify-lines)
+      # The notify list: users added while on are announced at once, then
+      # who comes and goes, in the Notify colour; the listing after.
+      expect_active_view='status'
+      select_views=('status')
+      ordered_actions=(
+        'input:/notify bob lunch buddy'
+        'input:/notify carol'
+        'input:/notify @dave:example'
+        "append:$root_dir/tests/ui-state-updates/notify-lines.json"
+        'input:/notify'
+      )
+      status_view_expect_args=(
+        --expect-status-view '[22:12] * Added Bob (@bob:example) to notify list'
+        --expect-status-view '[22:12] * Bob is on Matrix'
+        --expect-status-view '[22:12] * Carol is on Matrix'
+        --expect-status-view '[22:12] * Added @dave:example to notify list'
+        --expect-status-view '[22:12] * Bob has left Matrix'
+        --expect-status-view '[22:12] * @dave:example is on Matrix'
+        --expect-status-view '[22:12] *   Bob (@bob:example) is not on Matrix - lunch buddy'
+        --expect-status-view '[22:12] *   Carol (@carol:example) is on Matrix'
+        --expect-status-view '[22:12] *   @dave:example is on Matrix'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'notify list saved'
+      )
+      expect_switchbar_active='status'
+      ;;
     status-log)
       expect_active_view='status'
       select_views=('status')

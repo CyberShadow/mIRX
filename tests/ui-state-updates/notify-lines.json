@@ -1,0 +1,16 @@
+[
+  {
+    "PresenceChanged": [
+      {
+        "user_id": "@bob:example",
+        "kind": "offline",
+        "status_msg": null
+      },
+      {
+        "user_id": "@dave:example",
+        "kind": "online",
+        "status_msg": null
+      }
+    ]
+  }
+]
