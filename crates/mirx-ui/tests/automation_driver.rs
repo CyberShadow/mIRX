@@ -8392,7 +8392,7 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
          [other]\r\nbuffer=5000\r\n\
          [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\n\
          invite=3\r\njoin=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\n\
-         notice=5\r\nother=6\r\nown=1\r\npart=3\r\ntopic=3\r\neditbox=0\r\n\
+         notice=5\r\nnotify=7\r\nother=6\r\nown=1\r\npart=3\r\ntopic=3\r\neditbox=0\r\n\
          editbox_text=1\r\nlistbox=0\r\nlistbox_text=1\r\ngray=14\r\n\
          treebar=0\r\ntreebar_text=1\r\n"
     );

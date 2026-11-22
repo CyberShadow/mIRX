@@ -72,8 +72,8 @@ const fn index(index: u8) -> PaletteIndex {
 pub(super) const ERROR_COLOR: PaletteIndex = index(4);
 
 /// The parts of a window the scheme colours: the items of mIRC's Colors
-/// dialog that mirx draws, in mIRC's order. mIRC's CTCP, Info2, Notify,
-/// Quit, Wallops, Whois, Title and Inactive have nothing to colour here.
+/// dialog that mirx draws, in mIRC's order. mIRC's CTCP, Info2, Quit,
+/// Wallops, Whois, Title and Inactive have nothing to colour here.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)]
 pub(super) enum ColorItem {
     Background,
@@ -87,6 +87,7 @@ pub(super) enum ColorItem {
     Nick,
     Normal,
     Notice,
+    Notify,
     Other,
     Own,
     Part,
@@ -100,7 +101,7 @@ pub(super) enum ColorItem {
     TreebarText,
 }
 
-const COLOR_ITEMS: usize = 22;
+const COLOR_ITEMS: usize = 23;
 
 impl ColorItem {
     /// In declaration order, which is mIRC's: `ALL[item as usize] == item`.
@@ -116,6 +117,7 @@ impl ColorItem {
         Self::Nick,
         Self::Normal,
         Self::Notice,
+        Self::Notify,
         Self::Other,
         Self::Own,
         Self::Part,
@@ -143,6 +145,7 @@ impl ColorItem {
             Self::Nick => "Nick text",
             Self::Normal => "Normal text",
             Self::Notice => "Notice text",
+            Self::Notify => "Notify text",
             Self::Other => "Other text",
             Self::Own => "Own text",
             Self::Part => "Part text",
@@ -171,6 +174,7 @@ impl ColorItem {
             Self::Nick => "nick",
             Self::Normal => "normal",
             Self::Notice => "notice",
+            Self::Notify => "notify",
             Self::Other => "other",
             Self::Own => "own",
             Self::Part => "part",
@@ -205,6 +209,7 @@ impl ColorItem {
             Self::Nick => 3,
             Self::Normal => 1,
             Self::Notice => 5,
+            Self::Notify => 7,
             Self::Other => 6,
             Self::Own => 1,
             Self::Part => 3,
@@ -479,7 +484,7 @@ mod tests {
         ];
         // Where each of mirx's items is in that order.
         let positions = [
-            0, 1, 3, 4, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 21, 22, 23, 24, 25, 28, 29,
+            0, 1, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 21, 22, 23, 24, 25, 28, 29,
         ];
         for (item, position) in ColorItem::ALL.into_iter().zip(positions) {
             assert_eq!(item.classic().get(), classic[position], "{item:?}");
@@ -487,6 +492,7 @@ mod tests {
         let scheme = ColorScheme::default();
         assert_eq!(scheme.get(ColorItem::Highlight), index(5));
         assert_eq!(scheme.get(ColorItem::Gray), index(14));
+        assert_eq!(scheme.get(ColorItem::Notify), index(7));
     }
 
     #[test]

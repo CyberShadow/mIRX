@@ -54,10 +54,10 @@ pub(super) const COLORS_RESET_ID: u16 = 6504;
 const PALETTE_CELL: i32 = 20;
 const ITEM_COMBO_WIDTH: i32 = 160;
 /// The drop-down's list: every item without a scroll in the dialog font.
-const ITEM_COMBO_DROPPED_HEIGHT: i32 = 300;
+const ITEM_COMBO_DROPPED_HEIGHT: i32 = 320;
 
 /// The timeline's sample lines, mIRC's preview words: one per text item.
-const SAMPLE_LINES: [(&str, ColorItem); 15] = [
+const SAMPLE_LINES: [(&str, ColorItem); 16] = [
     ("* Joins: Carol", ColorItem::Join),
     ("* Parts: Dave", ColorItem::Part),
     ("* Op sets mode: +b", ColorItem::Mode),
@@ -68,6 +68,7 @@ const SAMPLE_LINES: [(&str, ColorItem); 15] = [
     ("<Bob> Normal text", ColorItem::Normal),
     ("<you> Own text", ColorItem::Own),
     ("-Bob- Notice text", ColorItem::Notice),
+    ("* Bob is on Matrix", ColorItem::Notify),
     ("* Bob waves", ColorItem::Action),
     ("<Bob> you: Highlight text", ColorItem::Highlight),
     ("* Info text", ColorItem::Info),
@@ -745,7 +746,7 @@ mod tests {
             size,
             (
                 (8 + 60) + (8 + widest_sample) + (8 + 30),
-                (8 + 15 * 15) + (8 + 15)
+                (8 + 16 * 15) + (8 + 15)
             )
         );
         // The text area's empty right, below its last line, and the gap
@@ -757,7 +758,7 @@ mod tests {
         assert_eq!(preview_item_at(&areas, 70, 50), Some(ColorItem::Background));
         assert_eq!(preview_item_at(&areas, 75, 4), Some(ColorItem::Join));
         assert_eq!(
-            preview_item_at(&areas, 75, 4 + 11 * 15),
+            preview_item_at(&areas, 75, 4 + 12 * 15),
             Some(ColorItem::Highlight)
         );
         assert_eq!(preview_item_at(&areas, 5, 5), Some(ColorItem::TreebarText));
