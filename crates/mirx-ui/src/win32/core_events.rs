@@ -5005,7 +5005,7 @@ mod tests {
                     "[22:12] * Syncing with the homeserver".to_owned(),
                     "[22:12] * Disconnected: boom".to_owned(),
                     "[22:12] * Syncing with the homeserver".to_owned(),
-                    "[22:12] * Disconnected: example signed this session out (token gone). Log out, then sign in again.".to_owned(),
+                    "[22:12] * Disconnected: example signed this session out (token gone). /e2ee export saves its room keys; File > Log Out ends it, then sign in again.".to_owned(),
                     "[22:12] * Logged out".to_owned(),
                     "[22:12] * Disconnected".to_owned(),
                 ]

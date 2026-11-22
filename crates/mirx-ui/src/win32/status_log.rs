@@ -198,10 +198,11 @@ pub(super) fn retrying_in(delay: std::time::Duration) -> String {
     format!("disconnected; retrying in {} seconds", delay.as_secs())
 }
 
-/// The server no longer accepts the session: no retry can help.
+/// The server no longer accepts the session: no retry can help. Its room
+/// keys are still on this computer, and exporting them needs no server.
 pub(super) fn session_ended(server: &str, message: &str) -> String {
     format!(
-        "Disconnected: {server} signed this session out ({message}). Log out, then sign in again."
+        "Disconnected: {server} signed this session out ({message}). /e2ee export saves its room keys; File > Log Out ends it, then sign in again."
     )
 }
 
@@ -471,7 +472,7 @@ mod tests {
         );
         assert_eq!(
             session_ended("example.org", "[401 / M_UNKNOWN_TOKEN] Invalid token"),
-            "Disconnected: example.org signed this session out ([401 / M_UNKNOWN_TOKEN] Invalid token). Log out, then sign in again."
+            "Disconnected: example.org signed this session out ([401 / M_UNKNOWN_TOKEN] Invalid token). /e2ee export saves its room keys; File > Log Out ends it, then sign in again."
         );
         assert_eq!(
             error("send message", "message send failed"),

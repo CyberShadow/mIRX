@@ -8,8 +8,8 @@ use super::{AccountLists, EventSender, RoomSnapshot, RoomSnapshots};
 use crate::api::CoreConfig;
 use crate::api::{
     AcceptRoomInviteRequest, AwayChanged, BanRoomMemberRequest, Command, CreateDirectRoomRequest,
-    CreateRoomRequest, CreateRoomVisibility, Event, HighlightWord, JoinRoomRequest,
-    KickRoomMemberRequest, LoginMethod, LoginRequest, Operation, PresenceKind,
+    CreateRoomRequest, CreateRoomVisibility, Event, ExportRoomKeysRequest, HighlightWord,
+    JoinRoomRequest, KickRoomMemberRequest, LoginMethod, LoginRequest, Operation, PresenceKind,
     RestoreSessionRequest, RoomJoined, RoomMemberRank, RoomMemberSummary, RoomMembers,
     RoomMembership, RoomNotificationMode, RoomReadState, RoomSummary, SyncStopReason,
 };
@@ -1611,6 +1611,49 @@ async fn signed_in_core(
         "{events:?}"
     );
     (profile, core, event_rx)
+}
+
+/// A session the server ended still has its room keys here: exporting
+/// them needs no server, so Status suggests it before Log Out.
+#[test]
+fn exporting_room_keys_works_after_the_server_ended_the_session() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        let (profile, mut core, event_rx) = signed_in_core(&mock_server, false).await;
+        // Ahead of the sign-in's mock.
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(unknown_token("Invalid token"))
+            .with_priority(1)
+            .mount(mock_server.server())
+            .await;
+        run(&mut core, Command::StartSync).await;
+        loop {
+            match next_event(&event_rx).await {
+                Event::SyncStopped(SyncStopReason::SessionEnded(_)) => break,
+                Event::E2eeStatus(_) | Event::SyncStarted => {}
+                other => panic!("expected a session-ended sync stop, got {other:?}"),
+            }
+        }
+        let path = profile.path().join("keys.txt");
+
+        run(
+            &mut core,
+            Command::ExportRoomKeys(ExportRoomKeysRequest {
+                path: path.to_string_lossy().into_owned(),
+                passphrase: "key file passphrase".to_owned(),
+            }),
+        )
+        .await;
+
+        let events = without_e2ee_status(drain_events(&event_rx));
+        assert!(
+            matches!(events.as_slice(), [Event::RoomKeysExported { .. }]),
+            "{events:?}"
+        );
+        assert!(path.is_file());
+        core.stop().await;
+    });
 }
 
 /// Logging out asks the server to end the session: one it already ended
