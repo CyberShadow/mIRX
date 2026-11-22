@@ -25067,6 +25067,8 @@ fn buffer_clear_on_the_window_menu_clears_that_window() -> Result<(), Box<dyn st
     // It clears the window whose menu it is, not the active one.
     let beta = view_child_hwnd(&app, &room_identity("!beta:example"))?;
     app.select_view(ViewIdentity::Status)?;
+    // The mock's sync logs its line in Status at no fixed moment.
+    wait_for_status_line(&app, "* Synced rooms: ", Duration::from_secs(10))?;
     let status_lines = find_view(&app.dump_ui_state()?, &ViewIdentity::Status)
         .lines
         .clone();
