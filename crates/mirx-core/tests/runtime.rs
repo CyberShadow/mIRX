@@ -2262,8 +2262,8 @@ fn room_activity_events_round_trip_through_serde() {
             sender: profile("@alice:example.org"),
             content: RoomStateNoticeContent::Member {
                 change: RoomMemberChange::NickChanged {
-                    old: Some("carol".to_owned()),
-                    new: None,
+                    old: "carol".to_owned(),
+                    new: "Carol".to_owned(),
                 },
                 target: RoomUserProfile {
                     user_id: "@carol:example.org".to_owned(),
@@ -2479,8 +2479,8 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             sender: profile("@alice:example.org"),
             content: RoomStateNoticeContent::Member {
                 change: RoomMemberChange::NickChanged {
-                    old: Some("carol".to_owned()),
-                    new: None,
+                    old: "carol".to_owned(),
+                    new: "Carol".to_owned(),
                 },
                 target: RoomUserProfile {
                     user_id: "@carol:example.org".to_owned(),
@@ -2632,7 +2632,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
     );
     assert_eq!(
         serde_json::to_string(&member_notice_event).expect("serialize member room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"state:$member:example.org","timestamp_ms":1700000000002,"highlight":false,"relation":null,"kind":{"type":"state_notice","event_id":"$member:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"content":{"type":"member","change":{"type":"nick_changed","old":"carol","new":null},"target":{"user_id":"@carol:example.org","nick":"Carol","nick_ambiguous":true},"reason":"rename"}}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"state:$member:example.org","timestamp_ms":1700000000002,"highlight":false,"relation":null,"kind":{"type":"state_notice","event_id":"$member:example.org","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"content":{"type":"member","change":{"type":"nick_changed","old":"carol","new":"Carol"},"target":{"user_id":"@carol:example.org","nick":"Carol","nick_ambiguous":true},"reason":"rename"}}}}"#
     );
     assert_eq!(
         serde_json::to_string(&image_event).expect("serialize image room activity"),
@@ -2952,7 +2952,7 @@ fn room_members_event_round_trips_multiple_members_and_allows_empty_members() {
         members: vec![
             RoomMemberSummary {
                 user_id: "@alice:example.org".to_owned(),
-                nick: Some("Alice".to_owned()),
+                nick: "Alice".to_owned(),
                 nick_ambiguous: true,
                 is_own_user: true,
                 rank: RoomMemberRank::Moderator,
@@ -2961,7 +2961,7 @@ fn room_members_event_round_trips_multiple_members_and_allows_empty_members() {
             },
             RoomMemberSummary {
                 user_id: "@bob:example.org".to_owned(),
-                nick: None,
+                nick: "bob".to_owned(),
                 nick_ambiguous: false,
                 is_own_user: false,
                 rank: RoomMemberRank::Voiced,
@@ -2974,7 +2974,7 @@ fn room_members_event_round_trips_multiple_members_and_allows_empty_members() {
     let populated_json = serde_json::to_string(&populated_event).expect("serialize room members");
     assert_eq!(
         populated_json,
-        r#"{"RoomMembers":{"room_id":"!ops:example.org","members":[{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":true,"is_own_user":true,"rank":"moderator","can_kick":true,"can_ban":false},{"user_id":"@bob:example.org","nick":null,"nick_ambiguous":false,"is_own_user":false,"rank":"voiced","can_kick":false,"can_ban":true}]}}"#
+        r#"{"RoomMembers":{"room_id":"!ops:example.org","members":[{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":true,"is_own_user":true,"rank":"moderator","can_kick":true,"can_ban":false},{"user_id":"@bob:example.org","nick":"bob","nick_ambiguous":false,"is_own_user":false,"rank":"voiced","can_kick":false,"can_ban":true}]}}"#
     );
 
     let restored: Event =
@@ -2995,6 +2995,18 @@ fn room_members_event_round_trips_multiple_members_and_allows_empty_members() {
     let restored: Event =
         serde_json::from_str(&empty_json).expect("deserialize empty room members");
     assert_eq!(restored, empty_event);
+}
+
+#[test]
+fn room_member_summary_requires_a_nick() {
+    let member = |nick: &str| {
+        format!(
+            r#"{{"user_id":"@bob:example.org",{nick}"nick_ambiguous":false,"is_own_user":false,"rank":"member","can_kick":false,"can_ban":false}}"#
+        )
+    };
+    assert!(serde_json::from_str::<RoomMemberSummary>(&member(r#""nick":"bob","#)).is_ok());
+    assert!(serde_json::from_str::<RoomMemberSummary>(&member(r#""nick":null,"#)).is_err());
+    assert!(serde_json::from_str::<RoomMemberSummary>(&member("")).is_err());
 }
 
 #[test]

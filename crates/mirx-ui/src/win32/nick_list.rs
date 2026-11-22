@@ -3,11 +3,7 @@
 use super::*;
 
 pub(super) fn room_member_nick(member: &RoomMemberSummary) -> String {
-    nick_label(
-        &member.user_id,
-        member.nick.as_deref(),
-        member.nick_ambiguous,
-    )
+    nick_label(&member.user_id, Some(&member.nick), member.nick_ambiguous)
 }
 
 pub(super) fn room_member_view_rows(members: &[RoomMemberSummary]) -> Vec<RoomMemberView> {
@@ -143,14 +139,13 @@ pub(super) unsafe fn query_selected_member(hwnd: HWND) -> Result<(), String> {
     refresh_status_bar(hwnd)
 }
 
-/// Inserts the selected member's name at the compose caret, replacing any
+/// Inserts the selected member's nick at the compose caret, replacing any
 /// selection, followed by a space to type on.
 pub(super) unsafe fn mention_selected_member(hwnd: HWND) -> Result<(), String> {
     let member = selected_member(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
-    let mention = member_mention_text(&member.user_id, member.nick.as_deref());
     let edit = compose_edit(hwnd);
     active_compose_history(state_mut(hwnd)).reset_navigation();
-    replace_edit_selection(edit, &format!("{mention} "));
+    replace_edit_selection(edit, &format!("{} ", member.nick));
     SetFocus(edit);
     Ok(())
 }
@@ -360,10 +355,12 @@ mod tests {
     #[test]
     fn member_view_rows_disambiguate_by_the_core_ambiguity_flag() {
         let labels = room_member_view_rows(&[
-            member_summary("@alex:example", Some("Alex"), true),
-            member_summary("@bo1:example", Some("Bo"), false),
-            member_summary("@bo2:example", Some("Bo"), false),
-            member_summary("@nameless:example", None, false),
+            member_summary("@alex:example", "Alex", true),
+            member_summary("@bo1:example", "Bo", false),
+            member_summary("@bo2:example", "Bo", false),
+            // The core names a member without a display name by localpart.
+            member_summary("@nameless:example", "nameless", false),
+            member_summary("@ghost:example", "ghost", true),
         ])
         .into_iter()
         .map(|member| member.label)
@@ -371,7 +368,13 @@ mod tests {
 
         assert_eq!(
             labels,
-            vec!["Alex (@alex:example)", "Bo", "Bo", "@nameless:example"]
+            vec![
+                "Alex (@alex:example)",
+                "Bo",
+                "Bo",
+                "nameless",
+                "ghost (@ghost:example)"
+            ]
         );
     }
 
@@ -379,7 +382,7 @@ mod tests {
     fn member_view_rows_keep_core_order_and_carry_rank_beside_the_bare_label() {
         let ranked = |user_id: &str, name: &str, rank| RoomMemberSummary {
             rank,
-            ..member_summary(user_id, Some(name), false)
+            ..member_summary(user_id, name, false)
         };
         let rows = room_member_view_rows(&[
             ranked("@zed:example", "Zed", RoomMemberRank::Moderator),
@@ -394,6 +397,21 @@ mod tests {
                 ("Zed", RoomMemberRank::Moderator),
                 ("Amy", RoomMemberRank::Voiced)
             ]
+        );
+    }
+
+    /// The list draws `@mod`: the op prefix, then the nick, as on IRC.
+    #[test]
+    fn a_nameless_moderator_reads_as_an_op_named_by_localpart() {
+        let rows = room_member_view_rows(&[RoomMemberSummary {
+            rank: RoomMemberRank::Moderator,
+            ..member_summary("@mod:example", "mod", false)
+        }]);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.label.as_str(), row.rank))
+                .collect::<Vec<_>>(),
+            vec![("mod", RoomMemberRank::Moderator)]
         );
     }
 }

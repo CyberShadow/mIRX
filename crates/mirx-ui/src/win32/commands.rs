@@ -14,7 +14,6 @@ use mirx_core::{
 
 use super::aliases::Aliases;
 use super::colors::PaletteIndex;
-use super::nick_completion::member_mention_text;
 use super::settings::{Bar, FontSetting, parse_palette_index, parse_points};
 use super::timeline_text::{context_line, rank_prefix, topic_is_text};
 use super::timestamp::{LocalTimeFn, TimestampFormat};
@@ -1471,9 +1470,11 @@ pub(super) fn help_lines(topic: Option<&str>) -> Result<Vec<String>, String> {
 }
 
 /// The member a nick names, resolved as IRC users expect: an exact user ID,
-/// else a display name (case-insensitive, as IRC nicks are), else a user ID
-/// localpart (`alice` for `@alice:example.org`). Each step must match exactly
-/// one user; a member listed in several rooms is one user.
+/// else a nick, the name the nick list shows (case-insensitive, as IRC
+/// nicks are), else a user ID localpart (`alice` for `@alice:example.org`
+/// named Alice). Each step must match exactly one user; a member listed in
+/// several rooms is one user. A nameless member's nick is their localpart,
+/// so `ghost` names both `@ghost` and a member named `Ghost`.
 pub(super) fn resolve_nick<'m>(
     members: impl IntoIterator<Item = &'m RoomMemberSummary>,
     nick: &str,
@@ -1482,12 +1483,7 @@ pub(super) fn resolve_nick<'m>(
     let folded = nick.to_lowercase();
     let steps: [&dyn Fn(&RoomMemberSummary) -> bool; 3] = [
         &|member| member.user_id == nick,
-        &|member| {
-            member
-                .nick
-                .as_deref()
-                .is_some_and(|name| name.to_lowercase() == folded)
-        },
+        &|member| member.nick.to_lowercase() == folded,
         &|member| user_id_localpart(&member.user_id).to_lowercase() == folded,
     ];
     for matches_nick in steps {
@@ -1557,16 +1553,11 @@ fn user_id_localpart(user_id: &str) -> &str {
         .map_or(user_id, |(localpart, _)| localpart)
 }
 
-/// The nick a member goes by in command output.
-fn member_nick(member: &RoomMemberSummary) -> &str {
-    member_mention_text(&member.user_id, member.nick.as_deref())
-}
-
 /// `/names`: the members, in nick list order, with their rank prefixes.
 pub(super) fn names_lines(room_name: &str, members: &[RoomMemberSummary]) -> Vec<String> {
     let names = members
         .iter()
-        .map(|member| format!("{}{}", rank_prefix(member.rank), member_nick(member)))
+        .map(|member| format!("{}{}", rank_prefix(member.rank), member.nick))
         .collect::<Vec<_>>()
         .join(" ");
     vec![
@@ -1770,7 +1761,7 @@ pub(super) fn rank_change_role(
     change: RankChange,
     member: &RoomMemberSummary,
 ) -> Result<MemberPowerRole, String> {
-    let nick = member_nick(member);
+    let nick = &member.nick;
     let is_operator = member.rank <= RoomMemberRank::Moderator;
     match change {
         RankChange::Op if is_operator => Err(format!("{nick} is already an operator")),
@@ -2799,14 +2790,10 @@ mod tests {
         );
     }
 
-    fn member(
-        user_id: &str,
-        display_name: Option<&str>,
-        rank: RoomMemberRank,
-    ) -> RoomMemberSummary {
+    fn member(user_id: &str, nick: &str, rank: RoomMemberRank) -> RoomMemberSummary {
         RoomMemberSummary {
             user_id: user_id.to_owned(),
-            nick: display_name.map(str::to_owned),
+            nick: nick.to_owned(),
             nick_ambiguous: false,
             is_own_user: false,
             rank,
@@ -2970,13 +2957,13 @@ mod tests {
     #[test]
     fn resolve_nick_prefers_user_id_then_display_name_then_localpart() {
         let members = [
-            member("@alice:example", Some("Alice"), RoomMemberRank::Member),
-            member("@bob:example", Some("alice2"), RoomMemberRank::Member),
-            member("@sam-one:example", Some("Sam"), RoomMemberRank::Member),
-            member("@sam-two:example", Some("sam"), RoomMemberRank::Member),
-            member("@carol:example", None, RoomMemberRank::Member),
+            member("@alice:example", "Alice", RoomMemberRank::Member),
+            member("@bob:example", "alice2", RoomMemberRank::Member),
+            member("@sam-one:example", "Sam", RoomMemberRank::Member),
+            member("@sam-two:example", "sam", RoomMemberRank::Member),
+            member("@carol:example", "carol", RoomMemberRank::Member),
             // The same user listed by a second room is still one user.
-            member("@alice:example", Some("Alice"), RoomMemberRank::Moderator),
+            member("@alice:example", "Alice", RoomMemberRank::Moderator),
         ];
         let resolve = |nick| resolve_nick(&members, nick).map(|member| member.user_id.as_str());
 
@@ -2996,13 +2983,27 @@ mod tests {
         );
     }
 
+    /// A nick is the name shown, so `ghost` is the nameless `@ghost` as
+    /// much as Casper, named `Ghost`, and names neither alone.
+    #[test]
+    fn resolve_nick_matches_the_nick_shown_before_any_localpart() {
+        let members = [
+            member("@casper:example", "Ghost", RoomMemberRank::Member),
+            member("@ghost:example", "ghost", RoomMemberRank::Member),
+        ];
+        let resolve = |nick| resolve_nick(&members, nick).map(|member| member.user_id.as_str());
+
+        assert_eq!(
+            resolve("ghost"),
+            Err("ghost is ambiguous (@casper:example, @ghost:example)".to_owned())
+        );
+        assert_eq!(resolve("casper"), Ok("@casper:example"));
+        assert_eq!(resolve("@ghost:example"), Ok("@ghost:example"));
+    }
+
     #[test]
     fn resolve_user_accepts_any_user_id() {
-        let members = [member(
-            "@alice:example",
-            Some("Alice"),
-            RoomMemberRank::Member,
-        )];
+        let members = [member("@alice:example", "Alice", RoomMemberRank::Member)];
         assert_eq!(
             resolve_user(&members, "@stranger:example"),
             Ok(UserTarget {
@@ -3145,20 +3146,16 @@ mod tests {
     #[test]
     fn names_whois_and_msg_lines_read_like_mirc() {
         let members = [
-            member("@creator:example", Some("Creator"), RoomMemberRank::Creator),
-            member(
-                "@admin:example",
-                Some("Admin"),
-                RoomMemberRank::Administrator,
-            ),
-            member("@mod:example", Some("Mod"), RoomMemberRank::Moderator),
-            member("@voice:example", Some("Voice"), RoomMemberRank::Voiced),
-            member("@ghost:example", None, RoomMemberRank::Member),
+            member("@creator:example", "Creator", RoomMemberRank::Creator),
+            member("@admin:example", "Admin", RoomMemberRank::Administrator),
+            member("@mod:example", "Mod", RoomMemberRank::Moderator),
+            member("@voice:example", "Voice", RoomMemberRank::Voiced),
+            member("@ghost:example", "ghost", RoomMemberRank::Member),
         ];
         assert_eq!(
             names_lines("Ops", &members),
             vec![
-                "* Names Ops: ~Creator &Admin @Mod +Voice @ghost:example".to_owned(),
+                "* Names Ops: ~Creator &Admin @Mod +Voice ghost".to_owned(),
                 "* End of /NAMES list".to_owned(),
             ]
         );
@@ -3193,16 +3190,18 @@ mod tests {
             ]
         );
         assert_eq!(
+            // A member without a display name goes by their localpart there;
+            // the full ID is where mIRC prints user@host.
             whois_lines(
                 &profile("@ghost:example", None),
-                None,
+                Some("ghost"),
                 &[(RoomMemberRank::Member, "Ops")]
             ),
             vec![
-                "* @ghost:example is @ghost:example".to_owned(),
-                "* @ghost:example on Ops".to_owned(),
-                "* @ghost:example using example".to_owned(),
-                "* @ghost:example End of /WHOIS list".to_owned(),
+                "* ghost is @ghost:example".to_owned(),
+                "* ghost on Ops".to_owned(),
+                "* ghost using example".to_owned(),
+                "* ghost End of /WHOIS list".to_owned(),
             ]
         );
         assert_eq!(
@@ -3493,7 +3492,7 @@ mod tests {
 
     #[test]
     fn rank_changes_follow_the_member_rank() {
-        let mut own = member("@me:example", Some("Me"), RoomMemberRank::Moderator);
+        let mut own = member("@me:example", "Me", RoomMemberRank::Moderator);
         own.is_own_user = true;
         let cases = [
             (
@@ -3564,7 +3563,7 @@ mod tests {
         ];
         for (change, rank, expected) in cases {
             assert_eq!(
-                rank_change_role(change, &member("@bob:example", Some("Bob"), rank)),
+                rank_change_role(change, &member("@bob:example", "Bob", rank)),
                 expected.map_err(str::to_owned),
                 "{change:?} {rank:?}"
             );

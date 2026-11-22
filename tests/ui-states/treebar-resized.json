@@ -135,7 +135,7 @@
         "content": {
           "type": "member",
           "change": { "type": "left" },
-          "target": { "user_id": "@dense-leaver:example", "nick": null, "nick_ambiguous": false },
+          "target": { "user_id": "@dense-leaver:example", "nick": "dense-leaver", "nick_ambiguous": false },
           "reason": null
         }
       },

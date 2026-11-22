@@ -96,11 +96,25 @@
           "can_ban": false
         },
         {
+          "user_id": "@blank:example",
+          "nick": "blank", "nick_ambiguous": false,
+          "is_own_user": false, "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
           "user_id": "@casey:example",
           "nick": "Casey", "nick_ambiguous": false,
           "is_own_user": false, "rank": "member",
           "can_kick": true,
           "can_ban": true
+        },
+        {
+          "user_id": "@ghost:example",
+          "nick": "ghost", "nick_ambiguous": false,
+          "is_own_user": false, "rank": "member",
+          "can_kick": false,
+          "can_ban": false
         },
         {
           "user_id": "@sam-one:example",
@@ -112,20 +126,6 @@
         {
           "user_id": "@sam-two:example",
           "nick": "Sam", "nick_ambiguous": true,
-          "is_own_user": false, "rank": "member",
-          "can_kick": false,
-          "can_ban": false
-        },
-        {
-          "user_id": "@ghost:example",
-          "nick": null, "nick_ambiguous": false,
-          "is_own_user": false, "rank": "member",
-          "can_kick": false,
-          "can_ban": false
-        },
-        {
-          "user_id": "@blank:example",
-          "nick": "", "nick_ambiguous": false,
           "is_own_user": false, "rank": "member",
           "can_kick": false,
           "can_ban": false

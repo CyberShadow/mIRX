@@ -182,15 +182,6 @@
           "can_ban": true
         },
         {
-          "user_id": "@ghost:example",
-          "nick": null,
-          "nick_ambiguous": false,
-          "is_own_user": false,
-          "rank": "member",
-          "can_kick": true,
-          "can_ban": true
-        },
-        {
           "user_id": "@alan:example",
           "nick": "Alan",
           "nick_ambiguous": false,
@@ -211,6 +202,15 @@
         {
           "user_id": "@casey:example",
           "nick": "Casey",
+          "nick_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@ghost:example",
+          "nick": "ghost",
           "nick_ambiguous": false,
           "is_own_user": false,
           "rank": "member",

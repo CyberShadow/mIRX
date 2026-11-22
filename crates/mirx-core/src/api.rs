@@ -868,11 +868,14 @@ pub enum RoomActivityKind {
 #[serde(deny_unknown_fields)]
 pub struct RoomUserProfile {
     pub user_id: String,
-    /// The name the room knows the user by: their display name there.
-    /// `None` when they have none.
+    /// The name the room knows the user by: their display name, or their
+    /// user ID's localpart when they set none (or an empty one). `None`
+    /// when the client has no member event for them, as for a user who
+    /// never joined.
     pub nick: Option<String>,
-    /// Whether another room member's nick is the same, so the nick alone
-    /// does not identify this user.
+    /// Whether another member's nick is the same (as the SDK normalises
+    /// names), so the nick alone does not identify them. Always false
+    /// without a nick.
     pub nick_ambiguous: bool,
 }
 
@@ -1409,9 +1412,11 @@ pub enum RoomMemberChange {
     KnockAccepted,
     KnockRetracted,
     KnockDenied,
+    /// The member's nick changed (see [`RoomUserProfile::nick`]); a display
+    /// name change that leaves the nick the same is no change.
     NickChanged {
-        old: Option<String>,
-        new: Option<String>,
+        old: String,
+        new: String,
     },
     AvatarChanged,
 }
@@ -1596,7 +1601,9 @@ pub struct RoomTyping {
 #[serde(deny_unknown_fields)]
 pub struct RoomMemberSummary {
     pub user_id: String,
-    pub nick: Option<String>,
+    /// As [`RoomUserProfile::nick`]; a member always has one.
+    pub nick: String,
+    /// As [`RoomUserProfile::nick_ambiguous`].
     pub nick_ambiguous: bool,
     /// Whether this member is the authenticated user.
     pub is_own_user: bool,

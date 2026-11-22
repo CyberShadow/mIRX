@@ -91,7 +91,7 @@
         "content": {
           "type": "member",
           "change": { "type": "left" },
-          "target": { "user_id": "@carol:example", "nick": null, "nick_ambiguous": false },
+          "target": { "user_id": "@carol:example", "nick": "carol", "nick_ambiguous": false },
           "reason": null
         }
       },

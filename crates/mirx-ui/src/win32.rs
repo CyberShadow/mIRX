@@ -431,7 +431,7 @@ use navigation::{
     tree_expansion_changed, view_caption, view_id_from_identity, view_identity_from_view_id,
     view_short_title,
 };
-use nick_completion::{NickCompletion, member_mention_text};
+use nick_completion::NickCompletion;
 use nick_list::{
     active_member_action_state, active_view_members, draw_nick_list_item,
     invoke_member_context_menu_for_automation, invoke_selected_member_context_menu_for_automation,

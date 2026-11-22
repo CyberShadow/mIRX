@@ -70,7 +70,7 @@
           },
           "target": {
             "user_id": "@dave:example",
-            "nick": null,
+            "nick": "dave",
             "nick_ambiguous": false
           },
           "reason": null

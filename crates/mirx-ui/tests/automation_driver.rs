@@ -1810,14 +1810,14 @@ fn typing_event(room_id: &str, user_ids: &[&str]) -> Event {
     })
 }
 
-fn room_members_event(room_id: &str, members: &[(&str, Option<&str>)]) -> Event {
+fn room_members_event(room_id: &str, members: &[(&str, &str)]) -> Event {
     Event::RoomMembers(RoomMembers {
         room_id: room_id.to_owned(),
         members: members
             .iter()
-            .map(|(user_id, display_name)| RoomMemberSummary {
+            .map(|(user_id, nick)| RoomMemberSummary {
                 user_id: (*user_id).to_owned(),
-                nick: display_name.map(str::to_owned),
+                nick: (*nick).to_owned(),
                 nick_ambiguous: false,
                 is_own_user: false,
                 rank: RoomMemberRank::Member,
@@ -5941,7 +5941,7 @@ fn launch_signed_in_member_app(
 fn signed_in_member_events() -> Vec<Event> {
     let member = |user_id: &str, display_name: &str, is_own_user| RoomMemberSummary {
         user_id: user_id.to_owned(),
-        nick: Some(display_name.to_owned()),
+        nick: display_name.to_owned(),
         nick_ambiguous: false,
         is_own_user,
         rank: RoomMemberRank::Member,
@@ -7744,12 +7744,9 @@ fn automation_driver_irc_info_commands_echo_in_active_window()
     app.append_synthetic_events(&serde_json::to_string(&vec![
         room_members_event(
             "!beta:example",
-            &[
-                ("@alice:example", Some("Alice")),
-                ("@bob:example", Some("Bob")),
-            ],
+            &[("@alice:example", "Alice"), ("@bob:example", "Bob")],
         ),
-        room_members_event("!alpha:example", &[("@alice:example", Some("Alice"))]),
+        room_members_event("!alpha:example", &[("@alice:example", "Alice")]),
     ])?)?;
     app.wait_idle(Duration::from_secs(5))?;
     let beta = room_identity("!beta:example");
@@ -9099,7 +9096,7 @@ fn ranked_member(
 ) -> RoomMemberSummary {
     RoomMemberSummary {
         user_id: user_id.to_owned(),
-        nick: Some(display_name.to_owned()),
+        nick: display_name.to_owned(),
         nick_ambiguous: false,
         is_own_user: false,
         rank,
@@ -9315,11 +9312,11 @@ fn automation_driver_loads_member_list_fixture() -> Result<(), Box<dyn std::erro
         view_member_labels(members_view),
         vec![
             "Alice",
+            "blank",
             "Casey",
+            "ghost",
             "Sam (@sam-one:example)",
             "Sam (@sam-two:example)",
-            "@ghost:example",
-            "@blank:example",
             "Zoe",
         ]
     );
@@ -9482,10 +9479,10 @@ fn automation_driver_member_list_shows_rank_prefixes_in_rank_order()
         "&Admin",
         "@Mod",
         "+Voice",
-        "@ghost:example",
         "Alan",
         "Alice",
         "Casey",
+        "ghost",
         "Sam (@sam-one:example)",
         "Sam (@sam-two:example)",
     ];
@@ -9505,10 +9502,10 @@ fn automation_driver_member_list_shows_rank_prefixes_in_rank_order()
             ("Admin", RoomMemberRank::Administrator),
             ("Mod", RoomMemberRank::Moderator),
             ("Voice", RoomMemberRank::Voiced),
-            ("@ghost:example", RoomMemberRank::Member),
             ("Alan", RoomMemberRank::Member),
             ("Alice", RoomMemberRank::Member),
             ("Casey", RoomMemberRank::Member),
+            ("ghost", RoomMemberRank::Member),
             ("Sam (@sam-one:example)", RoomMemberRank::Member),
             ("Sam (@sam-two:example)", RoomMemberRank::Member),
         ]
@@ -9781,7 +9778,7 @@ fn automation_driver_renders_every_membership_change_in_mirc_format()
     let view = find_view(&ui_state, &room_identity("!membership:example"));
     let expected = [
         "[22:13] * Joins: Carol (@carol:example)",
-        "[22:14] * Parts: @dave:example",
+        "[22:14] * Parts: dave (@dave:example)",
         "[22:15] * Eve was kicked by Op (flooding)",
         "[22:16] * Frank was banned by Op (spam)",
         "[22:17] * Grace was banned by Op",
@@ -9863,7 +9860,7 @@ fn member_menu_control_items() -> Result<(), Box<dyn std::error::Error>> {
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     let member = |user_id: &str, display_name: &str, rank, is_own_user| RoomMemberSummary {
         user_id: user_id.to_owned(),
-        nick: Some(display_name.to_owned()),
+        nick: display_name.to_owned(),
         nick_ambiguous: false,
         is_own_user,
         rank,
@@ -10053,8 +10050,7 @@ fn automation_driver_member_context_menu_query_clicked_member_without_prior_sele
 }
 
 #[test]
-fn automation_driver_member_menu_mentions_display_name_or_user_id()
--> Result<(), Box<dyn std::error::Error>> {
+fn automation_driver_member_menu_mentions_the_nick() -> Result<(), Box<dyn std::error::Error>> {
     let app = launch_member_list_app()?;
     app.select_member("@alice:example")?;
     app.mention_selected_member_via_menu()?;
@@ -10062,7 +10058,7 @@ fn automation_driver_member_menu_mentions_display_name_or_user_id()
     app.set_compose_text("")?;
     app.select_member("@ghost:example")?;
     app.mention_selected_member_via_menu()?;
-    assert_eq!(app.compose_text()?, "@ghost:example ");
+    assert_eq!(app.compose_text()?, "ghost ");
 
     // The name goes in at the caret; the rest of the line is kept.
     app.set_compose_text("hi  there")?;
@@ -10444,11 +10440,11 @@ fn automation_driver_loads_member_list_fixture_in_narrow_frame()
         view_member_labels(members_view),
         vec![
             "Alice",
+            "blank",
             "Casey",
+            "ghost",
             "Sam (@sam-one:example)",
             "Sam (@sam-two:example)",
-            "@ghost:example",
-            "@blank:example",
             "Zoe",
         ]
     );
@@ -10490,10 +10486,7 @@ fn automation_driver_replaces_room_members_on_append_and_state_reload()
         ),
         room_members_event(
             "!members:example",
-            &[
-                ("@alice:example", Some("Alice")),
-                ("@bob:example", Some("Bob")),
-            ],
+            &[("@alice:example", "Alice"), ("@bob:example", "Bob")],
         ),
     ])?;
 
@@ -10511,10 +10504,7 @@ fn automation_driver_replaces_room_members_on_append_and_state_reload()
 
     app.append_synthetic_events(&serde_json::to_string(&vec![room_members_event(
         "!members:example",
-        &[
-            ("@alice:example", Some("Alice")),
-            ("@carol:example", Some("Carol")),
-        ],
+        &[("@alice:example", "Alice"), ("@carol:example", "Carol")],
     )])?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
@@ -10536,10 +10526,7 @@ fn automation_driver_replaces_room_members_on_append_and_state_reload()
         ),
         room_members_event(
             "!members:example",
-            &[
-                ("@alice:example", Some("Alice")),
-                ("@dave:example", Some("Dave")),
-            ],
+            &[("@alice:example", "Alice"), ("@dave:example", "Dave")],
         ),
     ])?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -14374,7 +14361,7 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
                 1_700_000_180_000,
                 "@carol:example",
                 RoomMemberChange::Left,
-                None,
+                Some("carol"),
             ),
             message_entry_with_event_id(
                 "!mixed:example",
@@ -20760,10 +20747,7 @@ fn slash_ignore_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     );
     events.push(room_members_event(
         "!beta:example",
-        &[
-            ("@alice:example", Some("Alice")),
-            ("@bob:example", Some("Bob")),
-        ],
+        &[("@alice:example", "Alice"), ("@bob:example", "Bob")],
     ));
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;

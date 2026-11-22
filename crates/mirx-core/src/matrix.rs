@@ -1872,22 +1872,27 @@ async fn emit_room_snapshot_or_room_list_error(
     }
 }
 
-fn room_member_display_label(member: &RoomMemberSummary) -> &str {
-    match member.nick.as_deref() {
-        Some(display_name) if !display_name.is_empty() => display_name,
-        _ => member.user_id.as_str(),
+/// A member's nick, as the SDK names members (`RoomMember::name`), except
+/// that an empty display name, which names nobody, also falls back to the
+/// localpart. The SDK's ambiguity keys such a member under `""`, not their
+/// localpart, so it is flagged only against another empty name: accepted,
+/// since servers never set one.
+fn member_nick<'a>(display_name: Option<&'a str>, user_id: &'a UserId) -> &'a str {
+    match display_name {
+        Some(name) if !name.is_empty() => name,
+        _ => user_id.localpart(),
     }
 }
 
 #[cfg(test)]
 fn sorted_room_member_summaries_from_parts(
-    members: Vec<(String, Option<String>)>,
+    members: Vec<(String, String)>,
 ) -> Vec<RoomMemberSummary> {
     let members = members
         .into_iter()
-        .map(|(user_id, display_name)| RoomMemberSummary {
+        .map(|(user_id, nick)| RoomMemberSummary {
             user_id,
-            nick: display_name,
+            nick,
             nick_ambiguous: false,
             is_own_user: false,
             rank: RoomMemberRank::Member,
@@ -1899,7 +1904,7 @@ fn sorted_room_member_summaries_from_parts(
 }
 
 #[cfg(test)]
-fn room_members_from_parts(room_id: &str, members: Vec<(String, Option<String>)>) -> RoomMembers {
+fn room_members_from_parts(room_id: &str, members: Vec<(String, String)>) -> RoomMembers {
     RoomMembers {
         room_id: room_id.to_owned(),
         members: sorted_room_member_summaries_from_parts(members),
@@ -1907,16 +1912,12 @@ fn room_members_from_parts(room_id: &str, members: Vec<(String, Option<String>)>
 }
 
 /// Orders members as the nick list shows them: highest rank first, then by
-/// label, with the user ID breaking ties between equal labels.
+/// nick, with the user ID breaking ties between equal nicks.
 fn room_members_from_summaries(room_id: &str, mut members: Vec<RoomMemberSummary>) -> RoomMembers {
     members.sort_by(|left, right| {
         left.rank
             .cmp(&right.rank)
-            .then_with(|| {
-                room_member_display_label(left)
-                    .to_lowercase()
-                    .cmp(&room_member_display_label(right).to_lowercase())
-            })
+            .then_with(|| left.nick.to_lowercase().cmp(&right.nick.to_lowercase()))
             .then_with(|| left.user_id.cmp(&right.user_id))
     });
     RoomMembers {
@@ -1988,7 +1989,7 @@ fn room_members_from_matrix_members(
                 );
                 RoomMemberSummary {
                     user_id: member.user_id().to_string(),
-                    nick: member.display_name().map(str::to_owned),
+                    nick: member_nick(member.display_name(), member.user_id()).to_owned(),
                     nick_ambiguous: member.name_ambiguous(),
                     is_own_user: member.user_id() == authenticated_user_id,
                     rank: room_member_rank(member.power_level(), users_default),
@@ -2060,7 +2061,7 @@ pub(crate) async fn summarize_joined_room_members(
 }
 
 /// Resolves `user_id`'s current profile in `room` from the SDK member store.
-/// A user the store has never seen as a member has no room profile.
+/// A user the store has never seen as a member has no nick.
 async fn room_user_profile(
     room: &Room,
     user_id: &UserId,
@@ -2074,7 +2075,7 @@ async fn room_user_profile(
     Ok(match member {
         Some(member) => RoomUserProfile {
             user_id: user_id.to_string(),
-            nick: member.display_name().map(str::to_owned),
+            nick: Some(member_nick(member.display_name(), user_id).to_owned()),
             nick_ambiguous: member.name_ambiguous(),
         },
         None => RoomUserProfile {
@@ -2085,39 +2086,34 @@ async fn room_user_profile(
     })
 }
 
-/// Builds the profile of a membership event's target from the display name
-/// that event carried. Ambiguity follows the SDK rule for members: the name
-/// is ambiguous when it looks like a user ID or another user in the room
-/// currently uses it.
+/// Builds the profile of a membership event's target from the nick that
+/// event gave them ([`member_target_nick`]). Ambiguity follows the SDK rule
+/// for members: the nick is ambiguous when it looks like a user ID or
+/// another user in the room currently goes by it. The store keys members
+/// without a display name by localpart, so a localpart collides too.
 async fn member_target_profile(
     room: &Room,
     target: &UserId,
-    display_name: Option<String>,
+    nick: String,
 ) -> Result<RoomUserProfile, MatrixCoreError> {
-    let nick_ambiguous = match display_name.as_deref() {
-        // Without a display name the target is shown by user ID.
-        None => false,
-        Some(name) => {
-            let name = DisplayName::new(name);
-            name.is_inherently_ambiguous()
-                || room
-                    .client()
-                    .state_store()
-                    .get_users_with_display_name(room.room_id(), &name)
-                    .await
-                    .map_err(|err| {
-                        MatrixCoreError::new(format!(
-                            "failed to read Matrix room display names in {}: {err}",
-                            room.room_id()
-                        ))
-                    })?
-                    .iter()
-                    .any(|user_id| user_id != target)
-        }
-    };
+    let name = DisplayName::new(&nick);
+    let nick_ambiguous = name.is_inherently_ambiguous()
+        || room
+            .client()
+            .state_store()
+            .get_users_with_display_name(room.room_id(), &name)
+            .await
+            .map_err(|err| {
+                MatrixCoreError::new(format!(
+                    "failed to read Matrix room display names in {}: {err}",
+                    room.room_id()
+                ))
+            })?
+            .iter()
+            .any(|user_id| user_id != target);
     Ok(RoomUserProfile {
         user_id: target.to_string(),
-        nick: display_name,
+        nick: Some(nick),
         nick_ambiguous,
     })
 }
@@ -3403,7 +3399,8 @@ fn room_activity_from_sync_topic(
 
 /// Classifies a membership event. `None` means the event changed nothing a
 /// timeline line could report: no transition, a transition the spec forbids,
-/// or one ruma does not classify.
+/// one ruma does not classify, or a profile change that leaves the nick and
+/// avatar as they were.
 fn room_member_change_from_sync_member(
     event: &OriginalSyncRoomMemberEvent,
 ) -> Option<RoomMemberChange> {
@@ -3425,22 +3422,31 @@ fn room_member_change_from_sync_member(
         MembershipChange::KnockAccepted => RoomMemberChange::KnockAccepted,
         MembershipChange::KnockRetracted => RoomMemberChange::KnockRetracted,
         MembershipChange::KnockDenied => RoomMemberChange::KnockDenied,
-        // A combined rename and avatar change is reported as the rename.
+        // A combined nick and avatar change is reported as the nick change.
+        // A display name change that leaves the nick the same (`@ghost`
+        // dropping the name `ghost`) is none, as IRC has no such change.
         MembershipChange::ProfileChanged {
-            displayname_change: Some(change),
-            ..
-        } => RoomMemberChange::NickChanged {
-            old: change.old.map(str::to_owned),
-            new: change.new.map(str::to_owned),
-        },
-        MembershipChange::ProfileChanged {
-            displayname_change: None,
-            avatar_url_change: Some(_),
-        } => RoomMemberChange::AvatarChanged,
-        MembershipChange::ProfileChanged {
-            displayname_change: None,
-            avatar_url_change: None,
-        } => unreachable!("ruma reports ProfileChanged only when the name or avatar differs"),
+            displayname_change,
+            avatar_url_change,
+        } => {
+            let target = &event.state_key;
+            let nick_change = displayname_change
+                .map(|change| {
+                    (
+                        member_nick(change.old, target),
+                        member_nick(change.new, target),
+                    )
+                })
+                .filter(|(old, new)| old != new);
+            match (nick_change, avatar_url_change) {
+                (Some((old, new)), _) => RoomMemberChange::NickChanged {
+                    old: old.to_owned(),
+                    new: new.to_owned(),
+                },
+                (None, Some(_)) => RoomMemberChange::AvatarChanged,
+                (None, None) => return None,
+            }
+        }
         // ruma marks MembershipChange as non_exhaustive.
         _ => return None,
     })
@@ -3449,17 +3455,24 @@ fn room_member_change_from_sync_member(
 /// The display name a membership event's target had: the event's own for
 /// memberships that describe the member (join, invite, knock), the previous
 /// one for leave and ban events, which carry no profile.
-fn member_target_display_name(event: &OriginalSyncRoomMemberEvent) -> Option<String> {
+fn member_target_display_name(event: &OriginalSyncRoomMemberEvent) -> Option<&str> {
     match event.content.membership {
         MembershipState::Join | MembershipState::Invite | MembershipState::Knock => {
-            event.content.displayname.clone()
+            event.content.displayname.as_deref()
         }
         _ => event
             .unsigned
             .prev_content
             .as_ref()
-            .and_then(|prev| prev.displayname.clone()),
+            .and_then(|prev| prev.displayname.as_deref()),
     }
+}
+
+/// The nick a membership event's target had ([`member_nick`] of
+/// [`member_target_display_name`]): a membership event's target is a
+/// member, so it always has one.
+fn member_target_nick(event: &OriginalSyncRoomMemberEvent) -> String {
+    member_nick(member_target_display_name(event), &event.state_key).to_owned()
 }
 
 fn room_activity_from_sync_member(
@@ -3498,7 +3511,7 @@ async fn room_activity_from_member_event(
         return Ok(None);
     };
     let sender = lookups.profile(&event.sender).await?;
-    let target = member_target_profile(room, &event.state_key, member_target_display_name(event)).await?;
+    let target = member_target_profile(room, &event.state_key, member_target_nick(event)).await?;
     Ok(Some(room_activity_from_sync_member(
         room.room_id().as_str(),
         event,
@@ -5914,19 +5927,20 @@ mod tests {
         kick_room_member, list_public_rooms, map_cross_signing_status, map_decimals,
         map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
         map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
-        map_send_queue_update, member_target_display_name,
+        map_send_queue_update, member_nick, member_target_display_name, member_target_nick,
         message_presentation_and_text_from_serialized_event, outgoing_events_from_local_echo_event,
         own_room_user_profile, owned_event_id_from_str, power_levels_change,
         reaction_event_content, read_file_bytes, register_event_handlers, remove_highlight_word,
-        restore_session, room_activity_from_sync_member, room_activity_from_sync_message,
-        room_activity_from_sync_topic, room_activity_update_from_sync_message_replacement,
+        restore_session, room_activity_from_member_event, room_activity_from_sync_member,
+        room_activity_from_sync_message, room_activity_from_sync_topic,
+        room_activity_update_from_sync_message_replacement,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_history_backfill_event_from_timeline_event,
         room_history_backfill_events_from_timeline, room_list_update_is_relevant,
         room_media_request_parameters, room_member_change_from_sync_member, room_member_rank,
         room_members_from_parts, room_message_type, room_read_state_from_parts,
         room_read_update_is_relevant, room_tag_summaries_from_tags, room_typing_from_sync_typing,
-        room_unable_to_decrypt_cause, send_file, send_message, set_display_name,
+        room_unable_to_decrypt_cause, room_user_profile, send_file, send_message, set_display_name,
         set_room_member_power_level, set_room_notification_mode,
         sorted_room_member_summaries_from_parts, summarize_rooms, sync_message_replacement,
         unban_room_member, unignore_user, user_presence_from_response,
@@ -6028,7 +6042,7 @@ mod tests {
                 members: vec![
                     RoomMemberSummary {
                         user_id: "@example:localhost".to_owned(),
-                        nick: Some("Actor".to_owned()),
+                        nick: "Actor".to_owned(),
                         nick_ambiguous: false,
                         is_own_user: true,
                         rank: RoomMemberRank::Moderator,
@@ -6037,7 +6051,7 @@ mod tests {
                     },
                     RoomMemberSummary {
                         user_id: "@bob:localhost".to_owned(),
-                        nick: Some("Bob".to_owned()),
+                        nick: "Bob".to_owned(),
                         nick_ambiguous: false,
                         is_own_user: false,
                         rank: RoomMemberRank::Member,
@@ -6957,7 +6971,7 @@ mod tests {
                     members: vec![
                         RoomMemberSummary {
                             user_id: "@higher:example.org".to_owned(),
-                            nick: Some("Higher".to_owned()),
+                            nick: "Higher".to_owned(),
                             nick_ambiguous: false,
                             is_own_user: false,
                             rank: RoomMemberRank::Administrator,
@@ -6966,7 +6980,7 @@ mod tests {
                         },
                         RoomMemberSummary {
                             user_id: "@alice:example.org".to_owned(),
-                            nick: Some("Actor".to_owned()),
+                            nick: "Actor".to_owned(),
                             nick_ambiguous: false,
                             is_own_user: true,
                             rank: RoomMemberRank::Moderator,
@@ -6975,7 +6989,7 @@ mod tests {
                         },
                         RoomMemberSummary {
                             user_id: "@equal:example.org".to_owned(),
-                            nick: Some("Equal".to_owned()),
+                            nick: "Equal".to_owned(),
                             nick_ambiguous: false,
                             is_own_user: false,
                             rank: RoomMemberRank::Moderator,
@@ -6984,7 +6998,7 @@ mod tests {
                         },
                         RoomMemberSummary {
                             user_id: "@default:example.org".to_owned(),
-                            nick: Some("Default".to_owned()),
+                            nick: "Default".to_owned(),
                             nick_ambiguous: false,
                             is_own_user: false,
                             rank: RoomMemberRank::Member,
@@ -6994,6 +7008,196 @@ mod tests {
                     ],
                 }
             );
+        });
+    }
+
+    /// A room's state with a join for each of `members` (user ID, display
+    /// name if any), `@alice:example.org` (the session's user) among them.
+    fn named_member_state_events(members: &[(&str, Option<&str>)]) -> serde_json::Value {
+        let mut events = vec![serde_json::json!({
+            "type": "m.room.create", "state_key": "",
+            "sender": "@alice:example.org", "event_id": "$create:example.org",
+            "origin_server_ts": 1u64,
+            "content": { "creator": "@alice:example.org" }
+        })];
+        events.extend(members.iter().enumerate().map(|(index, (user_id, name))| {
+            let mut content = serde_json::json!({ "membership": "join" });
+            if let Some(name) = name {
+                content["displayname"] = serde_json::json!(name);
+            }
+            serde_json::json!({
+                "type": "m.room.member", "state_key": user_id,
+                "sender": user_id, "event_id": format!("$member{index}:example.org"),
+                "origin_server_ts": 2u64 + index as u64,
+                "content": content
+            })
+        }));
+        serde_json::Value::Array(events)
+    }
+
+    /// The `(user ID, nick, ambiguous)` of the joined members of a room
+    /// with `members`, in snapshot order.
+    async fn joined_member_nicks(members: &[(&str, Option<&str>)]) -> Vec<(String, String, bool)> {
+        let client = client_with_joined_members(named_member_state_events(members)).await;
+        let room = client
+            .get_room(room_id().as_ref())
+            .expect("joined room from sync response");
+        joined_room_members_no_sync(client.user_id().expect("authenticated user"), &room)
+            .await
+            .expect("members")
+            .members
+            .into_iter()
+            .map(|member| (member.user_id, member.nick, member.nick_ambiguous))
+            .collect()
+    }
+
+    #[test]
+    fn a_member_without_a_display_name_goes_by_their_localpart() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let nicks = joined_member_nicks(&[
+                ("@alice:example.org", Some("Alice")),
+                ("@ghost:example.org", None),
+                ("@blank:example.org", Some("")),
+                ("@bob:example.org", Some("Bob")),
+            ])
+            .await;
+            let owned = |user_id: &str, nick: &str| (user_id.to_owned(), nick.to_owned(), false);
+            assert_eq!(
+                nicks,
+                vec![
+                    // The creator ranks first.
+                    owned("@alice:example.org", "Alice"),
+                    owned("@blank:example.org", "blank"),
+                    owned("@bob:example.org", "Bob"),
+                    owned("@ghost:example.org", "ghost"),
+                ]
+            );
+        });
+    }
+
+    /// Pins the SDK rule the nicks rely on: its display-name map keys a
+    /// member without a display name by their localpart.
+    #[test]
+    fn a_localpart_shared_with_a_display_name_is_ambiguous_on_both_sides() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let nicks = joined_member_nicks(&[
+                ("@alice:example.org", Some("Alice")),
+                ("@casper:example.org", Some("Ghost")),
+                ("@ghost:example.org", None),
+                ("@sam:a.example.org", None),
+                ("@sam:b.example.org", None),
+            ])
+            .await;
+            assert_eq!(
+                nicks,
+                vec![
+                    ("@alice:example.org".to_owned(), "Alice".to_owned(), false),
+                    ("@casper:example.org".to_owned(), "Ghost".to_owned(), true),
+                    ("@ghost:example.org".to_owned(), "ghost".to_owned(), true),
+                    ("@sam:a.example.org".to_owned(), "sam".to_owned(), true),
+                    ("@sam:b.example.org".to_owned(), "sam".to_owned(), true),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn room_user_profile_names_members_by_nick_and_others_not_at_all() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let client = client_with_joined_members(named_member_state_events(&[
+                ("@alice:example.org", Some("Alice")),
+                ("@ghost:example.org", None),
+            ]))
+            .await;
+            let room = client
+                .get_room(room_id().as_ref())
+                .expect("joined room from sync response");
+            let ghost = UserId::parse("@ghost:example.org").expect("valid user id");
+            let stranger = UserId::parse("@stranger:example.org").expect("valid user id");
+            assert_eq!(
+                room_user_profile(&room, &ghost).await.expect("profile"),
+                RoomUserProfile {
+                    user_id: "@ghost:example.org".to_owned(),
+                    nick: Some("ghost".to_owned()),
+                    nick_ambiguous: false,
+                }
+            );
+            assert_eq!(
+                room_user_profile(&room, &stranger).await.expect("profile"),
+                profile("@stranger:example.org")
+            );
+        });
+    }
+
+    #[test]
+    fn a_membership_targets_nick_falls_back_to_the_localpart() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let ghost_leaves = member_event(
+                "@ghost:example.org",
+                "@ghost:example.org",
+                serde_json::json!({ "membership": "leave" }),
+                Some(serde_json::json!({ "membership": "join" })),
+            );
+            for (others, ambiguous) in [
+                (vec![("@alice:example.org", Some("Alice"))], false),
+                (
+                    vec![
+                        ("@alice:example.org", Some("Alice")),
+                        ("@casper:example.org", Some("Ghost")),
+                    ],
+                    true,
+                ),
+            ] {
+                let client = client_with_joined_members(named_member_state_events(&others)).await;
+                let room = client
+                    .get_room(room_id().as_ref())
+                    .expect("joined room from sync response");
+                let activity = room_activity_from_member_event(
+                    &room,
+                    &ghost_leaves,
+                    &mut EventBatchLookups::new(&room),
+                    false,
+                )
+                .await
+                .expect("mapped")
+                .expect("a line");
+                let RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+                    content: RoomStateNoticeContent::Member { target, .. },
+                    ..
+                }) = activity.kind
+                else {
+                    panic!("not a member notice: {activity:?}");
+                };
+                assert_eq!(
+                    target,
+                    RoomUserProfile {
+                        user_id: "@ghost:example.org".to_owned(),
+                        nick: Some("ghost".to_owned()),
+                        nick_ambiguous: ambiguous,
+                    },
+                    "{others:?}"
+                );
+            }
         });
     }
 
@@ -8276,37 +8480,27 @@ mod tests {
     }
 
     #[test]
-    fn room_member_sorting_uses_case_insensitive_display_name_then_user_id() {
+    fn member_nick_is_the_display_name_else_the_localpart() {
+        let ghost = UserId::parse("@ghost:example.org").expect("valid user id");
+        assert_eq!(member_nick(Some("Ghosty"), &ghost), "Ghosty");
+        assert_eq!(member_nick(None, &ghost), "ghost");
+        // An empty display name names nobody.
+        assert_eq!(member_nick(Some(""), &ghost), "ghost");
+    }
+
+    #[test]
+    fn room_member_sorting_uses_case_insensitive_nick_then_user_id() {
         assert_eq!(
             sorted_room_member_summaries_from_parts(vec![
-                ("@charlie:example.org".to_owned(), None),
-                ("@delta:example.org".to_owned(), Some("beta".to_owned())),
-                ("@echo:example.org".to_owned(), Some("alice".to_owned())),
-                ("@beta:example.org".to_owned(), Some(String::new())),
-                ("@alpha:example.org".to_owned(), Some("ALICE".to_owned())),
+                ("@charlie:example.org".to_owned(), "charlie".to_owned()),
+                ("@delta:example.org".to_owned(), "beta".to_owned()),
+                ("@echo:example.org".to_owned(), "alice".to_owned()),
+                ("@alpha:example.org".to_owned(), "ALICE".to_owned()),
             ]),
             vec![
                 RoomMemberSummary {
-                    user_id: "@beta:example.org".to_owned(),
-                    nick: Some(String::new()),
-                    nick_ambiguous: false,
-                    is_own_user: false,
-                    rank: RoomMemberRank::Member,
-                    can_kick: false,
-                    can_ban: false,
-                },
-                RoomMemberSummary {
-                    user_id: "@charlie:example.org".to_owned(),
-                    nick: None,
-                    nick_ambiguous: false,
-                    is_own_user: false,
-                    rank: RoomMemberRank::Member,
-                    can_kick: false,
-                    can_ban: false,
-                },
-                RoomMemberSummary {
                     user_id: "@alpha:example.org".to_owned(),
-                    nick: Some("ALICE".to_owned()),
+                    nick: "ALICE".to_owned(),
                     nick_ambiguous: false,
                     is_own_user: false,
                     rank: RoomMemberRank::Member,
@@ -8315,7 +8509,7 @@ mod tests {
                 },
                 RoomMemberSummary {
                     user_id: "@echo:example.org".to_owned(),
-                    nick: Some("alice".to_owned()),
+                    nick: "alice".to_owned(),
                     nick_ambiguous: false,
                     is_own_user: false,
                     rank: RoomMemberRank::Member,
@@ -8324,7 +8518,16 @@ mod tests {
                 },
                 RoomMemberSummary {
                     user_id: "@delta:example.org".to_owned(),
-                    nick: Some("beta".to_owned()),
+                    nick: "beta".to_owned(),
+                    nick_ambiguous: false,
+                    is_own_user: false,
+                    rank: RoomMemberRank::Member,
+                    can_kick: false,
+                    can_ban: false,
+                },
+                RoomMemberSummary {
+                    user_id: "@charlie:example.org".to_owned(),
+                    nick: "charlie".to_owned(),
                     nick_ambiguous: false,
                     is_own_user: false,
                     rank: RoomMemberRank::Member,
@@ -8336,21 +8539,21 @@ mod tests {
     }
 
     #[test]
-    fn room_members_from_parts_breaks_duplicate_display_names_by_user_id() {
+    fn room_members_from_parts_breaks_duplicate_nicks_by_user_id() {
         assert_eq!(
             room_members_from_parts(
                 "!room:example.org",
                 vec![
-                    ("@zulu:example.org".to_owned(), Some("Same".to_owned())),
-                    ("@alpha:example.org".to_owned(), Some("same".to_owned())),
-                    ("@mike:example.org".to_owned(), Some("same".to_owned())),
+                    ("@zulu:example.org".to_owned(), "Same".to_owned()),
+                    ("@alpha:example.org".to_owned(), "same".to_owned()),
+                    ("@mike:example.org".to_owned(), "same".to_owned()),
                 ],
             )
             .members,
             vec![
                 RoomMemberSummary {
                     user_id: "@alpha:example.org".to_owned(),
-                    nick: Some("same".to_owned()),
+                    nick: "same".to_owned(),
                     nick_ambiguous: false,
                     is_own_user: false,
                     rank: RoomMemberRank::Member,
@@ -8359,7 +8562,7 @@ mod tests {
                 },
                 RoomMemberSummary {
                     user_id: "@mike:example.org".to_owned(),
-                    nick: Some("same".to_owned()),
+                    nick: "same".to_owned(),
                     nick_ambiguous: false,
                     is_own_user: false,
                     rank: RoomMemberRank::Member,
@@ -8368,7 +8571,7 @@ mod tests {
                 },
                 RoomMemberSummary {
                     user_id: "@zulu:example.org".to_owned(),
-                    nick: Some("Same".to_owned()),
+                    nick: "Same".to_owned(),
                     nick_ambiguous: false,
                     is_own_user: false,
                     rank: RoomMemberRank::Member,
@@ -10464,8 +10667,8 @@ mod tests {
                 serde_json::json!({ "membership": "join", "displayname": "Caz" }),
                 Some(joined.clone()),
                 Some(RoomMemberChange::NickChanged {
-                    old: Some("Carol".to_owned()),
-                    new: Some("Caz".to_owned()),
+                    old: "Carol".to_owned(),
+                    new: "Caz".to_owned(),
                 }),
             ),
             (
@@ -10473,8 +10676,8 @@ mod tests {
                 serde_json::json!({ "membership": "join" }),
                 Some(joined.clone()),
                 Some(RoomMemberChange::NickChanged {
-                    old: Some("Carol".to_owned()),
-                    new: None,
+                    old: "Carol".to_owned(),
+                    new: "carol".to_owned(),
                 }),
             ),
             (
@@ -10496,8 +10699,8 @@ mod tests {
                 }),
                 Some(joined.clone()),
                 Some(RoomMemberChange::NickChanged {
-                    old: Some("Carol".to_owned()),
-                    new: Some("Caz".to_owned()),
+                    old: "Carol".to_owned(),
+                    new: "Caz".to_owned(),
                 }),
             ),
             // A member event repeating the current profile changes nothing.
@@ -10512,6 +10715,54 @@ mod tests {
                 room_member_change_from_sync_member(&event),
                 expected,
                 "{sender} {prev_content:?} -> {content}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_nick_change_names_both_nicks_and_an_unchanged_nick_is_none() {
+        let ghost = "@ghost:example.org";
+        let nameless = serde_json::json!({ "membership": "join" });
+        let avatar = "mxc://example.org/avatar";
+        for (content, prev_content, expected) in [
+            (
+                serde_json::json!({ "membership": "join", "displayname": "Ghosty" }),
+                nameless.clone(),
+                Some(RoomMemberChange::NickChanged {
+                    old: "ghost".to_owned(),
+                    new: "Ghosty".to_owned(),
+                }),
+            ),
+            (
+                nameless.clone(),
+                serde_json::json!({ "membership": "join", "displayname": "Ghosty" }),
+                Some(RoomMemberChange::NickChanged {
+                    old: "Ghosty".to_owned(),
+                    new: "ghost".to_owned(),
+                }),
+            ),
+            // An empty name names nobody: the nick stays the localpart.
+            (
+                serde_json::json!({ "membership": "join", "displayname": "" }),
+                nameless.clone(),
+                None,
+            ),
+            (
+                nameless.clone(),
+                serde_json::json!({ "membership": "join", "displayname": "ghost" }),
+                None,
+            ),
+            (
+                serde_json::json!({ "membership": "join", "avatar_url": avatar }),
+                serde_json::json!({ "membership": "join", "displayname": "ghost" }),
+                Some(RoomMemberChange::AvatarChanged),
+            ),
+        ] {
+            let event = member_event(ghost, ghost, content.clone(), Some(prev_content.clone()));
+            assert_eq!(
+                room_member_change_from_sync_member(&event),
+                expected,
+                "{prev_content} -> {content}"
             );
         }
     }
@@ -10546,7 +10797,7 @@ mod tests {
             (serde_json::json!({ "membership": "leave" }), None, None),
         ] {
             let event = member_event(carol, carol, content.clone(), prev_content);
-            assert_eq!(member_target_display_name(&event).as_deref(), expected, "{content}");
+            assert_eq!(member_target_display_name(&event), expected, "{content}");
         }
     }
 
@@ -10560,7 +10811,7 @@ mod tests {
         );
         let target = RoomUserProfile {
             user_id: "@carol:example.org".to_owned(),
-            nick: member_target_display_name(&event),
+            nick: Some(member_target_nick(&event)),
             nick_ambiguous: false,
         };
 
@@ -11375,8 +11626,8 @@ mod tests {
                     sender: member_profile("@bob:localhost", "Robert", false),
                     content: RoomStateNoticeContent::Member {
                         change: RoomMemberChange::NickChanged {
-                            old: Some("Bob".to_owned()),
-                            new: Some("Robert".to_owned()),
+                            old: "Bob".to_owned(),
+                            new: "Robert".to_owned(),
                         },
                         target: member_profile("@bob:localhost", "Robert", false),
                         reason: None,

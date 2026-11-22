@@ -10,16 +10,6 @@ use std::ops::Range;
 
 use mirx_core::RoomMemberSummary;
 
-/// The text that names a member in a message: their display name, or their
-/// user ID when they have none. Matrix permits an empty display name, which
-/// cannot name anyone.
-pub(super) fn member_mention_text<'a>(user_id: &'a str, display_name: Option<&'a str>) -> &'a str {
-    match display_name {
-        Some(name) if !name.is_empty() => name,
-        _ => user_id,
-    }
-}
-
 /// A replacement of `replace` in the edit text by `text`; the caret goes
 /// after `text`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,11 +35,11 @@ impl NickCompletion {
     /// Completes the word that ends at `caret` against `members`, taken in
     /// nick list order. `None` when there is no word or no member matches.
     ///
-    /// A word matches a member whose display name, or user ID with or without
-    /// its `@`, starts with it, ignoring case. A word starting with `@`
+    /// A word matches a member whose nick, or user ID with or without its
+    /// `@`, starts with it, ignoring case. A word starting with `@`
     /// completes to user IDs, so `/query @al` and `/kick @bo` stay useful;
-    /// any other word completes to the member's mention text. Matches that
-    /// would insert the same text appear once: two members both named Sam
+    /// any other word completes to the member's nick. Matches that would
+    /// insert the same text appear once: two members both named Sam
     /// complete to one `Sam`, and typing `@sam` picks between them. Our own
     /// user is never offered, since naming ourselves is pointless.
     pub(super) fn start(
@@ -69,16 +59,11 @@ impl NickCompletion {
         let mut candidates = Vec::<String>::new();
         for member in members.iter().filter(|member| !member.is_own_user) {
             let user_id = member.user_id.to_lowercase();
-            let display_name = member
-                .nick
-                .as_deref()
-                .filter(|name| !name.is_empty())
-                .map(str::to_lowercase);
             let matches = if wants_user_id {
                 user_id.starts_with(&word)
             } else {
                 user_id.trim_start_matches('@').starts_with(&word)
-                    || display_name.is_some_and(|name| name.starts_with(&word))
+                    || member.nick.to_lowercase().starts_with(&word)
             };
             if !matches {
                 continue;
@@ -86,7 +71,7 @@ impl NickCompletion {
             let inserted = if wants_user_id {
                 member.user_id.as_str()
             } else {
-                member_mention_text(&member.user_id, member.nick.as_deref())
+                member.nick.as_str()
             };
             if !candidates.iter().any(|candidate| candidate == inserted) {
                 candidates.push(inserted.to_owned());
@@ -167,10 +152,10 @@ mod tests {
 
     use super::*;
 
-    fn member(user_id: &str, display_name: Option<&str>) -> RoomMemberSummary {
+    fn member(user_id: &str, nick: &str) -> RoomMemberSummary {
         RoomMemberSummary {
             user_id: user_id.to_owned(),
-            nick: display_name.map(str::to_owned),
+            nick: nick.to_owned(),
             nick_ambiguous: false,
             is_own_user: false,
             rank: RoomMemberRank::Member,
@@ -181,19 +166,19 @@ mod tests {
 
     fn members() -> Vec<RoomMemberSummary> {
         vec![
-            member("@zed:example", Some("Alfred")),
+            member("@zed:example", "Alfred"),
             RoomMemberSummary {
                 is_own_user: true,
-                ..member("@alex:example", Some("Alex"))
+                ..member("@alex:example", "Alex")
             },
-            member("@alice:example", Some("Alice")),
-            member("@alan:example", Some("Alan")),
-            member("@casey:example", Some("Casey")),
-            member("@sam-one:example", Some("Sam")),
-            member("@sam-two:example", Some("Sam")),
-            member("@ghost:example", None),
-            member("@blank:example", Some("")),
-            member("@zoë:example", Some("Zoë 🦊")),
+            member("@alice:example", "Alice"),
+            member("@alan:example", "Alan"),
+            member("@casey:example", "Casey"),
+            member("@sam-one:example", "Sam"),
+            member("@sam-two:example", "Sam"),
+            // Without a display name, the core names them by localpart.
+            member("@ghost:example", "ghost"),
+            member("@zoë:example", "Zoë 🦊"),
         ]
     }
 
@@ -230,14 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn mention_text_prefers_a_non_empty_display_name() {
-        assert_eq!(member_mention_text("@a:example", Some("Ann")), "Ann");
-        assert_eq!(member_mention_text("@a:example", Some("")), "@a:example");
-        assert_eq!(member_mention_text("@a:example", None), "@a:example");
-    }
-
-    #[test]
-    fn completes_display_name_prefixes_case_insensitively_in_member_order() {
+    fn completes_nick_prefixes_case_insensitively_in_member_order() {
         assert_eq!(
             complete("hi al", 5, &[false, false, false, false]),
             vec!["hi Alfred", "hi Alice", "hi Alan", "hi Alfred"]
@@ -255,12 +233,27 @@ mod tests {
     }
 
     #[test]
-    fn user_id_localparts_match_and_insert_the_mention_text() {
+    fn user_id_localparts_match_and_insert_the_nick() {
         // `zed` is Alfred's localpart.
         assert_eq!(complete("ze", 2, &[false]), vec!["Alfred"]);
-        // Members without a usable display name are named by user ID.
-        assert_eq!(complete("gh", 2, &[false]), vec!["@ghost:example"]);
-        assert_eq!(complete("bla", 3, &[false]), vec!["@blank:example"]);
+        // A member without a display name goes by their localpart.
+        assert_eq!(complete("gh", 2, &[false]), vec!["ghost"]);
+        assert_eq!(complete("@gh", 3, &[false]), vec!["@ghost:example"]);
+    }
+
+    /// Nicks differing in case are distinct texts to insert, so both are
+    /// offered; the core names both users for either.
+    #[test]
+    fn nicks_differing_in_case_are_both_offered() {
+        let members = [
+            member("@casper:example", "Ghost"),
+            member("@ghost:example", "ghost"),
+        ];
+        let text = utf16("gh");
+        let (mut completion, edit) =
+            NickCompletion::start(&text, 2, &members, false).expect("completion starts");
+        assert_eq!(edit.text, "Ghost");
+        assert_eq!(completion.advance(false).text, "ghost");
     }
 
     #[test]

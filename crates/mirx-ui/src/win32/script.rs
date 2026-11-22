@@ -225,8 +225,8 @@ fn chan(model: &UiModel, view: &ViewId) -> String {
     }
 }
 
-/// `$me`: the user's nick in the window's room, as the nick list shows the
-/// user's own member, otherwise the user ID; empty when signed out.
+/// `$me`: the user's nick in the window's room (their localpart there when
+/// they set no display name), otherwise the user ID; empty when signed out.
 fn me(model: &UiModel, view: &ViewId) -> String {
     let Some(user_id) = model.own_user_id() else {
         return String::new();
@@ -239,9 +239,7 @@ fn me(model: &UiModel, view: &ViewId) -> String {
                 .iter()
                 .find(|member| member.user_id == user_id)
         })
-        .map_or(user_id, |member| {
-            member_mention_text(&member.user_id, member.nick.as_deref())
-        })
+        .map_or(user_id, |member| member.nick.as_str())
         .to_owned()
 }
 
@@ -265,7 +263,7 @@ mod tests {
         model.room_views.insert(
             "!ops:example".to_owned(),
             RoomViewModel {
-                members: vec![member_summary("@me:example", Some("Mee"), false)],
+                members: vec![member_summary("@me:example", "Mee", false)],
                 ..Default::default()
             },
         );
@@ -292,6 +290,15 @@ mod tests {
         assert_eq!(me(&model, &room_view_id("!ops:example")), "Mee");
         assert_eq!(me(&model, &room_view_id("!dev:example")), "@me:example");
         assert_eq!(me(&model, &ViewId::Status), "@me:example");
+        // Without a display name there, the core names us by localpart.
+        model.room_views.insert(
+            "!dev:example".to_owned(),
+            RoomViewModel {
+                members: vec![member_summary("@me:example", "me", false)],
+                ..Default::default()
+            },
+        );
+        assert_eq!(me(&model, &room_view_id("!dev:example")), "me");
         model.own_account = None;
         assert_eq!(me(&model, &room_view_id("!ops:example")), "");
     }
@@ -313,7 +320,7 @@ mod tests {
                 .get_mut("!ops:example")
                 .unwrap()
                 .members
-                .push(member_summary("@alice:example", Some("Alice"), false));
+                .push(member_summary("@alice:example", "Alice", false));
             let mut source = state.aliases.aliases().source().to_vec();
             source.extend(extra.iter().map(|line| (*line).to_owned()));
             let aliases = aliases::Aliases::from_source(source).unwrap();

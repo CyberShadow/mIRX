@@ -810,7 +810,7 @@ fn data_models_round_trip_through_json() {
                     lines: vec!["hello".to_owned()],
                     members: vec![RoomMemberView {
                         user_id: "@alice:example".to_owned(),
-                        nick: Some("Alice".to_owned()),
+                        nick: "Alice".to_owned(),
                         label: "Alice".to_owned(),
                         rank: RoomMemberRank::Voiced,
                         can_kick: true,
@@ -2012,8 +2012,8 @@ fn room_activity_member_state_notice_round_trips_through_json() {
             state_key: "@carol:example".to_owned(),
             content: RoomStateNoticeContent::Member {
                 change: RoomMemberChange::NickChanged {
-                    old: None,
-                    new: Some("carol".to_owned()),
+                    old: "Carol".to_owned(),
+                    new: "carol".to_owned(),
                 },
                 target_nick: Some("carol".to_owned()),
                 reason: Some("rename".to_owned()),
@@ -2039,7 +2039,7 @@ fn room_activity_member_state_notice_round_trips_through_json() {
                     "type": "member",
                     "change": {
                         "type": "nick_changed",
-                        "old": null,
+                        "old": "Carol",
                         "new": "carol"
                     },
                     "target_nick": "carol",

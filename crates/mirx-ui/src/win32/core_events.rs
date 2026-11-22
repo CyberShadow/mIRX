@@ -4753,7 +4753,7 @@ mod tests {
             &mut state,
             Event::RoomMembers(RoomMembers {
                 room_id: "!ops:example".to_owned(),
-                members: vec![member_summary("@bob:example", Some("Bob"), false)],
+                members: vec![member_summary("@bob:example", "Bob", false)],
             }),
         )
         .unwrap();

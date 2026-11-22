@@ -1763,6 +1763,7 @@ mod tests {
         for (reaction_event_id, sender, timestamp_ms) in [
             ("$r1", "@alice:example", 1_700_000_000_300),
             ("$r2", "@ghost:example", 1_700_000_000_200),
+            ("$r3", "@dave:example", 1_700_000_000_100),
         ] {
             apply_core_event(
                 &mut state,
@@ -1785,7 +1786,7 @@ mod tests {
         };
         assert_eq!(
             reaction_row(&state).logical_text,
-            "    reactions: +1 @ghost:example, @alice:example"
+            "    reactions: +1 @dave:example, @ghost:example, @alice:example"
         );
 
         // Members arrive after the reactions; the row is rebuilt from them.
@@ -1793,12 +1794,21 @@ mod tests {
             &mut state,
             Event::RoomMembers(RoomMembers {
                 room_id: "!ops:example".to_owned(),
-                members: vec![member_summary("@alice:example", Some("Alice"), false)],
+                members: vec![
+                    member_summary("@alice:example", "Alice", false),
+                    // Without a display name, the core names ghost by
+                    // localpart.
+                    member_summary("@ghost:example", "ghost", false),
+                ],
             }),
         )
         .unwrap();
         let row = reaction_row(&state);
-        assert_eq!(row.logical_text, "    reactions: +1 @ghost:example, Alice");
+        // Dave is no member: the full user ID.
+        assert_eq!(
+            row.logical_text,
+            "    reactions: +1 @dave:example, ghost, Alice"
+        );
         // It wraps like a log line instead of being clipped.
         assert_eq!(row.layout, TimelineRowLayout::Log);
     }
@@ -2564,8 +2574,9 @@ mod tests {
             Event::RoomMembers(RoomMembers {
                 room_id: "!ops:example".to_owned(),
                 members: vec![
-                    member_summary("@alice:example", Some("Alice"), false),
-                    member_summary("@sam1:example", Some("Sam"), true),
+                    member_summary("@alice:example", "Alice", false),
+                    member_summary("@sam1:example", "Sam", true),
+                    member_summary("@ghost:example", "ghost", false),
                 ],
             }),
         )
@@ -2574,15 +2585,20 @@ mod tests {
             &mut state,
             typing_event(
                 "!ops:example",
-                &["@alice:example", "@sam1:example", "@stranger:example"],
+                &[
+                    "@alice:example",
+                    "@sam1:example",
+                    "@ghost:example",
+                    "@stranger:example",
+                ],
             ),
         )
         .unwrap();
 
-        assert!(
-            render_room_lines(&state, "!ops:example")
-                .contains(&"* Alice, Sam (@sam1:example), @stranger:example are typing".to_owned())
-        );
+        // A stranger is no member: the full user ID.
+        assert!(render_room_lines(&state, "!ops:example").contains(
+            &"* Alice, Sam (@sam1:example), ghost, @stranger:example are typing".to_owned()
+        ));
     }
 
     #[test]
@@ -3840,8 +3856,8 @@ mod tests {
             (KnockDenied, EventItem::Invite),
             (
                 NickChanged {
-                    old: None,
-                    new: Some("Caz".to_owned()),
+                    old: "carol".to_owned(),
+                    new: "Caz".to_owned(),
                 },
                 EventItem::Nick,
             ),

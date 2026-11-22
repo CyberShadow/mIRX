@@ -152,7 +152,7 @@ mod tests {
             .model
             .room_views
             .entry_or_default("!ops:example".to_owned());
-        ops.members = vec![member_summary("@bob:example", Some("Bob"), false)];
+        ops.members = vec![member_summary("@bob:example", "Bob", false)];
         state
     }
 

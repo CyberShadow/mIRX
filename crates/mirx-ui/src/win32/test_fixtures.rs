@@ -1231,14 +1231,10 @@ pub(super) fn bold_style() -> mirx_core::TextStyle {
     }
 }
 
-pub(super) fn member_summary(
-    user_id: &str,
-    nick: Option<&str>,
-    nick_ambiguous: bool,
-) -> RoomMemberSummary {
+pub(super) fn member_summary(user_id: &str, nick: &str, nick_ambiguous: bool) -> RoomMemberSummary {
     RoomMemberSummary {
         user_id: user_id.to_owned(),
-        nick: nick.map(str::to_owned),
+        nick: nick.to_owned(),
         nick_ambiguous,
         is_own_user: false,
         rank: RoomMemberRank::Member,

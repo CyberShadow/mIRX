@@ -1741,7 +1741,7 @@ configure_case_expectations() {
         --expect-room-view '!mixed:example::[22:13] <Alice> synced hello'
         --expect-room-view "!mixed:example::[22:14] * Alice changes topic to 'mixed room topic'"
         --expect-room-view '!mixed:example::[22:15] * Joins: Bob (@bob:example)'
-        --expect-room-view '!mixed:example::[22:16] * Parts: @carol:example'
+        --expect-room-view '!mixed:example::[22:16] * Parts: carol (@carol:example)'
         --expect-room-view '!mixed:example::[22:17] -Server- server maintenance'
         --expect-room-view '!mixed:example::[22:18] * Alice waves hello'
         --expect-room-view '!mixed:example::[22:17] * Alice pending local echo (sending)'
@@ -1813,7 +1813,7 @@ configure_case_expectations() {
         --expect-room-view '!dense:example::[22:15] * Alice dense emote row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
         --expect-room-view "!dense:example::[22:16] * Alice changes topic to 'dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'"
         --expect-room-view '!dense:example::[22:17] * Joins: Dense Member Alpha Beta Gamma Delta (@dense-member:example)'
-        --expect-room-view '!dense:example::[22:17] * Parts: @dense-leaver:example'
+        --expect-room-view '!dense:example::[22:17] * Parts: dense-leaver (@dense-leaver:example)'
         --expect-room-view '!dense:example::[22:18] * Alice sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)'
         --expect-room-view '!dense:example::[22:18] * Alice sent unsupported com.example.custom: dense custom payload alpha beta gamma delta epsilon zeta'
         --expect-room-view '!dense:example::[22:19] <Alice> dense pending row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (sending)'
@@ -2828,7 +2828,7 @@ configure_case_expectations() {
       room_view_expect_args=(
         --expect-room-view '!membership:example::* Now talking in Membership (!membership:example)'
         --expect-room-view '!membership:example::[22:13] * Joins: Carol (@carol:example)'
-        --expect-room-view '!membership:example::[22:14] * Parts: @dave:example'
+        --expect-room-view '!membership:example::[22:14] * Parts: dave (@dave:example)'
         --expect-room-view '!membership:example::[22:15] * Eve was kicked by Op (flooding)'
         --expect-room-view '!membership:example::[22:16] * Frank was banned by Op (spam)'
         --expect-room-view '!membership:example::[22:17] * Grace was banned by Op'

@@ -584,14 +584,14 @@ fn room_read_state(
     }
 }
 
-fn room_members(room_id: &str, members: &[(&str, Option<&str>)]) -> RoomMembers {
+fn room_members(room_id: &str, members: &[(&str, &str)]) -> RoomMembers {
     RoomMembers {
         room_id: room_id.to_owned(),
         members: members
             .iter()
-            .map(|(user_id, display_name)| RoomMemberSummary {
+            .map(|(user_id, nick)| RoomMemberSummary {
                 user_id: (*user_id).to_owned(),
-                nick: display_name.map(str::to_owned),
+                nick: (*nick).to_owned(),
                 nick_ambiguous: false,
                 is_own_user: false,
                 rank: RoomMemberRank::Member,
@@ -645,16 +645,10 @@ fn initial_room_members_and_read_states_follow_joined_synced_rooms() {
     let room_members = vec![
         room_members(
             "!ops:example.org",
-            &[
-                ("@alice:example.org", Some("Alice")),
-                ("@bob:example.org", None),
-            ],
+            &[("@alice:example.org", "Alice"), ("@bob:example.org", "bob")],
         ),
-        room_members("!eng:example.org", &[("@carol:example.org", Some("Carol"))]),
-        room_members(
-            "!invite:example.org",
-            &[("@dave:example.org", Some("Dave"))],
-        ),
+        room_members("!eng:example.org", &[("@carol:example.org", "Carol")]),
+        room_members("!invite:example.org", &[("@dave:example.org", "Dave")]),
     ];
     let read_states = vec![
         room_read_state(

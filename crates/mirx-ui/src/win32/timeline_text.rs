@@ -1,8 +1,10 @@
 //! mIRC-style text for timeline lines and nicks.
 //!
-//! Every user shown in the UI goes through [`nick_label`], so duplicate
-//! display names are disambiguated the same way in the timeline, the nick
-//! list, and the typing indicator. Ambiguity itself is decided by mirx-core.
+//! mirx-core names users: a member's nick (their display name, else their
+//! localpart) and whether another member goes by the same one. Every user
+//! shown in the UI goes through [`nick_label`], which only adds the user ID
+//! to an ambiguous nick, the same way in the timeline, the nick list, and
+//! the typing indicator.
 
 use std::ops::Range;
 
@@ -11,19 +13,14 @@ use mirx_core::{
     RoomPowerLevelValueChange, RoomUserProfile,
 };
 
-/// The label for a user: their display name, the display name with the user
-/// ID when another member shares it, or the user ID when they have none.
-pub(super) fn nick_label(user_id: &str, display_name: Option<&str>, ambiguous: bool) -> String {
-    match display_name {
-        // An empty display name cannot identify anyone; Matrix permits it.
-        Some(name) if !name.is_empty() => {
-            if ambiguous {
-                format!("{name} ({user_id})")
-            } else {
-                name.to_owned()
-            }
-        }
-        _ => user_id.to_owned(),
+/// The label for a user: their nick, the nick with the user ID when another
+/// member goes by it too, or the user ID when they are not a member the
+/// core knows (no nick).
+pub(super) fn nick_label(user_id: &str, nick: Option<&str>, ambiguous: bool) -> String {
+    match nick {
+        Some(nick) if ambiguous => format!("{nick} ({user_id})"),
+        Some(nick) => nick.to_owned(),
+        None => user_id.to_owned(),
     }
 }
 
@@ -166,11 +163,7 @@ pub(super) fn member_change_text(
         RoomMemberChange::KnockAccepted => format!("{op} accepted knock from {nick}"),
         RoomMemberChange::KnockRetracted => format!("{nick} withdrew knock"),
         RoomMemberChange::KnockDenied => format!("{op} denied knock from {nick}"),
-        RoomMemberChange::NickChanged { old, new } => format!(
-            "{} is now known as {}",
-            nick_label(&target.user_id, old.as_deref(), false),
-            nick_label(&target.user_id, new.as_deref(), false),
-        ),
+        RoomMemberChange::NickChanged { old, new } => format!("{old} is now known as {new}"),
         RoomMemberChange::AvatarChanged => format!("{nick} changed avatar"),
     };
     match reason {
@@ -225,24 +218,25 @@ pub(super) fn power_levels_change_text(
 mod tests {
     use super::*;
 
-    fn profile(user_id: &str, display_name: Option<&str>, ambiguous: bool) -> RoomUserProfile {
+    fn profile(user_id: &str, nick: Option<&str>, ambiguous: bool) -> RoomUserProfile {
         RoomUserProfile {
             user_id: user_id.to_owned(),
-            nick: display_name.map(str::to_owned),
+            nick: nick.map(str::to_owned),
             nick_ambiguous: ambiguous,
         }
     }
 
     #[test]
-    fn nick_label_prefers_display_name_and_disambiguates_duplicates() {
+    fn nick_label_shows_the_nick_and_the_id_when_ambiguous() {
         assert_eq!(nick_label("@alice:example", Some("Alice"), false), "Alice");
+        assert_eq!(nick_label("@ghost:example", Some("ghost"), false), "ghost");
         assert_eq!(
-            nick_label("@sam1:example", Some("Sam"), true),
-            "Sam (@sam1:example)"
+            nick_label("@ghost:example", Some("ghost"), true),
+            "ghost (@ghost:example)"
         );
+        // No nick: not a member the core knows.
         assert_eq!(nick_label("@bob:example", None, false), "@bob:example");
         assert_eq!(nick_label("@bob:example", None, true), "@bob:example");
-        assert_eq!(nick_label("@eve:example", Some(""), false), "@eve:example");
     }
 
     fn message_line_parts(line: MessageLine) -> (String, String, usize) {
@@ -345,7 +339,8 @@ mod tests {
         let op = profile("@op:example", Some("Op"), false);
         let carol = profile("@carol:example", Some("Carol"), false);
         let sam = profile("@sam:example", Some("Sam"), true);
-        let anon = profile("@anon:example", None, false);
+        // Without a display name, the core names a member by localpart.
+        let anon = profile("@anon:example", Some("anon"), false);
         let text = |change: RoomMemberChange, target: &RoomUserProfile, reason: Option<&str>| {
             member_change_text(&op, &change, target, reason)
         };
@@ -356,7 +351,7 @@ mod tests {
         );
         assert_eq!(
             text(RoomMemberChange::InvitationAccepted, &anon, None),
-            "Joins: @anon:example"
+            "Joins: anon (@anon:example)"
         );
         assert_eq!(
             text(RoomMemberChange::Left, &carol, Some("bye")),
@@ -409,8 +404,8 @@ mod tests {
         assert_eq!(
             text(
                 RoomMemberChange::NickChanged {
-                    old: Some("Carol".to_owned()),
-                    new: Some("Caz".to_owned()),
+                    old: "Carol".to_owned(),
+                    new: "Caz".to_owned(),
                 },
                 &carol,
                 None,
@@ -420,13 +415,13 @@ mod tests {
         assert_eq!(
             text(
                 RoomMemberChange::NickChanged {
-                    old: None,
-                    new: Some("Carol".to_owned()),
+                    old: "carol".to_owned(),
+                    new: "Carol".to_owned(),
                 },
                 &carol,
                 None,
             ),
-            "@carol:example is now known as Carol"
+            "carol is now known as Carol"
         );
         assert_eq!(
             text(RoomMemberChange::AvatarChanged, &carol, None),

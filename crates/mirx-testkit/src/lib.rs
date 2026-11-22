@@ -1183,10 +1183,7 @@ pub enum RoomMemberChange {
     KnockAccepted,
     KnockRetracted,
     KnockDenied,
-    NickChanged {
-        old: Option<String>,
-        new: Option<String>,
-    },
+    NickChanged { old: String, new: String },
     AvatarChanged,
 }
 
@@ -2213,7 +2210,7 @@ impl<'de> Deserialize<'de> for ComposeKey {
 #[serde(deny_unknown_fields)]
 pub struct RoomMemberView {
     pub user_id: String,
-    pub nick: Option<String>,
+    pub nick: String,
     /// The nick, with the user ID when it is ambiguous; the nick list shows
     /// it after the rank prefix.
     pub label: String,

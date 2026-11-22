@@ -1783,7 +1783,7 @@ impl<'de> Deserialize<'de> for ComposeKey {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RoomMemberView {
     pub(crate) user_id: String,
-    pub(crate) nick: Option<String>,
+    pub(crate) nick: String,
     /// The nick, with the user ID when it is ambiguous; the nick list shows
     /// it after the rank prefix.
     pub(crate) label: String,
@@ -6545,7 +6545,7 @@ mod tests {
                                 lines: vec!["hello".to_owned()],
                                 members: vec![RoomMemberView {
                                     user_id: "@alice:example".to_owned(),
-                                    nick: Some("Alice".to_owned()),
+                                    nick: "Alice".to_owned(),
                                     label: "Alice".to_owned(),
                                     rank: RoomMemberRank::Moderator,
                                     can_kick: true,

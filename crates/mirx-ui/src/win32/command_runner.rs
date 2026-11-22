@@ -893,12 +893,12 @@ fn all_room_members(model: &UiModel) -> impl Iterator<Item = &RoomMemberSummary>
         .flat_map(|view| view.members.iter())
 }
 
-/// The nick a member of a known room goes by, if any room knows them with
-/// a display name.
+/// The nick a member of a known room goes by. `None` for a user no known
+/// room has.
 pub(super) fn known_nick(model: &UiModel, user_id: &str) -> Option<String> {
     all_room_members(model)
-        .filter(|member| member.user_id == user_id)
-        .find_map(|member| member.nick.clone())
+        .find(|member| member.user_id == user_id)
+        .map(|member| member.nick.clone())
 }
 
 /// The user `/ignore` and `/unignore` name: a user ID, which need not be a
@@ -1410,10 +1410,10 @@ mod tests {
             room("!ops:example", "Ops", false),
             query("!dm:example", "Alice", "@alice:example"),
         ];
-        let mut bob = member_summary("@bob:example", Some("Bob"), false);
+        let mut bob = member_summary("@bob:example", "Bob", false);
         bob.rank = RoomMemberRank::Moderator;
         let ops = RoomViewModel {
-            members: vec![member_summary("@alice:example", Some("Alice"), false), bob],
+            members: vec![member_summary("@alice:example", "Alice", false), bob],
             ..Default::default()
         };
         state
@@ -1421,7 +1421,7 @@ mod tests {
             .room_views
             .insert("!ops:example".to_owned(), ops);
         let dm = RoomViewModel {
-            members: vec![member_summary("@alice:example", Some("Alice"), false)],
+            members: vec![member_summary("@alice:example", "Alice", false)],
             ..Default::default()
         };
         state.model.room_views.insert("!dm:example".to_owned(), dm);
@@ -1631,6 +1631,28 @@ mod tests {
             });
         }
         stop_test_core(handle);
+    }
+
+    #[test]
+    fn whois_names_a_member_without_a_display_name_by_their_nick() {
+        let mut model = UiModel::default();
+        model.room_views.insert(
+            "!ops:example".to_owned(),
+            RoomViewModel {
+                members: vec![member_summary("@ghost:example", "ghost", false)],
+                ..Default::default()
+            },
+        );
+        let profile = UserProfile {
+            user_id: "@ghost:example".to_owned(),
+            display_name: None,
+            presence: None,
+        };
+        assert_eq!(
+            whois_lines(&model, &profile)[0],
+            "* ghost is @ghost:example"
+        );
+        assert_eq!(known_nick(&model, "@stranger:example"), None);
     }
 
     #[test]
@@ -1907,7 +1929,7 @@ mod tests {
         let ops = state.model.room_views.get_mut("!ops:example").unwrap();
         ops.members[0].can_kick = true;
         ops.members[0].can_ban = true;
-        let mut me = member_summary("@me:example", Some("Me"), false);
+        let mut me = member_summary("@me:example", "Me", false);
         me.rank = RoomMemberRank::Moderator;
         me.is_own_user = true;
         ops.members.push(me);
