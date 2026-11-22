@@ -5687,6 +5687,135 @@ mod tests {
             .unwrap_or_else(|| panic!("no line with {event_line_end}: {lines:#?}"))
     }
 
+    /// Deleting an edit shows what it replaced, as Element does: the latest
+    /// edit left, then the message's own text, no longer `(edited)`. The
+    /// deleted text shows nowhere.
+    #[test]
+    fn a_redacted_edit_restores_the_previous_text() {
+        let mut state = undecrypted_state();
+        for event in [
+            edit("$before", "$e2", "@alice:example", 2, "second"),
+            edit("$before", "$e3", "@alice:example", 3, "third"),
+        ] {
+            apply_core_event(&mut state, event).unwrap();
+        }
+        assert_eq!(
+            line_of(&ops_lines(&state), "<@alice:example> "),
+            "[22:13] <@alice:example> third (edited)"
+        );
+
+        apply_core_event(
+            &mut state,
+            incoming_redacted("!ops:example", "$e3", "$unedit3"),
+        )
+        .unwrap();
+        assert_eq!(
+            line_of(&ops_lines(&state), "<@alice:example> "),
+            "[22:13] <@alice:example> second (edited)"
+        );
+        apply_core_event(
+            &mut state,
+            incoming_redacted("!ops:example", "$e2", "$unedit2"),
+        )
+        .unwrap();
+        let lines = ops_lines(&state);
+        assert_eq!(
+            line_of(&lines, "<@alice:example> "),
+            "[22:13] <@alice:example> before"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("second") || line.contains("third")),
+            "{lines:#?}"
+        );
+        assert!(state.model.room_views["!ops:example"].line_edits.is_empty());
+    }
+
+    /// A page of history brings a message with the server's latest edit
+    /// (bundled): deleting that edit shows the message's own text.
+    #[test]
+    fn a_redacted_bundled_edit_restores_the_original() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", true)];
+        let mut old = alices_secret("tpyo");
+        old.activity_id = "event:$old".to_owned();
+        let RoomActivityKind::Message(message) = &mut old.kind else {
+            unreachable!()
+        };
+        message.event_id = Some("$old".to_owned());
+        let Event::RoomActivityUpdate(bundled) = edit("$old", "$fix", "@alice:example", 1, "typo")
+        else {
+            unreachable!()
+        };
+        apply_core_event(
+            &mut state,
+            room_history_backfill(
+                "!ops:example",
+                None,
+                vec![
+                    RoomHistoryBackfillEvent::Activity(Box::new(old)),
+                    RoomHistoryBackfillEvent::ActivityUpdate(bundled),
+                ],
+            ),
+        )
+        .unwrap();
+        assert!(
+            ops_lines(&state).contains(&"[22:14] <@alice:example> typo (edited)".to_owned()),
+            "{:#?}",
+            ops_lines(&state)
+        );
+
+        apply_core_event(
+            &mut state,
+            incoming_redacted("!ops:example", "$fix", "$unfix"),
+        )
+        .unwrap();
+
+        let lines = ops_lines(&state);
+        assert!(
+            lines.contains(&"[22:14] <@alice:example> tpyo".to_owned()),
+            "{lines:#?}"
+        );
+    }
+
+    /// A reply's quote of a line whose edit was deleted quotes the text the
+    /// line shows again.
+    #[test]
+    fn a_reply_quote_follows_the_restored_text() {
+        let mut state = reply_quote_state("$q");
+        apply_core_event(
+            &mut state,
+            edit("$q", "$fix", "@alice:example", 1, "secret"),
+        )
+        .unwrap();
+        assert!(
+            ops_lines(&state)
+                .iter()
+                .any(|line| line.contains("> ") && line.contains("secret")),
+            "{:#?}",
+            ops_lines(&state)
+        );
+
+        apply_core_event(
+            &mut state,
+            incoming_redacted("!ops:example", "$fix", "$unfix"),
+        )
+        .unwrap();
+
+        let lines = ops_lines(&state);
+        assert!(
+            !lines.iter().any(|line| line.contains("secret")),
+            "{lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("> <") && line.contains("are we deploying today?")),
+            "{lines:#?}"
+        );
+    }
+
     /// Only a message's sender can edit it (the spec's validity of
     /// replacement events): anyone else's edit is ignored, as Element
     /// does, also while the line waits for its key.

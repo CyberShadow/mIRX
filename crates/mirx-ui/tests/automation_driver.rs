@@ -13135,6 +13135,79 @@ fn automation_driver_applies_receive_side_message_edits_in_place()
     Ok(())
 }
 
+/// Deleting an edit shows what it replaced: the latest edit left, then the
+/// message's own text, no longer `(edited)`.
+#[test]
+fn automation_driver_a_redacted_edit_restores_the_previous_text()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(fixture_state_path(
+        "message-edits.json",
+    ))?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    // `lobby edited` at 180000.
+    app.append_synthetic_events(&fs::read_to_string(fixture_update_path(
+        "message-edits.json",
+    ))?)?;
+    let later_edit = serde_json::json!([{ "RoomActivityUpdate": {
+        "room_id": "!ops:example",
+        "target": { "type": "event", "event_id": "$ops-room-1" },
+        "kind": {
+            "type": "message_replaced",
+            "replacement_event_id": "$edit-room-2",
+            "sender": "@alice:example",
+            "timestamp_ms": 1_700_000_300_000u64,
+            "presentation": "text",
+            "body": "lobby final",
+            "styles": [],
+            "user_links": [],
+        },
+    }}]);
+    app.append_synthetic_events(&later_edit.to_string())?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let redact = |edit: &str| {
+        serde_json::json!([{ "RoomActivityUpdate": {
+            "room_id": "!ops:example",
+            "target": { "type": "event", "event_id": edit },
+            "kind": {
+                "type": "activity_redacted",
+                "redaction_event_id": format!("$redact{edit}"),
+            },
+        }}])
+        .to_string()
+    };
+    let lobby_line = |app: &MirxApp| -> Result<String, Box<dyn std::error::Error>> {
+        let state = app.dump_ui_state()?;
+        let view = find_view(&state, &room_identity("!ops:example"));
+        Ok(only_view_line_containing(view, "lobby").to_owned())
+    };
+    assert!(
+        lobby_line(&app)?.ends_with("lobby final (edited)"),
+        "{}",
+        lobby_line(&app)?
+    );
+
+    app.append_synthetic_events(&redact("$edit-room-2"))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let line = lobby_line(&app)?;
+    assert!(line.ends_with("lobby edited (edited)"), "{line}");
+
+    app.append_synthetic_events(&redact("$edit-room-1"))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let line = lobby_line(&app)?;
+    assert!(line.ends_with("lobby draft"), "{line}");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 #[test]
 fn automation_driver_decrypts_a_line_that_could_not_be_decrypted_in_place()
 -> Result<(), Box<dyn std::error::Error>> {

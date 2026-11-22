@@ -2,7 +2,7 @@
 
 use std::borrow::Borrow;
 
-use super::line_edits::{EditOrder, HeldEdit, LineEdits};
+use super::line_edits::{Edit, EditOrder, EditedLine, LineEdits, Restore};
 use super::*;
 
 /// Where a room window's older history stands.
@@ -300,6 +300,16 @@ pub(super) struct MessageReplacementFields {
 }
 
 impl MessageReplacementFields {
+    /// What `message` shows that an edit replaces.
+    pub(super) fn of(message: &RoomMessageActivity) -> Self {
+        Self {
+            presentation: message.presentation,
+            body: message.body.clone(),
+            styles: message.styles.clone(),
+            user_links: message.user_links.clone(),
+        }
+    }
+
     fn apply_to(self, message: &mut RoomMessageActivity) {
         message.presentation = self.presentation;
         message.body = self.body;
@@ -789,12 +799,12 @@ impl RoomViewModel {
         self.rebuild_threads();
     }
 
-    /// Applies an edit of a message line, if it is the line's latest and
-    /// from the line's sender: only a message's sender can edit it (the
-    /// spec's validity of replacement events), and anyone else's edit is
-    /// ignored, as Element does. A line that could not be decrypted holds
-    /// the edit until it decrypts. Whether the room changed.
-    fn replace_message(&mut self, target_event_id: &str, edit: HeldEdit) -> bool {
+    /// Keeps an edit of a message line from the line's sender, and shows
+    /// it if it is the line's latest: only a message's sender can edit it
+    /// (the spec's validity of replacement events), and anyone else's edit
+    /// is ignored, as Element does. A line that could not be decrypted
+    /// holds the edit until it decrypts. Whether the room changed.
+    fn replace_message(&mut self, target_event_id: &str, order: EditOrder, edit: Edit) -> bool {
         let Some(index) = self.find_activity_index_by_event_id(target_event_id) else {
             return false;
         };
@@ -815,30 +825,56 @@ impl RoomViewModel {
             | RoomActivityKind::StateNotice(_)
             | RoomActivityKind::Redacted(_) => return false,
         };
-        if *line_sender != edit.sender || !self.line_edits.is_newer(target_event_id, &edit.order) {
+        if *line_sender != edit.sender {
             return false;
         }
-        match &mut self.activities[index].kind {
-            RoomActivityKind::Message(message) => {
-                edit.fields.apply_to(message);
-                self.line_edits.applied(target_event_id, edit.order);
-                self.rebuild_threads();
-            }
-            RoomActivityKind::UnableToDecrypt(_) => self.line_edits.hold(target_event_id, edit),
+        let line = match &self.activities[index].kind {
+            RoomActivityKind::Message(message) => EditedLine::Message(message),
+            RoomActivityKind::UnableToDecrypt(_) => EditedLine::Undecrypted,
             _ => unreachable!("the line's sender was read above"),
-        }
+        };
+        let undecrypted = matches!(line, EditedLine::Undecrypted);
+        let Some(fields) = self.line_edits.edit(target_event_id, order, edit, line) else {
+            // Held, or older than the edit the line shows: kept to fall
+            // back to.
+            return undecrypted;
+        };
+        self.show_edit(index, fields);
+        true
+    }
+
+    /// The message line at `index` shows `fields`, from an edit or its own.
+    fn show_edit(&mut self, index: usize, fields: MessageReplacementFields) {
+        let RoomActivityKind::Message(message) = &mut self.activities[index].kind else {
+            panic!("only a message line shows an edit");
+        };
+        fields.apply_to(message);
+        self.rebuild_threads();
+    }
+
+    /// The edit `replacement_event_id` was redacted: its line shows the
+    /// latest edit left, or its own text. Whether a line had it.
+    fn redact_edit(&mut self, replacement_event_id: &str) -> bool {
+        let Some((target, restore)) = self.line_edits.redact_edit(replacement_event_id) else {
+            return false;
+        };
+        let fields = match restore {
+            Restore::Edit(fields) | Restore::Original(fields) => fields,
+            Restore::Unchanged => return true,
+        };
+        let index = self
+            .find_activity_index_by_event_id(&target)
+            .expect("a line's edits go with it");
+        self.show_edit(index, fields);
         true
     }
 
     /// Redacts the event a redaction names, whatever the room shows it as:
-    /// a line (its reactions and edit go with it), a reaction, or an edit
-    /// held for a line that could not be decrypted. Whether the room
-    /// showed it. An applied edit's redaction changes nothing: the line no
-    /// longer has the text the edit replaced.
+    /// a line (its reactions and edits go with it), a reaction, or an edit
+    /// (`redact_edit`). Whether the room showed it.
     fn redact_activity(&mut self, target_event_id: &str) -> bool {
         let Some(index) = self.find_activity_index_by_event_id(target_event_id) else {
-            return self.remove_reaction(target_event_id)
-                || self.line_edits.forget_held_by_replacement(target_event_id);
+            return self.remove_reaction(target_event_id) || self.redact_edit(target_event_id);
         };
         let activity_id = self.activities[index].activity_id.clone();
         self.remove_reactions_for_target(target_event_id);
@@ -1034,19 +1070,18 @@ impl RoomViewModel {
             "a decrypted line keeps its activity"
         );
         *shown = activity;
-        if matches!(shown.kind, RoomActivityKind::UnableToDecrypt(_)) {
-            // Its cause is in no thread's name.
-            return;
-        }
-        // An edit the line held applies to the message of its sender; one
-        // of another kind cannot be edited (a quote holds no edits).
-        if line
-            && let Some(held) = self.line_edits.take_held(&event_id)
-            && let RoomActivityKind::Message(message) = &mut shown.kind
-            && message.sender.user_id == held.sender
-        {
-            held.fields.apply_to(message);
-            self.line_edits.applied(&event_id, held.order);
+        match &mut shown.kind {
+            // Its cause is in no thread's name, and its edits wait on.
+            RoomActivityKind::UnableToDecrypt(_) => return,
+            // The edits the line held of its sender apply, the latest
+            // showing; a quote holds none.
+            RoomActivityKind::Message(message) => {
+                if line && let Some(fields) = self.line_edits.decrypted(&event_id, message) {
+                    fields.apply_to(message);
+                }
+            }
+            // A line of another kind has no text to edit.
+            _ => self.line_edits.forget(&event_id),
         }
         // It may be a thread's message, or a thread's root.
         self.rebuild_threads();
@@ -1170,11 +1205,11 @@ impl RoomViewModel {
                 },
             ) => self.replace_message(
                 event_id,
-                HeldEdit {
-                    order: EditOrder {
-                        timestamp_ms: *timestamp_ms,
-                        replacement_event_id: replacement_event_id.clone(),
-                    },
+                EditOrder {
+                    timestamp_ms: *timestamp_ms,
+                    replacement_event_id: replacement_event_id.clone(),
+                },
+                Edit {
                     sender: sender.clone(),
                     fields: MessageReplacementFields {
                         presentation: *presentation,
@@ -1243,7 +1278,8 @@ impl RoomViewModel {
                 RoomActivityUpdateTarget::Event { event_id },
                 RoomActivityUpdateKind::ActivityRedacted { .. },
             ) => (self.find_activity_index_by_event_id(event_id).is_some()
-                || self.reaction_target(event_id).is_some())
+                || self.reaction_target(event_id).is_some()
+                || self.line_edits.has_edit(event_id))
             .then_some(())
             .ok_or_else(|| {
                 "activity redaction requires an existing visible target event".to_owned()
