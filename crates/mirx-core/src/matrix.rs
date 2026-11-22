@@ -78,7 +78,7 @@ use matrix_sdk::{
             AnySyncTimelineEvent, InitialStateEvent, Mentions, SyncMessageLikeEvent,
             SyncStateEvent, TimelineEventType, ToDeviceEvent,
             direct::{DirectEvent, DirectEventContent},
-            ignored_user_list::{IgnoredUserListEvent, IgnoredUserListEventContent},
+            ignored_user_list::{IgnoredUser, IgnoredUserListEvent, IgnoredUserListEventContent},
             key::verification::{
                 VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
             },
@@ -1181,30 +1181,62 @@ fn parse_user_id(user_id: &str) -> Result<OwnedUserId, MatrixCoreError> {
         .map_err(|err| MatrixCoreError::new(format!("invalid user ID \"{user_id}\": {err}")))
 }
 
+/// The ignore list as the server has it now; none (404) is an empty list.
+///
+/// Changes to the list are read-modify-writes of the whole document, and
+/// they read this rather than the store, as the SDK's
+/// `Account::ignore_user` does: the store learns of a change only from the
+/// next sync's echo, so a second change before it would undo the first.
+/// The core runs these jobs one at a time (the `Account` lane), so mirx's
+/// own changes never interleave; another client's change between our read
+/// and our write can still be lost, as account data has no compare-and-set.
+async fn fetch_ignored_user_list(
+    client: &Client,
+) -> Result<IgnoredUserListEventContent, MatrixCoreError> {
+    let raw = client
+        .account()
+        .fetch_account_data_static::<IgnoredUserListEventContent>()
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to read the ignore list: {err}")))?;
+    let Some(raw) = raw else {
+        return Ok(IgnoredUserListEventContent::default());
+    };
+    raw.deserialize()
+        .map_err(|err| MatrixCoreError::new(format!("failed to decode the ignore list: {err}")))
+}
+
 /// Adds the user to the ignore list. The server's echo of the list, in the
 /// next sync, is the confirmation.
 pub(crate) async fn ignore_user(client: &Client, user_id: &str) -> Result<(), MatrixCoreError> {
     let user_id = parse_user_id(user_id)?;
+    if client.user_id() == Some(user_id.as_ref()) {
+        return Err(MatrixCoreError::new("you cannot ignore yourself"));
+    }
+    let mut content = fetch_ignored_user_list(client).await?;
+    content
+        .ignored_users
+        .insert(user_id.clone(), IgnoredUser::new());
     client
         .account()
-        .ignore_user(&user_id)
+        .set_account_data(content)
         .await
-        .map_err(|err| match err {
-            matrix_sdk::Error::CantIgnoreLoggedInUser => {
-                MatrixCoreError::new("you cannot ignore yourself")
-            }
-            err => MatrixCoreError::new(format!("failed to ignore {user_id}: {err}")),
-        })
+        .map(|_| ())
+        .map_err(|err| MatrixCoreError::new(format!("failed to ignore {user_id}: {err}")))
 }
 
 /// Removes the user from the ignore list; one who is not on it changes
 /// nothing.
 pub(crate) async fn unignore_user(client: &Client, user_id: &str) -> Result<(), MatrixCoreError> {
     let user_id = parse_user_id(user_id)?;
+    let mut content = fetch_ignored_user_list(client).await?;
+    if content.ignored_users.remove(&user_id).is_none() {
+        return Ok(());
+    }
     client
         .account()
-        .unignore_user(&user_id)
+        .set_account_data(content)
         .await
+        .map(|_| ())
         .map_err(|err| MatrixCoreError::new(format!("failed to unignore {user_id}: {err}")))
 }
 
@@ -14359,8 +14391,24 @@ mod tests {
             .collect()
     }
 
+    /// Answers GETs of the ignore list with `user_ids`, and PUTs with `{}`.
+    async fn mount_ignored_user_list(mock_server: &MatrixMockServer, user_ids: &[&str]) {
+        let path = r"^/_matrix/client/v3/user/.*/account_data/m\.ignored_user_list$";
+        let list = ignored_user_list_json(user_ids)["content"].clone();
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path_regex(path))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(list))
+            .mount(mock_server.server())
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("PUT"))
+            .and(wiremock::matchers::path_regex(path))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(mock_server.server())
+            .await;
+    }
+
     #[test]
-    fn ignore_user_puts_the_ignored_user_list() {
+    fn ignore_user_edits_the_servers_list_not_the_stored_one() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -14369,10 +14417,52 @@ mod tests {
         runtime.block_on(async {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
-            wiremock::Mock::given(wiremock::matchers::method("PUT"))
-                .and(wiremock::matchers::path_regex(
-                    r"^/_matrix/client/v3/user/.*/account_data/m\.ignored_user_list$",
+            // The store says Bob alone; the server knows Spam too.
+            sync_ignored_users(&mock_server, &client, &["@bob:localhost"]).await;
+            mount_ignored_user_list(&mock_server, &["@bob:localhost", "@spam:localhost"]).await;
+
+            ignore_user(&client, "@carol:localhost")
+                .await
+                .expect("ignore carol");
+            unignore_user(&client, "@bob:localhost")
+                .await
+                .expect("unignore bob");
+            // Not on the server's list: nothing to write.
+            unignore_user(&client, "@dave:localhost")
+                .await
+                .expect("unignore dave");
+            assert_eq!(
+                ignored_user_list_puts(&mock_server).await,
+                vec![
+                    serde_json::json!({ "ignored_users": {
+                        "@bob:localhost": {}, "@carol:localhost": {}, "@spam:localhost": {},
+                    } }),
+                    serde_json::json!({ "ignored_users": { "@spam:localhost": {} } }),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn ignore_user_starts_a_list_the_server_does_not_have() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let path = r"^/_matrix/client/v3/user/.*/account_data/m\.ignored_user_list$";
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path_regex(path))
+                .respond_with(wiremock::ResponseTemplate::new(404).set_body_json(
+                    serde_json::json!({ "errcode": "M_NOT_FOUND", "error": "not found" }),
                 ))
+                .mount(mock_server.server())
+                .await;
+            wiremock::Mock::given(wiremock::matchers::method("PUT"))
+                .and(wiremock::matchers::path_regex(path))
                 .respond_with(
                     wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({})),
                 )
@@ -14382,31 +14472,28 @@ mod tests {
             ignore_user(&client, "@bob:localhost")
                 .await
                 .expect("ignore bob");
+            unignore_user(&client, "@bob:localhost")
+                .await
+                .expect("unignore bob, not on the server's empty list");
             assert_eq!(
                 ignored_user_list_puts(&mock_server).await,
                 vec![serde_json::json!({ "ignored_users": { "@bob:localhost": {} } })]
             );
+        });
+    }
 
-            // The SDK edits the stored list: the server's echo seeds it.
-            sync_ignored_users(
-                &mock_server,
-                &client,
-                &["@bob:localhost", "@spam:localhost"],
-            )
-            .await;
-            assert_eq!(
-                ignored_users(&client).await.expect("stored list"),
-                vec!["@bob:localhost".to_owned(), "@spam:localhost".to_owned()]
-            );
-            unignore_user(&client, "@bob:localhost")
-                .await
-                .expect("unignore bob");
-            assert_eq!(
-                ignored_user_list_puts(&mock_server).await.last(),
-                Some(&serde_json::json!({ "ignored_users": { "@spam:localhost": {} } }))
-            );
+    #[test]
+    fn ignore_user_refuses_yourself_and_bad_ids_without_a_request() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
 
-            let puts = ignored_user_list_puts(&mock_server).await.len();
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mount_ignored_user_list(&mock_server, &[]).await;
+
             assert_eq!(
                 ignore_user(&client, "@example:localhost")
                     .await
@@ -14428,7 +14515,15 @@ mod tests {
                     .to_string(),
                 r#"invalid user ID "@bob": required colon is missing"#
             );
-            assert_eq!(ignored_user_list_puts(&mock_server).await.len(), puts);
+            let ignore_list_requests = mock_server
+                .server()
+                .received_requests()
+                .await
+                .expect("recorded requests")
+                .into_iter()
+                .filter(|request| request.url.path().contains("m.ignored_user_list"))
+                .count();
+            assert_eq!(ignore_list_requests, 0);
         });
     }
 

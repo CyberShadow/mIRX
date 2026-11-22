@@ -291,60 +291,172 @@ fn an_edit_goes_before_the_line_typed_after_it() {
     harness.join_stopped();
 }
 
-/// Answers after `delay`, and records when each request came.
-struct Recorded {
-    arrivals: std::sync::Arc<std::sync::Mutex<Vec<(Instant, serde_json::Value)>>>,
+/// The account's `m.ignored_user_list` as a server keeps it: a GET answers
+/// the last PUT's body, and each PUT is answered after
+/// `delay`. It records every request, with when it came.
+#[derive(Clone)]
+struct IgnoreListServer {
+    content: std::sync::Arc<std::sync::Mutex<serde_json::Value>>,
+    requests: std::sync::Arc<std::sync::Mutex<Vec<IgnoreListRequest>>>,
     delay: Duration,
 }
 
-impl Respond for Recorded {
-    fn respond(&self, request: &Request) -> ResponseTemplate {
-        self.arrivals
-            .lock()
-            .expect("arrivals lock")
-            .push((Instant::now(), body(request)));
-        ResponseTemplate::new(200)
-            .set_body_json(json!({}))
-            .set_delay(self.delay)
+/// A request `IgnoreListServer` got: when, its method, and a PUT's body.
+#[derive(Debug, Clone)]
+struct IgnoreListRequest {
+    at: Instant,
+    method: &'static str,
+    body: serde_json::Value,
+}
+
+impl IgnoreListServer {
+    fn mount(harness: &Harness, user_ids: &[&str], delay: Duration) -> Self {
+        let server = Self {
+            content: std::sync::Arc::new(std::sync::Mutex::new(ignore_list(user_ids))),
+            requests: std::sync::Arc::default(),
+            delay,
+        };
+        harness.mount(
+            Mock::given(path_regex(r"/account_data/m\.ignored_user_list$"))
+                .respond_with(server.clone())
+                .with_priority(1),
+        );
+        server
     }
+
+    /// The bodies of the PUTs, in arrival order.
+    fn puts(&self) -> Vec<serde_json::Value> {
+        self.requests
+            .lock()
+            .expect("requests lock")
+            .iter()
+            .filter(|request| request.method == "PUT")
+            .map(|request| request.body.clone())
+            .collect()
+    }
+}
+
+impl Respond for IgnoreListServer {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let mut content = self.content.lock().expect("content lock");
+        let mut requests = self.requests.lock().expect("requests lock");
+        match request.method.as_str() {
+            "GET" => {
+                requests.push(IgnoreListRequest {
+                    at: Instant::now(),
+                    method: "GET",
+                    body: serde_json::Value::Null,
+                });
+                ResponseTemplate::new(200).set_body_json(&*content)
+            }
+            "PUT" => {
+                let body = body(request);
+                requests.push(IgnoreListRequest {
+                    at: Instant::now(),
+                    method: "PUT",
+                    body: body.clone(),
+                });
+                *content = body;
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({}))
+                    .set_delay(self.delay)
+            }
+            other => panic!("unexpected {other} of the ignore list"),
+        }
+    }
+}
+
+fn ignore_list(user_ids: &[&str]) -> serde_json::Value {
+    let ignored_users = user_ids
+        .iter()
+        .map(|user_id| ((*user_id).to_owned(), json!({})))
+        .collect::<serde_json::Map<_, _>>();
+    json!({ "ignored_users": ignored_users })
+}
+
+/// A session whose stored ignore list holds Bob, as the server's.
+fn ignoring_bob() -> Harness {
+    Harness::restored_in_rooms(
+        &[ROOM],
+        &[json!({ "type": "m.ignored_user_list", "content": ignore_list(&["@bob:example.org"]) })],
+    )
+}
+
+#[test]
+fn ignoring_two_users_in_a_row_keeps_both() {
+    let harness = ignoring_bob();
+    let server = IgnoreListServer::mount(&harness, &["@bob:example.org"], Duration::ZERO);
+    let mut seen = Seen::new(&harness);
+
+    // The second comes before any sync echoes the first.
+    harness.send(Command::IgnoreUser("@carol:example.org".to_owned()));
+    harness.send(Command::IgnoreUser("@dave:example.org".to_owned()));
+    seen.until_acks(2);
+
+    assert_eq!(
+        server.puts(),
+        [
+            ignore_list(&["@bob:example.org", "@carol:example.org"]),
+            ignore_list(&[
+                "@bob:example.org",
+                "@carol:example.org",
+                "@dave:example.org"
+            ]),
+        ]
+    );
+    let events = seen.shut_down();
+    assert_eq!(acks(&events), 3, "{events:#?}");
+    harness.join_stopped();
+}
+
+#[test]
+fn unignoring_after_ignoring_keeps_the_others() {
+    let harness = ignoring_bob();
+    let server = IgnoreListServer::mount(&harness, &["@bob:example.org"], Duration::ZERO);
+    let mut seen = Seen::new(&harness);
+
+    harness.send(Command::IgnoreUser("@carol:example.org".to_owned()));
+    harness.send(Command::UnignoreUser("@bob:example.org".to_owned()));
+    seen.until_acks(2);
+
+    assert_eq!(
+        server.puts(),
+        [
+            ignore_list(&["@bob:example.org", "@carol:example.org"]),
+            ignore_list(&["@carol:example.org"]),
+        ]
+    );
+    let events = seen.shut_down();
+    assert_eq!(acks(&events), 3, "{events:#?}");
+    harness.join_stopped();
 }
 
 #[test]
 fn unignoring_then_ignoring_writes_one_after_the_other() {
-    let harness = Harness::restored_in_rooms(
-        &[ROOM],
-        &[json!({
-            "type": "m.ignored_user_list",
-            "content": { "ignored_users": { "@bob:example.org": {} } },
-        })],
-    );
+    let harness = ignoring_bob();
     let delay = Duration::from_millis(500);
-    let arrivals = std::sync::Arc::default();
-    harness.mount(
-        Mock::given(method("PUT"))
-            .and(path_regex(r"/account_data/m\.ignored_user_list$"))
-            .respond_with(Recorded {
-                arrivals: std::sync::Arc::clone(&arrivals),
-                delay,
-            })
-            .with_priority(1),
-    );
+    let server = IgnoreListServer::mount(&harness, &["@bob:example.org"], delay);
     let mut seen = Seen::new(&harness);
 
     harness.send(Command::UnignoreUser("@bob:example.org".to_owned()));
-    harness.send(Command::IgnoreUser("@bob:example.org".to_owned()));
+    harness.send(Command::IgnoreUser("@carol:example.org".to_owned()));
     seen.until_acks(2);
 
-    let arrivals = arrivals.lock().expect("arrivals lock").clone();
-    assert_eq!(arrivals.len(), 2, "{arrivals:#?}");
-    let ((first_at, first), (second_at, second)) = (&arrivals[0], &arrivals[1]);
-    assert_eq!(first["ignored_users"], json!({}));
-    assert_eq!(second["ignored_users"], json!({ "@bob:example.org": {} }));
-    // The second write starts after the first was answered.
+    let requests = server.requests.lock().expect("requests lock").clone();
+    let methods = requests
+        .iter()
+        .map(|request| request.method)
+        .collect::<Vec<_>>();
+    assert_eq!(methods, ["GET", "PUT", "GET", "PUT"], "{requests:#?}");
+    assert_eq!(requests[1].body, ignore_list(&[]));
+    assert_eq!(requests[3].body, ignore_list(&["@carol:example.org"]));
+    // The second read-modify-write reads only after the first write was
+    // answered: the Account lane runs them one at a time.
+    let (first_put_at, second_get_at) = (requests[1].at, requests[2].at);
     assert!(
-        second_at.duration_since(*first_at) >= delay,
+        second_get_at.duration_since(first_put_at) >= delay,
         "{:?} apart",
-        second_at.duration_since(*first_at)
+        second_get_at.duration_since(first_put_at)
     );
 
     let events = seen.shut_down();
