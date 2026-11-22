@@ -1215,7 +1215,7 @@ configure_case_expectations() {
       room_view_expect_args=(
         --expect-room-view '!reactions:example::* Now talking in Reactions (!reactions:example)'
         --expect-room-view '!reactions:example::normal reaction target'
-        --expect-room-view '!reactions:example::reactions: +1 Bob, Carol, @dave:example +1'
+        --expect-room-view '!reactions:example::reactions: +1 Bob, Carol, @dave:example and 1 more'
       )
       view_expect_args=(
         --expect-view 'thread:!reactions:example|$react-thread-root::thread reaction root'
