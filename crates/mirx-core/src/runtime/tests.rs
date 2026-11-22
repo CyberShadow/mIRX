@@ -76,6 +76,15 @@ fn joined_member_state() -> Vec<Raw<AnySyncStateEvent>> {
     .collect()
 }
 
+/// Log Out as File > Log Out's warning lets the user: whatever recovery
+/// and the key backup say. The tests of what Log Out does to the session,
+/// whose mocks have no recovery, use it.
+fn log_out_anyway() -> Command {
+    Command::Logout(crate::api::LogoutRequest {
+        discard_room_keys: true,
+    })
+}
+
 /// Runs `command` on `core` until its ack.
 async fn run(core: &mut Core, command: Command) {
     assert!(core.run_until_idle(command).await.is_continue());
@@ -1561,6 +1570,13 @@ fn without_e2ee_status(events: Vec<Event>) -> Vec<Event> {
 }
 
 async fn mock_logout(mock_server: &MatrixMockServer, answer: wiremock::ResponseTemplate) {
+    mock_logout_with(mock_server, answer).await;
+}
+
+async fn mock_logout_with(
+    mock_server: &MatrixMockServer,
+    answer: impl wiremock::Respond + 'static,
+) {
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/_matrix/client/v3/logout"))
         .respond_with(answer)
@@ -1667,7 +1683,7 @@ fn logging_out_removes_the_sessions_store() {
         let store = profile.path().join("profile").join("matrix-store");
         assert!(store.is_dir());
 
-        run(&mut core, Command::Logout).await;
+        run(&mut core, log_out_anyway()).await;
 
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
@@ -1686,7 +1702,7 @@ fn signing_in_after_logging_out_starts_a_new_session() {
         let first_server = MatrixMockServer::new().await;
         let (_profile, mut core, event_rx) = signed_in_core(&first_server, false).await;
         mock_logout(&first_server, logged_out()).await;
-        run(&mut core, Command::Logout).await;
+        run(&mut core, log_out_anyway()).await;
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
             vec![Event::LoggedOut]
@@ -1777,7 +1793,7 @@ fn logging_out_a_session_the_server_ended_logs_out() {
         let (_profile, mut core, event_rx) = signed_in_core(&mock_server, false).await;
         mock_logout(&mock_server, unknown_token("Invalid token")).await;
 
-        run(&mut core, Command::Logout).await;
+        run(&mut core, log_out_anyway()).await;
 
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
@@ -1838,7 +1854,7 @@ fn logging_out_closes_the_sessions_store() {
         }
         assert!(!open_files_under(profile.path()).is_empty());
 
-        run(&mut core, Command::Logout).await;
+        run(&mut core, log_out_anyway()).await;
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
             vec![Event::LoggedOut]
@@ -1871,7 +1887,7 @@ fn logging_out_with_a_dead_refresh_token_logs_out() {
         mock_logout(&mock_server, unknown_token("Invalid token")).await;
         mock_dead_refresh(&mock_server).await;
 
-        run(&mut core, Command::Logout).await;
+        run(&mut core, log_out_anyway()).await;
 
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
@@ -2411,6 +2427,268 @@ fn restore_reports_stored_unread_counts_without_new_events() {
         assert!(
             restored.iter().all(|read_state| **read_state == stored),
             "{events:?}"
+        );
+        core.stop().await;
+    });
+}
+
+/// The account's global account data as a server keeps it: a GET reads
+/// what the last PUT of its type wrote.
+#[derive(Clone, Default)]
+struct AccountDataStore(
+    std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, serde_json::Value>>>,
+);
+
+impl wiremock::Respond for AccountDataStore {
+    fn respond(&self, request: &wiremock::Request) -> wiremock::ResponseTemplate {
+        let event_type = request
+            .url
+            .path()
+            .rsplit('/')
+            .next()
+            .expect("an account data type")
+            .to_owned();
+        let mut store = self.0.lock().expect("the account data lock");
+        match request.method.as_str() {
+            "PUT" => {
+                let content = request.body_json().expect("JSON account data");
+                store.insert(event_type, content);
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({}))
+            }
+            "GET" => match store.get(&event_type) {
+                Some(content) => wiremock::ResponseTemplate::new(200).set_body_json(content),
+                None => not_found(),
+            },
+            other => panic!("account data {other}"),
+        }
+    }
+}
+
+/// The server's key backup versions: none until one is created.
+#[derive(Clone, Default)]
+struct BackupVersionStore(std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>>);
+
+impl wiremock::Respond for BackupVersionStore {
+    fn respond(&self, request: &wiremock::Request) -> wiremock::ResponseTemplate {
+        let mut version = self.0.lock().expect("the backup version lock");
+        match request.method.as_str() {
+            "POST" => {
+                let mut created: serde_json::Value =
+                    request.body_json().expect("a JSON backup version");
+                created["version"] = serde_json::json!("1");
+                created["count"] = serde_json::json!(0);
+                created["etag"] = serde_json::json!("0");
+                *version = Some(created);
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "version": "1" }))
+            }
+            "GET" => match &*version {
+                Some(version) => wiremock::ResponseTemplate::new(200).set_body_json(version),
+                None => not_found(),
+            },
+            other => panic!("backup version {other}"),
+        }
+    }
+}
+
+fn not_found() -> wiremock::ResponseTemplate {
+    wiremock::ResponseTemplate::new(404).set_body_json(serde_json::json!({
+        "errcode": "M_NOT_FOUND",
+        "error": "Not found",
+    }))
+}
+
+/// A room key export (matrix-sdk's own backup tests' key), passphrase
+/// `1234`.
+const ROOM_KEY_FILE: &str = "-----BEGIN MEGOLM SESSION DATA-----\n\
+    ASKcWoiAVUM97482UAi83Avce62hSLce7i5JhsqoF6xeAAAACqt2Cg3nyJPRWTTMXxXH7TXnkfdlmBXbQtq5\
+    bpHo3LRijcq2Gc6TXilESCmJN14pIsfKRJrWjZ0squ/XsoTFytuVLWwkNaW3QF6obeg2IoVtJXLMPdw3b2vO\
+    vgwGY3OMP0XafH13j1vcb6YLzvgLkZQLnYvd47hv3yK/9GmKS9tokuaQ7dCVYckYcIOS09EDTs70YdxUd5WG\
+    rQynATCLFP1p/NAGv70r9MK7Cy/mNpjD0r4qC7UEDIoi1kOWzHgnLo19wtvwsb8Fg8ATxcs3Wmtj8hIUYpDx\
+    ia4sM10zbytUuaPUAfCDf42IyxdmOnGe1CueXhgI71y+RW0s0argNqUt7jB70JT0o9CyX6UBGRaqLk2MPY9T\
+    hUu5J8X3UgIa6rcbWigzohzWm9rdbEHFrSWqjpfQYMaAKQQgETrjSy4XTrp2RhC2oNqG/hylI4ab+F4X6fpH\
+    DYP1NqNMP5g36xNu7LhDnrUB5qsPjYOmWORxGLfudpF3oLYCSlr3DgHqEIB6HjQblLZ3KQuPBse3zxyROTnS\
+    AhdPH4a/z1wioFtKNVph3hecsiKEdqnz4Y2coSIdhz58mJ9JWNQoFAENE5CSsoEZAGvafYZVpW4C75YY2zq1\
+    wIeiFi1dT43/jLAUGkslsi1VvnyfUu8qO404RxYO3XHoGLMFoFLOO+lZ+VGci2Vz10AhxJhEBHxRKxw4k2uB\
+    HztoSJUr/2Y\n\
+    -----END MEGOLM SESSION DATA-----";
+
+/// When each request of a test arrived, by name.
+type Arrivals = std::sync::Arc<std::sync::Mutex<Vec<(&'static str, std::time::Instant)>>>;
+
+/// Answers with `answer`, noting the request's arrival as `name`.
+fn noting_arrival(
+    arrivals: &Arrivals,
+    name: &'static str,
+    answer: wiremock::ResponseTemplate,
+) -> impl wiremock::Respond + use<> {
+    let arrivals = arrivals.clone();
+    move |_: &wiremock::Request| {
+        arrivals
+            .lock()
+            .expect("the arrivals lock")
+            .push((name, std::time::Instant::now()));
+        answer.clone()
+    }
+}
+
+/// A session that set up the account's cross-signing identity and its
+/// recovery itself, and then got a room key the key backup does not hold
+/// yet: the SDK starts uploading it at once, answered by `upload`.
+async fn session_with_recovery_and_a_new_room_key(
+    mock_server: &MatrixMockServer,
+    upload: impl wiremock::Respond + 'static,
+) -> matrix_sdk::Client {
+    use matrix_sdk::encryption::recovery::RecoveryState;
+    use matrix_sdk::ruma::{owned_device_id, owned_user_id};
+    use wiremock::matchers::{method, path_regex};
+
+    mock_server.mock_crypto_endpoints_preset().await;
+    let account_data = AccountDataStore::default();
+    wiremock::Mock::given(path_regex(r"^/_matrix/client/.*/user/.*/account_data/"))
+        .respond_with(account_data)
+        .mount(mock_server.server())
+        .await;
+    wiremock::Mock::given(path_regex(r"^/_matrix/client/.*/room_keys/version$"))
+        .respond_with(BackupVersionStore::default())
+        .mount(mock_server.server())
+        .await;
+    wiremock::Mock::given(method("PUT"))
+        .and(path_regex(r"^/_matrix/client/.*/room_keys/keys$"))
+        .respond_with(upload)
+        .mount(mock_server.server())
+        .await;
+    let client = mock_server
+        .client_builder_for_crypto_end_to_end(
+            &owned_user_id!("@alice:example.org"),
+            &owned_device_id!("MIRX"),
+        )
+        .build()
+        .await;
+    client
+        .encryption()
+        .wait_for_e2ee_initialization_tasks()
+        .await;
+    client
+        .encryption()
+        .bootstrap_cross_signing(None)
+        .await
+        .expect("set up cross-signing");
+    client
+        .encryption()
+        .recovery()
+        .enable()
+        .await
+        .expect("set up recovery");
+    assert_eq!(
+        client.encryption().recovery().state(),
+        RecoveryState::Enabled
+    );
+    let dir = tempfile::TempDir::new().expect("temporary directory");
+    let path = dir.path().join("room-keys.txt");
+    std::fs::write(&path, ROOM_KEY_FILE).expect("write the key file");
+    client
+        .encryption()
+        .import_room_keys(path, "1234")
+        .await
+        .expect("import the room key");
+    client
+}
+
+fn log_out_keeping_room_keys() -> Command {
+    Command::Logout(crate::api::LogoutRequest {
+        discard_room_keys: false,
+    })
+}
+
+/// Recovery is set up: Log Out first waits until the key backup holds the
+/// room key that came last, then ends the session.
+#[test]
+fn logging_out_saves_the_room_keys_to_the_backup_first() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        let arrivals = Arrivals::default();
+        let upload_time = Duration::from_millis(300);
+        let client = session_with_recovery_and_a_new_room_key(
+            &mock_server,
+            noting_arrival(
+                &arrivals,
+                "upload",
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "count": 1, "etag": "1" }))
+                    .set_delay(upload_time),
+            ),
+        )
+        .await;
+        mock_logout_with(
+            &mock_server,
+            noting_arrival(&arrivals, "logout", logged_out()),
+        )
+        .await;
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut core = Core::for_client(client, event_tx);
+
+        run(&mut core, log_out_keeping_room_keys()).await;
+
+        assert_eq!(
+            without_e2ee_status(drain_events(&event_rx)),
+            vec![Event::LoggedOut]
+        );
+        let arrivals = arrivals.lock().expect("the arrivals lock").clone();
+        let [("upload", uploaded), ("logout", logged_out)] = arrivals.as_slice() else {
+            panic!("{arrivals:?}");
+        };
+        assert!(
+            logged_out.duration_since(*uploaded) >= upload_time,
+            "the logout came {:?} after the upload",
+            logged_out.duration_since(*uploaded)
+        );
+        core.stop().await;
+    });
+}
+
+/// The key backup refuses the room key: Log Out says the keys are at risk,
+/// and the session stays; logging out anyway still works.
+#[test]
+fn a_failed_key_backup_keeps_the_session() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        // Not a 5xx, which the SDK retries.
+        let client = session_with_recovery_and_a_new_room_key(
+            &mock_server,
+            wiremock::ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "errcode": "M_FORBIDDEN",
+                "error": "not today",
+            })),
+        )
+        .await;
+        let arrivals = Arrivals::default();
+        mock_logout_with(
+            &mock_server,
+            noting_arrival(&arrivals, "logout", logged_out()),
+        )
+        .await;
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut core = Core::for_client(client, event_tx);
+
+        run(&mut core, log_out_keeping_room_keys()).await;
+
+        assert_eq!(
+            without_e2ee_status(drain_events(&event_rx)),
+            vec![Event::LogoutWouldLoseRoomKeys(
+                crate::api::RoomKeysAtRisk::BackupFailed(
+                    "your server could not be reached or refused them".to_owned()
+                )
+            )]
+        );
+        assert!(arrivals.lock().expect("the arrivals lock").is_empty());
+        // Still in the session.
+        core.session();
+
+        run(&mut core, log_out_anyway()).await;
+        assert_eq!(
+            without_e2ee_status(drain_events(&event_rx)),
+            vec![Event::LoggedOut]
         );
         core.stop().await;
     });

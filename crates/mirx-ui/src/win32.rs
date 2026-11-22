@@ -23,24 +23,25 @@ use mirx_core::{
     E2eeStatus, EditMessageRequest, Event, ExportRoomKeysRequest, FetchRoomEventRequest,
     FetchRoomMediaRequest, HighlightWord, HistoryFrom, ImportRoomKeysRequest,
     InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, LoginMethod,
-    LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoomsPage,
+    LoginRequest, LogoutRequest, MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoomsPage,
     ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
     ResetE2eeIdentityRequest, RestoreSessionRequest, RetryDecryptionRequest, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomActivityUpdateTarget, RoomAudioInfo, RoomEventFetch, RoomEventFetchResult,
     RoomEventsDecrypted, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
-    RoomImageInfo, RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary,
-    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomNotificationMode, RoomPollActivity, RoomPollContent, RoomReadState,
-    RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, RoomUserProfile,
-    RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
-    SendMessageThreadTarget, SendReactionRequest, SessionAuth, SetDisplayNameRequest,
-    SetReadMarkerRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
-    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SignOutDeviceRequest, StoredSession,
-    TextStyleSpan, UnbanRoomMemberRequest, UserDevices, UserLinkSpan, UserProfile,
-    VerificationDirection, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, login_method, login_server, start,
+    RoomImageInfo, RoomKeysAtRisk, RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
+    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomPollActivity,
+    RoomPollContent, RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary,
+    RoomTyping, RoomUserProfile, RoomVideoInfo, SendFileRequest, SendMessageReplyTarget,
+    SendMessageRequest, SendMessageThreadTarget, SendReactionRequest, SessionAuth,
+    SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,
+    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
+    SignOutDeviceRequest, StoredSession, TextStyleSpan, UnbanRoomMemberRequest, UserDevices,
+    UserLinkSpan, UserProfile, VerificationDirection, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, login_method, login_server,
+    start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -811,6 +812,9 @@ struct WindowState {
     tray: TrayState,
     /// The retry bookkeeping; `reconnect` and the sync events move it.
     reconnect: connection::Reconnect,
+    /// The core's refusal to log out, waiting for its Log Out dialog: only
+    /// the posted open (`WM_LOG_OUT_WARNING`) takes it.
+    log_out_warning: Option<RoomKeysAtRisk>,
     /// How often the refresh path rebuilt, wrapped and redrew, for tests.
     refresh_counters: RefreshCounters,
     /// The treebar splitter's drag while the frame has the mouse for it.
@@ -1057,6 +1061,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         colors_dialog: None,
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
+        log_out_warning: None,
         refresh_counters: RefreshCounters::default(),
         treebar_drag: None,
     });

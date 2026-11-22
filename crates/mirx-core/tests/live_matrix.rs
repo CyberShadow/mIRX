@@ -556,7 +556,9 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
 
     handle
         .command_sender()
-        .send(Command::Logout)
+        .send(Command::Logout(mirx_core::LogoutRequest {
+            discard_room_keys: true,
+        }))
         .expect("send logout");
 
     wait_for_live_logged_out(&handle, "live post-login command");
@@ -610,7 +612,9 @@ fn live_matrix_set_read_marker_updates_fully_read_marker_is_env_gated() {
         .expect("send set read marker");
     handle
         .command_sender()
-        .send(Command::Logout)
+        .send(Command::Logout(mirx_core::LogoutRequest {
+            discard_room_keys: true,
+        }))
         .expect("send logout");
 
     wait_for_live_logged_out(&handle, "live set read marker");

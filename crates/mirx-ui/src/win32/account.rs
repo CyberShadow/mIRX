@@ -394,13 +394,18 @@ pub(super) fn submit_start_sync(state: &mut WindowState) -> Result<(), String> {
         .map_err(|err| format!("failed to enqueue start sync command: {err}"))
 }
 
-pub(super) fn submit_logout(state: &mut WindowState) -> Result<(), String> {
+/// `discard_room_keys`: the user said to log out even if room keys are
+/// lost (`LogoutRequest`).
+pub(super) fn submit_logout(
+    state: &mut WindowState,
+    discard_room_keys: bool,
+) -> Result<(), String> {
     let sender = state
         .command_sender
         .as_ref()
         .ok_or_else(|| "core command sender is not available".to_owned())?;
     sender
-        .send(Command::Logout)
+        .send(Command::Logout(LogoutRequest { discard_room_keys }))
         .map_err(|err| format!("failed to enqueue logout command: {err}"))
 }
 
@@ -1201,7 +1206,7 @@ mod tests {
                 Err("core command sender is not available".to_owned())
             );
             assert_eq!(
-                submit_logout(&mut state),
+                submit_logout(&mut state, false),
                 Err("core command sender is not available".to_owned())
             );
 
@@ -1214,7 +1219,8 @@ mod tests {
             assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
 
             submit_start_sync(&mut state).unwrap();
-            submit_logout(&mut state).unwrap();
+            submit_logout(&mut state, false).unwrap();
+            submit_logout(&mut state, true).unwrap();
             assert_eq!(
                 commands.try_recv(),
                 Ok(Command::RestoreSession(RestoreSessionRequest {
@@ -1224,7 +1230,18 @@ mod tests {
                 }))
             );
             assert_eq!(commands.try_recv(), Ok(Command::StartSync));
-            assert_eq!(commands.try_recv(), Ok(Command::Logout));
+            assert_eq!(
+                commands.try_recv(),
+                Ok(Command::Logout(LogoutRequest {
+                    discard_room_keys: false
+                }))
+            );
+            assert_eq!(
+                commands.try_recv(),
+                Ok(Command::Logout(LogoutRequest {
+                    discard_room_keys: true
+                }))
+            );
         });
     }
 }

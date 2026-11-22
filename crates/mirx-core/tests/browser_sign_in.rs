@@ -318,7 +318,9 @@ fn logging_out_of_an_oauth_session_goes_to_the_authorization_server() {
 
     restore(&harness, oauth_session("AT1", "RT1"));
     harness.wait_for("RestoredSession", |event| *event == Event::RestoredSession);
-    harness.send(Command::Logout);
+    harness.send(Command::Logout(mirx_core::LogoutRequest {
+        discard_room_keys: true,
+    }));
     let Event::Error(error) = harness.wait_for(
         "the logout error",
         |event| matches!(event, Event::Error(error) if error.operation == Operation::Logout),

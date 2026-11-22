@@ -1299,7 +1299,7 @@ pub(super) unsafe fn log_out(hwnd: HWND) -> Result<(), String> {
     if state_ref(hwnd).model.connection == ConnectionState::WaitingToReconnect {
         reconnect::cancel(hwnd);
     }
-    submit_logout(state_mut(hwnd))
+    submit_logout(state_mut(hwnd), true)
 }
 
 /// A Commands item runs the slash command it stands for, prompting first

@@ -179,7 +179,7 @@ fn error_room_id(command: &Command) -> Option<&str> {
         | Command::CancelVerification(_)
         | Command::ConfirmVerificationSas(_)
         | Command::RejectVerificationSas(_)
-        | Command::Logout
+        | Command::Logout(_)
         | Command::Shutdown => None,
     }
 }
@@ -398,7 +398,9 @@ fn invalid_command_ordering_emits_typed_error_events() {
         .expect("send create direct room");
     handle
         .command_sender()
-        .send(Command::Logout)
+        .send(Command::Logout(mirx_core::LogoutRequest {
+            discard_room_keys: true,
+        }))
         .expect("send logout");
 
     let start_sync_error = next_answer(&handle, "start sync error");

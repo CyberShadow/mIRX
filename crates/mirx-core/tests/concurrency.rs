@@ -369,7 +369,7 @@ fn logout_cancels_hung_work_and_acks_it() {
 
     harness.send(backfill(ROOM));
     harness.wait_for_requests("GET", "/messages", 1);
-    harness.send(Command::Logout);
+    harness.send(common::log_out_anyway());
     seen.until("LoggedOut", |event| *event == Event::LoggedOut);
     seen.until_acks(2);
     let shape: Vec<_> = seen
@@ -474,7 +474,7 @@ fn a_failed_logout_keeps_the_session_whole() {
     harness.send(Command::StartSync);
     seen.until("SyncConnected", |event| *event == Event::SyncConnected);
 
-    harness.send(Command::Logout);
+    harness.send(common::log_out_anyway());
     seen.until("the logout error", |event| {
         is_error_of(event, Operation::Logout)
     });

@@ -685,8 +685,14 @@ pub(super) fn apply_core_event(
         }
         Event::VerificationRequest(request) => apply_verification_request(state, request),
         Event::VerificationState(event) => apply_verification_event(state, event),
+        Event::LogoutWouldLoseRoomKeys(risk) => {
+            state.log_out_warning = Some(risk);
+            state.model.status = "log out: room keys at risk".to_owned();
+        }
         Event::LoggedOut => {
             state.reconnect.reset();
+            // A warning not shown yet was about this session.
+            state.log_out_warning = None;
             delete_saved_session()?;
             state.current_session_homeserver_url = None;
             state.model.own_account = None;
@@ -1474,6 +1480,10 @@ mod tests {
                         room_id: None,
                         message: "continuous sync is already running".to_owned(),
                     }),
+                    ConnectionState::Syncing,
+                ),
+                (
+                    Event::LogoutWouldLoseRoomKeys(RoomKeysAtRisk::RecoveryOff),
                     ConnectionState::Syncing,
                 ),
                 (
@@ -3251,6 +3261,31 @@ mod tests {
                 .views
                 .contains_key(&ViewId::Room("!room:example".to_owned()))
         );
+    }
+
+    /// Log Out's refusal waits for its dialog, and says nothing else: the
+    /// session goes on as it was.
+    #[test]
+    fn a_logout_refusal_waits_for_its_dialog_until_logged_out() {
+        let mut state = test_state();
+        state.model.connection = ConnectionState::Syncing;
+        state.model.lifecycle_state = LifecycleState::Syncing;
+        let lines = status_log_lines(&state);
+
+        apply_core_event(
+            &mut state,
+            Event::LogoutWouldLoseRoomKeys(RoomKeysAtRisk::RecoveryOff),
+        )
+        .unwrap();
+
+        assert_eq!(state.log_out_warning, Some(RoomKeysAtRisk::RecoveryOff));
+        assert_eq!(state.model.status, "log out: room keys at risk");
+        assert_eq!(state.model.connection, ConnectionState::Syncing);
+        assert_eq!(state.model.lifecycle_state, LifecycleState::Syncing);
+        assert_eq!(status_log_lines(&state), lines);
+
+        with_local_app_data(|_| apply_core_event(&mut state, Event::LoggedOut).unwrap());
+        assert_eq!(state.log_out_warning, None);
     }
 
     #[test]

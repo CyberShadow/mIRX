@@ -991,6 +991,7 @@ pub(super) fn test_state() -> WindowState {
         colors_dialog: None,
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
+        log_out_warning: None,
         refresh_counters: RefreshCounters::default(),
         treebar_drag: None,
     }

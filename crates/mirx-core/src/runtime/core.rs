@@ -34,7 +34,8 @@ use super::{
     EventSender, RoomSnapshots, emit_error, emit_event, emit_invalid_state, emit_matrix_error,
 };
 use crate::api::{
-    Command, CoreConfig, Event, LoginRequest, Operation, RestoreSessionRequest, SyncStopReason,
+    Command, CoreConfig, Event, LoginRequest, LogoutRequest, Operation, RestoreSessionRequest,
+    RoomKeysAtRisk, SyncStopReason,
 };
 use crate::loopback::LoopbackRedirect;
 use crate::matrix::{self, BrowserFlow, MatrixCoreError};
@@ -58,8 +59,8 @@ enum Lifecycle {
     /// loopback listener.
     AwaitingBrowser(Box<PendingBrowserLogin>),
     Ready(Session),
-    /// A logout waits for the server. Its jobs go on; the session stays
-    /// whole if the server refuses.
+    /// A logout waits for the key backup, then for the server. Its jobs
+    /// go on; the session stays whole if either fails.
     LoggingOut(LoggingOut),
 }
 
@@ -73,9 +74,19 @@ struct SigningIn {
 
 struct LoggingOut {
     session: Session,
-    transition: LocalBoxFuture<'static, Result<(), MatrixCoreError>>,
+    /// Dropping it mid-wait (`Shutdown`) is safe: the SDK's upload task
+    /// goes on until the client drops.
+    transition: LocalBoxFuture<'static, Result<(), LogoutFailure>>,
     /// Sync ran before the logout stopped it.
     resume_sync: bool,
+}
+
+/// Why a logout under way did not log out.
+enum LogoutFailure {
+    /// The key backup could not be made to hold every room key.
+    RoomKeys(RoomKeysAtRisk),
+    /// The server did not end the session.
+    Server(MatrixCoreError),
 }
 
 struct PendingBrowserLogin {
@@ -94,7 +105,7 @@ enum Next {
     Job(Finished<Followup>),
     SignInEnd(SignInEnd),
     Redirect(io::Result<LoopbackRedirect>),
-    LogoutEnd(Result<(), MatrixCoreError>),
+    LogoutEnd(Result<(), LogoutFailure>),
     IdentityResetEnd(IdentityResetEnd),
 }
 
@@ -212,7 +223,7 @@ impl Core {
             (Route::Login(request), _) => self.log_in(request),
             (Route::RestoreSession(request), _) => self.restore(request),
             (Route::CancelLogin, _) => self.cancel_login().await,
-            (Route::Logout, _) => self.log_out().await,
+            (Route::Logout(request), _) => self.log_out(request).await,
             (Route::StartSync, _) => self.start_sync(),
             (Route::StopSync, _) => self.stop_sync(),
             (Route::Lane(command), _) => self.enqueue(command),
@@ -429,7 +440,8 @@ impl Core {
         ack(&self.events);
     }
 
-    async fn log_out(&mut self) {
+    async fn log_out(&mut self, request: LogoutRequest) {
+        let LogoutRequest { discard_room_keys } = request;
         let mut session = match std::mem::replace(&mut self.state, Lifecycle::Idle) {
             Lifecycle::Ready(session) => session,
             state => {
@@ -443,10 +455,27 @@ impl Core {
                 return;
             }
         };
-        // Before the server ends the session: a sync racing it would report
+        // Recovery's state is known here and now: a refusal leaves sync
+        // alone.
+        if !discard_room_keys && let Some(risk) = matrix::recovery_risk(session.client()) {
+            self.state = Lifecycle::Ready(session);
+            emit_event(&self.events, Event::LogoutWouldLoseRoomKeys(risk));
+            ack(&self.events);
+            return;
+        }
+        // Before the backup upload, so that no new room keys come; and
+        // before the server ends the session: a sync racing it would report
         // `SyncStopped(SessionEnded)` first.
         let resume_sync = session.stop_sync_quietly().await;
-        let transition = Box::pin(matrix::logout(session.client().clone()));
+        let client = session.client().clone();
+        let transition = Box::pin(async move {
+            if !discard_room_keys {
+                matrix::back_up_room_keys(&client)
+                    .await
+                    .map_err(LogoutFailure::RoomKeys)?;
+            }
+            matrix::logout(client).await.map_err(LogoutFailure::Server)
+        });
         self.state = Lifecycle::LoggingOut(LoggingOut {
             session,
             transition,
@@ -454,8 +483,8 @@ impl Core {
         });
     }
 
-    /// The server answered the logout under way.
-    async fn logout_ended(&mut self, result: Result<(), MatrixCoreError>) {
+    /// The logout under way ended.
+    async fn logout_ended(&mut self, result: Result<(), LogoutFailure>) {
         let Lifecycle::LoggingOut(LoggingOut {
             mut session,
             transition: _,
@@ -483,8 +512,15 @@ impl Core {
                 }
             }
             // The session stays whole.
-            Err(err) => {
-                emit_matrix_error(&self.events, Operation::Logout, err);
+            Err(failure) => {
+                match failure {
+                    LogoutFailure::RoomKeys(risk) => {
+                        emit_event(&self.events, Event::LogoutWouldLoseRoomKeys(risk));
+                    }
+                    LogoutFailure::Server(err) => {
+                        emit_matrix_error(&self.events, Operation::Logout, err);
+                    }
+                }
                 if resume_sync {
                     session.start_sync().expect("the logout stopped sync");
                 }

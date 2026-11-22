@@ -130,8 +130,20 @@ pub enum Command {
     /// their sessions; what that decrypts arrives later, as
     /// `RoomEventsDecrypted` too.
     RetryDecryption(RetryDecryptionRequest),
-    Logout,
+    /// Ends the session on the server and removes its data from this
+    /// computer. Answered by `LoggedOut`, by `LogoutWouldLoseRoomKeys`
+    /// (the session stays, as it was), or by a `Logout` error.
+    Logout(LogoutRequest),
     Shutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LogoutRequest {
+    /// Log out even when room keys would be lost: when no key backup a
+    /// new session can open holds them all. Without it the core first
+    /// waits for the key backup to hold every key, and refuses when it
+    /// cannot.
+    pub discard_room_keys: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2201,6 +2213,23 @@ pub enum SyncStopReason {
     SessionEnded(String),
 }
 
+/// Why logging out would lose room keys: no key backup that a new session
+/// can open would hold them all.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomKeysAtRisk {
+    /// Recovery is not set up: a new session has no way to the backup key.
+    RecoveryOff,
+    /// Recovery lacks some of the account's secrets.
+    RecoveryIncomplete,
+    /// The server has not said yet whether recovery is set up.
+    RecoveryUnknown,
+    /// Key backup is off: the backup does not get this session's keys.
+    BackupOff,
+    /// Uploading the keys to the backup failed, for this reason.
+    BackupFailed(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Event {
     Started,
@@ -2308,6 +2337,10 @@ pub enum Event {
     },
     VerificationRequest(VerificationRequest),
     VerificationState(VerificationStateEvent),
+    /// The answer to `Logout` without `discard_room_keys`: logging out now
+    /// would lose room keys, for this reason. The session stays signed in,
+    /// syncing as before.
+    LogoutWouldLoseRoomKeys(RoomKeysAtRisk),
     LoggedOut,
     Stopped,
     Error(CoreErrorEvent),
@@ -2367,6 +2400,24 @@ mod tests {
             r#"{"RoomKeysImported":{"path":"C:\\keys.txt","imported":2,"total":3}}"#
         );
         assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), imported);
+    }
+
+    /// Fixtures replay Log Out's refusal.
+    #[test]
+    fn logout_refusals_round_trip_through_serde() {
+        for (event, wire) in [
+            (
+                Event::LogoutWouldLoseRoomKeys(RoomKeysAtRisk::RecoveryOff),
+                r#"{"LogoutWouldLoseRoomKeys":"recovery_off"}"#,
+            ),
+            (
+                Event::LogoutWouldLoseRoomKeys(RoomKeysAtRisk::BackupFailed("why".to_owned())),
+                r#"{"LogoutWouldLoseRoomKeys":{"backup_failed":"why"}}"#,
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&event).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<Event>(wire).unwrap(), event);
+        }
     }
 
     #[test]

@@ -34,7 +34,7 @@ use matrix_sdk::{
     encryption::{
         BackupDownloadStrategy, CrossSigningResetAuthType, EncryptionSettings,
         VerificationState as EncryptionVerificationState,
-        backups::BackupState,
+        backups::{BackupState, futures::SteadyStateError},
         recovery::{IdentityResetHandle, RecoveryError, RecoveryState},
         verification::{
             CancelInfo, Emoji as MatrixEmoji, EmojiShortAuthString, SasState,
@@ -146,9 +146,9 @@ use crate::api::{
     RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
     RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
     RoomEventFetch, RoomEventFetchResult, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
-    RoomHistoryBackfillEvent, RoomIdentityChanges, RoomImageActivity, RoomImageInfo, RoomMedia,
-    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
-    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
+    RoomHistoryBackfillEvent, RoomIdentityChanges, RoomImageActivity, RoomImageInfo,
+    RoomKeysAtRisk, RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange,
+    RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomPollActivity,
     RoomPollContent, RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
@@ -5966,6 +5966,48 @@ pub(crate) async fn logout(client: Client) -> Result<(), MatrixCoreError> {
     }
 }
 
+/// Why logging out now would lose room keys, as far as recovery tells:
+/// `None` when recovery holds every secret a new session needs to open
+/// the key backup.
+pub(crate) fn recovery_risk(client: &Client) -> Option<RoomKeysAtRisk> {
+    match client.encryption().recovery().state() {
+        RecoveryState::Enabled => None,
+        RecoveryState::Disabled => Some(RoomKeysAtRisk::RecoveryOff),
+        RecoveryState::Incomplete => Some(RoomKeysAtRisk::RecoveryIncomplete),
+        RecoveryState::Unknown => Some(RoomKeysAtRisk::RecoveryUnknown),
+    }
+}
+
+/// Waits until the key backup holds every room key this session has: the
+/// SDK uploads them in the background, a batch at a time.
+pub(crate) async fn back_up_room_keys(client: &Client) -> Result<(), RoomKeysAtRisk> {
+    let backups = client.encryption().backups();
+    loop {
+        match backups.wait_for_steady_state().await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                if let Some(risk) = backup_failure_risk(error) {
+                    return Err(risk);
+                }
+            }
+        }
+    }
+}
+
+/// What a failed wait for the backup upload puts at risk; `None` when it
+/// only missed the upload's progress updates (`Lagged`): the upload goes
+/// on, and waiting again sees its end.
+fn backup_failure_risk(error: SteadyStateError) -> Option<RoomKeysAtRisk> {
+    match error {
+        SteadyStateError::BackupDisabled => Some(RoomKeysAtRisk::BackupOff),
+        // The SDK says no more than that.
+        SteadyStateError::Connection => Some(RoomKeysAtRisk::BackupFailed(
+            "your server could not be reached or refused them".to_owned(),
+        )),
+        SteadyStateError::Lagged => None,
+    }
+}
+
 /// The signed-in client's session, as the UI saves it.
 pub(crate) fn stored_session(client: &Client) -> StoredSession {
     let (meta, tokens, auth) = match client.session().expect("the client is signed in") {
@@ -6028,6 +6070,7 @@ mod tests {
         unban_room_member, unignore_user, user_presence_from_response,
     };
     use super::{MarkRoomReadRequest, SetReadMarkerRequest, mark_room_read, set_read_marker};
+    use super::{RoomKeysAtRisk, SteadyStateError, backup_failure_risk};
     use crate::api::PresenceKind;
     use crate::api::{
         CreateRoomRequest, CreateRoomVisibility, HighlightWord, ListPublicRoomsRequest, PublicRoom,
@@ -8260,6 +8303,23 @@ mod tests {
         ] {
             assert_eq!(map_e2ee_recovery_state(state), expected);
         }
+    }
+
+    /// A failed wait for the backup upload: the backup is off, or the
+    /// upload failed; a missed progress update is no failure.
+    #[test]
+    fn a_failed_backup_upload_puts_the_room_keys_at_risk() {
+        assert_eq!(
+            backup_failure_risk(SteadyStateError::BackupDisabled),
+            Some(RoomKeysAtRisk::BackupOff)
+        );
+        assert_eq!(
+            backup_failure_risk(SteadyStateError::Connection),
+            Some(RoomKeysAtRisk::BackupFailed(
+                "your server could not be reached or refused them".to_owned()
+            ))
+        );
+        assert_eq!(backup_failure_risk(SteadyStateError::Lagged), None);
     }
 
     #[test]

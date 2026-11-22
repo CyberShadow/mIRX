@@ -16,8 +16,8 @@ use matrix_sdk::ruma::{owned_device_id, owned_user_id};
 use matrix_sdk::test_utils::mocks::MatrixMockServer;
 use matrix_sdk_test::{JoinedRoomBuilder, SyncResponseBuilder};
 use mirx_core::{
-    Command, CoreConfig, CoreHandle, Event, RestoreSessionRequest, SessionAuth, StoredSession,
-    start,
+    Command, CoreConfig, CoreHandle, E2eeRecoveryState, Event, LogoutRequest,
+    RestoreSessionRequest, SessionAuth, StoredSession, start,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -25,6 +25,15 @@ use wiremock::matchers::{method, path_regex};
 use wiremock::{Mock, Request, ResponseTemplate};
 
 pub const EVENT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Log Out as File > Log Out's warning lets the user: whatever recovery
+/// and the key backup say. The tests of what Log Out does to the session,
+/// whose mocks have no recovery, use it.
+pub fn log_out_anyway() -> Command {
+    Command::Logout(LogoutRequest {
+        discard_room_keys: true,
+    })
+}
 
 pub struct Harness {
     pub runtime: tokio::runtime::Runtime,
@@ -212,6 +221,25 @@ impl Harness {
         self.events_until(what, matches)
             .pop()
             .expect("the matching event")
+    }
+
+    /// Asks for the E2EE status until recovery is `state`: it is `Unknown`
+    /// until the SDK's E2EE setup of the session has read it.
+    pub fn wait_for_recovery(&self, state: E2eeRecoveryState) {
+        let deadline = Instant::now() + EVENT_TIMEOUT;
+        loop {
+            self.send(Command::RefreshE2eeStatus);
+            let events =
+                self.events_until("the status's ack", |event| *event == Event::CommandHandled);
+            if events
+                .iter()
+                .any(|event| matches!(event, Event::E2eeStatus(status) if status.recovery == state))
+            {
+                return;
+            }
+            assert!(Instant::now() < deadline, "recovery never {state:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     pub fn mount(&self, mock: Mock) {
