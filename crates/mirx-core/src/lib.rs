@@ -33,7 +33,7 @@ pub use api::{
     RoomMessageSendState, RoomNotificationMode, RoomPollActivity, RoomPollContent,
     RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState, RoomRedactedActivity,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomUserProfile,
+    RoomUnableToDecryptActivity, RoomUnableToDecryptCause, RoomUserProfile,
     RoomVerificationRequestActivity, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
     SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,

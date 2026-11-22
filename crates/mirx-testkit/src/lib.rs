@@ -875,20 +875,22 @@ pub struct RoomUnableToDecryptActivity {
     pub event_id: String,
     pub sender: String,
     pub session_id: Option<String>,
-    pub reason: RoomUnableToDecryptReason,
+    pub cause: RoomUnableToDecryptCause,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Why a line could not be decrypted (`mirx_core::RoomUnableToDecryptCause`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RoomUnableToDecryptReason {
+pub enum RoomUnableToDecryptCause {
     Unknown,
-    MalformedEncryptedEvent,
-    MissingMegolmSession,
-    UnknownMegolmMessageIndex,
-    MegolmDecryptionFailure,
-    PayloadDeserializationFailure,
-    MismatchedIdentityKeys,
-    SenderIdentityNotTrusted,
+    SentBeforeYouJoined,
+    HistoricalNoBackup,
+    HistoricalUnverified,
+    WithheldUnverified,
+    WithheldBySender,
+    SenderIdentityChanged,
+    UnsignedDevice,
+    UnknownDevice,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

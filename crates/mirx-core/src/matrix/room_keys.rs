@@ -17,7 +17,7 @@ use matrix_sdk_crypto::KeyExportError;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use super::{
-    MatrixCoreError, SenderProfileCache, emit_sync_error,
+    EventBatchLookups, MatrixCoreError, emit_sync_error,
     room_history_backfill_event_from_timeline_event,
 };
 use crate::api::{
@@ -80,7 +80,7 @@ async fn undecrypted_sync_event(
         room,
         &event,
         &redaction_rules,
-        &mut SenderProfileCache::new(room),
+        &mut EventBatchLookups::new(room),
     )
     .await
 }
@@ -149,7 +149,7 @@ async fn room_events_decrypted(
     decrypted.sort_by_key(|event| event.timestamp());
 
     let redaction_rules = room.clone_info().room_version_rules_or_default().redaction;
-    let mut senders = SenderProfileCache::new(&room);
+    let mut lookups = EventBatchLookups::new(&room);
     let mut events = Vec::with_capacity(decrypted.len());
     for event in &decrypted {
         events.extend(
@@ -157,7 +157,7 @@ async fn room_events_decrypted(
                 &room,
                 event,
                 &redaction_rules,
-                &mut senders,
+                &mut lookups,
             )
             .await?,
         );
@@ -276,7 +276,7 @@ mod tests {
         BackfillRoomHistoryRequest, Event, HistoryFrom, ImportRoomKeysRequest,
         RetryDecryptionRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
         RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomEventsDecrypted,
-        RoomHistoryBackfillEvent, RoomUnableToDecryptReason,
+        RoomHistoryBackfillEvent, RoomUnableToDecryptCause,
     };
     use crate::runtime::RoomSnapshots;
 
@@ -477,6 +477,65 @@ mod tests {
             }
         }
 
+        /// Bob syncs alice's notice that she withholds the key of `sent`
+        /// from him, with `code` (`m.unverified`, `m.blacklisted`).
+        async fn bob_syncs_withheld(&self, sent: &Raw<AnySyncTimelineEvent>, code: &str) {
+            let alice_id = self.alice.user_id().expect("alice is signed in");
+            let sender_key = self
+                .alice
+                .encryption()
+                .curve25519_key()
+                .await
+                .expect("alice has E2EE");
+            let withheld = serde_json::json!({
+                "type": "m.room_key.withheld",
+                "sender": alice_id,
+                "content": {
+                    "algorithm": "m.megolm.v1.aes-sha2",
+                    "code": code,
+                    "reason": "withheld",
+                    "room_id": self.room_id,
+                    "session_id": session_id(sent),
+                    "sender_key": sender_key.to_base64(),
+                    "from_device": self.alice.device_id().expect("alice has a device"),
+                },
+            });
+            self.server
+                .mock_sync()
+                .ok_and_run(&self.bob, |builder| {
+                    builder.add_to_device_event(withheld);
+                })
+                .await;
+        }
+
+        /// The server's answer to bob's query whether he has a key backup.
+        async fn mount_backup_exists(&self, exists: bool) {
+            let version = self
+                .server
+                .mock_room_keys_version()
+                .expect_any_access_token();
+            match exists {
+                true => version.exists(),
+                false => version.none(),
+            }
+            .mount()
+            .await;
+        }
+
+        /// The one line bob shows after a sync, which could not be
+        /// decrypted, and why.
+        fn utd_cause(&self) -> RoomUnableToDecryptCause {
+            let events = self.drain();
+            let activities = activities(&events);
+            let [activity] = activities[..] else {
+                panic!("not one line: {events:#?}");
+            };
+            let RoomActivityKind::UnableToDecrypt(utd) = &activity.kind else {
+                panic!("not a UTD: {activity:#?}");
+            };
+            utd.cause
+        }
+
         fn drain(&self) -> Vec<Event> {
             std::iter::from_fn(|| self.events.recv_timeout(Duration::from_millis(300)).ok())
                 .collect()
@@ -491,6 +550,28 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn session_id(event: &Raw<AnySyncTimelineEvent>) -> String {
+        event
+            .get_field::<serde_json::Value>("content")
+            .expect("content")
+            .expect("content")["session_id"]
+            .as_str()
+            .expect("a megolm session id")
+            .to_owned()
+    }
+
+    /// `event` with `field` set to `value`, as the server may change it:
+    /// Megolm encrypts only the content.
+    fn with_field(
+        event: &Raw<AnySyncTimelineEvent>,
+        field: &str,
+        value: serde_json::Value,
+    ) -> Raw<AnySyncTimelineEvent> {
+        let mut json: serde_json::Value = event.deserialize_as().expect("json");
+        json[field] = value;
+        Raw::new(&json).expect("an event").cast_unchecked()
     }
 
     fn text(body: &str) -> serde_json::Value {
@@ -540,7 +621,9 @@ mod tests {
             assert_eq!(utd.event_id, "$secret");
             assert_eq!(utd.sender.user_id, "@alice:example.org");
             assert_eq!(utd.sender.display_name.as_deref(), Some("Alice"));
-            assert_eq!(utd.reason, RoomUnableToDecryptReason::MissingMegolmSession);
+            // Sent after this session was made, while bob was in the room:
+            // the key may yet come.
+            assert_eq!(utd.cause, RoomUnableToDecryptCause::Unknown);
             let session_id = sent
                 .event
                 .get_field::<serde_json::Value>("content")
@@ -550,6 +633,93 @@ mod tests {
                 .expect("a megolm session id")
                 .to_owned();
             assert_eq!(utd.session_id.as_deref(), Some(session_id.as_str()));
+        });
+    }
+
+    /// The server marks an event sent while bob was not in the room
+    /// (MSC4115, also under its unstable name): no key can be expected.
+    #[test]
+    fn a_message_sent_before_you_joined_says_so() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+            let sent = room
+                .alice_sends_first("$before", "m.room.message", text("psst"))
+                .await;
+            for membership in ["membership", "io.element.msc4115.membership"] {
+                let event = with_field(
+                    &sent.event,
+                    "unsigned",
+                    serde_json::json!({ membership: "leave" }),
+                );
+
+                room.bob_syncs(&[], &[&event]).await;
+
+                assert_eq!(
+                    room.utd_cause(),
+                    RoomUnableToDecryptCause::SentBeforeYouJoined,
+                    "{membership}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_message_older_than_this_session_without_a_backup_says_so() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+            room.mount_backup_exists(false).await;
+            let sent = room
+                .alice_sends_first("$old", "m.room.message", text("psst"))
+                .await;
+            let event = with_field(&sent.event, "origin_server_ts", serde_json::json!(1000));
+
+            room.bob_syncs(&[], &[&event]).await;
+
+            assert_eq!(
+                room.utd_cause(),
+                RoomUnableToDecryptCause::HistoricalNoBackup
+            );
+        });
+    }
+
+    /// Bob's session is not verified, so it cannot use the backup the
+    /// server has: verifying it would read the message.
+    #[test]
+    fn a_message_older_than_this_session_with_a_backup_says_verify() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+            room.mount_backup_exists(true).await;
+            let sent = room
+                .alice_sends_first("$old", "m.room.message", text("psst"))
+                .await;
+            let event = with_field(&sent.event, "origin_server_ts", serde_json::json!(1000));
+
+            room.bob_syncs(&[], &[&event]).await;
+
+            assert_eq!(
+                room.utd_cause(),
+                RoomUnableToDecryptCause::HistoricalUnverified
+            );
+        });
+    }
+
+    #[test]
+    fn a_withheld_key_says_the_sender_withheld_it() {
+        block_on(async {
+            for (code, cause) in [
+                ("m.unverified", RoomUnableToDecryptCause::WithheldUnverified),
+                ("m.blacklisted", RoomUnableToDecryptCause::WithheldBySender),
+            ] {
+                let room = EncryptedRoom::new().await;
+                let sent = room
+                    .alice_sends_first("$withheld", "m.room.message", text("psst"))
+                    .await;
+                room.bob_syncs_withheld(&sent.event, code).await;
+
+                room.bob_syncs(&[], &[&sent.event]).await;
+
+                assert_eq!(room.utd_cause(), cause, "{code}");
+            }
         });
     }
 
@@ -725,6 +895,50 @@ mod tests {
             let (activity, body) = decrypted_message(&decrypted.events[0]);
             assert_eq!(body, "old");
             assert_eq!(activity.activity_id, "event:$old");
+        });
+    }
+
+    /// A page of history reads this session's context for its lines that
+    /// could not be decrypted, as a synced line does.
+    #[test]
+    fn a_backfilled_message_without_its_key_has_its_cause() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+            let sent = room
+                .alice_sends_first("$before", "m.room.message", text("psst"))
+                .await;
+            let mut history: serde_json::Value = sent.event.deserialize_as().expect("json");
+            history["room_id"] = serde_json::json!(room.room_id.as_str());
+            history["unsigned"] = serde_json::json!({ "membership": "leave" });
+            room.server
+                .mock_room_messages()
+                .expect_any_access_token()
+                .ok(RoomMessagesResponseTemplate::default().events(vec![
+                    Raw::<AnyTimelineEvent>::from_json_string(history.to_string())
+                        .expect("a room event"),
+                ]))
+                .mock_once()
+                .mount()
+                .await;
+
+            let backfill = backfill_room_history(
+                &room.bob,
+                BackfillRoomHistoryRequest {
+                    room_id: room.room_id.to_string(),
+                    from: HistoryFrom::Latest,
+                    limit: 10,
+                },
+            )
+            .await
+            .expect("backfill");
+
+            let [RoomHistoryBackfillEvent::Activity(activity)] = &backfill.events[..] else {
+                panic!("not one line: {backfill:#?}");
+            };
+            let RoomActivityKind::UnableToDecrypt(utd) = &activity.kind else {
+                panic!("not a UTD: {activity:#?}");
+            };
+            assert_eq!(utd.cause, RoomUnableToDecryptCause::SentBeforeYouJoined);
         });
     }
 

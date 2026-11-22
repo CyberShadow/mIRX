@@ -28,7 +28,6 @@ use matrix_sdk::{
     config::{SyncSettings, SyncToken},
     deserialized_responses::{
         SyncOrStrippedState, TimelineEvent, TimelineEventKind, UnableToDecryptInfo,
-        UnableToDecryptReason,
     },
     encryption::{
         BackupDownloadStrategy, CrossSigningResetAuthType, EncryptionSettings,
@@ -124,6 +123,7 @@ use matrix_sdk_base::{
     RoomInfoNotableUpdate, RoomInfoNotableUpdateReasons, RoomState,
     deserialized_responses::DisplayName, read_receipts::RoomReadReceipts,
 };
+use matrix_sdk_crypto::types::events::{CryptoContextInfo, UtdCause};
 use matrix_sdk_crypto::{CrossSigningStatus, IdentityState, IdentityStatusChange};
 use mime::Mime;
 use serde::Deserialize;
@@ -149,7 +149,7 @@ use crate::api::{
     RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomPollActivity,
     RoomPollContent, RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomUserProfile,
+    RoomUnableToDecryptActivity, RoomUnableToDecryptCause, RoomUserProfile,
     RoomVerificationRequestActivity, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
     SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,
@@ -2121,22 +2121,37 @@ async fn member_target_profile(
     })
 }
 
-/// Sender profiles resolved while mapping one batch of events, so each
-/// distinct sender is read from the store once.
-struct SenderProfileCache<'a> {
+/// What mapping one batch of events reads about its room, each read once
+/// and only when an event needs it: sender profiles, and this session's
+/// crypto context (for the cause of a line that could not be decrypted).
+struct EventBatchLookups<'a> {
     room: &'a Room,
     profiles: BTreeMap<OwnedUserId, RoomUserProfile>,
+    crypto_context: Option<CryptoContextInfo>,
 }
 
-impl<'a> SenderProfileCache<'a> {
+impl<'a> EventBatchLookups<'a> {
     fn new(room: &'a Room) -> Self {
         Self {
             room,
             profiles: BTreeMap::new(),
+            crypto_context: None,
         }
     }
 
-    async fn get(&mut self, user_id: &UserId) -> Result<RoomUserProfile, MatrixCoreError> {
+    /// This session's state as `UtdCause` reads it: its verification, its
+    /// key backup, whether the server has one (cached by the SDK after its
+    /// first query), and when the session was made.
+    async fn crypto_context(&mut self) -> CryptoContextInfo {
+        if let Some(context) = self.crypto_context {
+            return context;
+        }
+        let context = self.room.crypto_context_info().await;
+        self.crypto_context = Some(context);
+        context
+    }
+
+    async fn profile(&mut self, user_id: &UserId) -> Result<RoomUserProfile, MatrixCoreError> {
         if let Some(profile) = self.profiles.get(user_id) {
             return Ok(profile.clone());
         }
@@ -3300,11 +3315,11 @@ async fn room_activity_from_timeline_state_event(
     let AnySyncTimelineEvent::State(event) = event else {
         return Ok(None);
     };
-    let mut senders = SenderProfileCache::new(room);
+    let mut lookups = EventBatchLookups::new(room);
     match event {
         AnySyncStateEvent::RoomTopic(SyncStateEvent::Original(event)) => {
             let highlight = activity_highlight(room.own_user_id(), &event.sender, actions);
-            let sender = senders.get(&event.sender).await?;
+            let sender = lookups.profile(&event.sender).await?;
             Ok(Some(room_activity_from_sync_topic(
                 room.room_id().as_str(),
                 event,
@@ -3314,11 +3329,11 @@ async fn room_activity_from_timeline_state_event(
         }
         AnySyncStateEvent::RoomMember(SyncStateEvent::Original(event)) => {
             let highlight = activity_highlight(room.own_user_id(), &event.sender, actions);
-            room_activity_from_member_event(room, event, &mut senders, highlight).await
+            room_activity_from_member_event(room, event, &mut lookups, highlight).await
         }
         AnySyncStateEvent::RoomPowerLevels(SyncStateEvent::Original(event)) => {
             let highlight = activity_highlight(room.own_user_id(), &event.sender, actions);
-            room_activity_from_power_levels_event(room, event, &mut senders, highlight).await
+            room_activity_from_power_levels_event(room, event, &mut lookups, highlight).await
         }
         _ => Ok(None),
     }
@@ -3436,13 +3451,13 @@ fn room_activity_from_sync_member(
 async fn room_activity_from_member_event(
     room: &Room,
     event: &OriginalSyncRoomMemberEvent,
-    senders: &mut SenderProfileCache<'_>,
+    lookups: &mut EventBatchLookups<'_>,
     highlight: bool,
 ) -> Result<Option<RoomActivity>, MatrixCoreError> {
     let Some(change) = room_member_change_from_sync_member(event) else {
         return Ok(None);
     };
-    let sender = senders.get(&event.sender).await?;
+    let sender = lookups.profile(&event.sender).await?;
     let target =
         member_target_profile(room, &event.state_key, member_target_display_name(event)).await?;
     Ok(Some(room_activity_from_sync_member(
@@ -3589,7 +3604,7 @@ fn power_levels_change(
 async fn room_activity_from_power_levels_event(
     room: &Room,
     event: &OriginalSyncRoomPowerLevelsEvent,
-    profiles: &mut SenderProfileCache<'_>,
+    lookups: &mut EventBatchLookups<'_>,
     highlight: bool,
 ) -> Result<Option<RoomActivity>, MatrixCoreError> {
     let Some(old) = event.unsigned.prev_content.as_ref() else {
@@ -3598,11 +3613,11 @@ async fn room_activity_from_power_levels_event(
     let Some(change) = power_levels_change(old, &event.content) else {
         return Ok(None);
     };
-    let sender = profiles.get(&event.sender).await?;
+    let sender = lookups.profile(&event.sender).await?;
     let mut changes = Vec::with_capacity(change.users.len());
     for (user_id, old, new) in change.users {
         changes.push(RoomPowerLevelUserChange {
-            target: profiles.get(&user_id).await?,
+            target: lookups.profile(&user_id).await?,
             old,
             new,
         });
@@ -5413,7 +5428,7 @@ async fn room_history_backfill_events_from_timeline(
     chunk: Vec<TimelineEvent>,
     redaction_rules: matrix_sdk::ruma::room_version_rules::RedactionRules,
 ) -> Result<Vec<RoomHistoryBackfillEvent>, MatrixCoreError> {
-    let mut senders = SenderProfileCache::new(room);
+    let mut lookups = EventBatchLookups::new(room);
     let mut events = Vec::with_capacity(chunk.len());
 
     for event in chunk.into_iter().rev() {
@@ -5422,7 +5437,7 @@ async fn room_history_backfill_events_from_timeline(
                 room,
                 &event,
                 &redaction_rules,
-                &mut senders,
+                &mut lookups,
             )
             .await?,
         );
@@ -5438,6 +5453,7 @@ fn room_activity_from_unable_to_decrypt_timeline_event(
     room_id: &str,
     event: &TimelineEvent,
     utd_info: &UnableToDecryptInfo,
+    cause: RoomUnableToDecryptCause,
     sender: RoomUserProfile,
     highlight: bool,
 ) -> Option<RoomActivity> {
@@ -5465,37 +5481,35 @@ fn room_activity_from_unable_to_decrypt_timeline_event(
             event_id,
             sender,
             session_id: utd_info.session_id.clone(),
-            reason: room_unable_to_decrypt_reason_from_sdk(&utd_info.reason),
+            cause,
         }),
     })
 }
 
-fn room_unable_to_decrypt_reason_from_sdk(
-    reason: &UnableToDecryptReason,
-) -> RoomUnableToDecryptReason {
-    match reason {
-        UnableToDecryptReason::Unknown => RoomUnableToDecryptReason::Unknown,
-        UnableToDecryptReason::MalformedEncryptedEvent => {
-            RoomUnableToDecryptReason::MalformedEncryptedEvent
+/// Why `raw` could not be decrypted, as the SDK's classifier reads its
+/// failure with this session's `context` and the event's membership info
+/// (MSC4115, in `unsigned`).
+fn room_unable_to_decrypt_cause(
+    raw: &Raw<AnySyncTimelineEvent>,
+    info: &UnableToDecryptInfo,
+    context: CryptoContextInfo,
+) -> RoomUnableToDecryptCause {
+    match UtdCause::determine(raw, context, info) {
+        UtdCause::Unknown => RoomUnableToDecryptCause::Unknown,
+        UtdCause::SentBeforeWeJoined => RoomUnableToDecryptCause::SentBeforeYouJoined,
+        UtdCause::HistoricalMessageAndBackupIsDisabled => {
+            RoomUnableToDecryptCause::HistoricalNoBackup
         }
-        UnableToDecryptReason::MissingMegolmSession { .. } => {
-            RoomUnableToDecryptReason::MissingMegolmSession
+        UtdCause::HistoricalMessageAndDeviceIsUnverified => {
+            RoomUnableToDecryptCause::HistoricalUnverified
         }
-        UnableToDecryptReason::UnknownMegolmMessageIndex => {
-            RoomUnableToDecryptReason::UnknownMegolmMessageIndex
+        UtdCause::WithheldForUnverifiedOrInsecureDevice => {
+            RoomUnableToDecryptCause::WithheldUnverified
         }
-        UnableToDecryptReason::MegolmDecryptionFailure => {
-            RoomUnableToDecryptReason::MegolmDecryptionFailure
-        }
-        UnableToDecryptReason::PayloadDeserializationFailure => {
-            RoomUnableToDecryptReason::PayloadDeserializationFailure
-        }
-        UnableToDecryptReason::MismatchedIdentityKeys => {
-            RoomUnableToDecryptReason::MismatchedIdentityKeys
-        }
-        UnableToDecryptReason::SenderIdentityNotTrusted(_) => {
-            RoomUnableToDecryptReason::SenderIdentityNotTrusted
-        }
+        UtdCause::WithheldBySender => RoomUnableToDecryptCause::WithheldBySender,
+        UtdCause::VerificationViolation => RoomUnableToDecryptCause::SenderIdentityChanged,
+        UtdCause::UnsignedDevice => RoomUnableToDecryptCause::UnsignedDevice,
+        UtdCause::UnknownDevice => RoomUnableToDecryptCause::UnknownDevice,
     }
 }
 
@@ -5507,7 +5521,7 @@ async fn room_history_backfill_event_from_timeline_event(
     room: &Room,
     event: &TimelineEvent,
     redaction_rules: &matrix_sdk::ruma::room_version_rules::RedactionRules,
-    senders: &mut SenderProfileCache<'_>,
+    lookups: &mut EventBatchLookups<'_>,
 ) -> Result<Vec<RoomHistoryBackfillEvent>, MatrixCoreError> {
     let room_id = room.room_id().as_str();
     // The SDK has no push actions for an event it could not evaluate the
@@ -5521,9 +5535,11 @@ async fn room_history_backfill_event_from_timeline_event(
             return Ok(Vec::new());
         };
         let highlight = highlight(&sender);
-        let sender = senders.get(&sender).await?;
+        let sender = lookups.profile(&sender).await?;
+        let cause =
+            room_unable_to_decrypt_cause(event.raw(), utd_info, lookups.crypto_context().await);
         return Ok(room_activity_from_unable_to_decrypt_timeline_event(
-            room_id, event, utd_info, sender, highlight,
+            room_id, event, utd_info, cause, sender, highlight,
         )
         .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity)))
         .into_iter()
@@ -5545,7 +5561,7 @@ async fn room_history_backfill_event_from_timeline_event(
         let Ok(AnySyncTimelineEvent::MessageLike(event)) = raw.deserialize() else {
             return Ok(Vec::new());
         };
-        let sender = senders.get(event.sender()).await?;
+        let sender = lookups.profile(event.sender()).await?;
         return Ok(room_activity_from_sync_message_like(
             room_id,
             &event,
@@ -5568,7 +5584,7 @@ async fn room_history_backfill_event_from_timeline_event(
             .into_iter()
             .collect());
         }
-        let sender = senders.get(&event.sender).await?;
+        let sender = lookups.profile(&event.sender).await?;
         let activity =
             room_activity_from_sync_message(room_id, &event, sender, highlight(&event.sender));
         // An edit that did not decrypt, or is no message edit, is no
@@ -5606,7 +5622,7 @@ async fn room_history_backfill_event_from_timeline_event(
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomTopicEvent>() {
-        let sender = senders.get(&event.sender).await?;
+        let sender = lookups.profile(&event.sender).await?;
         return Ok(vec![RoomHistoryBackfillEvent::Activity(Box::new(
             room_activity_from_sync_topic(room_id, &event, sender, highlight(&event.sender)),
         ))]);
@@ -5616,7 +5632,7 @@ async fn room_history_backfill_event_from_timeline_event(
         return Ok(room_activity_from_member_event(
             room,
             &event,
-            senders,
+            lookups,
             highlight(&event.sender),
         )
         .await?
@@ -5638,7 +5654,7 @@ async fn room_history_backfill_event_from_timeline_event(
         return Ok(room_activity_from_power_levels_event(
             room,
             &event,
-            senders,
+            lookups,
             highlight(&event.sender),
         )
         .await?
@@ -5743,7 +5759,7 @@ async fn fetch_room_event_activity(
         &room,
         &event,
         &redaction_rules,
-        &mut SenderProfileCache::new(&room),
+        &mut EventBatchLookups::new(&room),
     )
     .await?
     .into_iter()
@@ -5797,8 +5813,8 @@ mod tests {
 
     use super::edit_message;
     use super::{
-        LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, PowerLevelsChange,
-        SenderProfileCache, activity_highlight, add_highlight_word, attach_reply_relation,
+        EventBatchLookups, LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry,
+        PowerLevelsChange, activity_highlight, add_highlight_word, attach_reply_relation,
         attach_thread_relation, attach_thread_reply_relation, backfill_room_history,
         ban_room_member, cancelled_state, content_type_for_file_name, create_room,
         direct_user_ids_by_room_from_content, emit_member_snapshots_after_sync, fetch_room_event,
@@ -5820,7 +5836,7 @@ mod tests {
         room_media_request_parameters, room_member_change_from_sync_member, room_member_rank,
         room_members_from_parts, room_message_type, room_read_state_from_parts,
         room_read_update_is_relevant, room_tag_summaries_from_tags, room_typing_from_sync_typing,
-        room_unable_to_decrypt_reason_from_sdk, send_file, send_message, set_display_name,
+        room_unable_to_decrypt_cause, send_file, send_message, set_display_name,
         set_room_member_power_level, set_room_notification_mode,
         sorted_room_member_summaries_from_parts, summarize_rooms, sync_message_replacement,
         unban_room_member, unignore_user, user_presence_from_response,
@@ -7142,7 +7158,7 @@ mod tests {
                     event_id: "$encrypted1:example.org".to_owned(),
                     sender: profile("@alice:example.org"),
                     session_id: Some("SESSIONID".to_owned()),
-                    reason: RoomUnableToDecryptReason::MissingMegolmSession,
+                    cause: RoomUnableToDecryptCause::Unknown,
                 }),
             })))
         );
@@ -7243,12 +7259,139 @@ mod tests {
         }
     }
 
+    /// Every `UtdCause` the SDK's classifier gives has its own cause on the
+    /// wire: the reason, the event's membership info and timestamp, and
+    /// this session's state decide it.
     #[test]
-    fn unable_to_decrypt_reason_mapping_covers_sdk_reasons() {
-        assert_eq!(
-            room_unable_to_decrypt_reason_from_sdk(&UnableToDecryptReason::MegolmDecryptionFailure),
-            RoomUnableToDecryptReason::MegolmDecryptionFailure,
-        );
+    fn room_unable_to_decrypt_cause_maps_every_utd_cause() {
+        use matrix_sdk::deserialized_responses::{VerificationLevel, WithheldCode};
+        use matrix_sdk::ruma::MilliSecondsSinceUnixEpoch;
+        use matrix_sdk_crypto::types::events::CryptoContextInfo;
+
+        let raw = |origin_server_ts: u64, unsigned: serde_json::Value| {
+            Raw::new(&serde_json::json!({
+                "type": "m.room.encrypted",
+                "content": {
+                    "algorithm": "m.megolm.v1.aes-sha2",
+                    "ciphertext": "AwgAEnAC",
+                    "sender_key": "SENDERKEY",
+                    "device_id": "DEVICE",
+                    "session_id": "SESSIONID",
+                },
+                "event_id": "$utd:example.org",
+                "sender": "@alice:example.org",
+                "origin_server_ts": origin_server_ts,
+                "unsigned": unsigned,
+            }))
+            .expect("serialize raw encrypted event")
+            .cast_unchecked()
+        };
+        let info = |reason| UnableToDecryptInfo {
+            session_id: Some("SESSIONID".to_owned()),
+            reason,
+        };
+        let missing = |withheld_code| UnableToDecryptReason::MissingMegolmSession { withheld_code };
+        // A session made at 2000, unverified, its backup unused.
+        let context = |backup_exists_on_server| CryptoContextInfo {
+            device_creation_ts: MilliSecondsSinceUnixEpoch(2000u32.into()),
+            this_device_is_verified: false,
+            backup_exists_on_server,
+            is_backup_configured: false,
+        };
+        let new = raw(3000, serde_json::json!({}));
+        let old = raw(1000, serde_json::json!({}));
+        for (raw, reason, context, cause) in [
+            (
+                &new,
+                missing(None),
+                context(true),
+                RoomUnableToDecryptCause::Unknown,
+            ),
+            (
+                &raw(3000, serde_json::json!({ "membership": "leave" })),
+                missing(None),
+                context(true),
+                RoomUnableToDecryptCause::SentBeforeYouJoined,
+            ),
+            (
+                &raw(
+                    3000,
+                    serde_json::json!({ "io.element.msc4115.membership": "leave" }),
+                ),
+                missing(None),
+                context(true),
+                RoomUnableToDecryptCause::SentBeforeYouJoined,
+            ),
+            (
+                &old,
+                missing(None),
+                context(false),
+                RoomUnableToDecryptCause::HistoricalNoBackup,
+            ),
+            (
+                &old,
+                missing(None),
+                context(true),
+                RoomUnableToDecryptCause::HistoricalUnverified,
+            ),
+            (
+                &new,
+                missing(Some(WithheldCode::Unverified)),
+                context(true),
+                RoomUnableToDecryptCause::WithheldUnverified,
+            ),
+            (
+                &new,
+                missing(Some(WithheldCode::Blacklisted)),
+                context(true),
+                RoomUnableToDecryptCause::WithheldBySender,
+            ),
+            (
+                &new,
+                UnableToDecryptReason::SenderIdentityNotTrusted(
+                    VerificationLevel::VerificationViolation,
+                ),
+                context(true),
+                RoomUnableToDecryptCause::SenderIdentityChanged,
+            ),
+            (
+                &new,
+                UnableToDecryptReason::SenderIdentityNotTrusted(VerificationLevel::UnsignedDevice),
+                context(true),
+                RoomUnableToDecryptCause::UnsignedDevice,
+            ),
+            (
+                &new,
+                UnableToDecryptReason::SenderIdentityNotTrusted(VerificationLevel::None(
+                    matrix_sdk::deserialized_responses::DeviceLinkProblem::MissingDevice,
+                )),
+                context(true),
+                RoomUnableToDecryptCause::UnknownDevice,
+            ),
+        ] {
+            assert_eq!(
+                room_unable_to_decrypt_cause(raw, &info(reason.clone()), context),
+                cause,
+                "{reason:?}"
+            );
+        }
+        // A verified session, or one whose backup works, should have had
+        // the key: nothing it can say.
+        for context in [
+            CryptoContextInfo {
+                this_device_is_verified: true,
+                ..context(true)
+            },
+            CryptoContextInfo {
+                is_backup_configured: true,
+                ..context(true)
+            },
+        ] {
+            assert_eq!(
+                room_unable_to_decrypt_cause(&old, &info(missing(None)), context),
+                RoomUnableToDecryptCause::Unknown
+            );
+        }
     }
 
     #[test]
@@ -7283,7 +7426,7 @@ mod tests {
                     event_id: "$encrypted-vector:example.org".to_owned(),
                     sender: profile("@alice:example.org"),
                     session_id: Some("SESSIONID".to_owned()),
-                    reason: RoomUnableToDecryptReason::MissingMegolmSession,
+                    cause: RoomUnableToDecryptCause::Unknown,
                 }),
             }))]
         );
@@ -7322,7 +7465,7 @@ mod tests {
         RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
         RoomMessageSendState, RoomPollActivity, RoomPollContent, RoomPowerLevelUserChange,
         RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
-        RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity, RoomUnableToDecryptReason,
+        RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity, RoomUnableToDecryptCause,
         RoomUserProfile, RoomVerificationRequestActivity, RoomVideoActivity, RoomVideoInfo,
         SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SetDisplayNameRequest,
         SetRoomMemberPowerLevelRequest, StoredSession, UnbanRoomMemberRequest,
@@ -7685,7 +7828,7 @@ mod tests {
                 room,
                 event,
                 redaction_rules,
-                &mut SenderProfileCache::new(room),
+                &mut EventBatchLookups::new(room),
             )
             .await
             .expect("map backfill event")

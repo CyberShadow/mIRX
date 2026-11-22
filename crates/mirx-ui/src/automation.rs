@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 78;
+pub(crate) const PROTOCOL_VERSION: u32 = 79;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -2370,7 +2370,7 @@ pub(crate) struct DumpRoomUnableToDecryptActivity {
     pub(crate) event_id: String,
     pub(crate) sender: String,
     pub(crate) session_id: Option<String>,
-    pub(crate) reason: mirx_core::RoomUnableToDecryptReason,
+    pub(crate) cause: mirx_core::RoomUnableToDecryptCause,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2802,7 +2802,7 @@ pub(crate) fn dump_room_activity_kind_from_core(kind: &RoomActivityKind) -> Dump
                 event_id: message.event_id.clone(),
                 sender: message.sender.user_id.clone(),
                 session_id: message.session_id.clone(),
-                reason: message.reason.clone(),
+                cause: message.cause,
             })
         }
         RoomActivityKind::StateNotice(notice) => {
@@ -4034,8 +4034,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_78() {
-        assert_eq!(PROTOCOL_VERSION, 78);
+    fn protocol_version_is_79() {
+        assert_eq!(PROTOCOL_VERSION, 79);
     }
 
     #[test]
@@ -6073,7 +6073,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":78,
+                    "protocol_version":79,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })

@@ -104,7 +104,7 @@
           "display_name_ambiguous": false
         },
         "session_id": "SESSION-B",
-        "reason": "missing_megolm_session"
+        "cause": "unknown"
       }
     }
   },
@@ -124,7 +124,7 @@
           "display_name_ambiguous": false
         },
         "session_id": "SESSION-C",
-        "reason": "missing_megolm_session"
+        "cause": "unknown"
       }
     }
   }

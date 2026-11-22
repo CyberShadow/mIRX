@@ -876,20 +876,40 @@ pub struct RoomUnableToDecryptActivity {
     pub event_id: String,
     pub sender: RoomUserProfile,
     pub session_id: Option<String>,
-    pub reason: RoomUnableToDecryptReason,
+    /// Why, as far as this session can tell now: it depends on this
+    /// session's verification and key backup, so a retry can tell it anew.
+    pub cause: RoomUnableToDecryptCause,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// Why an event could not be decrypted: the SDK's `UtdCause`, which reads
+/// the reason with this session's state and the event's membership info.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RoomUnableToDecryptReason {
+pub enum RoomUnableToDecryptCause {
+    /// No explanation: the key may yet come (from the sender, another of
+    /// your sessions, the key backup), or it is a bug.
     Unknown,
-    MalformedEncryptedEvent,
-    MissingMegolmSession,
-    UnknownMegolmMessageIndex,
-    MegolmDecryptionFailure,
-    PayloadDeserializationFailure,
-    MismatchedIdentityKeys,
-    SenderIdentityNotTrusted,
+    /// The key is missing, and it was sent while you were not in the room.
+    SentBeforeYouJoined,
+    /// The key is missing, it was sent before this session existed, and
+    /// there is no key backup on the server.
+    HistoricalNoBackup,
+    /// The key is missing, it was sent before this session existed, and
+    /// the key backup this session cannot use yet is there to verify for.
+    HistoricalUnverified,
+    /// The sender withholds its key from sessions that are not verified.
+    WithheldUnverified,
+    /// The sender withheld its key from this session (blocked it, or could
+    /// not reach it).
+    WithheldBySender,
+    /// The sender's identity was verified, and has changed since.
+    SenderIdentityChanged,
+    /// Sent from a session its owner has not signed, which the trust
+    /// requirement refuses.
+    UnsignedDevice,
+    /// Sent from a session that cannot be found securely, which the trust
+    /// requirement refuses.
+    UnknownDevice,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

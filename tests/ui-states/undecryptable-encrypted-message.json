@@ -43,7 +43,7 @@
         "event_id": "$encrypted-utd1:example.org",
         "sender": { "user_id": "@alice:example.org", "display_name": null, "display_name_ambiguous": false },
         "session_id": "SESSIONID",
-        "reason": "missing_megolm_session"
+        "cause": "unknown"
       },
       "relation": null
     }

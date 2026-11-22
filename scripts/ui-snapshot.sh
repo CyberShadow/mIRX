@@ -2982,7 +2982,7 @@ configure_case_expectations() {
       room_activity_expect_args=(
         --expect-room-activity '!encrypted:example.org::unable_to_decrypt'
         --expect-room-activity '!encrypted:example.org::$encrypted-utd1:example.org'
-        --expect-room-activity '!encrypted:example.org::"reason":"missing_megolm_session"'
+        --expect-room-activity '!encrypted:example.org::"cause":"unknown"'
         --expect-room-activity '!encrypted:example.org::"session_id":"SESSIONID"'
       )
       room_view_expect_args=(

@@ -613,7 +613,7 @@ pub(super) fn unable_to_decrypt_activity(
             event_id: event_id.to_owned(),
             sender: user_profile(sender),
             session_id: Some("SESSIONID".to_owned()),
-            reason: mirx_core::RoomUnableToDecryptReason::MissingMegolmSession,
+            cause: mirx_core::RoomUnableToDecryptCause::Unknown,
         }),
     }))
 }

@@ -32,7 +32,7 @@ use mirx_testkit::{
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState, RoomPollActivity,
     RoomPollContent, RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReactionSummary,
     RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag,
-    RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomVerificationRequestActivity,
+    RoomUnableToDecryptActivity, RoomUnableToDecryptCause, RoomVerificationRequestActivity,
     RoomVideoActivity, RoomVideoInfo, SendFileArgs, SessionAuth, SetupE2eeRecoveryArgs, SpaceChild,
     StatusBarState, StoredSession, SubmittedDirectRoomCommand, SubmittedHistoryCommand,
     SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedMessageCommand,
@@ -2191,7 +2191,7 @@ fn room_activity_unable_to_decrypt_round_trips_through_json() {
             event_id: "$encrypted1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
             session_id: Some("SESSIONID".to_owned()),
-            reason: RoomUnableToDecryptReason::MissingMegolmSession,
+            cause: RoomUnableToDecryptCause::SentBeforeYouJoined,
         }),
     };
     let json = serde_json::json!({
@@ -2199,7 +2199,7 @@ fn room_activity_unable_to_decrypt_round_trips_through_json() {
         "timestamp_ms":1710000000000u64, "highlight":false, "relation":null, "reactions":[],
         "kind":{"type":"unable_to_decrypt", "event_id":"$encrypted1:example.org",
         "sender":"@alice:example.org", "session_id":"SESSIONID",
-        "reason":"missing_megolm_session"}
+        "cause":"sent_before_you_joined"}
     });
 
     assert_eq!(serde_json::to_value(&activity).unwrap(), json);
@@ -2216,11 +2216,74 @@ fn room_activity_unable_to_decrypt_rejects_unknown_fields() {
         "timestamp_ms":1710000000000u64, "highlight":false, "relation":null, "reactions":[],
         "kind":{"type":"unable_to_decrypt", "event_id":"$encrypted1:example.org",
         "sender":"@alice:example.org", "session_id":"SESSIONID",
-        "reason":"missing_megolm_session", "unexpected":true}
+        "cause":"unknown", "unexpected":true}
     });
 
     assert!(serde_json::from_value::<RoomActivity>(json.clone()).is_err());
     assert!(serde_json::from_value::<CoreRoomActivity>(json).is_err());
+}
+
+/// The core wire names why a line could not be decrypted by its cause; the
+/// old `reason` is refused, and every cause round-trips with the mirror.
+#[test]
+fn core_room_activity_unable_to_decrypt_carries_its_cause() {
+    let core = |extra: serde_json::Value| {
+        let mut kind = serde_json::json!({
+            "type":"unable_to_decrypt", "event_id":"$encrypted1:example.org",
+            "sender":{"user_id":"@alice:example.org", "display_name":null,
+                "display_name_ambiguous":false},
+            "session_id":"SESSIONID",
+        });
+        kind.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value::<CoreRoomActivity>(serde_json::json!({
+            "room_id":"!room:example", "activity_id":"event:$encrypted1:example.org",
+            "timestamp_ms":1710000000000u64, "highlight":false, "relation":null,
+            "kind":kind,
+        }))
+    };
+    assert!(core(serde_json::json!({"reason":"missing_megolm_session"})).is_err());
+    for (wire, cause) in [
+        ("unknown", RoomUnableToDecryptCause::Unknown),
+        (
+            "sent_before_you_joined",
+            RoomUnableToDecryptCause::SentBeforeYouJoined,
+        ),
+        (
+            "historical_no_backup",
+            RoomUnableToDecryptCause::HistoricalNoBackup,
+        ),
+        (
+            "historical_unverified",
+            RoomUnableToDecryptCause::HistoricalUnverified,
+        ),
+        (
+            "withheld_unverified",
+            RoomUnableToDecryptCause::WithheldUnverified,
+        ),
+        (
+            "withheld_by_sender",
+            RoomUnableToDecryptCause::WithheldBySender,
+        ),
+        (
+            "sender_identity_changed",
+            RoomUnableToDecryptCause::SenderIdentityChanged,
+        ),
+        ("unsigned_device", RoomUnableToDecryptCause::UnsignedDevice),
+        ("unknown_device", RoomUnableToDecryptCause::UnknownDevice),
+    ] {
+        let activity = core(serde_json::json!({ "cause": wire })).expect(wire);
+        let mirx_core::RoomActivityKind::UnableToDecrypt(utd) = &activity.kind else {
+            panic!("not a UTD: {activity:?}");
+        };
+        let core_wire = serde_json::to_value(utd.cause).unwrap();
+        assert_eq!(core_wire, serde_json::json!(wire));
+        assert_eq!(
+            serde_json::from_value::<RoomUnableToDecryptCause>(core_wire).unwrap(),
+            cause
+        );
+    }
 }
 
 #[test]
