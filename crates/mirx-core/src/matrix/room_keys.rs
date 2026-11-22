@@ -897,6 +897,49 @@ mod tests {
         });
     }
 
+    /// Reactions go in the clear (the SDK's are): one can show before
+    /// its message decrypts, which no line shows yet. It comes from the
+    /// event cache with the decrypted line.
+    #[test]
+    fn a_late_decrypted_message_brings_its_cached_reactions() {
+        block_on(async {
+            let room = EncryptedRoom::new().await;
+            let sent = room
+                .alice_sends_first("$late", "m.room.message", text("late"))
+                .await;
+            let reaction: Raw<AnySyncTimelineEvent> = Raw::new(&serde_json::json!({
+                "type": "m.reaction",
+                "content": {
+                    "m.relates_to": { "rel_type": "m.annotation", "event_id": "$late", "key": "👍" }
+                },
+                "event_id": "$react",
+                "sender": room.alice.user_id().expect("alice is signed in"),
+                "origin_server_ts": 1700000000500u64
+            }))
+            .expect("a reaction")
+            .cast_unchecked();
+            room.bob_syncs(&[], &[&sent.event, &reaction]).await;
+            room.drain();
+
+            room.bob_syncs(&[&sent.room_key], &[]).await;
+
+            let (decrypted, _) = room.decrypted().await;
+            assert_eq!(decrypted.events.len(), 2, "{decrypted:#?}");
+            assert_eq!(decrypted_message(&decrypted.events[0]).1, "late");
+            assert!(
+                matches!(
+                    &decrypted.events[1],
+                    RoomHistoryBackfillEvent::ActivityUpdate(RoomActivityUpdate {
+                        target: RoomActivityUpdateTarget::Event { event_id },
+                        kind: RoomActivityUpdateKind::ReactionAdded { reaction_event_id, .. },
+                        ..
+                    }) if event_id == "$late" && reaction_event_id == "$react"
+                ),
+                "{decrypted:#?}"
+            );
+        });
+    }
+
     #[test]
     fn a_backfilled_line_that_could_not_be_decrypted_decrypts_when_its_key_comes() {
         block_on(async {

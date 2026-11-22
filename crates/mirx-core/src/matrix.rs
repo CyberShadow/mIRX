@@ -40,6 +40,7 @@ use matrix_sdk::{
             VerificationRequest as MatrixVerificationRequest, VerificationRequestState,
         },
     },
+    event_cache::RoomEventCache,
     event_handler::RawEvent,
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
     notification_settings::{
@@ -83,7 +84,7 @@ use matrix_sdk::{
             poll::{start::PollKind, unstable_start::UnstablePollStartEventContent},
             push_rules::PushRulesEvent,
             reaction::{OriginalSyncReactionEvent, ReactionEventContent},
-            relation::{Annotation, Reply, Thread},
+            relation::{Annotation, RelationType, Reply, Thread},
             room::{
                 EncryptedFile, ImageInfo, MediaSource,
                 encrypted::{OriginalSyncRoomEncryptedEvent, Relation as EncryptedRelation},
@@ -2122,12 +2123,14 @@ async fn member_target_profile(
 }
 
 /// What mapping one batch of events reads about its room, each read once
-/// and only when an event needs it: sender profiles, and this session's
-/// crypto context (for the cause of a line that could not be decrypted).
+/// and only when an event needs it: sender profiles, this session's crypto
+/// context (for the cause of a line that could not be decrypted), and the
+/// room's event cache (for the edits and reactions of each line).
 struct EventBatchLookups<'a> {
     room: &'a Room,
     profiles: BTreeMap<OwnedUserId, RoomUserProfile>,
     crypto_context: Option<CryptoContextInfo>,
+    event_cache: Option<RoomEventCache>,
 }
 
 impl<'a> EventBatchLookups<'a> {
@@ -2136,7 +2139,44 @@ impl<'a> EventBatchLookups<'a> {
             room,
             profiles: BTreeMap::new(),
             crypto_context: None,
+            event_cache: None,
         }
+    }
+
+    /// The edits and reactions of `event_id` the room's event cache has
+    /// (synced, or saved from a history page), and their own edits and
+    /// reactions in turn (the SDK follows relations transitively), in no
+    /// useful order. A session always subscribes the cache before its
+    /// first sync, so a cache that cannot be opened is an error.
+    async fn relations(
+        &mut self,
+        event_id: &EventId,
+    ) -> Result<Vec<TimelineEvent>, MatrixCoreError> {
+        let room_id = self.room.room_id();
+        let cache = match &self.event_cache {
+            Some(cache) => cache,
+            None => {
+                // The handles keep the cache's tasks alive; the client
+                // holds them too.
+                let (cache, _handles) = self.room.event_cache().await.map_err(|err| {
+                    MatrixCoreError::new(format!(
+                        "failed to open the event cache of {room_id}: {err}"
+                    ))
+                })?;
+                self.event_cache.insert(cache)
+            }
+        };
+        cache
+            .find_event_relations(
+                event_id,
+                Some(vec![RelationType::Annotation, RelationType::Replacement]),
+            )
+            .await
+            .map_err(|err| {
+                MatrixCoreError::new(format!(
+                    "failed to read the relations of {event_id} in {room_id}: {err}"
+                ))
+            })
     }
 
     /// This session's state as `UtdCause` reads it: its verification, its
@@ -5513,11 +5553,57 @@ fn room_unable_to_decrypt_cause(
     }
 }
 
-/// What an event of a page (or one decrypted late) shows: its line, or its
-/// update of another; a message's line is followed by its latest edit,
-/// which the server bundles with it (`m.relations` in its `unsigned`), as
-/// the edit itself may be on a newer page.
+/// What an event of a page (or one decrypted late, or fetched) shows: its
+/// line, or its update of another. A line is followed by every edit and
+/// reaction of it the event cache has, since those may be on newer pages,
+/// or have synced while it was not loaded; a message's line also by its
+/// latest edit as the server bundles it. The UI takes the same edit or
+/// reaction again as one.
+///
+/// The cache applies a redaction that syncs to the event it redacts, but
+/// not one that only a history page brings (`save_events` stores events
+/// as they are). A reaction the cache had before it was taken back, whose
+/// redaction never synced, therefore still shows (a gap).
 async fn room_history_backfill_event_from_timeline_event(
+    room: &Room,
+    event: &TimelineEvent,
+    redaction_rules: &matrix_sdk::ruma::room_version_rules::RedactionRules,
+    lookups: &mut EventBatchLookups<'_>,
+) -> Result<Vec<RoomHistoryBackfillEvent>, MatrixCoreError> {
+    let mut mapped = timeline_event_mapping(room, event, redaction_rules, lookups).await?;
+    let Some(RoomHistoryBackfillEvent::Activity(_)) = mapped.first() else {
+        return Ok(mapped);
+    };
+    let event_id = event.event_id().expect("an event with a line has an ID");
+    let target = RoomActivityUpdateTarget::Event {
+        event_id: event_id.to_string(),
+    };
+    for related in lookups.relations(&event_id).await? {
+        // The relations of its relations (a reaction to an edit) are of
+        // events no line shows.
+        mapped.extend(
+            timeline_event_mapping(room, &related, redaction_rules, lookups)
+                .await?
+                .into_iter()
+                .filter(|mapped| {
+                    matches!(
+                        mapped,
+                        RoomHistoryBackfillEvent::ActivityUpdate(RoomActivityUpdate {
+                            target: update_target,
+                            kind: RoomActivityUpdateKind::MessageReplaced { .. }
+                                | RoomActivityUpdateKind::ReactionAdded { .. },
+                            ..
+                        }) if *update_target == target
+                    )
+                }),
+        );
+    }
+    Ok(mapped)
+}
+
+/// What `room_history_backfill_event_from_timeline_event` makes of one
+/// event, but without the edits and reactions the event cache has of it.
+async fn timeline_event_mapping(
     room: &Room,
     event: &TimelineEvent,
     redaction_rules: &matrix_sdk::ruma::room_version_rules::RedactionRules,
@@ -7711,6 +7797,18 @@ mod tests {
         (runtime, client, room_send_queue)
     }
 
+    /// A signed-in client of `mock_server` with its event cache
+    /// subscribed, as a session's is before its first sync: mapping a
+    /// line reads its relations there.
+    async fn session_client(mock_server: &MatrixMockServer) -> Client {
+        let client = mock_server.client_builder().build().await;
+        client
+            .event_cache()
+            .subscribe()
+            .expect("subscribe the event cache");
+        client
+    }
+
     async fn client_with_joined_members(member_events: serde_json::Value) -> Client {
         let base_client = BaseClient::new(
             StoreConfig::new(CrossProcessLockConfig::SingleProcess),
@@ -7739,12 +7837,18 @@ mod tests {
             .receive_sync_response(response)
             .await
             .expect("receive sync response");
-        Client::builder()
+        let client = Client::builder()
             .homeserver_url("http://localhost")
             .base_client(base_client)
             .build()
             .await
-            .expect("build matrix client")
+            .expect("build matrix client");
+        // Mapping a line reads its relations in the event cache.
+        client
+            .event_cache()
+            .subscribe()
+            .expect("subscribe the event cache");
+        client
     }
 
     fn room_media_request(source: RoomMediaSource) -> FetchRoomMediaRequest {
@@ -10943,7 +11047,7 @@ mod tests {
 
         runtime.block_on(async {
             let mock_server = MatrixMockServer::new().await;
-            let client = mock_server.client_builder().build().await;
+            let client = session_client(&mock_server).await;
             let (events, event_rx) = mpsc::channel();
             register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             sync_and_refresh_members(
@@ -11310,7 +11414,7 @@ mod tests {
 
         runtime.block_on(async {
             let mock_server = MatrixMockServer::new().await;
-            let client = mock_server.client_builder().build().await;
+            let client = session_client(&mock_server).await;
             let state_events = profile_test_state_events();
             mock_server
                 .sync_room(
@@ -11387,7 +11491,7 @@ mod tests {
         start: Option<&str>,
     ) -> (MatrixMockServer, matrix_sdk::Client) {
         let mock_server = MatrixMockServer::new().await;
-        let client = mock_server.client_builder().build().await;
+        let client = session_client(&mock_server).await;
         mock_server
             .sync_room(&client, JoinedRoomBuilder::new(room_id().as_ref()))
             .await;
@@ -11416,6 +11520,427 @@ mod tests {
             },
             limit: 10,
         }
+    }
+
+    /// Waits until the room's event cache has `event_id` as `cached` wants
+    /// it: the cache takes a sync in its own task, after `sync_room`.
+    async fn wait_until_cached(
+        client: &Client,
+        event_id: &str,
+        cached: impl Fn(&TimelineEvent) -> bool,
+    ) {
+        let room = client.get_room(&room_id()).expect("joined room");
+        let (cache, _handles) = room.event_cache().await.expect("open the event cache");
+        let event_id = OwnedEventId::try_from(event_id).expect("valid event ID");
+        for _ in 0..500 {
+            if cache
+                .find_event(&event_id)
+                .await
+                .expect("read the event cache")
+                .is_some_and(|event| cached(&event))
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("{event_id} never reached the event cache as wanted");
+    }
+
+    fn reaction_json(event_id: &str, sender: &str, target: &str, key: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "m.reaction",
+            "content": {
+                "m.relates_to": { "rel_type": "m.annotation", "event_id": target, "key": key }
+            },
+            "event_id": event_id,
+            "sender": sender,
+            "origin_server_ts": 1700000000500u64
+        })
+    }
+
+    fn edit_json(event_id: &str, sender: &str, target: &str, body: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.text",
+                "body": format!("* {body}"),
+                "m.new_content": { "msgtype": "m.text", "body": body },
+                "m.relates_to": { "rel_type": "m.replace", "event_id": target }
+            },
+            "event_id": event_id,
+            "sender": sender,
+            "origin_server_ts": 1700000000600u64
+        })
+    }
+
+    fn reaction_added(event_id: &str, sender: &str, target: &str, key: &str) -> RoomActivityUpdate {
+        RoomActivityUpdate {
+            room_id: room_id().to_string(),
+            target: RoomActivityUpdateTarget::Event {
+                event_id: target.to_owned(),
+            },
+            kind: RoomActivityUpdateKind::ReactionAdded {
+                reaction_event_id: event_id.to_owned(),
+                sender: sender.to_owned(),
+                timestamp_ms: 1_700_000_000_500,
+                key: key.to_owned(),
+            },
+        }
+    }
+
+    fn message_replaced(
+        event_id: &str,
+        sender: &str,
+        target: &str,
+        body: &str,
+    ) -> RoomActivityUpdate {
+        RoomActivityUpdate {
+            room_id: room_id().to_string(),
+            target: RoomActivityUpdateTarget::Event {
+                event_id: target.to_owned(),
+            },
+            kind: RoomActivityUpdateKind::MessageReplaced {
+                replacement_event_id: event_id.to_owned(),
+                sender: sender.to_owned(),
+                timestamp_ms: 1_700_000_000_600,
+                presentation: RoomMessagePresentationKind::Text,
+                body: body.to_owned(),
+                styles: Vec::new(),
+                user_links: Vec::new(),
+            },
+        }
+    }
+
+    fn raw_history_event(mut event: serde_json::Value) -> Raw<AnyTimelineEvent> {
+        event["room_id"] = serde_json::json!(room_id().as_str());
+        Raw::from_json_string(event.to_string()).expect("raw history event")
+    }
+
+    /// A session's client in a room whose sync brought `synced` (each in
+    /// the event cache when this returns), with `/messages` serving `page`
+    /// (newest first) once.
+    async fn relations_fixture(
+        synced: Vec<serde_json::Value>,
+        page: Vec<serde_json::Value>,
+    ) -> (MatrixMockServer, Client) {
+        let mock_server = MatrixMockServer::new().await;
+        let client = session_client(&mock_server).await;
+        let mut room = JoinedRoomBuilder::new(room_id().as_ref());
+        for event in &synced {
+            room = room.add_timeline_event(raw_sync_timeline_event(event.clone()));
+        }
+        mock_server.sync_room(&client, room).await;
+        for event in &synced {
+            let event_id = event["event_id"].as_str().expect("an event ID");
+            wait_until_cached(&client, event_id, |_| true).await;
+        }
+        mock_server
+            .mock_room_messages()
+            .ok(RoomMessagesResponseTemplate::default()
+                .events(page.into_iter().map(raw_history_event).collect()))
+            .mock_once()
+            .mount()
+            .await;
+        (mock_server, client)
+    }
+
+    async fn latest_page(client: &Client) -> Vec<RoomHistoryBackfillEvent> {
+        backfill_room_history(
+            client,
+            BackfillRoomHistoryRequest {
+                room_id: room_id().to_string(),
+                from: HistoryFrom::Latest,
+                limit: 10,
+            },
+        )
+        .await
+        .expect("backfill room history")
+        .events
+    }
+
+    /// The updates that follow a page's only line, which must be `event_id`'s.
+    fn updates_after_the_line(
+        events: Vec<RoomHistoryBackfillEvent>,
+        event_id: &str,
+    ) -> Vec<RoomActivityUpdate> {
+        let mut events = events.into_iter();
+        let Some(RoomHistoryBackfillEvent::Activity(line)) = events.next() else {
+            panic!("the page starts with a line");
+        };
+        assert_eq!(line.activity_id, format!("event:{event_id}"));
+        events
+            .map(|event| match event {
+                RoomHistoryBackfillEvent::ActivityUpdate(update) => update,
+                RoomHistoryBackfillEvent::Activity(activity) => {
+                    panic!("a second line {activity:?}")
+                }
+            })
+            .collect()
+    }
+
+    /// No server bundles reactions: a reaction that synced while its
+    /// message was not loaded comes from the event cache with the line.
+    #[test]
+    fn a_backfilled_message_brings_the_reactions_that_synced_before_it_loaded() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime")
+            .block_on(async {
+                let (_server, client) = relations_fixture(
+                    vec![reaction_json(
+                        "$react:localhost",
+                        "@bob:localhost",
+                        "$old:localhost",
+                        "👍",
+                    )],
+                    vec![text_message_json(
+                        "$old:localhost",
+                        "@alice:localhost",
+                        "old",
+                    )],
+                )
+                .await;
+
+                assert_eq!(
+                    updates_after_the_line(latest_page(&client).await, "$old:localhost"),
+                    vec![reaction_added(
+                        "$react:localhost",
+                        "@bob:localhost",
+                        "$old:localhost",
+                        "👍"
+                    )]
+                );
+            });
+    }
+
+    /// A reaction is newer than its message, so it is often on the page
+    /// before it, which had no line for it; `Room::messages` saves every
+    /// page to the event cache.
+    #[test]
+    fn a_backfilled_message_brings_the_reactions_of_a_newer_page() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime")
+            .block_on(async {
+                let mock_server = MatrixMockServer::new().await;
+                let client = session_client(&mock_server).await;
+                mock_server
+                    .sync_room(&client, JoinedRoomBuilder::new(room_id().as_ref()))
+                    .await;
+                mock_server
+                    .mock_room_messages()
+                    .ok(RoomMessagesResponseTemplate::default()
+                        .events(vec![raw_history_event(reaction_json(
+                            "$react:localhost",
+                            "@bob:localhost",
+                            "$old:localhost",
+                            "👍",
+                        ))])
+                        .end_token("t1"))
+                    .mock_once()
+                    .mount()
+                    .await;
+                mock_server
+                    .mock_room_messages()
+                    .match_from("t1")
+                    .ok(
+                        RoomMessagesResponseTemplate::default().events(vec![raw_history_event(
+                            text_message_json("$old:localhost", "@alice:localhost", "old"),
+                        )]),
+                    )
+                    .mock_once()
+                    .mount()
+                    .await;
+
+                // The reaction alone: the UI has no line for it.
+                assert_eq!(
+                    latest_page(&client).await,
+                    vec![RoomHistoryBackfillEvent::ActivityUpdate(reaction_added(
+                        "$react:localhost",
+                        "@bob:localhost",
+                        "$old:localhost",
+                        "👍"
+                    ))]
+                );
+                let older = backfill_room_history(
+                    &client,
+                    BackfillRoomHistoryRequest {
+                        room_id: room_id().to_string(),
+                        from: HistoryFrom::Token {
+                            token: "t1".to_owned(),
+                        },
+                        limit: 10,
+                    },
+                )
+                .await
+                .expect("backfill the older page");
+                assert_eq!(
+                    updates_after_the_line(older.events, "$old:localhost"),
+                    vec![reaction_added(
+                        "$react:localhost",
+                        "@bob:localhost",
+                        "$old:localhost",
+                        "👍"
+                    )]
+                );
+            });
+    }
+
+    /// The server bundles only the latest edit; the event cache has every
+    /// edit mirx saw. Whether an edit is the message sender's is the UI's
+    /// to judge, so one by someone else comes too.
+    #[test]
+    fn a_backfilled_message_brings_the_edits_it_had_but_no_bundle() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime")
+            .block_on(async {
+                let (_server, client) = relations_fixture(
+                    vec![
+                        edit_json(
+                            "$fix:localhost",
+                            "@alice:localhost",
+                            "$old:localhost",
+                            "fixed",
+                        ),
+                        edit_json(
+                            "$hijack:localhost",
+                            "@bob:localhost",
+                            "$old:localhost",
+                            "mine",
+                        ),
+                    ],
+                    vec![text_message_json(
+                        "$old:localhost",
+                        "@alice:localhost",
+                        "old",
+                    )],
+                )
+                .await;
+
+                let mut updates =
+                    updates_after_the_line(latest_page(&client).await, "$old:localhost");
+                updates.sort_by_key(|update| match &update.kind {
+                    RoomActivityUpdateKind::MessageReplaced {
+                        replacement_event_id,
+                        ..
+                    } => replacement_event_id.clone(),
+                    kind => panic!("not an edit: {kind:?}"),
+                });
+                assert_eq!(
+                    updates,
+                    vec![
+                        message_replaced(
+                            "$fix:localhost",
+                            "@alice:localhost",
+                            "$old:localhost",
+                            "fixed"
+                        ),
+                        message_replaced(
+                            "$hijack:localhost",
+                            "@bob:localhost",
+                            "$old:localhost",
+                            "mine"
+                        ),
+                    ]
+                );
+            });
+    }
+
+    /// A reaction taken back is redacted in the event cache when its
+    /// redaction syncs: it maps to nothing.
+    #[test]
+    fn a_redacted_reaction_is_not_brought() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime")
+            .block_on(async {
+                let (mock_server, client) = relations_fixture(
+                    vec![reaction_json(
+                        "$react:localhost",
+                        "@bob:localhost",
+                        "$old:localhost",
+                        "👍",
+                    )],
+                    vec![text_message_json(
+                        "$old:localhost",
+                        "@alice:localhost",
+                        "old",
+                    )],
+                )
+                .await;
+                mock_server
+                    .sync_room(
+                        &client,
+                        JoinedRoomBuilder::new(room_id().as_ref()).add_timeline_event(
+                            raw_sync_timeline_event(serde_json::json!({
+                                "type": "m.room.redaction",
+                                "redacts": "$react:localhost",
+                                "content": { "redacts": "$react:localhost" },
+                                "event_id": "$unreact:localhost",
+                                "sender": "@bob:localhost",
+                                "origin_server_ts": 1700000000700u64
+                            })),
+                        ),
+                    )
+                    .await;
+                wait_until_cached(&client, "$react:localhost", |event| {
+                    event
+                        .raw()
+                        .get_field::<serde_json::Value>("unsigned")
+                        .expect("read unsigned")
+                        .is_some_and(|unsigned| unsigned.get("redacted_because").is_some())
+                })
+                .await;
+
+                assert_eq!(
+                    updates_after_the_line(latest_page(&client).await, "$old:localhost"),
+                    Vec::new()
+                );
+            });
+    }
+
+    /// The SDK follows relations transitively: a reaction to an edit is
+    /// among the message's, but it is of no line.
+    #[test]
+    fn relations_of_relations_are_not_brought() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime")
+            .block_on(async {
+                let (_server, client) = relations_fixture(
+                    vec![
+                        edit_json(
+                            "$fix:localhost",
+                            "@alice:localhost",
+                            "$old:localhost",
+                            "fixed",
+                        ),
+                        reaction_json("$react:localhost", "@bob:localhost", "$fix:localhost", "👍"),
+                    ],
+                    vec![text_message_json(
+                        "$old:localhost",
+                        "@alice:localhost",
+                        "old",
+                    )],
+                )
+                .await;
+
+                assert_eq!(
+                    updates_after_the_line(latest_page(&client).await, "$old:localhost"),
+                    vec![message_replaced(
+                        "$fix:localhost",
+                        "@alice:localhost",
+                        "$old:localhost",
+                        "fixed"
+                    )]
+                );
+            });
     }
 
     #[test]
@@ -11853,7 +12378,7 @@ mod tests {
 
         runtime.block_on(async {
             let mock_server = MatrixMockServer::new().await;
-            let client = mock_server.client_builder().build().await;
+            let client = session_client(&mock_server).await;
             mock_server
                 .sync_room(
                     &client,
@@ -12050,7 +12575,7 @@ mod tests {
 
         runtime.block_on(async {
             let mock_server = MatrixMockServer::new().await;
-            let client = mock_server.client_builder().build().await;
+            let client = session_client(&mock_server).await;
             let state_events = profile_test_state_events();
             mock_server
                 .sync_room(
@@ -12385,7 +12910,7 @@ mod tests {
 
         runtime.block_on(async {
             let mock_server = MatrixMockServer::new().await;
-            let client = mock_server.client_builder().build().await;
+            let client = session_client(&mock_server).await;
             mock_server
                 .sync_room(
                     &client,
