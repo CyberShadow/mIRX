@@ -4686,6 +4686,9 @@ fn a_restart_with_connect_on_startup_off_shows_the_rooms_and_asks_nothing()
     let model = app.dump_model()?;
     assert_eq!(model.connection, "signed_in");
     assert_eq!(model.last_error, None);
+    // The SDK reads the session's E2EE state from the store meanwhile;
+    // no summary comes before the server's.
+    let_background_tasks_settle(&app)?;
     let lines = status_view_lines(&app)?;
     assert!(
         lines.iter().any(|line| line.contains("* Synced rooms: ")),
@@ -4695,7 +4698,7 @@ fn a_restart_with_connect_on_startup_off_shows_the_rooms_and_asks_nothing()
         !lines
             .iter()
             .any(|line| line.contains("* Syncing with the homeserver")
-                || line.contains("server backup exists")),
+                || line.contains("* E2EE: ")),
         "{lines:?}"
     );
 
@@ -4703,6 +4706,72 @@ fn a_restart_with_connect_on_startup_off_shows_the_rooms_and_asks_nothing()
     app.wait_for_connection("syncing", Duration::from_secs(30))?;
     wait_until_connected(&app)?;
     wait_for_status_line(&app, "server backup exists", Duration::from_secs(10))?;
+    let_background_tasks_settle(&app)?;
+    let summaries = status_lines_with(&app, "* E2EE: ")?;
+    assert_eq!(summaries.len(), 1, "{summaries:?}");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Waits out what background tasks still have to say: the SDK's E2EE
+/// state streams tick within moments of a restore and of the first sync.
+fn let_background_tasks_settle(app: &MirxApp) -> Result<(), Box<dyn std::error::Error>> {
+    app.wait_idle(Duration::from_secs(5))?;
+    std::thread::sleep(Duration::from_secs(2));
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+/// A restart says each thing once in Status, as mIRC's connect does: the
+/// stored rooms, that it syncs, and the server's E2EE summary with only
+/// the command that applies.
+#[test]
+fn a_restart_says_each_thing_once_in_status() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    run_once_and_close(&local_app_data, &server)?;
+
+    let app = launch_with_saved_session(&local_app_data)?;
+    wait_until_connected(&app)?;
+    let_background_tasks_settle(&app)?;
+
+    assert_eq!(
+        status_lines_with(&app, "* ")?,
+        [
+            format!("* Restoring session for @alice:example on {}", server.base_url),
+            "* Session restored".to_owned(),
+            "* Synced rooms: 1 joined, 0 invited".to_owned(),
+            "* Syncing with the homeserver".to_owned(),
+            "* E2EE: recovery disabled, local backup unknown, server backup exists, cross-signing complete, this session not verified".to_owned(),
+            "* Use /e2ee setup to enable recovery".to_owned(),
+        ]
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The first restore of a new profile syncs before it shows the rooms,
+/// and says so once too: one room count, the server's E2EE summary alone.
+#[test]
+fn a_first_restore_says_each_thing_once_in_status() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+
+    let app = launch_with_saved_session(&local_app_data)?;
+    wait_until_connected(&app)?;
+    wait_for_status_line(&app, "* Synced rooms: ", Duration::from_secs(10))?;
+    let_background_tasks_settle(&app)?;
+
+    let lines = status_lines_with(&app, "* ")?;
+    let count = |text: &str| lines.iter().filter(|line| line.contains(text)).count();
+    assert_eq!(count("* Synced rooms: "), 1, "{lines:?}");
+    assert_eq!(count("* E2EE: "), 1, "{lines:?}");
+    assert_eq!(count("server backup exists"), 1, "{lines:?}");
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -5518,20 +5587,16 @@ fn reconnect_after_a_lost_connection_is_immediate() -> Result<(), Box<dyn std::e
     server.faults.drop_syncs.store(1, Ordering::SeqCst);
     wait_for_status_line(&app, "* Reconnected to example", Duration::from_secs(30))?;
     app.wait_for_connection("syncing", Duration::from_secs(30))?;
-    let lines = status_view_lines(&app)?;
-    let position = |text: &str| {
-        lines
-            .iter()
-            .position(|line| line.contains(text))
-            .unwrap_or_else(|| panic!("{text:?} in {lines:?}"))
-    };
-    assert!(
-        position("* Disconnected: ") < position("* Reconnecting to example")
-            && position("* Reconnecting to example") < position("* Reconnected to example"),
-        "{lines:?}"
-    );
-    assert!(
-        !lines.iter().any(|line| line.contains("Connect retry")),
+    // Each says one thing: no "Syncing with the homeserver" after the
+    // "Reconnecting to", which said it.
+    let lines = status_lines_with(&app, "* ")?;
+    let lost = lines
+        .iter()
+        .position(|line| line.starts_with("* Disconnected: "))
+        .unwrap_or_else(|| panic!("no Disconnected in {lines:?}"));
+    assert_eq!(
+        lines[lost + 1..],
+        ["* Reconnecting to example", "* Reconnected to example"],
         "{lines:?}"
     );
     assert_eq!(app.dump_model()?.reconnect_attempts, 0);
