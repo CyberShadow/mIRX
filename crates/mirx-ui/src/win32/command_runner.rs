@@ -220,7 +220,7 @@ pub(super) unsafe fn run_slash_command(
             target: Some(target),
         } => {
             let state = state_mut(hwnd);
-            let user_id = ignore_target(&state.model, &target)?;
+            let user_id = user_target(&state.model, &target)?;
             ignore::check_ignore(
                 state.model.ignored_users.as_deref(),
                 state.model.own_user_id(),
@@ -232,12 +232,53 @@ pub(super) unsafe fn run_slash_command(
         }
         SlashCommand::Unignore { target } => {
             let state = state_mut(hwnd);
-            let user_id = ignore_target(&state.model, &target)?;
+            let user_id = user_target(&state.model, &target)?;
             ignore::check_unignore(state.model.ignored_users.as_deref(), &user_id, |user_id| {
                 known_nick(&state.model, user_id)
             })?;
             enqueue_command(state, Command::UnignoreUser(user_id.clone()))?;
             Ok(Some(format!("unignore submitted: {user_id}")))
+        }
+        SlashCommand::Notify(NotifyCommand::List) => {
+            let lines = {
+                let state = state_ref(hwnd);
+                notify::list_lines(&state.settings.settings().notify, |user_id| {
+                    known_nick(&state.model, user_id)
+                })
+            };
+            echo_in_active_view(hwnd, lines)?;
+            Ok(None)
+        }
+        SlashCommand::Notify(NotifyCommand::Add { target, note }) => {
+            let line = {
+                let state = state_mut(hwnd);
+                let user_id = user_target(&state.model, &target)?;
+                let mut list = state.settings.settings().notify.clone();
+                let added = list.add(user_id.clone(), note);
+                state.settings.update(|settings| settings.notify = list)?;
+                notify::added_line(added, &user_id, |user_id| known_nick(&state.model, user_id))
+            };
+            echo_in_active_view(hwnd, [line])?;
+            Ok(Some("notify list saved".to_owned()))
+        }
+        SlashCommand::Notify(NotifyCommand::Remove { target }) => {
+            let line = {
+                let state = state_mut(hwnd);
+                let user_id = user_target(&state.model, &target)?;
+                let nick_of = |user_id: &str| known_nick(&state.model, user_id);
+                let mut list = state.settings.settings().notify.clone();
+                if !list.remove(&user_id) {
+                    return Err(format!(
+                        "{} is not on the notify list",
+                        ignore::user_name(&user_id, &nick_of)
+                    ));
+                }
+                let line = notify::removed_line(&user_id, nick_of);
+                state.settings.update(|settings| settings.notify = list)?;
+                line
+            };
+            echo_in_active_view(hwnd, [line])?;
+            Ok(Some("notify list saved".to_owned()))
         }
         SlashCommand::Close => {
             let state = state_ref(hwnd);
@@ -904,10 +945,10 @@ pub(super) fn known_nick(model: &UiModel, user_id: &str) -> Option<String> {
         .map(|member| member.nick.clone())
 }
 
-/// The user `/ignore` and `/unignore` name: a user ID, which need not be a
-/// member of any known room, or a known member's nick. Ignored users stay
-/// nameable by ID once they leave every room.
-fn ignore_target(model: &UiModel, target: &str) -> Result<String, String> {
+/// The user `/ignore`, `/unignore` and `/notify` name: a user ID, which
+/// need not be a member of any known room, or a known member's nick.
+/// Ignored and listed users stay nameable by ID once they leave every room.
+fn user_target(model: &UiModel, target: &str) -> Result<String, String> {
     Ok(commands::resolve_user(all_room_members(model), target)?.user_id)
 }
 
@@ -1405,6 +1446,7 @@ mod tests {
         UserIdentityState,
     };
 
+    use super::super::notify::NotifyList;
     use super::super::test_fixtures::*;
     use super::*;
 
@@ -1894,6 +1936,49 @@ mod tests {
                         "[22:12] * /unignore: Bob is not ignored",
                         "[22:12] * Ignore list:",
                         "[22:12] *   @spam:remote",
+                    ]
+                );
+            });
+        }
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn notify_adds_updates_lists_and_removes_locally() {
+        let (state, handle) = irc_command_state();
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                for input in [
+                    "/notify",
+                    "/notify dave",
+                    "/notify -r @carol:remote",
+                    "/notify bob lunch buddy",
+                    "/notify @carol:remote",
+                    "/notify Bob",
+                    "/notify -r @carol:remote",
+                    "/notify -l",
+                ] {
+                    type_compose_line(hwnd, input);
+                }
+                assert_eq!(state_ref(hwnd).recorded_commands, vec![]);
+                assert_eq!(state_ref(hwnd).model.status, "notify list saved");
+                let mut list = NotifyList::default();
+                list.add("@bob:example".to_owned(), None);
+                assert_eq!(state_ref(hwnd).settings.settings().notify, list);
+                let lines = render_room_lines(state_ref(hwnd), "!ops:example");
+                assert_eq!(
+                    &lines[lines.len() - 9..],
+                    [
+                        "[22:12] * Notify list is empty",
+                        "[22:12] * /notify: no such nick: dave",
+                        "[22:12] * /notify: @carol:remote is not on the notify list",
+                        "[22:12] * Added Bob (@bob:example) to notify list",
+                        "[22:12] * Added @carol:remote to notify list",
+                        "[22:12] * Updated Bob (@bob:example) in notify list",
+                        "[22:12] * Removed @carol:remote from notify list",
+                        "[22:12] * Notify list:",
+                        "[22:12] *   Bob (@bob:example)",
                     ]
                 );
             });

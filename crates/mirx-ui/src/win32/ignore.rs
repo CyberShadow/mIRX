@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 /// `Bob (@bob:example)`, or the bare ID for a user with no known nick.
-fn user_label(user_id: &str, nick_of: &impl Fn(&str) -> Option<String>) -> String {
+pub(super) fn user_label(user_id: &str, nick_of: &impl Fn(&str) -> Option<String>) -> String {
     match nick_of(user_id) {
         Some(nick) => format!("{nick} ({user_id})"),
         None => user_id.to_owned(),
@@ -18,7 +18,7 @@ fn user_label(user_id: &str, nick_of: &impl Fn(&str) -> Option<String>) -> Strin
 }
 
 /// The name a refusal uses: the nick, else the ID.
-fn user_name(user_id: &str, nick_of: &impl Fn(&str) -> Option<String>) -> String {
+pub(super) fn user_name(user_id: &str, nick_of: &impl Fn(&str) -> Option<String>) -> String {
     nick_of(user_id).unwrap_or_else(|| user_id.to_owned())
 }
 

@@ -32,6 +32,20 @@ pub(super) enum ComposeSubmission<'a> {
     },
 }
 
+/// `/notify`'s forms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum NotifyCommand {
+    /// `/notify` or `/notify -l`.
+    List,
+    /// `/notify <nick> [note]`: adds the user, or replaces their note.
+    Add {
+        target: String,
+        note: Option<String>,
+    },
+    /// `/notify -r <nick>`.
+    Remove { target: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SlashCommand {
     Status,
@@ -97,6 +111,8 @@ pub(super) enum SlashCommand {
     Unignore {
         target: String,
     },
+    /// `/notify`: mIRC's notify list.
+    Notify(NotifyCommand),
     Close,
     Exit,
     /// `/server [server]`: connect, as File > Connect does.
@@ -362,6 +378,7 @@ impl SlashCommand {
             Self::IdentityAccept { .. } => "identity",
             Self::Ignore { .. } => "ignore",
             Self::Unignore { .. } => "unignore",
+            Self::Notify(_) => "notify",
             Self::Close => "close",
             Self::Exit => "exit",
             Self::Server { .. } => "server",
@@ -612,6 +629,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "notice",
         usage: "<nick|#room> <message>",
         summary: "send a notice",
+    },
+    CommandSpec {
+        name: "notify",
+        usage: "[-r] [nick [note]]",
+        summary: "watch for a user on Matrix (-r: stop; no nick: list)",
     },
     CommandSpec {
         name: "op",
@@ -909,6 +931,7 @@ fn parse_named(name: &str, argument: &str) -> Result<SlashCommand, CommandError>
         "unignore" => Ok(SlashCommand::Unignore {
             target: single_word(&name, argument)?,
         }),
+        "notify" => parse_notify(argument).map(SlashCommand::Notify),
         "close" => no_parameters(SlashCommand::Close),
         "exit" => no_parameters(SlashCommand::Exit),
         "server" => Ok(SlashCommand::Server {
@@ -1274,6 +1297,28 @@ fn parse_devices(argument: &str) -> Result<SlashCommand, CommandError> {
     }
 }
 
+/// `[-l]`, `-r <nick>` or `<nick> [note]`. mIRC's `-s`, `-h`, `-n` and
+/// `on`/`off` are not mirx's: a user named `on` is given by their ID.
+fn parse_notify(argument: &str) -> Result<NotifyCommand, CommandError> {
+    let (first, rest) = split_word(argument);
+    match first {
+        "" => Ok(NotifyCommand::List),
+        "-l" if rest.is_empty() => Ok(NotifyCommand::List),
+        "-l" => Err(CommandError::new("notify", "too many parameters")),
+        "-r" => Ok(NotifyCommand::Remove {
+            target: single_word("notify", rest)?,
+        }),
+        switch if switch.starts_with('-') => Err(CommandError::new(
+            "notify",
+            format!("unknown switch {switch}"),
+        )),
+        target => Ok(NotifyCommand::Add {
+            target: target.to_owned(),
+            note: (!rest.is_empty()).then(|| rest.to_owned()),
+        }),
+    }
+}
+
 /// `accept <nick>`, the one action yet.
 fn parse_identity(argument: &str) -> Result<SlashCommand, CommandError> {
     let (action, rest) = split_word(argument);
@@ -1540,7 +1585,7 @@ pub(super) fn resolve_user<'m>(
 }
 
 /// `@localpart:server`, the shape of a Matrix user ID.
-fn is_user_id(text: &str) -> bool {
+pub(super) fn is_user_id(text: &str) -> bool {
     text.strip_prefix('@')
         .and_then(|rest| rest.split_once(':'))
         .is_some_and(|(localpart, server)| !localpart.is_empty() && !server.is_empty())
@@ -2958,6 +3003,50 @@ mod tests {
         }
         assert_eq!(parse("/close now"), error("close", "takes no parameters"));
         assert_eq!(parse("/exit now"), error("exit", "takes no parameters"));
+    }
+
+    #[test]
+    fn notify_lists_adds_with_a_note_and_removes() {
+        let notify = |command| Ok(SlashCommand::Notify(command));
+        assert_eq!(parse("/notify"), notify(NotifyCommand::List));
+        assert_eq!(parse("/NOTIFY -l "), notify(NotifyCommand::List));
+        assert_eq!(
+            parse("/notify bob"),
+            notify(NotifyCommand::Add {
+                target: "bob".to_owned(),
+                note: None,
+            })
+        );
+        assert_eq!(
+            parse("/notify @bob:example  lunch  buddy "),
+            notify(NotifyCommand::Add {
+                target: "@bob:example".to_owned(),
+                note: Some("lunch  buddy".to_owned()),
+            })
+        );
+        assert_eq!(
+            parse("/notify -r bob"),
+            notify(NotifyCommand::Remove {
+                target: "bob".to_owned(),
+            })
+        );
+        assert_eq!(parse("/notify -r"), insufficient("notify"));
+        assert_eq!(
+            parse("/notify -r bob carol"),
+            error("notify", "too many parameters")
+        );
+        assert_eq!(
+            parse("/notify -l bob"),
+            error("notify", "too many parameters")
+        );
+        assert_eq!(parse("/notify -s"), error("notify", "unknown switch -s"));
+        assert_eq!(
+            help_lines(Some("notify")),
+            Ok(vec![
+                "* /notify [-r] [nick [note]] - watch for a user on Matrix (-r: stop; no nick: list)"
+                    .to_owned()
+            ])
+        );
     }
 
     #[test]

@@ -231,6 +231,7 @@ mod navigation;
 mod nick_completion;
 mod nick_list;
 mod notifications;
+mod notify;
 mod open_link;
 mod options;
 mod options_dialog;
@@ -309,8 +310,8 @@ use command_runner::{
 };
 use commands::{
     AliasCommand, BarCommand, CommandError, ComposeInput, ComposeSubmission, CreateRoomArgs,
-    E2eeSlashCommand, EchoCommand, EchoPlace, FontCommand, LogCommand, RoomKeyTransfer,
-    SlashCommand, TimestampCommand, VerificationAction, classify_input,
+    E2eeSlashCommand, EchoCommand, EchoPlace, FontCommand, LogCommand, NotifyCommand,
+    RoomKeyTransfer, SlashCommand, TimestampCommand, VerificationAction, classify_input,
     local_command_history_entry,
 };
 #[cfg(test)]
