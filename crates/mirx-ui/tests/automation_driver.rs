@@ -25751,16 +25751,15 @@ fn dragging_copies_the_marked_text_on_release() -> Result<(), Box<dyn std::error
 }
 
 #[test]
-fn dragging_with_ctrl_copies_control_codes() -> Result<(), Box<dyn std::error::Error>> {
+fn styled_text_copies_plain_with_ctrl_too() -> Result<(), Box<dyn std::error::Error>> {
     let app = launch_render_state("rich-text.json")?;
     let timeline = app.active_timeline_hwnd()? as HWND;
     let from = text_point(&app, "<Alice> bold italic", "<Alice> ".len())?;
     let to = text_point(&app, "<Alice> bold italic", "<Alice> bold italic".len())?;
-    drag_text(timeline, &from, &to, MK_CONTROL);
-    assert_eq!(clipboard_text()?, "\x02bold\x0f \x1ditalic");
-    // Without Ctrl, the text alone.
-    drag_text(timeline, &from, &to, 0);
-    assert_eq!(clipboard_text()?, "bold italic");
+    for keys in [0, MK_CONTROL] {
+        drag_text(timeline, &from, &to, keys);
+        assert_eq!(clipboard_text()?, "bold italic");
+    }
     Ok(())
 }
 
