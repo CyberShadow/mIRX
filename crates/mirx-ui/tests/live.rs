@@ -264,14 +264,19 @@ impl Peer<'_> {
 
     /// Waits until `user_id` has joined the room.
     fn wait_for_member(&self, room_id: &RoomId, user_id: &UserId) {
+        self.wait_for_membership(room_id, user_id, MembershipState::Join);
+    }
+
+    /// Waits until `user_id`'s membership of the room is `state`.
+    fn wait_for_membership(&self, room_id: &RoomId, user_id: &UserId, state: MembershipState) {
         let room = self.room(room_id);
-        self.sync_until(&format!("{user_id} join {room_id}"), async || {
+        self.sync_until(&format!("{user_id} {state} {room_id}"), async || {
             let member = room
                 .get_member_no_sync(user_id)
                 .await
                 .expect("the store reads members");
             match member {
-                Some(member) if *member.membership() == MembershipState::Join => Ok(()),
+                Some(member) if *member.membership() == state => Ok(()),
                 other => Err(format!(
                     "{:?}",
                     other.map(|member| member.membership().clone())
@@ -1984,6 +1989,44 @@ fn an_alias_greets_in_the_query_it_opens() -> Result<(), Box<dyn Error>> {
         !lines.iter().any(|line| line.contains("hi Bob")),
         "{lines:?}"
     );
+
+    finish(app, &local_app_data)
+}
+
+/// Options > IRC: an invite's line names its inviter, from the invite's
+/// stripped state as Conduit sends it, and prints in the window in front
+/// (Status); Auto-join channel on invite accepts the group room, behind
+/// the window in front, and leaves the direct room's invite alone.
+#[test]
+fn an_invite_names_its_inviter_and_auto_join_takes_channels_only() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let bob = homeserver.register("bob", "Bob");
+    let alice = homeserver.register("alice", "Alice");
+    let local_app_data = unique_local_app_data_path();
+    write_settings(&local_app_data, "[irc]\r\nauto_join_invite=on\r\n")?;
+    let app = launch_live_app(&local_app_data)?;
+    sign_in(&app, &homeserver, &alice)?;
+    app.select_status_view()?;
+
+    let hall = bob.create_encrypted_room("Hall", alice.user_id());
+    // Conduit's invite state carries no member event of the inviter's
+    // (only the recommended stripped state and the invite itself), so
+    // mirx knows Bob by his user ID alone.
+    let inviter = format!("* {}", bob.user_id());
+    wait_for_status_line(
+        &app,
+        &format!("{inviter} invites you to join Hall"),
+        TIMEOUT,
+    )?;
+    bob.wait_for_member(&hall, alice.user_id());
+    let with_bob = bob.create_dm(alice.user_id());
+    wait_for_status_line(&app, &format!("{inviter} invites you to a query"), TIMEOUT)?;
+    wait_for_room_membership(&app, &hall, RoomMembership::Join)?;
+    // The query's invite stays one: mirx never accepted it.
+    let_background_tasks_settle(&app)?;
+    wait_for_room_membership(&app, &with_bob, RoomMembership::Invite)?;
+    bob.wait_for_membership(&with_bob, alice.user_id(), MembershipState::Invite);
+    assert_eq!(app.dump_ui_state()?.mdi.active, ViewIdentity::Status);
 
     finish(app, &local_app_data)
 }
