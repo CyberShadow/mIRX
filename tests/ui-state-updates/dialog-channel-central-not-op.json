@@ -3,9 +3,9 @@
     "RoomSettings": {
       "room_id": "!topic:example",
       "name": "Topic Room",
-      "topic": "incident review",
+      "topic": "deploy at noon",
       "join_rule": "knock",
-      "topic_by_operators": true,
+      "topic_by_operators": false,
       "moderated": true,
       "listed_in_directory": false,
       "bans": [

@@ -17,7 +17,7 @@
       {
         "room_id": "!topic:example",
         "display_name": "Topic Room",
-        "topic": "incident review",
+        "topic": "deploy at noon",
         "membership": "join",
         "encrypted": false,
         "is_space": false,
@@ -69,11 +69,33 @@
     "RoomActivity": {
       "room_id": "!topic:example",
       "activity_id": "state:$settings-0",
-      "timestamp_ms": 1700000100000,
+      "timestamp_ms": 1700000050000,
       "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$settings-0",
+        "sender": {
+          "user_id": "@bob:example",
+          "nick": "Bob",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "topic",
+          "topic": "incident review"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!topic:example",
+      "activity_id": "state:$settings-1",
+      "timestamp_ms": 1700000100000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$settings-1",
         "sender": {
           "user_id": "@bob:example",
           "nick": "Bob",

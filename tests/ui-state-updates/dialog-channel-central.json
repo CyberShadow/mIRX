@@ -3,7 +3,7 @@
     "RoomSettings": {
       "room_id": "!topic:example",
       "name": "Topic Room",
-      "topic": "incident review",
+      "topic": "deploy at noon",
       "join_rule": "invite",
       "topic_by_operators": true,
       "moderated": false,

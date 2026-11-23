@@ -388,8 +388,8 @@ configure_case_expectations() {
         dialog-channel-central)
           # /channel, and the core's answer: two bans, the topic set by ops
           # only, invite only and in the Rooms List; everything the
-          # user's to change. Topic History has the topic the window saw
-          # set too.
+          # user's (@me, an administrator) to change. Topic History has the
+          # current topic and the earlier one the window saw set.
           ordered_actions=(
             'compose-text:/channel'
             dialog:compose_return
@@ -398,9 +398,10 @@ configure_case_expectations() {
           expect_dialog_title='Channel Central - Topic Room'
           ;;
         dialog-channel-central-not-op)
-          # A member who may set only the topic: the rest greyed, and the
-          # line over OK says why. Knock is neither invite only nor not:
-          # Invite only is indeterminate.
+          # A member who may set only the topic (members may: Only ops set
+          # topic unchecked): the rest greyed, and the line over OK says
+          # why. Knock is neither invite only nor not: Invite only is
+          # indeterminate.
           ordered_actions=(
             'compose-text:/channel'
             dialog:compose_return
