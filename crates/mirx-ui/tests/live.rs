@@ -26,6 +26,7 @@ use matrix_sdk::Client;
 use matrix_sdk::config::SyncSettings;
 use matrix_sdk::room::Room as SdkRoom;
 use matrix_sdk::ruma::api::client::account::register::v3::Request as RegisterRequest;
+use matrix_sdk::ruma::api::client::directory::get_room_visibility;
 use matrix_sdk::ruma::api::client::room::Visibility;
 use matrix_sdk::ruma::api::client::room::create_room::v3::{
     Request as CreateRoomRequest, RoomPreset,
@@ -45,11 +46,15 @@ use matrix_sdk::ruma::events::room::power_levels::RoomPowerLevelsEventContent;
 use matrix_sdk::ruma::events::{InitialStateEvent, StateEventType};
 use matrix_sdk::ruma::{DeviceId, OwnedDeviceId, OwnedRoomId, OwnedUserId, RoomId, UserId};
 use mirx_core::{E2eeRecoveryState, E2eeStatus, RoomMemberRank, RoomMembership};
-use mirx_testkit::{AutomationDialog, ComposeKey, ContextMenuCommand, MirxApp, ViewIdentity};
+use mirx_testkit::{
+    AutomationDialog, ComposeKey, ContextMenuCommand, MirxApp, UiChannelCentral, UiCheckState,
+    ViewIdentity,
+};
 use support::*;
 use windows_sys::Win32::Foundation::{HWND, WPARAM};
+use windows_sys::Win32::UI::Controls::BST_CHECKED;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetDlgItem, IDOK, PostMessageW, SetWindowTextW, WM_COMMAND,
+    BM_SETCHECK, GetDlgItem, IDCANCEL, IDOK, PostMessageW, SendMessageW, SetWindowTextW, WM_COMMAND,
 };
 
 /// Every live user's password.
@@ -70,6 +75,12 @@ const ADDRESS_ENTRY_NICKNAME_ID: i32 = 7301;
 const ADDRESS_ENTRY_OK_ID: usize = 7304;
 /// The recovery key handoff dialog's "I Saved It".
 const RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID: usize = 5018;
+/// Channel Central's fields, Bans List, Remove and mode checks.
+const CHANNEL_CENTRAL_NAME_ID: i32 = 7601;
+const CHANNEL_CENTRAL_TOPIC_ID: i32 = 7602;
+const CHANNEL_CENTRAL_BANS_ID: i32 = 7603;
+const CHANNEL_CENTRAL_REMOVE_ID: WPARAM = 7604;
+const CHANNEL_CENTRAL_MODE_IDS: [i32; 4] = [7605, 7606, 7607, 7608];
 
 /// The homeserver under test, and the runtime its peers run on.
 struct Homeserver {
@@ -374,6 +385,54 @@ impl Peer<'_> {
             .iter()
             .map(|(user, level)| (user.to_string(), i64::from(*level)))
             .collect()
+    }
+
+    /// The content of the room's state event of `event_type` and
+    /// `state_key`, as the server has it.
+    fn room_state(
+        &self,
+        room_id: &RoomId,
+        event_type: StateEventType,
+        state_key: &str,
+    ) -> serde_json::Value {
+        let request = get_state_event_for_key::v3::Request::new(
+            room_id.to_owned(),
+            event_type.clone(),
+            state_key.to_owned(),
+        );
+        self.homeserver
+            .runtime
+            .block_on(self.client.send(request).into_future())
+            .unwrap_or_else(|error| panic!("reading {event_type} {state_key:?} failed: {error}"))
+            .into_content()
+            .deserialize_as_unchecked::<serde_json::Value>()
+            .expect("state content is JSON")
+    }
+
+    /// Whether the room is listed in the server's room directory.
+    fn directory_visibility(&self, room_id: &RoomId) -> Visibility {
+        self.homeserver
+            .runtime
+            .block_on(
+                self.client
+                    .send(get_room_visibility::v3::Request::new(room_id.to_owned()))
+                    .into_future(),
+            )
+            .expect("reading the directory listing succeeds")
+            .visibility
+    }
+
+    /// Sends a message the server may refuse; its error.
+    fn try_send_text(&self, room_id: &RoomId, body: &str) -> Result<(), String> {
+        let room = self.room(room_id);
+        self.homeserver
+            .runtime
+            .block_on(
+                room.send(RoomMessageEventContent::text_plain(body))
+                    .into_future(),
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     fn device_id(&self) -> &DeviceId {
@@ -1400,6 +1459,191 @@ fn rank_changes_in_a_row_and_together_all_stay() -> Result<(), Box<dyn Error>> {
         &room,
         "* Alice sets power level: Carol 0 -> 50, Dave 1 -> 50",
     )?;
+
+    finish(app, &local_app_data)
+}
+
+/// Opens Channel Central with `/channel` in the active room and waits for
+/// the server's settings in it.
+fn open_channel_central(app: &MirxApp) -> Result<(HWND, UiChannelCentral), Box<dyn Error>> {
+    app.set_compose_text("/channel")?;
+    app.open_dialog(AutomationDialog::ComposeReturn)?;
+    let dialog = wait_for_dialog(app, "mirxWin32ChannelCentralDialog")?;
+    let ui_state = app.wait_for_ui_state("Channel Central's settings", TIMEOUT, |ui_state| {
+        ui_state
+            .channel_central
+            .as_ref()
+            .is_some_and(|central| central.ok_enabled)
+    })?;
+    Ok((dialog, ui_state.channel_central.expect("waited for above")))
+}
+
+fn set_dialog_text(dialog: HWND, id: i32, text: &str) {
+    let text = wide_null(text);
+    assert_ne!(
+        unsafe { SetWindowTextW(GetDlgItem(dialog, id), text.as_ptr()) },
+        0
+    );
+}
+
+/// Channel Central changes the room on the server: its creator (v12,
+/// Conduit) renames it, sets the topic, makes it ops-only for the topic,
+/// moderated, invite only and unlisted, and lifts a ban, all in one OK.
+#[test]
+fn channel_central_changes_the_room_on_the_server() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let bob = homeserver.register("bob", "Bob");
+    let carol = homeserver.register("carol", "Carol");
+    let alice = homeserver.register("alice", "Alice");
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_live_app(&local_app_data)?;
+    sign_in(&app, &homeserver, &alice)?;
+
+    let alias_localpart = unique_name("central");
+    let room_name = unique_name("Central");
+    app.select_status_view()?;
+    type_commands(
+        &app,
+        &[&format!("/create -public #{alias_localpart} {room_name}")],
+    )?;
+    let ui_state = app.wait_for_ui_state("the created room", TIMEOUT, |ui_state| {
+        ui_state
+            .rooms
+            .iter()
+            .any(|room| room.display_name == room_name)
+    })?;
+    let room_id = OwnedRoomId::try_from(
+        ui_state
+            .rooms
+            .iter()
+            .find(|room| room.display_name == room_name)
+            .expect("waited for above")
+            .room_id
+            .as_str(),
+    )?;
+    bob.join(&room_id);
+    carol.join(&room_id);
+    let room = room_identity(room_id.as_str());
+    wait_for_view_line(&app, &room, "Carol")?;
+    app.select_view(room.clone())?;
+    type_commands(&app, &["/ban Carol spam"])?;
+    bob.sync_until("Carol banned", async || {
+        let carol_member = bob
+            .room(&room_id)
+            .get_member_no_sync(carol.user_id())
+            .await
+            .expect("the store reads members");
+        match carol_member {
+            Some(member) if *member.membership() == MembershipState::Ban => Ok(()),
+            other => Err(format!(
+                "{:?}",
+                other.map(|member| member.membership().clone())
+            )),
+        }
+    });
+
+    let (dialog, central) = open_channel_central(&app)?;
+    // The creator may change everything.
+    assert_eq!(central.status, "");
+    assert_eq!(central.name, room_name);
+    assert_eq!(central.ban_rows.len(), 1, "{:?}", central.ban_rows);
+    let ban = &central.ban_rows[0];
+    assert!(ban[0].contains(carol.user_id().as_str()), "{ban:?}");
+    assert_eq!((ban[1].as_str(), ban[3].as_str()), ("Alice", "spam"));
+    // Public, and listed in the Rooms List.
+    assert_eq!(central.invite_only.state, UiCheckState::Unchecked);
+    assert_eq!(central.private.state, UiCheckState::Unchecked);
+    assert_eq!(central.moderated.state, UiCheckState::Unchecked);
+    assert!(
+        [
+            central.topic_by_operators,
+            central.invite_only,
+            central.moderated,
+            central.private
+        ]
+        .iter()
+        .all(|check| check.enabled)
+    );
+
+    set_dialog_text(dialog, CHANNEL_CENTRAL_NAME_ID, "Renamed");
+    set_dialog_text(dialog, CHANNEL_CENTRAL_TOPIC_ID, "only ops talk here");
+    for id in CHANNEL_CENTRAL_MODE_IDS {
+        unsafe {
+            SendMessageW(
+                GetDlgItem(dialog, id),
+                BM_SETCHECK,
+                BST_CHECKED as WPARAM,
+                0,
+            )
+        };
+    }
+    let bans = unsafe { GetDlgItem(dialog, CHANNEL_CENTRAL_BANS_ID) };
+    post_left_click(bans, &central.ban_row_click_points[0], false);
+    app.wait_for_ui_state("the ban selected", TIMEOUT, |ui_state| {
+        ui_state
+            .channel_central
+            .as_ref()
+            .is_some_and(|central| central.remove_enabled)
+    })?;
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, CHANNEL_CENTRAL_REMOVE_ID, 0) },
+        0
+    );
+    app.wait_for_ui_state("the ban removed", TIMEOUT, |ui_state| {
+        ui_state
+            .channel_central
+            .as_ref()
+            .is_some_and(|central| central.ban_rows.is_empty())
+    })?;
+    press_dialog_button(&app, dialog, IDOK as usize, "Channel Central")?;
+
+    // The server has every part, as Bob reads it.
+    let state = |event_type: StateEventType, state_key: &str| {
+        bob.room_state(&room_id, event_type, state_key)
+    };
+    wait_for_server(
+        &app,
+        "Carol unbanned",
+        || state(StateEventType::RoomMember, carol.user_id().as_str()),
+        |member| member["membership"] == "leave",
+    )?;
+    assert_eq!(state(StateEventType::RoomName, "")["name"], "Renamed");
+    assert_eq!(
+        state(StateEventType::RoomTopic, "")["topic"],
+        "only ops talk here"
+    );
+    assert_eq!(
+        state(StateEventType::RoomJoinRules, "")["join_rule"],
+        "invite"
+    );
+    let levels = bob.server_power_levels_content(&room_id);
+    assert!(i64::from(levels.events_default) >= 1, "{levels:?}");
+    let topic_level = levels
+        .events
+        .get(&"m.room.topic".into())
+        .map_or(levels.state_default, |level| *level);
+    assert!(i64::from(topic_level) >= 50, "{levels:?}");
+    assert_eq!(bob.directory_visibility(&room_id), Visibility::Private);
+    // Moderated: Bob, at the default level, may not speak.
+    let refused = bob.try_send_text(&room_id, "may I?");
+    assert!(refused.is_err(), "{refused:?}");
+
+    wait_for_view_line(&app, &room, "* Alice changes room name to 'Renamed'")?;
+    wait_for_view_line(&app, &room, "* Alice makes the room invite only")?;
+    // Read again from the server.
+    let (dialog, central) = open_channel_central(&app)?;
+    assert_eq!(central.name, "Renamed");
+    assert_eq!(central.topic, "only ops talk here");
+    assert!(central.ban_rows.is_empty(), "{:?}", central.ban_rows);
+    for check in [
+        central.topic_by_operators,
+        central.invite_only,
+        central.moderated,
+        central.private,
+    ] {
+        assert_eq!(check.state, UiCheckState::Checked);
+    }
+    press_dialog_button(&app, dialog, IDCANCEL as usize, "Channel Central")?;
 
     finish(app, &local_app_data)
 }
