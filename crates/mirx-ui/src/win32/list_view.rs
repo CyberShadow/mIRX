@@ -1,9 +1,12 @@
 //! Report-style ListView helpers the dialogs share.
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::UI::Controls::{
-    LVIF_TEXT, LVIR_LABEL, LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT, LVM_GETITEMRECT,
-    LVM_GETITEMTEXTW, LVM_GETNEXTITEM, LVM_INSERTITEMW, LVM_SETITEMTEXTW, LVNI_SELECTED,
+    LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_STATE, LVIF_TEXT, LVIR_LABEL, LVIS_FOCUSED,
+    LVIS_SELECTED, LVITEMW, LVM_DELETEALLITEMS, LVM_ENSUREVISIBLE, LVM_GETITEMCOUNT,
+    LVM_GETITEMRECT, LVM_GETITEMTEXTW, LVM_GETNEXTITEM, LVM_INSERTCOLUMNW, LVM_INSERTITEMW,
+    LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVM_SETITEMTEXTW, LVNI_SELECTED,
+    LVS_EX_FULLROWSELECT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW;
 
@@ -12,6 +15,36 @@ use super::wide_null;
 use crate::automation::UiPoint;
 
 pub(super) const LIST_VIEW_CLASS_NAME: &str = "SysListView32";
+
+/// Gives a new report-style list its columns, `(title, width)` each, and
+/// whole-row selection.
+pub(super) unsafe fn set_up_report_list(list: HWND, columns: &[(&str, i32)]) -> Result<(), String> {
+    SendMessageW(
+        list,
+        LVM_SETEXTENDEDLISTVIEWSTYLE,
+        LVS_EX_FULLROWSELECT as WPARAM,
+        LVS_EX_FULLROWSELECT as LPARAM,
+    );
+    for (index, (title, width)) in columns.iter().enumerate() {
+        let mut title = wide_null(title);
+        let column = LVCOLUMNW {
+            mask: LVCF_TEXT | LVCF_WIDTH,
+            cx: *width,
+            pszText: title.as_mut_ptr(),
+            ..LVCOLUMNW::default()
+        };
+        if SendMessageW(
+            list,
+            LVM_INSERTCOLUMNW,
+            index,
+            &column as *const LVCOLUMNW as LPARAM,
+        ) != index as LRESULT
+        {
+            return Err(format!("LVM_INSERTCOLUMNW {index} failed"));
+        }
+    }
+    Ok(())
+}
 
 /// Fills a list's rows; nothing is selected afterwards, so the buttons
 /// that act on a selected row are greyed until something is.
@@ -40,6 +73,24 @@ pub(super) unsafe fn fill_list(list: HWND, rows: &[Vec<String>]) {
 pub(super) unsafe fn selected_row(list: HWND) -> Option<usize> {
     let row = SendMessageW(list, LVM_GETNEXTITEM, usize::MAX, LVNI_SELECTED as LPARAM);
     usize::try_from(row).ok()
+}
+
+/// Selects (and focuses) `row`, as a click on it does.
+pub(super) unsafe fn select_row(list: HWND, row: usize) {
+    let state = LVIS_SELECTED | LVIS_FOCUSED;
+    let item = LVITEMW {
+        mask: LVIF_STATE,
+        state,
+        stateMask: state,
+        ..LVITEMW::default()
+    };
+    SendMessageW(
+        list,
+        LVM_SETITEMSTATE,
+        row,
+        &item as *const LVITEMW as LPARAM,
+    );
+    SendMessageW(list, LVM_ENSUREVISIBLE, row, 0);
 }
 
 /// A list's rows, `columns` cells each, and where a click selects each, in

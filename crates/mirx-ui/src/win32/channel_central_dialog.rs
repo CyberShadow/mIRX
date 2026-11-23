@@ -13,9 +13,8 @@ use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
-    BST_CHECKED, BST_INDETERMINATE, BST_UNCHECKED, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW,
-    LVM_INSERTCOLUMNW, LVM_SETEXTENDEDLISTVIEWSTYLE, LVN_ITEMCHANGED, LVS_EX_FULLROWSELECT,
-    LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, NMHDR,
+    BST_CHECKED, BST_INDETERMINATE, BST_UNCHECKED, LVN_ITEMCHANGED, LVS_REPORT, LVS_SHOWSELALWAYS,
+    LVS_SINGLESEL, NMHDR,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -36,7 +35,9 @@ use super::channel_central::{
 };
 use super::dialogs::{DialogMetrics, create_modal_dialog, dialog_text_size, end_modal_dialog};
 use super::dpi::Dpi;
-use super::list_view::{LIST_VIEW_CLASS_NAME, dump_list, fill_list, selected_row};
+use super::list_view::{
+    LIST_VIEW_CLASS_NAME, dump_list, fill_list, selected_row, set_up_report_list,
+};
 use super::room_model::room_by_id;
 use super::timestamp::LocalTimeFn;
 use super::window_data::{self, WindowData};
@@ -282,12 +283,6 @@ unsafe fn create_controls(dialog: HWND) -> Result<(), String> {
         list_width,
         list_height,
     );
-    SendMessageW(
-        state.controls.bans,
-        LVM_SETEXTENDEDLISTVIEWSTYLE,
-        LVS_EX_FULLROWSELECT as WPARAM,
-        LVS_EX_FULLROWSELECT as LPARAM,
-    );
     // The list's inside, less its sunken edges and a scroll bar.
     let inner_width = list_width - dpi.px(24);
     let (user, set_by, date) = (
@@ -295,32 +290,15 @@ unsafe fn create_controls(dialog: HWND) -> Result<(), String> {
         dpi.px(SET_BY_COLUMN_WIDTH),
         dpi.px(DATE_COLUMN_WIDTH),
     );
-    for (index, (title, width)) in [
-        ("User", user),
-        ("Set by", set_by),
-        ("Date", date),
-        ("Reason", inner_width - user - set_by - date),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let mut title = wide_null(title);
-        let column = LVCOLUMNW {
-            mask: LVCF_TEXT | LVCF_WIDTH,
-            cx: width,
-            pszText: title.as_mut_ptr(),
-            ..LVCOLUMNW::default()
-        };
-        if SendMessageW(
-            state.controls.bans,
-            LVM_INSERTCOLUMNW,
-            index,
-            &column as *const LVCOLUMNW as LPARAM,
-        ) != index as LRESULT
-        {
-            return Err(format!("LVM_INSERTCOLUMNW {index} failed"));
-        }
-    }
+    set_up_report_list(
+        state.controls.bans,
+        &[
+            ("User", user),
+            ("Set by", set_by),
+            ("Date", date),
+            ("Reason", inner_width - user - set_by - date),
+        ],
+    )?;
     state.controls.remove = place(
         control(
             BUTTON_CLASS_NAME,

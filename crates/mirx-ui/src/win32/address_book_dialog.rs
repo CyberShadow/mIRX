@@ -24,9 +24,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDDS_SUBITEM, CDRF_NEWFONT,
-    CDRF_NOTIFYITEMDRAW, CDRF_NOTIFYSUBITEMDRAW, DRAWITEMSTRUCT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW,
-    LVIF_STATE, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVM_ENSUREVISIBLE, LVM_INSERTCOLUMNW,
-    LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVN_ITEMCHANGED, LVS_EX_FULLROWSELECT,
+    CDRF_NOTIFYITEMDRAW, CDRF_NOTIFYSUBITEMDRAW, DRAWITEMSTRUCT, LVN_ITEMCHANGED,
     LVS_NOCOLUMNHEADER, LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, MEASUREITEMSTRUCT,
     NM_CUSTOMDRAW, NM_DBLCLK, NM_RETURN, NMHDR, NMLVCUSTOMDRAW, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT,
     TCM_GETCURSEL, TCM_GETITEMRECT, TCM_INSERTITEMW, TCM_SETCURSEL, TCN_SELCHANGE,
@@ -56,7 +54,9 @@ use super::dialogs::{
 };
 use super::dpi::Dpi;
 use super::ignore::user_label;
-use super::list_view::{LIST_VIEW_CLASS_NAME, dump_list, fill_list, selected_row};
+use super::list_view::{
+    LIST_VIEW_CLASS_NAME, dump_list, fill_list, select_row, selected_row, set_up_report_list,
+};
 use super::nick_colors::{NickColor, NickColorEntry, NickColorSetting};
 use super::notify::NotifySetting;
 use super::room_list_window::rect_center;
@@ -453,30 +453,7 @@ unsafe fn create_controls(dialog: HWND) -> Result<(), String> {
             list_width,
             list_height,
         );
-        SendMessageW(
-            list,
-            LVM_SETEXTENDEDLISTVIEWSTYLE,
-            LVS_EX_FULLROWSELECT as WPARAM,
-            LVS_EX_FULLROWSELECT as LPARAM,
-        );
-        for (index, (title, width)) in columns.iter().enumerate() {
-            let mut title = wide_null(title);
-            let column = LVCOLUMNW {
-                mask: LVCF_TEXT | LVCF_WIDTH,
-                cx: *width,
-                pszText: title.as_mut_ptr(),
-                ..LVCOLUMNW::default()
-            };
-            if SendMessageW(
-                list,
-                LVM_INSERTCOLUMNW,
-                index,
-                &column as *const LVCOLUMNW as LPARAM,
-            ) != index as LRESULT
-            {
-                return Err(format!("LVM_INSERTCOLUMNW {} failed", title.len()));
-            }
-        }
+        set_up_report_list(list, columns)?;
         Ok::<_, String>(list)
     };
     // The list's inside, less its sunken edges and a scroll bar.
@@ -699,24 +676,6 @@ unsafe fn refill_colors_list(state: &DialogState) {
         .collect::<Vec<_>>();
     fill_list(state.colors.list, &rows);
     grey_row_buttons(state);
-}
-
-/// Selects (and focuses) `row`, as a click on it does.
-unsafe fn select_row(list: HWND, row: usize) {
-    let state = LVIS_SELECTED | LVIS_FOCUSED;
-    let item = LVITEMW {
-        mask: LVIF_STATE,
-        state,
-        stateMask: state,
-        ..LVITEMW::default()
-    };
-    SendMessageW(
-        list,
-        LVM_SETITEMSTATE,
-        row,
-        &item as *const LVITEMW as LPARAM,
-    );
-    SendMessageW(list, LVM_ENSUREVISIBLE, row, 0);
 }
 
 /// Edit and Delete act on the selected row: greyed without one.
