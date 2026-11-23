@@ -1469,6 +1469,8 @@ pub struct UiState {
     pub address_book: Option<UiAddressBook>,
     /// Channel Central while it is open, read back from its controls.
     pub channel_central: Option<UiChannelCentral>,
+    /// The Sessions dialog while it is open, read back from its controls.
+    pub sessions: Option<UiSessions>,
     /// The colour index while it shows.
     pub color_index: Option<UiColorIndex>,
     /// The tray icon and the frame's place behind it.
@@ -2376,6 +2378,24 @@ pub struct UiChannelCentral {
     pub ok_enabled: bool,
 }
 
+/// The Sessions dialog: your sessions and what its buttons may do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiSessions {
+    pub caption: String,
+    /// The line under the list: reading, the count, or an error.
+    pub status: String,
+    /// Session, Name, Verified and Last seen.
+    pub rows: Vec<Vec<String>>,
+    /// In the list's client coordinates.
+    pub row_click_points: Vec<UiPoint>,
+    pub selected: Option<usize>,
+    pub verify_enabled: bool,
+    pub rename_enabled: bool,
+    pub sign_out_enabled: bool,
+    pub refresh_enabled: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UiCheckBox {
@@ -2414,6 +2434,8 @@ pub enum AutomationDialog {
     AddressBook,
     /// Room > Channel Central..., for the active window's room.
     ChannelCentral,
+    /// Tools > Sessions...
+    Sessions,
     /// File > Select Server...
     SelectServer,
     /// Help > About mirx

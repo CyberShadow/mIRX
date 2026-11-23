@@ -53,10 +53,10 @@ use mirx_testkit::{
     UiCheckState, UiColorCodePart, UiColorItem, UiColorsDialog, UiComposeTarget,
     UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState,
     UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
-    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
-    UiTimelineLink, UiTimestamp, UiTipsOptions, UiTrayOptions, UnsupportedRoomMessageActivity,
-    UserCommandAction, Verification, VerificationActionKind, VerificationState, ViewActivityLevel,
-    ViewIdentity,
+    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiSessions, UiState,
+    UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiTipsOptions, UiTrayOptions,
+    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionKind,
+    VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -121,7 +121,6 @@ const MENU_ID_VERIFY_REJECT_SAS: usize = 40010;
 const MENU_ID_RECOVER_E2EE: usize = 40005;
 const MENU_ID_SETUP_E2EE_RECOVERY: usize = 40017;
 const MENU_ID_VERIFY_THIS_SESSION: usize = 40050;
-const MENU_ID_TOOLS_SESSIONS: usize = 40051;
 const RECOVER_E2EE_DIALOG_SECRET_ID: i32 = 5007;
 const RESET_E2EE_DIALOG_PASSWORD_ID: i32 = 5019;
 const RESET_E2EE_DIALOG_RESET_ID: usize = 5020;
@@ -3578,7 +3577,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 87);
+    assert_eq!(version.protocol_version, 88);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -7607,7 +7606,6 @@ fn automation_driver_devices_lists_sessions_whois_style() -> Result<(), Box<dyn 
     let app = launch_signed_in_member_app(&local_app_data)?;
 
     type_commands(&app, &["/devices", "/devices Bob", "/devices Nobody"])?;
-    invoke_account_menu_command(&app, MENU_ID_TOOLS_SESSIONS)?;
     app.select_member("@bob:example")?;
     assert!(app.dump_member_menu_state()?.devices_enabled);
     app.open_member_context_menu("@bob:example", ContextMenuCommand::DevicesMember)?;
@@ -7621,8 +7619,7 @@ fn automation_driver_devices_lists_sessions_whois_style() -> Result<(), Box<dyn 
         vec![
             list("@alice:example"),
             list("@bob:example"),
-            list("@alice:example"),
-            list("@bob:example"),
+            list("@bob:example")
         ]
     );
 
@@ -7675,6 +7672,379 @@ fn automation_driver_devices_lists_sessions_whois_style() -> Result<(), Box<dyn 
     ] {
         assert!(view_contains(beta, line), "{line}");
     }
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+const SESSIONS_LIST_ID: i32 = 7701;
+const SESSIONS_VERIFY_ID: WPARAM = 7702;
+const SESSIONS_RENAME_ID: WPARAM = 7703;
+const SESSIONS_SIGN_OUT_ID: WPARAM = 7704;
+const SESSIONS_REFRESH_ID: WPARAM = 7705;
+
+/// Opens Tools > Sessions... and waits for it to show and for the core's
+/// answer to its read: this core is not signed in, so the error.
+fn open_sessions_dialog(app: &MirxApp) -> Result<(HWND, UiSessions), Box<dyn std::error::Error>> {
+    app.open_dialog(AutomationDialog::Sessions)?;
+    let dialog = wait_for_window(&wide_null("mirxWin32SessionsDialog"), "Sessions dialog")?;
+    assert_eq!(
+        unsafe { GetWindow(dialog, GW_OWNER) },
+        app.automation_frame_hwnd() as HWND
+    );
+    let ui_state = app.wait_for_ui_state(
+        "the Sessions dialog's answer",
+        Duration::from_secs(30),
+        |ui_state| {
+            ui_state
+                .sessions
+                .as_ref()
+                .is_some_and(|sessions| sessions.status != "Reading your sessions...")
+        },
+    )?;
+    Ok((dialog, ui_state.sessions.expect("waited for above")))
+}
+
+fn sessions(app: &MirxApp) -> Result<UiSessions, Box<dyn std::error::Error>> {
+    Ok(app
+        .dump_ui_state()?
+        .sessions
+        .ok_or("the Sessions dialog is open")?)
+}
+
+/// Clicks the Sessions dialog's row and waits until it is selected.
+fn select_session(
+    app: &MirxApp,
+    dialog: HWND,
+    row: usize,
+) -> Result<UiSessions, Box<dyn std::error::Error>> {
+    let point = sessions(app)?.row_click_points[row];
+    post_left_click(
+        unsafe { GetDlgItem(dialog, SESSIONS_LIST_ID) },
+        &point,
+        false,
+    );
+    let ui_state =
+        app.wait_for_ui_state("the session selected", Duration::from_secs(5), |ui_state| {
+            ui_state
+                .sessions
+                .as_ref()
+                .is_some_and(|sessions| sessions.selected == Some(row))
+        })?;
+    Ok(ui_state.sessions.expect("waited for above"))
+}
+
+fn own_session(
+    device_id: &str,
+    display_name: Option<&str>,
+    verified: bool,
+    this_session: bool,
+    last_seen_ms: Option<u64>,
+) -> DeviceSummary {
+    DeviceSummary {
+        device_id: device_id.to_owned(),
+        display_name: display_name.map(str::to_owned),
+        verified,
+        this_session,
+        last_seen_ms,
+    }
+}
+
+/// Alice's sessions: this one (verified), her phone (not verified) and a
+/// tablet the server has no name or time for.
+fn alice_sessions(phone_name: &str, this_session_verified: bool) -> Event {
+    Event::UserDevices(UserDevices {
+        user_id: "@alice:example".to_owned(),
+        identity: UserIdentityState::Verified,
+        devices: vec![
+            own_session(
+                "L4PT0P",
+                Some("Laptop"),
+                this_session_verified,
+                true,
+                Some(1_795_183_331_000),
+            ),
+            own_session(
+                "PH0NE",
+                Some(phone_name),
+                false,
+                false,
+                Some(1_795_096_931_000),
+            ),
+            own_session("TABL3T", None, true, false, None),
+        ],
+    })
+}
+
+fn list_devices_commands(app: &MirxApp) -> Result<usize, Box<dyn std::error::Error>> {
+    Ok(app
+        .dump_model()?
+        .submitted_user_commands
+        .iter()
+        .filter(|command| {
+            command.action == UserCommandAction::ListDevices && command.user_id == "@alice:example"
+        })
+        .count())
+}
+
+/// Tools > Sessions... lists your sessions in a dialog; the answer and the
+/// read's errors show only there, while another user's list still prints.
+#[test]
+fn sessions_dialog_lists_your_sessions_without_printing_them()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_signed_in_member_app(&local_app_data)?;
+    let beta = room_identity("!beta:example");
+    let status_before = app.dump_model()?.status;
+
+    let (dialog, shown) = open_sessions_dialog(&app)?;
+    assert_eq!(shown.caption, "Sessions - @alice:example");
+    // Close is the default button, for Enter.
+    let default = unsafe { SendMessageW(dialog, DM_GETDEFID, 0, 0) };
+    assert_eq!(default as usize & 0xffff, IDCANCEL as usize);
+    // The read's error, in the dialog only; Refresh tries again.
+    assert_eq!(
+        shown.status,
+        "listing devices requires an authenticated session"
+    );
+    assert!(shown.rows.is_empty());
+    assert!(!shown.verify_enabled && !shown.rename_enabled && !shown.sign_out_enabled);
+    assert!(shown.refresh_enabled);
+    assert_eq!(
+        app.dump_model()?.submitted_user_commands,
+        [SubmittedUserCommand {
+            action: UserCommandAction::ListDevices,
+            user_id: "@alice:example".to_owned(),
+        }]
+    );
+    let ui_state = app.dump_ui_state()?;
+    assert!(
+        !view_contains(find_view(&ui_state, &beta), "/devices"),
+        "{:?}",
+        find_view(&ui_state, &beta).lines
+    );
+    assert_eq!(app.dump_model()?.status, status_before);
+
+    let bob = Event::UserDevices(UserDevices {
+        user_id: "@bob:example".to_owned(),
+        identity: UserIdentityState::Verified,
+        devices: vec![own_session("B0B", None, true, false, None)],
+    });
+    append_events(&app, vec![alice_sessions("Element Android", true), bob])?;
+    let shown = sessions(&app)?;
+    assert_eq!(shown.status, "3 sessions");
+    assert_eq!(shown.rows.len(), 3, "{:?}", shown.rows);
+    assert_eq!(shown.rows[0], ["L4PT0P", "Laptop", "Yes", "this session"]);
+    assert_eq!(shown.rows[1][..3], ["PH0NE", "Element Android", "No"]);
+    // `dd/mm/yyyy HH:nn` in the local time.
+    assert_eq!(shown.rows[1][3].len(), 16, "{:?}", shown.rows[1]);
+    assert_eq!(&shown.rows[1][3][2..3], "/", "{:?}", shown.rows[1]);
+    assert_eq!(shown.rows[2], ["TABL3T", "", "Yes", ""]);
+    assert_eq!(shown.selected, None);
+    assert!(!shown.verify_enabled && !shown.rename_enabled && !shown.sign_out_enabled);
+    let ui_state = app.dump_ui_state()?;
+    let beta_view = find_view(&ui_state, &beta);
+    assert!(!view_contains(beta_view, "Alice"), "{:?}", beta_view.lines);
+    assert!(view_contains(beta_view, "* Bob End of /DEVICES list"));
+
+    let shown = select_session(&app, dialog, 1)?;
+    assert!(shown.verify_enabled && shown.rename_enabled && shown.sign_out_enabled);
+    let shown = select_session(&app, dialog, 0)?;
+    assert!(!shown.verify_enabled && shown.rename_enabled && !shown.sign_out_enabled);
+
+    // Refresh reads again; the answer's error replaces the count.
+    post_dialog_command(dialog, SESSIONS_REFRESH_ID);
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(list_devices_commands(&app)?, 2);
+    let shown = sessions(&app)?;
+    assert_eq!(
+        shown.status,
+        "listing devices requires an authenticated session"
+    );
+    assert_eq!(shown.rows.len(), 3);
+    let ui_state = app.dump_ui_state()?;
+    assert!(!view_contains(find_view(&ui_state, &beta), "/devices"));
+
+    close_dialog(&app, dialog)?;
+    assert_eq!(app.dump_ui_state()?.sessions, None);
+    // Closed, the answers print again.
+    append_events(&app, vec![alice_sessions("Element Android", true)])?;
+    let ui_state = app.dump_ui_state()?;
+    assert!(view_contains(
+        find_view(&ui_state, &beta),
+        "* Alice End of /DEVICES list"
+    ));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Rename... and Sign Out... ask over the Sessions dialog and send what
+/// `/devices rename` and `/devices delete` send; each change the server
+/// made prints its line and reads the list again, keeping the selection.
+#[test]
+fn sessions_dialog_renames_and_signs_out_a_session() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_signed_in_member_app(&local_app_data)?;
+    let beta = room_identity("!beta:example");
+    let password = "sample account password";
+
+    let (dialog, _) = open_sessions_dialog(&app)?;
+    append_events(&app, vec![alice_sessions("Element Android", true)])?;
+    select_session(&app, dialog, 1)?;
+
+    // Each prompt is the Sessions dialog's: owned by it, over it.
+    let rename = |text: &str| -> Result<(), Box<dyn std::error::Error>> {
+        post_dialog_command(dialog, SESSIONS_RENAME_ID);
+        let prompt = wait_for_window(&wide_null("mirxWin32SingleFieldDialog"), "Rename Session")?;
+        assert_eq!(unsafe { GetWindow(prompt, GW_OWNER) }, dialog);
+        assert_eq!(unsafe { read_window_text(prompt) }, "Rename Session");
+        let edit = unsafe { GetDlgItem(prompt, SINGLE_FIELD_DIALOG_EDIT_ID) };
+        assert_eq!(unsafe { read_window_text(edit) }, "Element Android");
+        let text = wide_null(text);
+        assert_ne!(unsafe { SetWindowTextW(edit, text.as_ptr()) }, 0);
+        post_dialog_command(prompt, SINGLE_FIELD_DIALOG_OK_ID);
+        wait_for_window_gone(prompt, "Rename Session")?;
+        app.wait_idle(Duration::from_secs(5))?;
+        Ok(())
+    };
+    // An empty name is refused, and the same name sends nothing.
+    rename("  ")?;
+    assert_eq!(sessions(&app)?.status, "a session needs a name");
+    rename("Element Android")?;
+    assert!(app.dump_model()?.submitted_session_commands.is_empty());
+
+    rename(" Old phone ")?;
+    assert_eq!(
+        app.dump_model()?.submitted_session_commands,
+        [SubmittedSessionCommand::Rename {
+            device_id: "PH0NE".to_owned(),
+            display_name: "Old phone".to_owned(),
+        }]
+    );
+    // This core refuses it: in the dialog only.
+    assert_eq!(
+        sessions(&app)?.status,
+        "renaming a session requires an authenticated session"
+    );
+    let ui_state = app.dump_ui_state()?;
+    assert!(!view_contains(find_view(&ui_state, &beta), "/devices"));
+
+    // The server's rename prints as ever, and reads the list again.
+    let reads = list_devices_commands(&app)?;
+    append_events(
+        &app,
+        vec![Event::DeviceRenamed {
+            device_id: "PH0NE".to_owned(),
+            display_name: "Old phone".to_owned(),
+        }],
+    )?;
+    assert_eq!(list_devices_commands(&app)?, reads + 1);
+    let ui_state = app.dump_ui_state()?;
+    assert!(view_contains(
+        find_view(&ui_state, &beta),
+        "* Session PH0NE renamed \"Old phone\""
+    ));
+    append_events(&app, vec![alice_sessions("Old phone", true)])?;
+    let shown = sessions(&app)?;
+    assert_eq!(shown.rows[1][1], "Old phone");
+    assert_eq!(
+        shown.selected,
+        Some(1),
+        "the renamed session stays selected"
+    );
+    assert!(shown.sign_out_enabled);
+
+    // Sign Out... confirms with the password, Cancel the default.
+    post_dialog_command(dialog, SESSIONS_SIGN_OUT_ID);
+    let confirm = wait_for_window(
+        &wide_null("mirxWin32SignOutSessionDialog"),
+        "Sign Out Session dialog",
+    )?;
+    assert_eq!(unsafe { GetWindow(confirm, GW_OWNER) }, dialog);
+    let default = unsafe { SendMessageW(confirm, DM_GETDEFID, 0, 0) };
+    assert_eq!(default as usize & 0xffff, SIGN_OUT_SESSION_DIALOG_CANCEL_ID);
+    let edit = unsafe { GetDlgItem(confirm, RESET_E2EE_DIALOG_PASSWORD_ID) };
+    let wide = wide_null(password);
+    assert_ne!(unsafe { SetWindowTextW(edit, wide.as_ptr()) }, 0);
+    post_dialog_command(confirm, SIGN_OUT_SESSION_DIALOG_SIGN_OUT_ID);
+    wait_for_window_gone(confirm, "Sign Out Session dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_session_commands[1..],
+        [SubmittedSessionCommand::SignOut {
+            device_id: "PH0NE".to_owned(),
+            password_redacted: true,
+        }]
+    );
+    assert!(!serde_json::to_string(&model)?.contains(password));
+    let ui_state = app.dump_ui_state()?;
+    assert!(!serde_json::to_string(&ui_state)?.contains(password));
+    assert_eq!(
+        sessions(&app)?.status,
+        "signing out a session requires an authenticated session"
+    );
+
+    let reads = list_devices_commands(&app)?;
+    append_events(&app, vec![Event::DeviceSignedOut("PH0NE".to_owned())])?;
+    assert_eq!(list_devices_commands(&app)?, reads + 1);
+    let ui_state = app.dump_ui_state()?;
+    assert!(view_contains(
+        find_view(&ui_state, &beta),
+        "* Session PH0NE signed out"
+    ));
+
+    close_dialog(&app, dialog)?;
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Verify... closes the dialog and runs what `/verify` runs: another
+/// session is asked by its ID; this session asks your other ones.
+#[test]
+fn sessions_dialog_verify_closes_and_asks_that_session() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_signed_in_member_app(&local_app_data)?;
+    let request = |device_id: Option<&str>| SubmittedVerificationRequest {
+        user_id: "@alice:example".to_owned(),
+        device_id: device_id.map(str::to_owned),
+    };
+
+    let (dialog, _) = open_sessions_dialog(&app)?;
+    append_events(&app, vec![alice_sessions("Element Android", true)])?;
+    select_session(&app, dialog, 1)?;
+    post_dialog_command(dialog, SESSIONS_VERIFY_ID);
+    wait_for_window_gone(dialog, "Sessions dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.dump_ui_state()?.sessions, None);
+    assert_eq!(
+        app.dump_model()?.submitted_verification_requests,
+        [request(Some("PH0NE"))]
+    );
+    // As `/verify`: this core refuses it in the active window.
+    let ui_state = app.dump_ui_state()?;
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
+    assert!(view_contains(beta, "* /verify: "), "{:?}", beta.lines);
+
+    let (dialog, _) = open_sessions_dialog(&app)?;
+    append_events(&app, vec![alice_sessions("Element Android", false)])?;
+    assert_eq!(
+        sessions(&app)?.status,
+        "3 sessions; this session is not verified"
+    );
+    let shown = select_session(&app, dialog, 0)?;
+    assert!(shown.verify_enabled && !shown.sign_out_enabled);
+    post_dialog_command(dialog, SESSIONS_VERIFY_ID);
+    wait_for_window_gone(dialog, "Sessions dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_model()?.submitted_verification_requests,
+        [request(Some("PH0NE")), request(None)]
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -18347,7 +18717,7 @@ fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
                 ("E&xport Room Keys...", true),
                 ("I&mport Room Keys...", true),
                 ("&Verify This Session", true),
-                ("Sess&ions", true),
+                ("Sess&ions...", true),
                 ("&Accept Verification", false),
                 ("Confirm &SAS", false),
                 ("Re&ject SAS", false),

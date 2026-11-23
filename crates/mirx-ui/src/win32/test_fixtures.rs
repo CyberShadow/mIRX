@@ -991,6 +991,7 @@ pub(super) fn test_state() -> WindowState {
         colors_dialog: None,
         address_book_dialog: None,
         channel_central_dialog: None,
+        sessions_dialog: None,
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
         notify_watch: notify::NotifyWatch::default(),

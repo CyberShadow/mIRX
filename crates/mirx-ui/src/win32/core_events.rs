@@ -388,6 +388,14 @@ pub(super) fn apply_core_event(
     event: Event,
 ) -> Result<ActivityAttention, String> {
     state.model.connection = connection::after_event(state.model.connection, &event);
+    // The open Sessions dialog asked, and shows it
+    // (`apply_events_and_refresh`): the status bar and the windows say
+    // nothing.
+    if state.sessions_dialog.is_some()
+        && sessions::is_dialog_answer(state.model.own_user_id(), &event)
+    {
+        return Ok(ActivityAttention::default());
+    }
     match event {
         Event::CommandHandled => state.core_commands_handled += 1,
         Event::Started => {
@@ -933,6 +941,9 @@ pub(super) unsafe fn apply_events_and_refresh(
         }
         if let Some(dialog) = state_ref(hwnd).channel_central_dialog {
             channel_central_dialog::take_core_answer(dialog, &event);
+        }
+        if let Some(dialog) = state_ref(hwnd).sessions_dialog {
+            sessions_dialog::take_core_answer(dialog, &event)?;
         }
         let state = state_mut(hwnd);
         if history_backfill_anchor.is_none()

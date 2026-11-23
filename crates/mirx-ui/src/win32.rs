@@ -255,6 +255,8 @@ mod save_buffer;
 mod script;
 mod self_test;
 mod send_file;
+mod sessions;
+mod sessions_dialog;
 mod settings;
 mod splitter;
 mod status_log;
@@ -835,6 +837,9 @@ struct WindowState {
     /// Channel Central while it is open: the core's answer to its read
     /// goes to it, and the automation dump reads it.
     channel_central_dialog: Option<HWND>,
+    /// The Sessions dialog while it is open: your sessions and the errors
+    /// of what it does go to it, and the automation dump reads it.
+    sessions_dialog: Option<HWND>,
     tray: TrayState,
     /// The retry bookkeeping; `reconnect` and the sync events move it.
     reconnect: connection::Reconnect,
@@ -1095,6 +1100,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         colors_dialog: None,
         address_book_dialog: None,
         channel_central_dialog: None,
+        sessions_dialog: None,
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
         notify_watch: notify::NotifyWatch::default(),

@@ -887,8 +887,8 @@ unsafe fn menu_command_result(
             .map(|_| Some(())),
         ),
         MENU_ID_TOOLS_SESSIONS => (
-            "Tools",
-            run_local_command(hwnd, SlashCommand::Devices { target: None }).map(|_| Some(())),
+            "Sessions",
+            sessions_dialog::run_sessions_dialog(hwnd).map(|()| Some(())),
         ),
         MENU_ID_VERIFY_ACCEPT => (
             "Tools",
@@ -984,6 +984,7 @@ pub(super) fn dialog_gesture(dialog: AutomationDialog) -> DialogGesture {
         AutomationDialog::ChannelCentral => {
             DialogGesture::MenuCommand(MENU_ID_ROOM_CHANNEL_CENTRAL)
         }
+        AutomationDialog::Sessions => DialogGesture::MenuCommand(MENU_ID_TOOLS_SESSIONS),
         AutomationDialog::SelectServer => DialogGesture::MenuCommand(MENU_ID_FILE_SELECT_SERVER),
         AutomationDialog::About => DialogGesture::MenuCommand(MENU_ID_HELP_ABOUT),
         AutomationDialog::CommandsJoin => DialogGesture::MenuCommand(MENU_ID_COMMANDS_JOIN),

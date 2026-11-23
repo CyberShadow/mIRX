@@ -65,7 +65,7 @@ pub(super) const MENU_ID_MEMBER_DEVOICE: usize = 40048;
 pub(super) const MENU_ID_TOOLS_COLORS: usize = 40049;
 /// Verify This Session, which runs `/verify`.
 pub(super) const MENU_ID_VERIFY_THIS_SESSION: usize = 40050;
-/// Sessions, which runs `/devices`.
+/// Sessions..., which opens the Sessions dialog.
 pub(super) const MENU_ID_TOOLS_SESSIONS: usize = 40051;
 pub(super) const MENU_ID_MEMBER_DEVICES: usize = 40052;
 pub(super) const MENU_ID_MEMBER_VERIFY: usize = 40053;
@@ -249,7 +249,7 @@ pub(super) const TOOLS_MENU: &[MenuEntry] = &[
     },
     Item {
         id: MENU_ID_TOOLS_SESSIONS,
-        label: "Sess&ions",
+        label: "Sess&ions...",
     },
     Separator,
     Item {

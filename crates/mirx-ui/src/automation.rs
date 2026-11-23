@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 87;
+pub(crate) const PROTOCOL_VERSION: u32 = 88;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -701,6 +701,8 @@ pub(crate) enum AutomationDialog {
     AddressBook,
     /// Room > Channel Central..., for the active window's room.
     ChannelCentral,
+    /// Tools > Sessions...
+    Sessions,
     /// File > Select Server...
     SelectServer,
     /// Help > About mirx
@@ -1133,6 +1135,8 @@ pub(crate) struct UiState {
     pub(crate) address_book: Option<UiAddressBook>,
     /// Channel Central while it is open, read back from its controls.
     pub(crate) channel_central: Option<UiChannelCentral>,
+    /// The Sessions dialog while it is open, read back from its controls.
+    pub(crate) sessions: Option<UiSessions>,
     /// The colour index while it shows.
     pub(crate) color_index: Option<UiColorIndex>,
     /// The tray icon and the frame's place behind it.
@@ -1560,6 +1564,24 @@ pub(crate) struct UiChannelCentral {
     pub(crate) moderated: UiCheckBox,
     pub(crate) private: UiCheckBox,
     pub(crate) ok_enabled: bool,
+}
+
+/// The Sessions dialog: your sessions and what its buttons may do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiSessions {
+    pub(crate) caption: String,
+    /// The line under the list: reading, the count, or an error.
+    pub(crate) status: String,
+    /// Session, Name, Verified and Last seen.
+    pub(crate) rows: Vec<Vec<String>>,
+    /// In the list's client coordinates.
+    pub(crate) row_click_points: Vec<UiPoint>,
+    pub(crate) selected: Option<usize>,
+    pub(crate) verify_enabled: bool,
+    pub(crate) rename_enabled: bool,
+    pub(crate) sign_out_enabled: bool,
+    pub(crate) refresh_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -4232,8 +4254,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_87() {
-        assert_eq!(PROTOCOL_VERSION, 87);
+    fn protocol_version_is_88() {
+        assert_eq!(PROTOCOL_VERSION, 88);
     }
 
     #[test]
@@ -5623,6 +5645,7 @@ mod tests {
             ("aliases", AutomationDialog::Aliases),
             ("address_book", AutomationDialog::AddressBook),
             ("channel_central", AutomationDialog::ChannelCentral),
+            ("sessions", AutomationDialog::Sessions),
             ("select_server", AutomationDialog::SelectServer),
             ("about", AutomationDialog::About),
             ("commands_join", AutomationDialog::CommandsJoin),
@@ -6273,7 +6296,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":87,
+                    "protocol_version":88,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -7070,6 +7093,22 @@ mod tests {
                         },
                         ok_enabled: true,
                     }),
+                    sessions: Some(super::UiSessions {
+                        caption: "Sessions - @alice:example".to_owned(),
+                        status: "2 sessions".to_owned(),
+                        rows: vec![vec![
+                            "L4PT0P".to_owned(),
+                            "Laptop".to_owned(),
+                            "Yes".to_owned(),
+                            "this session".to_owned(),
+                        ]],
+                        row_click_points: vec![super::UiPoint { x: 40, y: 12 }],
+                        selected: Some(0),
+                        verify_enabled: false,
+                        rename_enabled: true,
+                        sign_out_enabled: false,
+                        refresh_enabled: true,
+                    }),
                     color_index: Some(super::UiColorIndex {
                         part: super::UiColorCodePart::Background,
                         rect: super::UiRect {
@@ -7359,6 +7398,17 @@ mod tests {
                         "moderated":{"state":"unchecked","enabled":false},
                         "private":{"state":"unchecked","enabled":true},
                         "ok_enabled":true
+                    },
+                    "sessions":{
+                        "caption":"Sessions - @alice:example",
+                        "status":"2 sessions",
+                        "rows":[["L4PT0P","Laptop","Yes","this session"]],
+                        "row_click_points":[{"x":40,"y":12}],
+                        "selected":0,
+                        "verify_enabled":false,
+                        "rename_enabled":true,
+                        "sign_out_enabled":false,
+                        "refresh_enabled":true
                     },
                     "color_index":{
                         "part":"background",
