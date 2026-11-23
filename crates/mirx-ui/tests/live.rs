@@ -43,7 +43,7 @@ use matrix_sdk::ruma::events::room::message::{
     OriginalSyncRoomMessageEvent, RoomMessageEventContent,
 };
 use matrix_sdk::ruma::events::room::power_levels::RoomPowerLevelsEventContent;
-use matrix_sdk::ruma::events::{InitialStateEvent, StateEventType};
+use matrix_sdk::ruma::events::{InitialStateEvent, StateEventType, TimelineEventType};
 use matrix_sdk::ruma::{DeviceId, OwnedDeviceId, OwnedRoomId, OwnedUserId, RoomId, UserId};
 use mirx_core::{E2eeRecoveryState, E2eeStatus, RoomMemberRank, RoomMembership};
 use mirx_testkit::{
@@ -1651,6 +1651,97 @@ fn channel_central_changes_the_room_on_the_server() -> Result<(), Box<dyn Error>
         assert_eq!(check.state, UiCheckState::Checked);
     }
     press_dialog_button(&app, dialog, IDCANCEL as usize, "Channel Central")?;
+
+    finish(app, &local_app_data)
+}
+
+/// `/mode` changes the room's modes and a member's rank in one power-levels
+/// write, and the echo prints mIRC's mode line; a join rule typed in Status
+/// for a named room changes that room.
+#[test]
+fn mode_changes_the_room_and_ranks_in_one_write() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let bob = homeserver.register("bob", "Bob");
+    let carol = homeserver.register("carol", "Carol");
+    let dave = homeserver.register("dave", "Dave");
+    let alice = homeserver.register("alice", "Alice");
+    let alias_localpart = unique_name("modes");
+    let room_id = bob.create_public_room("Modes", &alias_localpart);
+    bob.set_power_level(&room_id, alice.user_id(), 100);
+    carol.join(&room_id);
+    dave.join(&room_id);
+    // The server's new room: only ops set the topic, not moderated.
+    let created = bob.server_power_levels_content(&room_id);
+    let topic_level = created
+        .events
+        .get(&TimelineEventType::RoomTopic)
+        .copied()
+        .unwrap_or(created.state_default);
+    assert!(topic_level > created.users_default, "{created:?}");
+    assert!(
+        created.events_default <= created.users_default,
+        "{created:?}"
+    );
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_live_app(&local_app_data)?;
+    sign_in(&app, &homeserver, &alice)?;
+    let alias = format!("#{alias_localpart}:localhost");
+    join_by_address(&app, &alias, &room_id)?;
+    let alice_id = alice.user_id().to_string();
+    let room = room_identity(room_id.as_str());
+    // The nicks resolve in the nick list.
+    wait_for_nick_list(
+        &app,
+        &room_id,
+        &BTreeMap::from([
+            (alice_id.clone(), RoomMemberRank::Administrator),
+            (bob.user_id().to_string(), RoomMemberRank::Creator),
+            (carol.user_id().to_string(), RoomMemberRank::Member),
+            (dave.user_id().to_string(), RoomMemberRank::Member),
+        ]),
+    )?;
+
+    app.select_view(room.clone())?;
+    type_commands(&app, &["/mode +m-t+v Dave"])?;
+    wait_for_server(
+        &app,
+        "a moderated room with Dave voiced",
+        || bob.server_power_levels_content(&room_id),
+        |levels| {
+            levels.events_default > levels.users_default
+                && levels.users.get(dave.user_id()) == Some(&1.into())
+                && levels.users.get(alice.user_id()) == Some(&100.into())
+        },
+    )?;
+    wait_for_view_line(
+        &app,
+        &room,
+        "* Alice sets mode: +m-t; power level: Dave 0 -> 1",
+    )?;
+    assert!(carol.try_send_text(&room_id, "carol is muted").is_err());
+    dave.try_send_text(&room_id, "dave has voice")
+        .map_err(|error| format!("a voiced member speaks: {error}"))?;
+
+    type_commands(&app, &["/mode -m+t-v Dave"])?;
+    wait_for_server(
+        &app,
+        "an unmoderated room without Dave's voice",
+        || bob.server_power_levels(&room_id),
+        |users| *users == BTreeMap::from([(alice_id.clone(), 100)]),
+    )?;
+    wait_for_view_line(
+        &app,
+        &room,
+        "* Alice sets mode: +t-m; power level: Dave 1 -> 0",
+    )?;
+    carol
+        .try_send_text(&room_id, "carol speaks again")
+        .map_err(|error| format!("an unmoderated room takes messages: {error}"))?;
+
+    // Typed in Status, for the room it names.
+    app.select_status_view()?;
+    type_commands(&app, &[&format!("/mode {alias} +i")])?;
+    wait_for_view_line(&app, &room, "* Alice makes the room invite only")?;
 
     finish(app, &local_app_data)
 }
