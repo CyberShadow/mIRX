@@ -571,7 +571,7 @@ pub(super) fn apply_core_event(
                 let lines = ignore::change_lines(old, &ignored_users, |user_id| {
                     known_nick(&state.model, user_id)
                 });
-                echo_lines_in_active_view(state, lines);
+                echo_lines_in_front_window(state, lines);
             }
             state.model.ignored_users = Some(ignored_users);
         }
@@ -580,10 +580,10 @@ pub(super) fn apply_core_event(
         Event::RoomSettings(_) => {}
         Event::UserProfile(profile) => {
             let lines = whois_lines(&state.model, &profile);
-            echo_lines_in_active_view(state, lines);
+            echo_lines_in_front_window(state, lines);
         }
         Event::AwayChanged(changed) => {
-            echo_lines_in_active_view(state, commands::away_lines(&changed));
+            echo_lines_in_front_window(state, commands::away_lines(&changed));
             state.model.status = commands::away_status(&changed);
         }
         Event::PresenceChanged(changes) => {
@@ -592,21 +592,21 @@ pub(super) fn apply_core_event(
         }
         Event::UserDevices(devices) => {
             let lines = devices_lines(&state.model, &devices, state.local_time);
-            echo_lines_in_active_view(state, lines);
+            echo_lines_in_front_window(state, lines);
         }
         Event::RoomIdentityChanges(changes) => {
             identity::apply_room_identity_changes(state, changes);
         }
         Event::UserIdentityAccepted(user_id) => {
             let nick = known_nick(&state.model, &user_id).unwrap_or(user_id);
-            echo_lines_in_active_view(state, [identity::accepted_line(&nick)]);
+            echo_lines_in_front_window(state, [identity::accepted_line(&nick)]);
         }
         Event::DeviceSignedOut(device_id) => {
-            echo_lines_in_active_view(state, [commands::device_signed_out_line(&device_id)]);
+            echo_lines_in_front_window(state, [commands::device_signed_out_line(&device_id)]);
             state.model.status = "session signed out".to_owned();
         }
         Event::DeviceSignOutApproval { device_id, url } => {
-            echo_lines_in_active_view(
+            echo_lines_in_front_window(
                 state,
                 [
                     commands::device_sign_out_approval_line(&device_id),
@@ -619,7 +619,7 @@ pub(super) fn apply_core_event(
             device_id,
             display_name,
         } => {
-            echo_lines_in_active_view(
+            echo_lines_in_front_window(
                 state,
                 [commands::device_renamed_line(&device_id, &display_name)],
             );
@@ -821,7 +821,7 @@ pub(super) fn apply_core_event(
                 ErrorDestination::AskingDialog => return Ok(ActivityAttention::default()),
                 ErrorDestination::ActiveWindow { command } => {
                     let error = CommandError::new(command, error.message.clone());
-                    echo_lines_in_active_view(state, [error.to_string()]);
+                    echo_lines_in_front_window(state, [error.to_string()]);
                 }
                 ErrorDestination::Room(room_id) => match state.model.room_views.get_mut(room_id) {
                     Some(room_view) => {
@@ -993,7 +993,8 @@ pub(super) unsafe fn apply_events_and_refresh(
         attention = attention.then(apply_core_event(state, event)?);
         state.event_generation += 1;
         if let Some(url) = browser_url {
-            open_web_link(hwnd, url)?;
+            let front = state_ref(hwnd).active_view.clone();
+            open_web_link(hwnd, &front, url)?;
         }
         if connection_lost {
             reconnect::after_sync_lost(hwnd)?;

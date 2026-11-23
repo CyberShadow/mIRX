@@ -10,10 +10,16 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use super::hotlinks::LinkKind;
 use super::*;
 
-/// Follows the link `text` the user double-clicked, as `kind` says.
-pub(super) unsafe fn open_link(frame: HWND, text: &str, kind: LinkKind) -> Result<(), String> {
+/// Follows the link `text` the user double-clicked in `window`, as `kind`
+/// says; errors print there.
+pub(super) unsafe fn open_link(
+    frame: HWND,
+    window: &ViewId,
+    text: &str,
+    kind: LinkKind,
+) -> Result<(), String> {
     match kind {
-        LinkKind::Web(url) => open_web_link(frame, url),
+        LinkKind::Web(url) => open_web_link(frame, window, url),
         LinkKind::Matrix(
             MatrixLink::Room {
                 room_id_or_alias,
@@ -26,11 +32,14 @@ pub(super) unsafe fn open_link(frame: HWND, text: &str, kind: LinkKind) -> Resul
             },
         ) => match open_room_link(frame, room_id_or_alias, via) {
             Ok(status) => set_local_command_status(frame, status),
-            Err(error) => report_error_line(frame, format!("* Unable to open {text}: {error}")),
+            Err(error) => {
+                report_error_line(frame, window, format!("* Unable to open {text}: {error}"))
+            }
         },
         // As `/query @user` does, errors included.
         LinkKind::Matrix(MatrixLink::User { user_id }) => run_local_command(
             frame,
+            window,
             SlashCommand::Query {
                 target: user_id,
                 message: None,
@@ -39,13 +48,18 @@ pub(super) unsafe fn open_link(frame: HWND, text: &str, kind: LinkKind) -> Resul
     }
 }
 
-/// Opens the web address `url` in the default browser: a hotlink, or the
-/// homeserver's sign-in page. A failure prints where the user looks.
-pub(super) unsafe fn open_web_link(frame: HWND, url: String) -> Result<(), String> {
+/// Opens the web address `url` in the default browser: a hotlink clicked in
+/// `window`, or the homeserver's sign-in page, for the window in front. A
+/// failure prints in `window`.
+pub(super) unsafe fn open_web_link(
+    frame: HWND,
+    window: &ViewId,
+    url: String,
+) -> Result<(), String> {
     state_mut(frame).opened_links.push(url.clone());
     match open_in_browser(frame, &url) {
         Ok(()) => Ok(()),
-        Err(error) => report_error_line(frame, format!("* Unable to open {url}: {error}")),
+        Err(error) => report_error_line(frame, window, format!("* Unable to open {url}: {error}")),
     }
 }
 

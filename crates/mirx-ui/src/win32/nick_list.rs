@@ -87,7 +87,8 @@ pub(super) unsafe fn query_double_clicked_member(content: HWND) -> Result<(), St
         }
         member_action(state, MENU_ID_MEMBER_QUERY, &members)
     };
-    run_member_action(frame, action)
+    let window = content_view(state_ref(frame), content).clone();
+    run_member_action(frame, &window, action)
 }
 
 /// A member of the room of `view_id`, a window with a nick list. The
@@ -212,18 +213,19 @@ pub(super) unsafe fn show_member_context_menu(
         }
         None => default_context_point_for_window(member_list)?,
     };
+    // The list's window, which the menu's commands act in, even if the
+    // menu's modal loop activates another.
+    let window = content_view(state_ref(frame), GetParent(member_list)).clone();
     let menu = state_ref(frame).controls.member_menu;
     refresh_member_menu_state(frame, menu)?;
     let action_state = active_member_action_state(frame);
     if requested_command.is_some_and(|command| !action_state.enabled(command)) {
         return Err("member context menu action is disabled".to_owned());
     }
-    if let Some(command) = show_context_menu(frame, menu, x, y, requested_command)?
-        && let Some(result) = handle_menu_command(frame, command)
-    {
-        result?;
+    match show_context_menu(frame, menu, x, y, requested_command)? {
+        Some(command) => run_member_menu_item(frame, &window, command),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// A right-click on item `hit`: a nick not selected becomes the only
@@ -239,30 +241,39 @@ unsafe fn select_clicked_item(list: HWND, hit: usize) {
     }
 }
 
-/// Runs a member menu item for the active window's selected members, taken
-/// when it runs: the menu's modal loop handles core events, and a member
-/// who left meanwhile is no longer selected.
-pub(super) unsafe fn run_member_menu_item(hwnd: HWND, id: usize) -> Result<(), String> {
+/// Runs a member menu item, picked in `window`, for the members its nick
+/// list selects, taken when it runs: the menu's modal loop handles core
+/// events, and a member who left meanwhile is no longer selected.
+pub(super) unsafe fn run_member_menu_item(
+    hwnd: HWND,
+    window: &ViewId,
+    id: usize,
+) -> Result<(), String> {
     let action = {
         let state = state_ref(hwnd);
-        member_action(state, id, &active_selected_members(state))
+        member_action(state, id, &window_selected_members(state, window))
     };
-    run_member_action(hwnd, action)
+    run_member_action(hwnd, window, action)
 }
 
 /// Runs what a member menu item does: commands as if typed (their
 /// refusals and errors print where typed ones do), queries as Query User
 /// opens them (the status bar shows the last), and nicks inserted at the
 /// compose caret, replacing any selection, followed by a space to type on.
-/// An empty action had its members leave while the menu was open.
-unsafe fn run_member_action(hwnd: HWND, action: MemberMenuAction) -> Result<(), String> {
+/// All of it in `window`, whose nick list it came from. An empty action had
+/// its members leave while the menu was open.
+unsafe fn run_member_action(
+    hwnd: HWND,
+    window: &ViewId,
+    action: MemberMenuAction,
+) -> Result<(), String> {
     if action.is_empty() {
         return Err("no member is selected".to_owned());
     }
     match action {
         MemberMenuAction::Commands(commands) => {
             for command in commands {
-                run_local_command(hwnd, command)?;
+                run_local_command(hwnd, window, command)?;
             }
             Ok(())
         }
@@ -274,6 +285,10 @@ unsafe fn run_member_action(hwnd: HWND, action: MemberMenuAction) -> Result<(), 
             refresh_status_bar(hwnd)
         }
         MemberMenuAction::Mention(nicks) => {
+            // The editbox takes the focus, which only the active window's can.
+            if *window != state_ref(hwnd).active_view {
+                return Err("a name can be inserted only in the active window".to_owned());
+            }
             let edit = compose_edit(hwnd);
             active_compose_history(state_mut(hwnd)).reset_navigation();
             replace_edit_selection(edit, &format!("{} ", nicks.join(" ")));
@@ -492,10 +507,9 @@ unsafe fn selected_members(state: &WindowState, view_id: &ViewId) -> Vec<RoomMem
         .collect()
 }
 
-/// The active window's selected members; none in a window without a nick
-/// list.
-unsafe fn active_selected_members(state: &WindowState) -> Vec<RoomMemberSummary> {
-    match &state.active_view {
+/// The members `window`'s nick list selects; none in a window without one.
+unsafe fn window_selected_members(state: &WindowState, window: &ViewId) -> Vec<RoomMemberSummary> {
+    match window {
         ViewId::Status | ViewId::RoomList => Vec::new(),
         view_id @ (ViewId::Room(_) | ViewId::Thread { .. }) => selected_members(state, view_id),
     }
@@ -526,7 +540,7 @@ fn member_action(
 
 pub(super) unsafe fn active_member_action_state(hwnd: HWND) -> MemberMenuActionState {
     let state = state_ref(hwnd);
-    let selected = active_selected_members(state);
+    let selected = window_selected_members(state, &state.active_view);
     MemberMenuActionState {
         items: member_menu_item_ids()
             .map(|id| (id, !member_action(state, id, &selected).is_empty()))

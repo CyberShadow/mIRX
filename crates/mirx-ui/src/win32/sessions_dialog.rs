@@ -40,8 +40,8 @@ use super::timestamp::LocalTimeFn;
 use super::window_data::{self, WindowData};
 use super::{
     BUTTON_CLASS_NAME, STATIC_CLASS_NAME, create_child_window, enqueue_command, read_window_text,
-    run_local_command, run_modal_dialog, show_single_field_dialog, state_mut, submit_device_rename,
-    wide_null,
+    run_local_command, run_modal_dialog, show_single_field_dialog, state_mut, state_ref,
+    submit_device_rename, wide_null,
 };
 use crate::automation::UiSessions;
 
@@ -94,6 +94,8 @@ unsafe fn dialog_state(hwnd: HWND) -> &'static mut DialogState {
 /// Shows your sessions until Close, or until Verify... closes it and
 /// starts that verification.
 pub(super) unsafe fn run_sessions_dialog(hwnd: HWND) -> Result<(), String> {
+    // The window the dialog was opened from, where Verify's lines print.
+    let window = state_ref(hwnd).active_view.clone();
     let state = state_mut(hwnd);
     let own_user_id = own_user_id(&state.model)?.to_owned();
     let caption = format!("Sessions - {own_user_id}");
@@ -125,7 +127,7 @@ pub(super) unsafe fn run_sessions_dialog(hwnd: HWND) -> Result<(), String> {
     run_modal_dialog(hwnd, dialog);
     state_mut(hwnd).sessions_dialog = None;
     match dialog_state.verify.take() {
-        Some(verify) => run_local_command(hwnd, verify),
+        Some(verify) => run_local_command(hwnd, &window, verify),
         None => Ok(()),
     }
 }

@@ -174,7 +174,7 @@ unsafe fn join_room_list_row_reporting(frame: HWND, item: i32) -> LRESULT {
         && let Err(message) = join_room_list_row(frame, item as usize)
     {
         let error = CommandError::new("list", message);
-        if let Err(message) = report_command_error(frame, error) {
+        if let Err(message) = report_command_error(frame, &ViewId::RoomList, error) {
             show_error_message(frame, ROOM_LIST_TITLE, &message);
         }
     }

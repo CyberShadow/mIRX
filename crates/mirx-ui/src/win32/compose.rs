@@ -180,31 +180,40 @@ unsafe fn complete_compose_nick(hwnd: HWND, reverse: bool) -> Result<(), String>
     Ok(())
 }
 
-/// Message > Reply to Message and Edit Message: arm the editbox with the
-/// selected message.
+/// Message > Reply to Message and Edit Message, picked in `window`: arm its
+/// editbox with the selected message.
 pub(super) unsafe fn arm_compose_target_on_selected_message(
     hwnd: HWND,
+    window: &ViewId,
     target: fn(String) -> ComposeTarget,
 ) -> Result<(), String> {
     let Some(event_id) = selected_timeline_event_id_for_automation(hwnd) else {
         set_local_command_status(hwnd, "no message selected".to_owned())?;
         return Err("no message selected".to_owned());
     };
-    if let Err(message) = arm_compose_target(hwnd, target(event_id)) {
+    if let Err(message) = arm_compose_target(hwnd, window, target(event_id)) {
         set_local_command_status(hwnd, message.clone())?;
         return Err(message);
     }
     Ok(())
 }
 
-/// Arms the active window's editbox with `target` and focuses it. A reply
-/// keeps what was typed; an edit replaces it with the message as one would
-/// type it.
-pub(super) unsafe fn arm_compose_target(hwnd: HWND, target: ComposeTarget) -> Result<(), String> {
+/// Arms the editbox of `window` with `target` and focuses it. A reply keeps
+/// what was typed; an edit replaces it with the message as one would type
+/// it. Only the active window's editbox can take the focus, so another
+/// window's is refused.
+pub(super) unsafe fn arm_compose_target(
+    hwnd: HWND,
+    window: &ViewId,
+    target: ComposeTarget,
+) -> Result<(), String> {
     let edit_text = {
         let state = state_ref(hwnd);
-        let activity = window_message(&state.model, &state.active_view, target.event_id())
+        let activity = window_message(&state.model, window, target.event_id())
             .ok_or_else(|| "no such message in this window".to_owned())?;
+        if *window != state.active_view {
+            return Err("an editbox can be armed only in the active window".to_owned());
+        }
         match &target {
             ComposeTarget::Reply { .. } => None,
             ComposeTarget::Edit { .. } => Some(replies::compose_text_for_edit(
@@ -212,10 +221,9 @@ pub(super) unsafe fn arm_compose_target(hwnd: HWND, target: ComposeTarget) -> Re
             )),
         }
     };
-    let view_id = state_ref(hwnd).active_view.clone();
     state_mut(hwnd)
         .views
-        .get_mut(&view_id)
+        .get_mut(window)
         .expect("the active view has a window")
         .compose_mut()
         .target = Some(target);
@@ -227,7 +235,7 @@ pub(super) unsafe fn arm_compose_target(hwnd: HWND, target: ComposeTarget) -> Re
             SendMessageW(edit, EM_SETSEL, len, len as LPARAM);
         }
     }
-    refresh_view_content(hwnd, &view_id)?;
+    refresh_view_content(hwnd, window)?;
     SetFocus(edit);
     Ok(())
 }
@@ -265,12 +273,16 @@ fn react_compose_text(event_id: &str) -> String {
     format!("/react {event_id} ")
 }
 
-pub(super) unsafe fn submit_redact_selected_message(hwnd: HWND) -> Result<(), String> {
+/// Message > Redact Message, picked in `window`.
+pub(super) unsafe fn submit_redact_selected_message(
+    hwnd: HWND,
+    window: &ViewId,
+) -> Result<(), String> {
     let Some(event_id) = selected_timeline_event_id_for_automation(hwnd) else {
         set_local_command_status(hwnd, "no message selected".to_owned())?;
         return Err("no message selected".to_owned());
     };
-    let result = submit_redact_slash_command(state_mut(hwnd), event_id);
+    let result = submit_redact_slash_command(state_mut(hwnd), window, event_id);
     match result {
         Ok(message) => set_local_command_status(hwnd, message),
         Err(message) => {
@@ -334,8 +346,9 @@ pub(super) fn armed_compose_target_row(
 
 pub(super) unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> {
     let edit = compose_edit(hwnd);
-    // Commands may activate another window; the line still belongs to the
-    // history of the editbox it was typed in.
+    // The window the line was typed in: its commands act there, and the
+    // line belongs to its editbox's history, though commands may activate
+    // another window.
     let view = state_ref(hwnd).active_view.clone();
     let input = read_window_text(edit);
     if input.is_empty() {
@@ -357,13 +370,13 @@ pub(super) unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> 
             let target = state_ref(hwnd).views[&view].compose().target.clone();
             match &target {
                 None => {
-                    submit_compose(state_mut(hwnd), presentation, body, None)?;
+                    submit_compose(state_mut(hwnd), &view, presentation, body, None)?;
                 }
                 Some(ComposeTarget::Reply { event_id }) => {
-                    send_reply(state_mut(hwnd), event_id, presentation, body)?;
+                    send_reply(state_mut(hwnd), &view, event_id, presentation, body)?;
                 }
                 Some(ComposeTarget::Edit { event_id }) => {
-                    send_edit(state_mut(hwnd), event_id, presentation, body)?;
+                    send_edit(state_mut(hwnd), &view, event_id, presentation, body)?;
                 }
             }
             record(input.clone());
@@ -384,13 +397,13 @@ pub(super) unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> 
             // wrote that alias.
             record(input.clone());
             SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
-            script::run_alias_call(hwnd, name, args)?;
+            script::run_alias_call(hwnd, &view, name, args)?;
         }
         // Recorded as typed, as an alias call is.
         ComposeInput::Evaluate(line) => {
             record(input.clone());
             SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
-            script::run_evaluated_line(hwnd, line)?;
+            script::run_evaluated_line(hwnd, &view, line)?;
         }
         ComposeInput::Line(ComposeSubmission::LocalCommand(parsed)) => {
             if let Some(entry) = local_command_history_entry(&input, &parsed) {
@@ -399,8 +412,8 @@ pub(super) unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> 
             // Cleared first: a command may fill the editbox, as /edit does.
             SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
             match parsed {
-                Ok(command) => run_local_command(hwnd, command)?,
-                Err(error) => report_command_error(hwnd, error)?,
+                Ok(command) => run_local_command(hwnd, &view, command)?,
+                Err(error) => report_command_error(hwnd, &view, error)?,
             }
         }
     }
@@ -493,8 +506,10 @@ pub(super) unsafe fn submit_compose_from_control(
 ) -> Result<String, String> {
     let edit = compose_edit(hwnd);
     let input = read_window_text(edit);
+    let window = state_ref(hwnd).active_view.clone();
     let room_id = submit_compose(
         state_mut(hwnd),
+        &window,
         RoomMessagePresentationKind::Text,
         &input,
         explicit_room_id,
@@ -515,16 +530,18 @@ pub(super) fn message_text_from_input(input: &str) -> Result<(String, Vec<TextSt
     Ok((body, styles))
 }
 
+/// Sends a line given in `window` to its room, or to `explicit_room_id`.
 pub(super) fn submit_compose(
     state: &mut WindowState,
+    window: &ViewId,
     presentation: RoomMessagePresentationKind,
     input: &str,
     explicit_room_id: Option<&str>,
 ) -> Result<String, String> {
     let (body, styles) = message_text_from_input(input)?;
-    let destination = resolve_compose_destination(state, explicit_room_id)?;
+    let destination = resolve_compose_destination(state, window, explicit_room_id)?;
 
-    let clears_active_thread_marker = explicit_room_id.is_none() && destination.thread.is_some();
+    let clears_thread_marker = explicit_room_id.is_none() && destination.thread.is_some();
     enqueue_send_message(
         state,
         SendMessageRequest {
@@ -536,11 +553,11 @@ pub(super) fn submit_compose(
             reply: None,
         },
     )?;
-    if clears_active_thread_marker {
-        state.room_activity.remove(&state.active_view);
+    if clears_thread_marker {
+        state.room_activity.remove(window);
     }
     let notice = away_notice(state, &destination.room_id);
-    echo_lines_in_active_view(state, notice);
+    echo_lines_in_view(state, &echo_view(window), notice);
 
     Ok(destination.room_id)
 }
@@ -588,8 +605,8 @@ pub(super) fn enqueue_send_message(
 
 /// After a message to `room_id`: if it is a query whose user is away, the
 /// line that says so (IRC's `RPL_AWAY`), once per away status
-/// (`PresenceBook::away_notice`). It prints in the active window, after
-/// any echo of the message.
+/// (`PresenceBook::away_notice`). It prints in the window the message was
+/// given in, after any echo of the message.
 pub(super) fn away_notice(state: &mut WindowState, room_id: &str) -> Option<String> {
     let room = room_by_id(&state.model.rooms, room_id).expect("a message goes to a known room");
     let (RoomWindowKind::Query, [user_id]) =
@@ -608,9 +625,9 @@ pub(super) struct ComposeDestination {
     pub(super) thread: Option<SendMessageThreadTarget>,
 }
 
-/// The room `/sendfile` sends to: the active window's.
-pub(super) fn send_file_room_id(state: &WindowState) -> Result<String, String> {
-    match &state.active_view {
+/// The room `/sendfile` given in `window` sends to: that window's.
+pub(super) fn send_file_room_id(window: &ViewId) -> Result<String, String> {
+    match window {
         ViewId::Room(room_id) => Ok(room_id.clone()),
         ViewId::Thread { .. } => Err("file attachments cannot target threads yet".to_owned()),
         ViewId::Status | ViewId::RoomList => Err("no room selected".to_owned()),
@@ -664,8 +681,11 @@ pub(super) unsafe fn run_send_file_dialog(
     }
 }
 
+/// Where a line given in `window` goes: `explicit_room_id`, else the
+/// window's room, in its thread for a thread window.
 pub(super) fn resolve_compose_destination(
     state: &WindowState,
+    window: &ViewId,
     explicit_room_id: Option<&str>,
 ) -> Result<ComposeDestination, String> {
     if let Some(room_id) = explicit_room_id {
@@ -683,7 +703,7 @@ pub(super) fn resolve_compose_destination(
         return Err(format!("unknown room id: {room_id}"));
     }
 
-    match &state.active_view {
+    match window {
         ViewId::Room(room_id) => {
             if sendable_room_by_id(&state.model.rooms, room_id).is_some() {
                 Ok(ComposeDestination {
@@ -699,7 +719,7 @@ pub(super) fn resolve_compose_destination(
             thread_root_event_id,
         } => {
             projected_thread_by_id(&state.model, room_id, thread_root_event_id)
-                .expect("active thread compose must target an existing projected thread");
+                .expect("a thread window's line must target an existing projected thread");
             Ok(ComposeDestination {
                 room_id: room_id.clone(),
                 thread: Some(SendMessageThreadTarget {
@@ -1198,7 +1218,7 @@ mod tests {
         ];
 
         state.active_view = ViewId::Room("!ops:example".to_owned());
-        let room_id = send_file_room_id(&state).unwrap();
+        let room_id = send_file_room_id(&state.active_view).unwrap();
         assert_eq!(
             submit_send_file(&mut state, room_id, PathBuf::from("C:\\shot.png")),
             Ok("File queued for !ops:example".to_owned())
@@ -1222,12 +1242,12 @@ mod tests {
             thread_root_event_id: "$root".to_owned(),
         };
         assert_eq!(
-            send_file_room_id(&state),
+            send_file_room_id(&state.active_view),
             Err("file attachments cannot target threads yet".to_owned())
         );
         state.active_view = ViewId::Status;
         assert_eq!(
-            send_file_room_id(&state),
+            send_file_room_id(&state.active_view),
             Err("no room selected".to_owned())
         );
         assert_eq!(state.recorded_commands.len(), 1);
@@ -1254,9 +1274,11 @@ mod tests {
                     event_id: "$q".to_owned(),
                 });
                 set_compose_text(hwnd, "half typed").unwrap();
-                arm_compose_target_on_selected_message(hwnd, |event_id| ComposeTarget::Reply {
-                    event_id,
-                })
+                arm_compose_target_on_selected_message(
+                    hwnd,
+                    &state_ref(hwnd).active_view.clone(),
+                    |event_id| ComposeTarget::Reply { event_id },
+                )
                 .unwrap();
                 assert_eq!(active_compose_target(hwnd), Some(reply_to("$q")));
                 assert_eq!(dump_compose_text(hwnd).unwrap(), "half typed");
@@ -1309,9 +1331,11 @@ mod tests {
                     event_id: "$wave".to_owned(),
                 });
                 assert!(active_message_action_state(state_ref(hwnd)).edit_enabled);
-                arm_compose_target_on_selected_message(hwnd, |event_id| ComposeTarget::Edit {
-                    event_id,
-                })
+                arm_compose_target_on_selected_message(
+                    hwnd,
+                    &state_ref(hwnd).active_view.clone(),
+                    |event_id| ComposeTarget::Edit { event_id },
+                )
                 .unwrap();
                 assert_eq!(active_compose_target(hwnd), Some(edit_of("$wave")));
                 assert_eq!(dump_compose_text(hwnd).unwrap(), "/me waves");
@@ -1725,7 +1749,7 @@ mod tests {
         unsafe {
             with_test_compose_window(state, |hwnd| {
                 install_test_active_timeline_event(hwnd, "$event-id");
-                submit_redact_selected_message(hwnd).unwrap();
+                submit_redact_selected_message(hwnd, &state_ref(hwnd).active_view.clone()).unwrap();
                 assert_eq!(
                     state_ref(hwnd).model.status,
                     "Redaction queued for $event-id"
@@ -1750,12 +1774,20 @@ mod tests {
         state.model.rooms = vec![room("!selected:example", "Selected", false)];
         state.model.selected_room = Some("!selected:example".to_owned());
         state.active_view = ViewId::Room("!selected:example".to_owned());
+        let window = state.active_view.clone();
 
-        let selected_room_id =
-            submit_compose(&mut state, RoomMessagePresentationKind::Text, "hello", None).unwrap();
+        let selected_room_id = submit_compose(
+            &mut state,
+            &window,
+            RoomMessagePresentationKind::Text,
+            "hello",
+            None,
+        )
+        .unwrap();
         assert_eq!(selected_room_id, "!selected:example");
         let emote_room_id = submit_compose(
             &mut state,
+            &window,
             RoomMessagePresentationKind::Emote,
             "waves",
             None,
@@ -1834,12 +1866,28 @@ mod tests {
         };
 
         state.active_view = ViewId::Room("!ops:example".to_owned());
-        submit_compose(&mut state, RoomMessagePresentationKind::Text, "hi", None).unwrap();
+        let window = state.active_view.clone();
+        submit_compose(
+            &mut state,
+            &window,
+            RoomMessagePresentationKind::Text,
+            "hi",
+            None,
+        )
+        .unwrap();
         assert_eq!(echo(&state, "!ops:example"), Vec::<String>::new());
 
         state.active_view = ViewId::Room("!bob:example".to_owned());
         for _ in 0..2 {
-            submit_compose(&mut state, RoomMessagePresentationKind::Text, "hi", None).unwrap();
+            let window = state.active_view.clone();
+            submit_compose(
+                &mut state,
+                &window,
+                RoomMessagePresentationKind::Text,
+                "hi",
+                None,
+            )
+            .unwrap();
         }
         assert_eq!(echo(&state, "!bob:example"), ["* Bob is away: lunch"]);
         assert_eq!(state.recorded_commands.len(), 3);
@@ -1855,9 +1903,11 @@ mod tests {
         state.model.rooms = vec![room("!beta:example", "Beta", false)];
         state.model.selected_room = Some("!beta:example".to_owned());
         state.active_view = ViewId::Room("!beta:example".to_owned());
+        let window = state.active_view.clone();
 
         let room_id = submit_compose(
             &mut state,
+            &window,
             RoomMessagePresentationKind::Text,
             "/status",
             None,
@@ -1921,9 +1971,16 @@ mod tests {
             thread_view_id("!ops:example", "$thread-root:example"),
             ViewActivityLevel::Message,
         );
+        let window = state.active_view.clone();
 
-        let room_id =
-            submit_compose(&mut state, RoomMessagePresentationKind::Text, "hello", None).unwrap();
+        let room_id = submit_compose(
+            &mut state,
+            &window,
+            RoomMessagePresentationKind::Text,
+            "hello",
+            None,
+        )
+        .unwrap();
         assert_eq!(room_id, "!ops:example");
         assert!(
             !state
@@ -1932,6 +1989,7 @@ mod tests {
         );
         let emote_room_id = submit_compose(
             &mut state,
+            &window,
             RoomMessagePresentationKind::Emote,
             "waves",
             None,
@@ -1996,9 +2054,11 @@ mod tests {
             room_id: "!ops:example".to_owned(),
             thread_root_event_id: "$thread-root:example".to_owned(),
         };
+        let window = state.active_view.clone();
 
         let room_id = submit_compose(
             &mut state,
+            &window,
             RoomMessagePresentationKind::Text,
             "hello",
             Some("!ops:example"),
@@ -2032,10 +2092,12 @@ mod tests {
             invited_room("!invite:example", "Invite"),
             space("!space:example", "Space"),
         ];
+        let window = state.active_view.clone();
 
         assert_eq!(
             submit_compose(
                 &mut state,
+                &window,
                 RoomMessagePresentationKind::Text,
                 "",
                 Some("!room:example"),
@@ -2046,6 +2108,7 @@ mod tests {
         assert_eq!(
             submit_compose(
                 &mut state,
+                &window,
                 RoomMessagePresentationKind::Emote,
                 "waves",
                 Some("!missing:example"),
@@ -2055,6 +2118,7 @@ mod tests {
         assert_eq!(
             submit_compose(
                 &mut state,
+                &window,
                 RoomMessagePresentationKind::Emote,
                 "waves",
                 Some("!invite:example"),
@@ -2064,6 +2128,7 @@ mod tests {
         assert_eq!(
             submit_compose(
                 &mut state,
+                &window,
                 RoomMessagePresentationKind::Emote,
                 "waves",
                 Some("!space:example"),
@@ -2073,6 +2138,7 @@ mod tests {
         assert_eq!(
             submit_compose(
                 &mut state,
+                &window,
                 RoomMessagePresentationKind::Emote,
                 "waves",
                 None,
@@ -2082,15 +2148,44 @@ mod tests {
         assert!(state.recorded_commands.is_empty());
     }
 
+    /// A line from Status goes nowhere, whatever window is in front.
+    #[test]
+    fn a_line_sent_from_status_goes_nowhere() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!beta:example", "Beta", false)];
+        state.active_view = room_view_id("!beta:example");
+
+        assert_eq!(
+            submit_compose(
+                &mut state,
+                &ViewId::Status,
+                RoomMessagePresentationKind::Text,
+                "hi",
+                None,
+            ),
+            Err("no room selected".to_owned())
+        );
+        assert!(state.recorded_commands.is_empty());
+
+        stop_test_core(handle);
+    }
+
     #[test]
     fn submit_compose_requires_available_command_sender() {
         let mut state = test_state();
         state.model.rooms = vec![room("!room:example", "Room", false)];
         state.model.selected_room = Some("!room:example".to_owned());
         state.active_view = ViewId::Room("!room:example".to_owned());
+        let window = state.active_view.clone();
 
         assert_eq!(
-            submit_compose(&mut state, RoomMessagePresentationKind::Text, "hello", None,),
+            submit_compose(
+                &mut state,
+                &window,
+                RoomMessagePresentationKind::Text,
+                "hello",
+                None,
+            ),
             Err("core command sender is not available".to_owned())
         );
     }

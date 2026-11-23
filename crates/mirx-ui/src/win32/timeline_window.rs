@@ -190,8 +190,9 @@ unsafe extern "system" fn timeline_window_proc(
         WM_LBUTTONDBLCLK => {
             select_timeline_row(hwnd, lparam);
             let frame = frame_window_for(hwnd);
+            let window = timeline_view(state_ref(frame), hwnd);
             if let Some((text, kind)) = timeline_link_at(hwnd, client_point(lparam)) {
-                if let Err(message) = open_link(frame, &text, kind) {
+                if let Err(message) = open_link(frame, &window, &text, kind) {
                     show_error_message(frame, "Link", &message);
                 }
                 return 0;
@@ -205,7 +206,7 @@ unsafe extern "system" fn timeline_window_proc(
                     show_error_message(frame, "Message", &message);
                 }
             } else {
-                match double_click_action(state_ref(frame)) {
+                match double_click_action(state_ref(frame), &window) {
                     // Posted: the dialog's modal loop runs after the
                     // click's handling, as from the Room menu.
                     Some(DoubleClick::ChannelCentral) => {
@@ -213,7 +214,8 @@ unsafe extern "system" fn timeline_window_proc(
                     }
                     // As typed: it opens no modal loop.
                     Some(DoubleClick::Whois(nick)) => {
-                        if let Err(message) = run_local_command(frame, SlashCommand::Whois { nick })
+                        if let Err(message) =
+                            run_local_command(frame, &window, SlashCommand::Whois { nick })
                         {
                             show_error_message(frame, "Whois", &message);
                         }
@@ -451,7 +453,10 @@ unsafe fn finish_text_drag(hwnd: HWND, with_codes: bool) {
     );
     if let Err(error) = copy_to_clipboard(hwnd, &text) {
         let frame = frame_window_for(hwnd);
-        if let Err(message) = report_error_line(frame, format!("* Unable to copy: {error}")) {
+        let window = timeline_view(state_ref(frame), hwnd);
+        if let Err(message) =
+            report_error_line(frame, &window, format!("* Unable to copy: {error}"))
+        {
             show_error_message(frame, "Copy", &message);
         }
     }

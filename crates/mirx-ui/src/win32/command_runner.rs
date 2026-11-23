@@ -10,24 +10,29 @@ enum QueryTargetResolution {
     Ambiguous,
 }
 
-/// Runs a command and reports how it went: its status, or its error in the
-/// active window.
-pub(super) unsafe fn run_local_command(hwnd: HWND, command: SlashCommand) -> Result<(), String> {
-    match execute_slash_command(hwnd, command) {
+/// Runs a command given in `window` and reports how it went: its status,
+/// or its error in that window.
+pub(super) unsafe fn run_local_command(
+    hwnd: HWND,
+    window: &ViewId,
+    command: SlashCommand,
+) -> Result<(), String> {
+    match execute_slash_command(hwnd, window, command) {
         Ok(Some(status)) => set_local_command_status(hwnd, status),
         Ok(None) => Ok(()),
-        Err(error) => report_command_error(hwnd, error),
+        Err(error) => report_command_error(hwnd, window, error),
     }
 }
 
-/// Runs a typed command. `Ok(Some(status))` is feedback for the status bar;
-/// `Ok(None)` means the command reported (or needs) nothing.
+/// Runs a command given in `window`. `Ok(Some(status))` is feedback for the
+/// status bar; `Ok(None)` means the command reported (or needs) nothing.
 pub(super) unsafe fn execute_slash_command(
     hwnd: HWND,
+    window: &ViewId,
     command: SlashCommand,
 ) -> Result<Option<String>, CommandError> {
     let name = command.name();
-    run_slash_command(hwnd, command).map_err(|reason| CommandError::new(name, reason))
+    run_slash_command(hwnd, window, command).map_err(|reason| CommandError::new(name, reason))
 }
 
 /// `/clear`, and the window menu's Buffer > Clear: every line of the
@@ -57,8 +62,13 @@ pub(super) unsafe fn clear_window(hwnd: HWND, view_id: &ViewId) -> Result<String
     }
 }
 
+/// Runs a command given in `window`, the window it is about: the room a
+/// command without one acts on, and where its lines print. It was the
+/// active one when the command was given; it need not be now (a prompt's
+/// modal loop may have activated another).
 pub(super) unsafe fn run_slash_command(
     hwnd: HWND,
+    window: &ViewId,
     command: SlashCommand,
 ) -> Result<Option<String>, String> {
     match command {
@@ -67,7 +77,7 @@ pub(super) unsafe fn run_slash_command(
             Ok(Some("status window active".to_owned()))
         }
         SlashCommand::Find { query } => {
-            execute_active_view_find(hwnd, &query)?;
+            execute_view_find(hwnd, window, &query)?;
             Ok(None)
         }
         SlashCommand::Window { target } => {
@@ -102,7 +112,8 @@ pub(super) unsafe fn run_slash_command(
                             RoomMessagePresentationKind::Text,
                             &input,
                         )?;
-                        echo_in_active_view(hwnd, away_notice(state_mut(hwnd), &room_id))?;
+                        let notice = away_notice(state_mut(hwnd), &room_id);
+                        echo_in_window(hwnd, &ViewId::Room(room_id), notice)?;
                     }
                     Ok(Some(format!("query opened: {user_id}")))
                 }
@@ -112,8 +123,9 @@ pub(super) unsafe fn run_slash_command(
                 QueryTargetResolution::None => {
                     let status = submit_query_slash_command(state_mut(hwnd), user_id.clone())?;
                     if message.is_some() {
-                        echo_in_active_view(
+                        echo_in_window(
                             hwnd,
+                            window,
                             [format!(
                                 "* /query: creating a query with {user_id}; message not sent"
                             )],
@@ -132,18 +144,18 @@ pub(super) unsafe fn run_slash_command(
             let sent = send_room_message(state_mut(hwnd), room_id.clone(), presentation, &body)?;
             let echo = commands::msg_echo(presentation, &target, &sent);
             let notice = away_notice(state_mut(hwnd), &room_id);
-            echo_in_active_view(hwnd, std::iter::once(echo).chain(notice))?;
+            echo_in_window(hwnd, window, std::iter::once(echo).chain(notice))?;
             Ok(None)
         }
         SlashCommand::Names { target } => {
             let lines = {
                 let state = state_ref(hwnd);
-                let room_id = resolve_joined_room_target(state, target.as_deref())?;
+                let room_id = resolve_joined_room_target(state, window, target.as_deref())?;
                 let room = room_by_id(&state.model.rooms, &room_id)
                     .expect("a joined room target must exist");
                 commands::names_lines(&room.display_name, room_members(&state.model, &room_id))
             };
-            echo_in_active_view(hwnd, lines)?;
+            echo_in_window(hwnd, window, lines)?;
             Ok(None)
         }
         SlashCommand::Whois { nick } => {
@@ -200,7 +212,7 @@ pub(super) unsafe fn run_slash_command(
                     known_nick(model, user_id)
                 })?
             };
-            echo_in_active_view(hwnd, lines)?;
+            echo_in_window(hwnd, window, lines)?;
             Ok(None)
         }
         SlashCommand::Ignore {
@@ -241,7 +253,7 @@ pub(super) unsafe fn run_slash_command(
                     |user_id| known_nick(&state.model, user_id),
                 )
             };
-            echo_in_active_view(hwnd, lines)?;
+            echo_in_window(hwnd, window, lines)?;
             Ok(None)
         }
         SlashCommand::Notify(NotifyCommand::Add {
@@ -264,12 +276,11 @@ pub(super) unsafe fn run_slash_command(
                     .update(|settings| settings.notify.list = list)?;
                 line
             };
-            echo_in_active_view(hwnd, [line])?;
+            echo_in_window(hwnd, window, [line])?;
             show_nick_colors(hwnd)?;
             // As mIRC asks the server at once: a user on now is news.
             announce_notify_changes(state_mut(hwnd))?;
-            let view = echo_view(&state_ref(hwnd).active_view);
-            refresh_view_content(hwnd, &view)?;
+            refresh_view_content(hwnd, &echo_view(window))?;
             Ok(Some("notify list saved".to_owned()))
         }
         SlashCommand::Notify(NotifyCommand::Remove { target }) => {
@@ -290,7 +301,7 @@ pub(super) unsafe fn run_slash_command(
                     .update(|settings| settings.notify.list = list)?;
                 line
             };
-            echo_in_active_view(hwnd, [line])?;
+            echo_in_window(hwnd, window, [line])?;
             show_nick_colors(hwnd)?;
             Ok(Some("notify list saved".to_owned()))
         }
@@ -301,14 +312,14 @@ pub(super) unsafe fn run_slash_command(
                     known_nick(&state.model, user_id)
                 })
             };
-            echo_in_active_view(hwnd, lines)?;
+            echo_in_window(hwnd, window, lines)?;
             Ok(None)
         }
         SlashCommand::NickColor(NickColorCommand::Active(active)) => {
             let mut setting = state_ref(hwnd).settings.settings().nick_colors.clone();
             setting.active = active;
             apply_nick_colors(hwnd, setting)?;
-            echo_in_active_view(hwnd, [nick_colors::state_line(active)])?;
+            echo_in_window(hwnd, window, [nick_colors::state_line(active)])?;
             Ok(Some("nick colors saved".to_owned()))
         }
         SlashCommand::NickColor(NickColorCommand::Add {
@@ -335,7 +346,7 @@ pub(super) unsafe fn run_slash_command(
                 (setting, line)
             };
             apply_nick_colors(hwnd, setting)?;
-            echo_in_active_view(hwnd, [line])?;
+            echo_in_window(hwnd, window, [line])?;
             Ok(Some("nick colors saved".to_owned()))
         }
         SlashCommand::NickColor(NickColorCommand::Remove(target)) => {
@@ -359,11 +370,11 @@ pub(super) unsafe fn run_slash_command(
                 (setting, line)
             };
             apply_nick_colors(hwnd, setting)?;
-            echo_in_active_view(hwnd, [line])?;
+            echo_in_window(hwnd, window, [line])?;
             Ok(Some("nick colors saved".to_owned()))
         }
         SlashCommand::Channel { target } => {
-            let room_id = channel_central_room(state_ref(hwnd), target.as_deref())?;
+            let room_id = channel_central_room(state_ref(hwnd), window, target.as_deref())?;
             // Modal: it says what it sent itself.
             channel_central_dialog::run_channel_central_dialog(hwnd, room_id)?;
             Ok(None)
@@ -375,11 +386,11 @@ pub(super) unsafe fn run_slash_command(
         }
         SlashCommand::Close => {
             let state = state_ref(hwnd);
-            if close_action(&state.model, &state.active_view) == CloseAction::Refuse {
+            if close_action(&state.model, window) == CloseAction::Refuse {
                 return Err("the Status window cannot be closed".to_owned());
             }
             // Posted: closing may ask first, and destroys this editbox.
-            let child = state.views[&state.active_view].child;
+            let child = state.views[window].child;
             if PostMessageW(child, WM_CLOSE, 0, 0) == 0 {
                 return Err(last_os_error("PostMessageW WM_CLOSE"));
             }
@@ -387,7 +398,7 @@ pub(super) unsafe fn run_slash_command(
         }
         SlashCommand::Kick { nick, reason } => {
             let state = state_mut(hwnd);
-            let (room_id, member) = room_member_target(state, &nick)?;
+            let (room_id, member) = room_member_target(state, window, &nick)?;
             if !member.can_kick {
                 return Err(format!("you cannot kick {nick}"));
             }
@@ -404,7 +415,7 @@ pub(super) unsafe fn run_slash_command(
         }
         SlashCommand::Ban { nick, reason } => {
             let state = state_mut(hwnd);
-            let (room_id, member) = room_member_target(state, &nick)?;
+            let (room_id, member) = room_member_target(state, window, &nick)?;
             if !member.can_ban {
                 return Err(format!("you cannot ban {nick}"));
             }
@@ -421,7 +432,7 @@ pub(super) unsafe fn run_slash_command(
         }
         SlashCommand::Unban { target, reason } => {
             let state = state_mut(hwnd);
-            let room_id = resolve_joined_room_target(state, None)?;
+            let room_id = resolve_joined_room_target(state, window, None)?;
             let user_id = commands::resolve_user(all_room_members(&state.model), &target)?.user_id;
             enqueue_command(
                 state,
@@ -435,7 +446,7 @@ pub(super) unsafe fn run_slash_command(
         }
         SlashCommand::Invite { nick, room } => {
             let state = state_mut(hwnd);
-            let room_id = resolve_joined_room_target(state, room.as_deref())?;
+            let room_id = resolve_joined_room_target(state, window, room.as_deref())?;
             let user_id = commands::resolve_user(all_room_members(&state.model), &nick)?.user_id;
             if room_members(&state.model, &room_id)
                 .iter()
@@ -454,7 +465,7 @@ pub(super) unsafe fn run_slash_command(
         }
         SlashCommand::SetRank { nicks, change } => {
             let state = state_mut(hwnd);
-            let room_id = resolve_joined_room_target(state, None)?;
+            let room_id = resolve_joined_room_target(state, window, None)?;
             // One write carries every change or none: the first refusal
             // sends nothing.
             let changes = commands::member_role_changes(
@@ -484,7 +495,7 @@ pub(super) unsafe fn run_slash_command(
         }
         SlashCommand::Mode { room, changes } => {
             let state = state_mut(hwnd);
-            let room_id = resolve_joined_room_target(state, room.as_deref())?;
+            let room_id = resolve_joined_room_target(state, window, room.as_deref())?;
             let member_roles = commands::member_role_changes(
                 room_members(&state.model, &room_id),
                 changes
@@ -532,24 +543,25 @@ pub(super) unsafe fn run_slash_command(
             Ok(None)
         }
         SlashCommand::Accept { target } => {
-            submit_accept_slash_command(state_mut(hwnd), target.as_deref()).map(Some)
+            submit_accept_slash_command(state_mut(hwnd), window, target.as_deref()).map(Some)
         }
         SlashCommand::Reject { target } => {
-            submit_reject_slash_command(state_mut(hwnd), target.as_deref()).map(Some)
+            submit_reject_slash_command(state_mut(hwnd), window, target.as_deref()).map(Some)
         }
         SlashCommand::Part { target } => {
-            submit_part_slash_command(state_mut(hwnd), target.as_deref()).map(Some)
+            submit_part_slash_command(state_mut(hwnd), window, target.as_deref()).map(Some)
         }
         SlashCommand::React {
             target_event_id,
             key,
-        } => submit_react_slash_command(state_mut(hwnd), target_event_id, key).map(Some),
+        } => submit_react_slash_command(state_mut(hwnd), window, target_event_id, key).map(Some),
         SlashCommand::Reply {
             target_event_id,
             body: None,
         } => {
             arm_compose_target(
                 hwnd,
+                window,
                 ComposeTarget::Reply {
                     event_id: target_event_id,
                 },
@@ -562,6 +574,7 @@ pub(super) unsafe fn run_slash_command(
         } => {
             send_reply(
                 state_mut(hwnd),
+                window,
                 &target_event_id,
                 RoomMessagePresentationKind::Text,
                 &body,
@@ -569,7 +582,7 @@ pub(super) unsafe fn run_slash_command(
             Ok(Some(format!("Reply queued for {target_event_id}")))
         }
         SlashCommand::SendFile { path } => {
-            let room_id = send_file_room_id(state_ref(hwnd))?;
+            let room_id = send_file_room_id(window)?;
             match path {
                 Some(path) => {
                     submit_send_file(state_mut(hwnd), room_id, PathBuf::from(path)).map(Some)
@@ -583,6 +596,7 @@ pub(super) unsafe fn run_slash_command(
         } => {
             arm_compose_target(
                 hwnd,
+                window,
                 ComposeTarget::Edit {
                     event_id: target_event_id,
                 },
@@ -597,32 +611,35 @@ pub(super) unsafe fn run_slash_command(
             // an emote stays an emote.
             let presentation = {
                 let state = state_ref(hwnd);
-                let activity = window_message(&state.model, &state.active_view, &target_event_id)
+                let activity = window_message(&state.model, window, &target_event_id)
                     .ok_or_else(|| "no such message in this window".to_owned())?;
                 replies::editable_message(activity, state.model.own_user_id())?.presentation
             };
-            send_edit(state_mut(hwnd), &target_event_id, presentation, &body)?;
+            send_edit(
+                state_mut(hwnd),
+                window,
+                &target_event_id,
+                presentation,
+                &body,
+            )?;
             Ok(Some(format!("Edit queued for {target_event_id}")))
         }
         SlashCommand::Redact { event_id } => {
-            submit_redact_slash_command(state_mut(hwnd), event_id).map(Some)
+            submit_redact_slash_command(state_mut(hwnd), window, event_id).map(Some)
         }
         SlashCommand::Unreact { reaction_event_id } => {
-            submit_unreact_slash_command(state_mut(hwnd), reaction_event_id).map(Some)
+            submit_unreact_slash_command(state_mut(hwnd), window, reaction_event_id).map(Some)
         }
         SlashCommand::Topic {
             room,
             topic: Some(topic),
-        } => submit_topic_slash_command(state_mut(hwnd), room.as_deref(), topic).map(Some),
+        } => submit_topic_slash_command(state_mut(hwnd), window, room.as_deref(), topic).map(Some),
         SlashCommand::Topic { room, topic: None } => {
-            let line = room_topic_line(state_ref(hwnd), room.as_deref())?;
-            echo_in_active_view(hwnd, [line])?;
+            let line = room_topic_line(state_ref(hwnd), window, room.as_deref())?;
+            echo_in_window(hwnd, window, [line])?;
             Ok(None)
         }
-        SlashCommand::Clear => {
-            let view_id = state_ref(hwnd).active_view.clone();
-            clear_window(hwnd, &view_id).map(Some)
-        }
+        SlashCommand::Clear => clear_window(hwnd, window).map(Some),
         SlashCommand::ClearAll(switches) => {
             let views = clearall_views(&state_ref(hwnd).model, switches);
             for view_id in &views {
@@ -649,13 +666,10 @@ pub(super) unsafe fn run_slash_command(
                 count => format!("sent to {count} channels"),
             }))
         }
-        SlashCommand::SaveBuf { path } => {
-            let view_id = state_ref(hwnd).active_view.clone();
-            match path {
-                Some(path) => save_window_buffer(hwnd, &view_id, Path::new(&path)).map(Some),
-                None => run_save_buffer_dialog(hwnd, &view_id),
-            }
-        }
+        SlashCommand::SaveBuf { path } => match path {
+            Some(path) => save_window_buffer(hwnd, window, Path::new(&path)).map(Some),
+            None => run_save_buffer_dialog(hwnd, window),
+        },
         SlashCommand::E2ee(command) => match command {
             E2eeSlashCommand::ShowStatus => {
                 let state = state_mut(hwnd);
@@ -717,15 +731,19 @@ pub(super) unsafe fn run_slash_command(
             }
         },
         SlashCommand::Help { topic } => {
-            echo_in_active_view(hwnd, commands::help_lines(topic.as_deref())?)?;
+            echo_in_window(hwnd, window, commands::help_lines(topic.as_deref())?)?;
             Ok(None)
         }
         SlashCommand::Echo(echo) => {
-            print_echo(hwnd, echo)?;
+            print_echo(hwnd, window, echo)?;
             Ok(None)
         }
         SlashCommand::Alias(AliasCommand::List) => {
-            echo_in_active_view(hwnd, alias_list_lines(state_ref(hwnd).aliases.aliases()))?;
+            echo_in_window(
+                hwnd,
+                window,
+                alias_list_lines(state_ref(hwnd).aliases.aliases()),
+            )?;
             Ok(None)
         }
         SlashCommand::Alias(AliasCommand::Remove(name)) => {
@@ -744,12 +762,12 @@ pub(super) unsafe fn run_slash_command(
                 LogCommand::On { target } => (target, Some(true)),
                 LogCommand::Off { target } => (target, Some(false)),
             };
-            let view_id = log_command_view(state_ref(hwnd), target.as_deref())?;
+            let view_id = log_command_view(state_ref(hwnd), window, target.as_deref())?;
             let line = match on {
                 None => logging_is_line(state_ref(hwnd), &view_id),
                 Some(on) => set_view_logging(state_mut(hwnd), &view_id, on)?,
             };
-            echo_in_active_view(hwnd, [line])?;
+            echo_in_window(hwnd, window, [line])?;
             Ok(None)
         }
         SlashCommand::Font(FontCommand::Dialog) => run_font_dialog(hwnd),
@@ -764,7 +782,7 @@ pub(super) unsafe fn run_slash_command(
                     on_off(timestamp.show),
                     timestamp.format
                 );
-                echo_in_active_view(hwnd, [line])?;
+                echo_in_window(hwnd, window, [line])?;
                 Ok(None)
             }
             TimestampCommand::On | TimestampCommand::Off => {
@@ -782,7 +800,7 @@ pub(super) unsafe fn run_slash_command(
             let show = match command {
                 BarCommand::Show => {
                     let shown = state_ref(hwnd).settings.settings().bar_shown(bar);
-                    echo_in_active_view(hwnd, [bar_is_line(bar, shown)])?;
+                    echo_in_window(hwnd, window, [bar_is_line(bar, shown)])?;
                     return Ok(None);
                 }
                 BarCommand::On => true,
@@ -828,9 +846,10 @@ pub(super) unsafe fn run_slash_command(
     }
 }
 
-/// `/echo`: its line goes in its window. A window the user is not in gets
-/// mIRC's event activity, as `/echo` without `-n` gives it.
-unsafe fn print_echo(hwnd: HWND, echo: EchoCommand) -> Result<(), String> {
+/// `/echo` given in `window`: its line goes in its window, `window` itself
+/// without one. A window the user is not looking at gets mIRC's event
+/// activity, as `/echo` without `-n` gives it.
+unsafe fn print_echo(hwnd: HWND, window: &ViewId, echo: EchoCommand) -> Result<(), String> {
     let EchoCommand {
         color,
         place,
@@ -839,7 +858,7 @@ unsafe fn print_echo(hwnd: HWND, echo: EchoCommand) -> Result<(), String> {
     } = echo;
     let state = state_mut(hwnd);
     let view = match place {
-        EchoPlace::Active => echo_view(&state.active_view),
+        EchoPlace::Active => echo_view(window),
         EchoPlace::Status => ViewId::Status,
         EchoPlace::Window(target) => {
             let view = match resolve_room(&state.model.rooms, is_navigable_room, &target) {
@@ -879,11 +898,15 @@ fn alias_list_lines(aliases: &Aliases) -> Vec<String> {
         .collect()
 }
 
-/// The window `/log` acts on: the active one (a thread window's room), or
-/// the room `target` names, whose window must be open.
-fn log_command_view(state: &WindowState, target: Option<&str>) -> Result<ViewId, String> {
+/// The window `/log` given in `window` acts on: that one (a thread
+/// window's room), or the room `target` names, whose window must be open.
+fn log_command_view(
+    state: &WindowState,
+    window: &ViewId,
+    target: Option<&str>,
+) -> Result<ViewId, String> {
     let Some(target) = target else {
-        return log_view(&state.active_view);
+        return log_view(window);
     };
     let view_id = match resolve_room(&state.model.rooms, is_navigable_room, target) {
         Ok(room) => ViewId::Room(room.room_id.clone()),
@@ -917,33 +940,41 @@ fn bar_is_line(bar: Bar, shown: bool) -> String {
     format!("* {} is {}", bar.title(), on_off(shown))
 }
 
-/// A typed command's error, printed in the window it was typed in; the
-/// status bar says the same.
-pub(super) unsafe fn report_command_error(hwnd: HWND, error: CommandError) -> Result<(), String> {
-    report_error_line(hwnd, error.to_string())
+/// A command's error, printed in the window it was given in; the status
+/// bar says the same.
+pub(super) unsafe fn report_command_error(
+    hwnd: HWND,
+    window: &ViewId,
+    error: CommandError,
+) -> Result<(), String> {
+    report_error_line(hwnd, window, error.to_string())
 }
 
-/// An error line, `* ...`, printed in the active window as a typed
-/// command's errors are; the status bar says the same.
-pub(super) unsafe fn report_error_line(hwnd: HWND, text: String) -> Result<(), String> {
-    echo_in_active_view(hwnd, [text.clone()])?;
+/// An error line, `* ...`, printed in `window` as a command's errors are;
+/// the status bar says the same.
+pub(super) unsafe fn report_error_line(
+    hwnd: HWND,
+    window: &ViewId,
+    text: String,
+) -> Result<(), String> {
+    echo_in_window(hwnd, window, [text.clone()])?;
     set_local_command_status(hwnd, text)
 }
 
-/// The window a command's lines print in: the active one. The Rooms List
-/// has no text of its own: what a Commands menu item run there prints goes
-/// to Status.
-pub(super) fn echo_view(active_view: &ViewId) -> ViewId {
-    match active_view {
+/// The window the lines of a command given in `window` print in: that one.
+/// The Rooms List has no text of its own: what a Commands menu item run
+/// there prints goes to Status.
+pub(super) fn echo_view(window: &ViewId) -> ViewId {
+    match window {
         ViewId::RoomList => ViewId::Status,
         view => view.clone(),
     }
 }
 
-/// Prints a command's lines in the active window. They are its newest lines,
-/// in the window the user is looking at, so they raise no activity. The
-/// caller refreshes the window.
-pub(super) fn echo_lines_in_active_view(
+/// Prints the lines of a core answer in the window in front now, where the
+/// user looks when it arrives. They raise no activity. The caller
+/// refreshes the window.
+pub(super) fn echo_lines_in_front_window(
     state: &mut WindowState,
     lines: impl IntoIterator<Item = String>,
 ) {
@@ -992,13 +1023,14 @@ pub(super) fn push_lines_in_view(
     }
 }
 
-/// Prints a command's lines in the active window, and shows them.
-pub(super) unsafe fn echo_in_active_view(
+/// Prints the lines of a command given in `window` there, and shows them.
+pub(super) unsafe fn echo_in_window(
     hwnd: HWND,
+    window: &ViewId,
     lines: impl IntoIterator<Item = String>,
 ) -> Result<(), String> {
-    echo_lines_in_active_view(state_mut(hwnd), lines);
-    let view = echo_view(&state_ref(hwnd).active_view);
+    let view = echo_view(window);
+    echo_lines_in_view(state_mut(hwnd), &view, lines);
     refresh_view_content(hwnd, &view)
 }
 
@@ -1039,13 +1071,14 @@ fn room_members<'m>(model: &'m UiModel, room_id: &str) -> &'m [RoomMemberSummary
         .unwrap_or_default()
 }
 
-/// The joined room a member command acts on, and the member the nick names
-/// there.
+/// The joined room a member command given in `window` acts on, and the
+/// member the nick names there.
 fn room_member_target<'s>(
     state: &'s WindowState,
+    window: &ViewId,
     nick: &str,
 ) -> Result<(String, &'s RoomMemberSummary), String> {
-    let room_id = resolve_joined_room_target(state, None)?;
+    let room_id = resolve_joined_room_target(state, window, None)?;
     let member = commands::resolve_nick(room_members(&state.model, &room_id), nick)?;
     Ok((room_id, member))
 }
@@ -1171,12 +1204,15 @@ pub(super) fn devices_lines(
     commands::devices_lines(devices, &nick, own_user, identity_changed, local_time)
 }
 
+/// The joined room a command given in `window` acts on: `target`, else
+/// `window`'s room (a thread window's too).
 pub(super) fn resolve_joined_room_target(
     state: &WindowState,
+    window: &ViewId,
     target: Option<&str>,
 ) -> Result<String, String> {
     let Some(target) = target else {
-        return match &state.active_view {
+        return match window {
             ViewId::Room(room_id) => {
                 if sendable_room_by_id(&state.model.rooms, room_id).is_some() {
                     Ok(room_id.clone())
@@ -1197,15 +1233,15 @@ pub(super) fn resolve_joined_room_target(
     }
 }
 
-/// The room Channel Central opens for: `target`, else the active window's
-/// room. It reads the server, so it needs the session; a query is no
-/// channel.
+/// The room Channel Central opens for: `target`, else `window`'s room. It
+/// reads the server, so it needs the session; a query is no channel.
 pub(super) fn channel_central_room(
     state: &WindowState,
+    window: &ViewId,
     target: Option<&str>,
 ) -> Result<String, String> {
     own_user_id(&state.model)?;
-    let room_id = resolve_joined_room_target(state, target)?;
+    let room_id = resolve_joined_room_target(state, window, target)?;
     let room = room_by_id(&state.model.rooms, &room_id).expect("a joined room target must exist");
     if room.is_direct {
         return Err(format!("{} is a query, not a channel", room.display_name));
@@ -1213,13 +1249,16 @@ pub(super) fn channel_central_room(
     Ok(room_id)
 }
 
+/// The invite `/accept` or `/reject` given in `window` answers: `target`,
+/// else `window`'s room.
 pub(super) fn resolve_invite_command_room_id(
     state: &WindowState,
+    window: &ViewId,
     action: &str,
     target: Option<&str>,
 ) -> Result<String, String> {
     let Some(target) = target else {
-        return match &state.active_view {
+        return match window {
             ViewId::Room(room_id)
                 if room_by_id(&state.model.rooms, room_id)
                     .is_some_and(is_invite_command_target) =>
@@ -1378,9 +1417,10 @@ pub(super) fn submit_join_room(
 
 pub(super) fn submit_accept_slash_command(
     state: &mut WindowState,
+    window: &ViewId,
     target: Option<&str>,
 ) -> Result<String, String> {
-    let room_id = resolve_invite_command_room_id(state, "accept", target)?;
+    let room_id = resolve_invite_command_room_id(state, window, "accept", target)?;
     let command = Command::AcceptRoomInvite(AcceptRoomInviteRequest {
         room_id: room_id.clone(),
     });
@@ -1397,9 +1437,10 @@ pub(super) fn submit_accept_slash_command(
 
 pub(super) fn submit_reject_slash_command(
     state: &mut WindowState,
+    window: &ViewId,
     target: Option<&str>,
 ) -> Result<String, String> {
-    let room_id = resolve_invite_command_room_id(state, "reject", target)?;
+    let room_id = resolve_invite_command_room_id(state, window, "reject", target)?;
     let command = Command::RejectRoomInvite(RejectRoomInviteRequest {
         room_id: room_id.clone(),
     });
@@ -1416,9 +1457,10 @@ pub(super) fn submit_reject_slash_command(
 
 pub(super) fn submit_part_slash_command(
     state: &mut WindowState,
+    window: &ViewId,
     target: Option<&str>,
 ) -> Result<String, String> {
-    let room_id = resolve_joined_room_target(state, target)?;
+    let room_id = resolve_joined_room_target(state, window, target)?;
     let command = Command::LeaveRoom(LeaveRoomRequest {
         room_id: room_id.clone(),
     });
@@ -1437,10 +1479,11 @@ pub(super) fn submit_part_slash_command(
 /// follows the next room snapshot, not the click.
 pub(super) fn submit_room_notification_mode(
     state: &mut WindowState,
+    window: &ViewId,
     target: Option<&str>,
     mode: RoomNotificationMode,
 ) -> Result<String, String> {
-    let room_id = resolve_joined_room_target(state, target)?;
+    let room_id = resolve_joined_room_target(state, window, target)?;
     let display_name = sendable_room_by_id(&state.model.rooms, &room_id)
         .expect("the joined room target is a joined room")
         .display_name
@@ -1457,10 +1500,11 @@ pub(super) fn submit_room_notification_mode(
 
 fn submit_react_slash_command(
     state: &mut WindowState,
+    window: &ViewId,
     target_event_id: String,
     key: String,
 ) -> Result<String, String> {
-    let room_id = resolve_joined_room_target(state, None)?;
+    let room_id = resolve_joined_room_target(state, window, None)?;
     let command = Command::SendReaction(SendReactionRequest {
         room_id: room_id.clone(),
         target_event_id: target_event_id.clone(),
@@ -1477,16 +1521,17 @@ fn submit_react_slash_command(
     Ok(format!("Reaction queued for {target_event_id}"))
 }
 
-/// Replaces the user's message `target_event_id` in the active window with
+/// Replaces the user's message `target_event_id` in `window` with
 /// `presentation` and `input`; sends nothing when that is what it says.
 pub(super) fn send_edit(
     state: &mut WindowState,
+    window: &ViewId,
     target_event_id: &str,
     presentation: RoomMessagePresentationKind,
     input: &str,
 ) -> Result<(), String> {
     let message = replies::editable_message(
-        window_message(&state.model, &state.active_view, target_event_id)
+        window_message(&state.model, window, target_event_id)
             .ok_or_else(|| "no such message in this window".to_owned())?,
         state.model.own_user_id(),
     )?;
@@ -1494,7 +1539,7 @@ pub(super) fn send_edit(
     if message.presentation == presentation && message.body == body && message.styles == styles {
         return Ok(());
     }
-    let room_id = resolve_joined_room_target(state, None)?;
+    let room_id = resolve_joined_room_target(state, window, None)?;
     enqueue_command(
         state,
         Command::EditMessage(EditMessageRequest {
@@ -1507,23 +1552,24 @@ pub(super) fn send_edit(
     )
 }
 
-/// Sends a reply to the message `target_event_id` in the active window, in
-/// its thread when the window is one.
+/// Sends a reply to the message `target_event_id` in `window`, in its
+/// thread when the window is one.
 pub(super) fn send_reply(
     state: &mut WindowState,
+    window: &ViewId,
     target_event_id: &str,
     presentation: RoomMessagePresentationKind,
     input: &str,
 ) -> Result<(), String> {
     let (body, styles) = message_text_from_input(input)?;
-    let destination = resolve_compose_destination(state, None)?;
+    let destination = resolve_compose_destination(state, window, None)?;
     let sender_user_id = room_activity_sender_user_id(
-        window_message(&state.model, &state.active_view, target_event_id)
+        window_message(&state.model, window, target_event_id)
             .ok_or_else(|| "no such message in this window".to_owned())?,
     )
     .expect("a message that is not redacted has a sender")
     .to_owned();
-    let clears_active_thread_marker = destination.thread.is_some();
+    let clears_thread_marker = destination.thread.is_some();
     enqueue_send_message(
         state,
         SendMessageRequest {
@@ -1538,16 +1584,20 @@ pub(super) fn send_reply(
             }),
         },
     )?;
-    if clears_active_thread_marker {
-        state.room_activity.remove(&state.active_view);
+    if clears_thread_marker {
+        state.room_activity.remove(window);
     }
     let notice = away_notice(state, &destination.room_id);
-    echo_lines_in_active_view(state, notice);
+    echo_lines_in_view(state, &echo_view(window), notice);
     Ok(())
 }
 
-fn submit_redact_event_command(state: &mut WindowState, event_id: String) -> Result<(), String> {
-    let room_id = resolve_joined_room_target(state, None)?;
+fn submit_redact_event_command(
+    state: &mut WindowState,
+    window: &ViewId,
+    event_id: String,
+) -> Result<(), String> {
+    let room_id = resolve_joined_room_target(state, window, None)?;
     let command = Command::RedactEvent(RedactEventRequest { room_id, event_id });
     let sender = state
         .command_sender
@@ -1562,17 +1612,19 @@ fn submit_redact_event_command(state: &mut WindowState, event_id: String) -> Res
 
 pub(super) fn submit_redact_slash_command(
     state: &mut WindowState,
+    window: &ViewId,
     event_id: String,
 ) -> Result<String, String> {
-    submit_redact_event_command(state, event_id.clone())?;
+    submit_redact_event_command(state, window, event_id.clone())?;
     Ok(format!("Redaction queued for {event_id}"))
 }
 
 fn submit_unreact_slash_command(
     state: &mut WindowState,
+    window: &ViewId,
     reaction_event_id: String,
 ) -> Result<String, String> {
-    submit_redact_event_command(state, reaction_event_id.clone())?;
+    submit_redact_event_command(state, window, reaction_event_id.clone())?;
     Ok(format!("Reaction redaction queued for {reaction_event_id}"))
 }
 
@@ -1595,8 +1647,12 @@ pub(super) fn submit_query_slash_command(
 }
 
 /// `/topic [#room]`: the room's topic, as mIRC prints it.
-fn room_topic_line(state: &WindowState, room: Option<&str>) -> Result<String, String> {
-    let room_id = resolve_joined_room_target(state, room)?;
+fn room_topic_line(
+    state: &WindowState,
+    window: &ViewId,
+    room: Option<&str>,
+) -> Result<String, String> {
+    let room_id = resolve_joined_room_target(state, window, room)?;
     Ok(commands::topic_line(
         state.model.room_views[&room_id].topic.as_deref(),
     ))
@@ -1604,10 +1660,11 @@ fn room_topic_line(state: &WindowState, room: Option<&str>) -> Result<String, St
 
 fn submit_topic_slash_command(
     state: &mut WindowState,
+    window: &ViewId,
     room: Option<&str>,
     topic: String,
 ) -> Result<String, String> {
-    let room_id = resolve_joined_room_target(state, room)?;
+    let room_id = resolve_joined_room_target(state, window, room)?;
     let command = Command::SetRoomTopic(SetRoomTopicRequest {
         room_id: room_id.clone(),
         topic,
@@ -2760,29 +2817,34 @@ mod tests {
         ];
 
         assert_eq!(
-            resolve_invite_command_room_id(&state, "accept", Some("Shared")),
+            resolve_invite_command_room_id(&state, &state.active_view, "accept", Some("Shared")),
             Err("accept failed: ambiguous invited room target: Shared".to_owned())
         );
         assert_eq!(
-            resolve_invite_command_room_id(&state, "accept", Some("!joined:example")),
+            resolve_invite_command_room_id(
+                &state,
+                &state.active_view,
+                "accept",
+                Some("!joined:example")
+            ),
             Err("accept failed: room is not invited: !joined:example".to_owned())
         );
         assert_eq!(
-            resolve_invite_command_room_id(&state, "accept", Some("Joined")),
+            resolve_invite_command_room_id(&state, &state.active_view, "accept", Some("Joined")),
             Err("accept failed: room is not invited: Joined".to_owned())
         );
         assert_eq!(
-            resolve_invite_command_room_id(&state, "accept", Some("Missing")),
+            resolve_invite_command_room_id(&state, &state.active_view, "accept", Some("Missing")),
             Err("accept failed: invited room not found: Missing".to_owned())
         );
         assert_eq!(
-            resolve_invite_command_room_id(&state, "accept", None),
+            resolve_invite_command_room_id(&state, &state.active_view, "accept", None),
             Err("accept failed: no invited room selected".to_owned())
         );
 
         state.active_view = room_view_id("!joined:example");
         assert_eq!(
-            resolve_invite_command_room_id(&state, "reject", None),
+            resolve_invite_command_room_id(&state, &state.active_view, "reject", None),
             Err("reject failed: no invited room selected".to_owned())
         );
     }
@@ -2883,6 +2945,7 @@ mod tests {
             with_room_link_frame(|hwnd| {
                 run_local_command(
                     hwnd,
+                    &state_ref(hwnd).active_view.clone(),
                     SlashCommand::Join {
                         target: "#ops:example.org".to_owned(),
                     },
@@ -2995,8 +3058,9 @@ mod tests {
         let (mut state, handle) = test_state_with_command_sender();
         state.model.rooms = vec![invited_room("!invite:example", "Invite")];
         state.active_view = room_view_id("!invite:example");
+        let window = state.active_view.clone();
 
-        let status = submit_accept_slash_command(&mut state, None).unwrap();
+        let status = submit_accept_slash_command(&mut state, &window, None).unwrap();
 
         assert_eq!(status, "accept submitted: !invite:example");
         assert_eq!(
@@ -3021,8 +3085,9 @@ mod tests {
         let (mut state, handle) = test_state_with_command_sender();
         state.model.rooms = vec![invited_room("!invite:example", "Invite")];
         state.active_view = room_view_id("!invite:example");
+        let window = state.active_view.clone();
 
-        let status = submit_reject_slash_command(&mut state, None).unwrap();
+        let status = submit_reject_slash_command(&mut state, &window, None).unwrap();
 
         assert_eq!(status, "reject submitted: !invite:example");
         assert_eq!(
@@ -3065,8 +3130,9 @@ mod tests {
         let (mut state, handle) = test_state_with_command_sender();
         state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
+        let window = state.active_view.clone();
 
-        let status = submit_part_slash_command(&mut state, None).unwrap();
+        let status = submit_part_slash_command(&mut state, &window, None).unwrap();
 
         assert_eq!(status, "part submitted: !room:example");
         assert_eq!(
@@ -3083,8 +3149,9 @@ mod tests {
     fn submit_part_slash_command_from_thread_targets_parent_room() {
         let (mut state, handle) = test_state_with_command_sender();
         state.active_view = thread_view_id("!room:example", "$thread-root");
+        let window = state.active_view.clone();
 
-        let status = submit_part_slash_command(&mut state, None).unwrap();
+        let status = submit_part_slash_command(&mut state, &window, None).unwrap();
 
         assert_eq!(status, "part submitted: !room:example");
         assert_eq!(
@@ -3102,9 +3169,10 @@ mod tests {
         let (mut state, handle) = test_state_with_command_sender();
         state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
+        let window = state.active_view.clone();
 
         assert_eq!(
-            submit_room_notification_mode(&mut state, None, RoomNotificationMode::Mute),
+            submit_room_notification_mode(&mut state, &window, None, RoomNotificationMode::Mute),
             Ok("notifications for Room: Mute".to_owned())
         );
         assert_eq!(
@@ -3128,9 +3196,10 @@ mod tests {
     #[test]
     fn submit_part_slash_command_from_status_returns_no_room_selected() {
         let mut state = test_state();
+        let window = state.active_view.clone();
 
         assert_eq!(
-            submit_part_slash_command(&mut state, None),
+            submit_part_slash_command(&mut state, &window, None),
             Err("no room selected".to_owned())
         );
         assert!(state.recorded_commands.is_empty());
@@ -3143,8 +3212,9 @@ mod tests {
             room("!alpha:example", "Alpha", false),
             room("!beta:example", "Beta", false),
         ];
+        let window = state.active_view.clone();
 
-        let status = submit_part_slash_command(&mut state, Some("Beta")).unwrap();
+        let status = submit_part_slash_command(&mut state, &window, Some("Beta")).unwrap();
 
         assert_eq!(status, "part submitted: !beta:example");
         assert_eq!(
@@ -3164,9 +3234,10 @@ mod tests {
             room("!shared-one:example", "Shared", false),
             room("!shared-two:example", "Shared", false),
         ];
+        let window = state.active_view.clone();
 
         assert_eq!(
-            submit_part_slash_command(&mut state, Some("Shared")),
+            submit_part_slash_command(&mut state, &window, Some("Shared")),
             Err("ambiguous room: Shared".to_owned())
         );
         assert!(state.recorded_commands.is_empty());
@@ -3177,10 +3248,15 @@ mod tests {
         let (mut state, handle) = test_state_with_command_sender();
         state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
+        let window = state.active_view.clone();
 
-        let status =
-            submit_react_slash_command(&mut state, "$react-normal".to_owned(), "+1".to_owned())
-                .unwrap();
+        let status = submit_react_slash_command(
+            &mut state,
+            &window,
+            "$react-normal".to_owned(),
+            "+1".to_owned(),
+        )
+        .unwrap();
 
         assert_eq!(status, "Reaction queued for $react-normal");
         assert_eq!(
@@ -3207,9 +3283,11 @@ mod tests {
     fn submit_react_slash_command_from_thread_targets_parent_room() {
         let (mut state, handle) = test_state_with_command_sender();
         state.active_view = thread_view_id("!room:example", "$thread-root");
+        let window = state.active_view.clone();
 
         let status = submit_react_slash_command(
             &mut state,
+            &window,
             "$react-normal".to_owned(),
             "two words".to_owned(),
         )
@@ -3231,9 +3309,15 @@ mod tests {
     #[test]
     fn submit_react_slash_command_from_status_returns_no_room_selected() {
         let mut state = test_state();
+        let window = state.active_view.clone();
 
         assert_eq!(
-            submit_react_slash_command(&mut state, "$react-normal".to_owned(), "+1".to_owned(),),
+            submit_react_slash_command(
+                &mut state,
+                &window,
+                "$react-normal".to_owned(),
+                "+1".to_owned(),
+            ),
             Err("no room selected".to_owned())
         );
         assert!(state.recorded_commands.is_empty());
@@ -3242,9 +3326,11 @@ mod tests {
     #[test]
     fn send_reply_from_the_active_room_names_the_replied_to_sender() {
         let mut state = compose_target_state();
+        let window = state.active_view.clone();
 
         send_reply(
             &mut state,
+            &window,
             "$q",
             RoomMessagePresentationKind::Text,
             "hello there",
@@ -3306,9 +3392,11 @@ mod tests {
             thread_view_id("!ops:example", "$thread-root:example"),
             ViewActivityLevel::Message,
         );
+        let window = state.active_view.clone();
 
         send_reply(
             &mut state,
+            &window,
             "$thread-1:example",
             RoomMessagePresentationKind::Text,
             "threaded acknowledgement",
@@ -3356,9 +3444,11 @@ mod tests {
     #[test]
     fn send_reply_and_send_edit_need_the_message_in_the_active_window() {
         let mut state = compose_target_state();
+        let window = state.active_view.clone();
         assert_eq!(
             send_reply(
                 &mut state,
+                &window,
                 "$elsewhere",
                 RoomMessagePresentationKind::Text,
                 "hello"
@@ -3368,6 +3458,7 @@ mod tests {
         assert_eq!(
             send_edit(
                 &mut state,
+                &window,
                 "$elsewhere",
                 RoomMessagePresentationKind::Text,
                 "hello"
@@ -3381,10 +3472,18 @@ mod tests {
     fn send_reply_and_send_edit_require_an_available_command_sender() {
         let mut state = compose_target_state();
         state.command_sender = None;
+        let window = state.active_view.clone();
         for result in [
-            send_reply(&mut state, "$q", RoomMessagePresentationKind::Text, "hello"),
+            send_reply(
+                &mut state,
+                &window,
+                "$q",
+                RoomMessagePresentationKind::Text,
+                "hello",
+            ),
             send_edit(
                 &mut state,
+                &window,
                 "$mine",
                 RoomMessagePresentationKind::Text,
                 "hello",
@@ -3401,9 +3500,11 @@ mod tests {
     #[test]
     fn send_edit_from_the_active_room_records_the_typed_request() {
         let mut state = compose_target_state();
+        let window = state.active_view.clone();
 
         send_edit(
             &mut state,
+            &window,
             "$mine",
             RoomMessagePresentationKind::Text,
             "replacement text",
@@ -3449,9 +3550,11 @@ mod tests {
         message.sender = user_profile("@me:example");
         apply_core_event(&mut state, Event::RoomActivity(Box::new(in_thread))).unwrap();
         state.active_view = thread_view_id("!ops:example", "$q");
+        let window = state.active_view.clone();
 
         send_edit(
             &mut state,
+            &window,
             "$mine-in-thread",
             RoomMessagePresentationKind::Text,
             "thread final",
@@ -3475,9 +3578,11 @@ mod tests {
         let (mut state, handle) = test_state_with_command_sender();
         state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
+        let window = state.active_view.clone();
 
         let status =
-            submit_redact_slash_command(&mut state, "$event-to-redact".to_owned()).unwrap();
+            submit_redact_slash_command(&mut state, &window, "$event-to-redact".to_owned())
+                .unwrap();
 
         assert_eq!(status, "Redaction queued for $event-to-redact");
         assert_eq!(
@@ -3502,9 +3607,11 @@ mod tests {
     fn submit_redact_slash_command_from_thread_targets_parent_room() {
         let (mut state, handle) = test_state_with_command_sender();
         state.active_view = thread_view_id("!room:example", "$thread-root");
+        let window = state.active_view.clone();
 
         let status =
-            submit_redact_slash_command(&mut state, "$event-to-redact".to_owned()).unwrap();
+            submit_redact_slash_command(&mut state, &window, "$event-to-redact".to_owned())
+                .unwrap();
 
         assert_eq!(status, "Redaction queued for $event-to-redact");
         assert_eq!(
@@ -3523,10 +3630,14 @@ mod tests {
         let (mut state, handle) = test_state_with_command_sender();
         state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
+        let window = state.active_view.clone();
 
-        let status =
-            submit_unreact_slash_command(&mut state, "$reaction-alice-plus-one".to_owned())
-                .unwrap();
+        let status = submit_unreact_slash_command(
+            &mut state,
+            &window,
+            "$reaction-alice-plus-one".to_owned(),
+        )
+        .unwrap();
 
         assert_eq!(
             status,
@@ -3554,10 +3665,14 @@ mod tests {
     fn submit_unreact_slash_command_from_thread_targets_parent_room() {
         let (mut state, handle) = test_state_with_command_sender();
         state.active_view = thread_view_id("!room:example", "$thread-root");
+        let window = state.active_view.clone();
 
-        let status =
-            submit_unreact_slash_command(&mut state, "$reaction-alice-plus-one".to_owned())
-                .unwrap();
+        let status = submit_unreact_slash_command(
+            &mut state,
+            &window,
+            "$reaction-alice-plus-one".to_owned(),
+        )
+        .unwrap();
 
         assert_eq!(
             status,
@@ -3577,9 +3692,14 @@ mod tests {
     #[test]
     fn submit_unreact_slash_command_from_status_returns_no_room_selected() {
         let mut state = test_state();
+        let window = state.active_view.clone();
 
         assert_eq!(
-            submit_unreact_slash_command(&mut state, "$reaction-alice-plus-one".to_owned()),
+            submit_unreact_slash_command(
+                &mut state,
+                &window,
+                "$reaction-alice-plus-one".to_owned()
+            ),
             Err("no room selected".to_owned())
         );
         assert!(state.recorded_commands.is_empty());
@@ -3590,9 +3710,11 @@ mod tests {
         let (mut state, handle) = test_state_with_command_sender();
         state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
+        let window = state.active_view.clone();
 
         let status =
-            submit_topic_slash_command(&mut state, None, "incident review".to_owned()).unwrap();
+            submit_topic_slash_command(&mut state, &window, None, "incident review".to_owned())
+                .unwrap();
 
         assert_eq!(status, "topic change submitted for !room:example");
         assert_eq!(
@@ -3617,9 +3739,11 @@ mod tests {
     fn submit_topic_slash_command_from_thread_targets_parent_room() {
         let (mut state, handle) = test_state_with_command_sender();
         state.active_view = thread_view_id("!room:example", "$thread-root");
+        let window = state.active_view.clone();
 
         let status =
-            submit_topic_slash_command(&mut state, None, "incident review".to_owned()).unwrap();
+            submit_topic_slash_command(&mut state, &window, None, "incident review".to_owned())
+                .unwrap();
 
         assert_eq!(status, "topic change submitted for !room:example");
         assert_eq!(
@@ -3636,9 +3760,10 @@ mod tests {
     #[test]
     fn submit_topic_slash_command_from_status_returns_no_room_selected() {
         let mut state = test_state();
+        let window = state.active_view.clone();
 
         assert_eq!(
-            submit_topic_slash_command(&mut state, None, "incident review".to_owned()),
+            submit_topic_slash_command(&mut state, &window, None, "incident review".to_owned()),
             Err("no room selected".to_owned())
         );
         assert!(state.recorded_commands.is_empty());
@@ -3661,9 +3786,11 @@ mod tests {
         let (mut state, handle) = test_state_with_command_sender();
         apply_core_event(&mut state, Event::SyncedRooms(aliased_rooms())).unwrap();
         state.active_view = room_view_id("!ops:example");
+        let window = state.active_view.clone();
 
         let status =
-            submit_topic_slash_command(&mut state, Some("#hall"), "new".to_owned()).unwrap();
+            submit_topic_slash_command(&mut state, &window, Some("#hall"), "new".to_owned())
+                .unwrap();
 
         assert_eq!(status, "topic change submitted for !lobby:example");
         assert_eq!(
@@ -3674,11 +3801,11 @@ mod tests {
             })]
         );
         assert_eq!(
-            submit_topic_slash_command(&mut state, Some("#nope"), "x".to_owned()),
+            submit_topic_slash_command(&mut state, &window, Some("#nope"), "x".to_owned()),
             Err("unknown room: #nope".to_owned())
         );
         assert_eq!(
-            submit_topic_slash_command(&mut state, Some("#party"), "x".to_owned()),
+            submit_topic_slash_command(&mut state, &window, Some("#party"), "x".to_owned()),
             Err("room is not joined: #party".to_owned())
         );
 
@@ -3691,16 +3818,16 @@ mod tests {
         apply_core_event(&mut state, Event::SyncedRooms(aliased_rooms())).unwrap();
 
         assert_eq!(
-            room_topic_line(&state, None),
+            room_topic_line(&state, &state.active_view, None),
             Err("no room selected".to_owned())
         );
         state.active_view = room_view_id("!ops:example");
         assert_eq!(
-            room_topic_line(&state, None),
+            room_topic_line(&state, &state.active_view, None),
             Ok("* Topic is 'incident review'".to_owned())
         );
         assert_eq!(
-            room_topic_line(&state, Some("#lobby:example")),
+            room_topic_line(&state, &state.active_view, Some("#lobby:example")),
             Ok("* No topic is set".to_owned())
         );
         assert!(state.recorded_commands.is_empty());
@@ -3712,11 +3839,16 @@ mod tests {
         apply_core_event(&mut state, Event::SyncedRooms(aliased_rooms())).unwrap();
 
         assert_eq!(
-            resolve_invite_command_room_id(&state, "accept", Some("#party")),
+            resolve_invite_command_room_id(&state, &state.active_view, "accept", Some("#party")),
             Ok("!invite:example".to_owned())
         );
         assert_eq!(
-            resolve_invite_command_room_id(&state, "accept", Some("#ops:example")),
+            resolve_invite_command_room_id(
+                &state,
+                &state.active_view,
+                "accept",
+                Some("#ops:example")
+            ),
             Err("accept failed: room is not invited: #ops:example".to_owned())
         );
         assert_eq!(
@@ -3750,9 +3882,11 @@ mod tests {
             .expect("room view must exist")
             .activities
             .clone();
+        let window = state.active_view.clone();
 
         let status =
-            submit_topic_slash_command(&mut state, None, "incident review".to_owned()).unwrap();
+            submit_topic_slash_command(&mut state, &window, None, "incident review".to_owned())
+                .unwrap();
 
         assert_eq!(status, "topic change submitted for !room:example");
         assert_eq!(
@@ -3788,5 +3922,112 @@ mod tests {
     fn bar_lines_name_the_bar() {
         assert_eq!(bar_is_line(Bar::Switchbar, true), "* Switchbar is on");
         assert_eq!(bar_is_line(Bar::Treebar, false), "* Treebar is off");
+    }
+
+    /// The channels Alpha and Beta, Beta active; Bob is in both (and can
+    /// be kicked), Carol only in Beta.
+    unsafe fn with_two_channels_frame(test: impl FnOnce(HWND)) {
+        with_test_frame(600, 400, |hwnd| {
+            let (sender, commands) = inert_command_sender();
+            std::mem::forget(commands);
+            let state = state_mut(hwnd);
+            state.command_sender = Some(sender);
+            state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
+            state.model.rooms = vec![
+                room("!alpha:example", "Alpha", false),
+                room("!beta:example", "Beta", false),
+            ];
+            let bob = RoomMemberSummary {
+                can_kick: true,
+                ..member_summary("@bob:example", "Bob", false)
+            };
+            for (room_id, topic, members) in [
+                ("!alpha:example", "alpha topic", vec![bob.clone()]),
+                (
+                    "!beta:example",
+                    "beta topic",
+                    vec![bob, member_summary("@carol:example", "Carol", false)],
+                ),
+            ] {
+                state.model.room_views.insert(
+                    room_id.to_owned(),
+                    RoomViewModel {
+                        topic: Some(topic.to_owned()),
+                        members,
+                        ..Default::default()
+                    },
+                );
+            }
+            sync_views_and_tree(hwnd).unwrap();
+            activate_view(hwnd, &room_view_id("!beta:example"), None).unwrap();
+            test(hwnd);
+        });
+    }
+
+    /// The rooms the recorded commands act on, in order.
+    fn command_rooms(state: &WindowState) -> Vec<&str> {
+        state
+            .recorded_commands
+            .iter()
+            .map(|command| match command {
+                Command::InviteRoomMember(request) => request.room_id.as_str(),
+                Command::KickRoomMember(request) => request.room_id.as_str(),
+                Command::UpdateRoomSettings(request) => request.room_id.as_str(),
+                command => panic!("unexpected command {command:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn commands_act_in_the_window_they_were_given_in() {
+        unsafe {
+            with_two_channels_frame(|hwnd| {
+                let alpha = room_view_id("!alpha:example");
+                let beta_lines = render_room_lines(state_ref(hwnd), "!beta:example");
+                let run = |window: &ViewId, line: &str| {
+                    let command = commands::parse(line).unwrap();
+                    run_local_command(hwnd, window, command).unwrap();
+                };
+                run(&alpha, "/invite Carol");
+                run(&alpha, "/kick Bob");
+                run(&alpha, "/op Bob");
+                assert_eq!(
+                    command_rooms(state_ref(hwnd)),
+                    ["!alpha:example", "!alpha:example", "!alpha:example"]
+                );
+                let alpha_before = render_room_lines(state_ref(hwnd), "!alpha:example");
+                run(&alpha, "/topic");
+                run(&alpha, "/kick Nobody");
+                let alpha_lines = render_room_lines(state_ref(hwnd), "!alpha:example");
+                assert_eq!(alpha_lines.len(), alpha_before.len() + 2, "{alpha_lines:?}");
+                assert!(alpha_lines[alpha_before.len()].ends_with("* Topic is 'alpha topic'"));
+                assert!(
+                    alpha_lines[alpha_before.len() + 1].ends_with("* /kick: no such nick: Nobody")
+                );
+                assert_eq!(
+                    render_room_lines(state_ref(hwnd), "!beta:example"),
+                    beta_lines
+                );
+                run(&alpha, "/clear");
+                let alpha_lines = render_room_lines(state_ref(hwnd), "!alpha:example");
+                assert!(
+                    !alpha_lines.iter().any(|line| line.ends_with("Nobody")),
+                    "{alpha_lines:?}"
+                );
+
+                let status_before = status_log_lines(state_ref(hwnd)).len();
+                run(&ViewId::Status, "/topic");
+                run(&ViewId::Status, "/names");
+                let status = status_log_lines(state_ref(hwnd));
+                assert_eq!(status.len(), status_before + 2, "{status:?}");
+                assert!(status[status_before].ends_with("* /topic: no room selected"));
+                assert!(status[status_before + 1].ends_with("* /names: no room selected"));
+                assert_eq!(
+                    render_room_lines(state_ref(hwnd), "!beta:example"),
+                    beta_lines
+                );
+                assert_eq!(state_ref(hwnd).active_view, room_view_id("!beta:example"));
+            });
+        }
     }
 }

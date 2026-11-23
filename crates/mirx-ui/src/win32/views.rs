@@ -234,7 +234,8 @@ unsafe extern "system" fn mdi_child_window_proc(
         }
         WM_SYSCOMMAND if wparam & 0xFFF0 == SYSMENU_ID_FIND => {
             let frame = frame_window_for(hwnd);
-            if let Err(message) = begin_find_dialog(frame) {
+            let view_id = state_ref(frame).hwnd_views[&(hwnd as isize)].clone();
+            if let Err(message) = begin_find_dialog(frame, &view_id) {
                 show_error_message(frame, "Find", &message);
             }
             0
@@ -289,7 +290,9 @@ unsafe extern "system" fn mdi_child_window_proc(
         }
         WM_SYSCOMMAND if wparam & 0xFFF0 == SYSMENU_ID_FONT => {
             let frame = frame_window_for(hwnd);
-            if let Err(message) = run_local_command(frame, SlashCommand::Font(FontCommand::Dialog))
+            let view_id = state_ref(frame).hwnd_views[&(hwnd as isize)].clone();
+            if let Err(message) =
+                run_local_command(frame, &view_id, SlashCommand::Font(FontCommand::Dialog))
             {
                 show_error_message(frame, "Font", &message);
             }
@@ -427,8 +430,10 @@ unsafe fn close_view_requested(frame: HWND, child: HWND) -> bool {
             let result = {
                 let state = state_mut(frame);
                 match leave {
-                    CloseLeave::Part => submit_part_slash_command(state, Some(room_id)),
-                    CloseLeave::RejectInvite => submit_reject_slash_command(state, Some(room_id)),
+                    CloseLeave::Part => submit_part_slash_command(state, &view_id, Some(room_id)),
+                    CloseLeave::RejectInvite => {
+                        submit_reject_slash_command(state, &view_id, Some(room_id))
+                    }
                 }
             };
             match result {
@@ -945,12 +950,14 @@ unsafe fn create_buffer_menu(view_id: &ViewId) -> Result<HMENU, String> {
 }
 
 /// The window menu's Logging: turns the log of the window that owns the
-/// menu on or off. That window need not be the active one.
+/// menu on or off, and says so there. That window need not be the active
+/// one.
 unsafe fn toggle_window_logging(frame: HWND, child: HWND) -> Result<(), String> {
-    let view_id = log_view(&state_ref(frame).hwnd_views[&(child as isize)])?;
+    let window = state_ref(frame).hwnd_views[&(child as isize)].clone();
+    let view_id = log_view(&window)?;
     let on = view_log_path(state_ref(frame), &view_id).is_none();
     let line = set_view_logging(state_mut(frame), &view_id, on)?;
-    echo_in_active_view(frame, [line])
+    echo_in_window(frame, &window, [line])
 }
 
 /// Checks or clears a window menu's Logging item.
@@ -1017,6 +1024,18 @@ pub(super) unsafe fn mdi_child_edit(child: HWND) -> HWND {
 
 pub(super) unsafe fn room_content_timeline(content: HWND) -> HWND {
     room_content_state_ref(content).timeline
+}
+
+/// The window whose text `timeline` shows.
+pub(super) unsafe fn timeline_view(state: &WindowState, timeline: HWND) -> ViewId {
+    state
+        .views
+        .iter()
+        .find(|(view_id, view)| {
+            **view_id != ViewId::RoomList && view_timeline(view_id, view.content) == timeline
+        })
+        .map(|(view_id, _)| view_id.clone())
+        .expect("a timeline is a window's")
 }
 
 /// A view's timeline: the Status content is one, a room or thread content

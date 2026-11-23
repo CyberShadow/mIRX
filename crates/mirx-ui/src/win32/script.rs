@@ -24,25 +24,67 @@ enum Flow {
     Stop,
 }
 
-/// The window an alias call or a `//line` was typed in, as `#` and `$me`
-/// see it.
+/// Where the commands of an alias call or a `//line` act, and print.
+#[derive(Clone, Copy)]
+enum ActsIn {
+    /// Typed: each command acts in the window active when it runs, so
+    /// `/q $$1 | say hi` greets in the query.
+    FrontWindow,
+}
+
+/// The window a call was given in, as `#` and `$me` see it, and where its
+/// commands act.
 struct CallWindow {
     chan: String,
     me: String,
+    acts_in: ActsIn,
 }
 
 impl CallWindow {
-    /// The active window, which typed lines come from.
-    fn active(state: &WindowState) -> Self {
+    /// `window`, where a line was typed.
+    fn typed_in(state: &WindowState, window: &ViewId) -> Self {
         Self {
-            chan: chan(&state.model, &state.active_view),
-            me: me(&state.model, &state.active_view),
+            chan: chan(&state.model, window),
+            me: me(&state.model, window),
+            acts_in: ActsIn::FrontWindow,
+        }
+    }
+
+    /// The window the call's next command acts in, and prints in. The one
+    /// place where the window in front decides where a command acts.
+    fn window(&self, state: &WindowState) -> ViewId {
+        match self.acts_in {
+            ActsIn::FrontWindow => state.active_view.clone(),
         }
     }
 }
 
-/// Runs the alias `name`, typed with `args` in the active window.
-pub(super) unsafe fn run_alias_call(hwnd: HWND, name: &str, args: &str) -> Result<(), String> {
+/// Who runs a command, as its error names it.
+#[derive(Clone, Copy)]
+enum Caller<'a> {
+    /// The alias of this name: ` (in alias /x)`.
+    Alias(&'a str),
+    /// A typed `//line`: nothing.
+    Line,
+}
+
+impl Caller<'_> {
+    /// An error of a command it ran, as printed.
+    fn error_line(self, error: impl std::fmt::Display) -> String {
+        match self {
+            Caller::Alias(name) => format!("{error} (in alias /{name})"),
+            Caller::Line => error.to_string(),
+        }
+    }
+}
+
+/// Runs the alias `name`, typed with `args` in `window`.
+pub(super) unsafe fn run_alias_call(
+    hwnd: HWND,
+    window: &ViewId,
+    name: &str,
+    args: &str,
+) -> Result<(), String> {
     let state = state_ref(hwnd);
     let alias = state
         .aliases
@@ -50,16 +92,19 @@ pub(super) unsafe fn run_alias_call(hwnd: HWND, name: &str, args: &str) -> Resul
         .get(name)
         .expect("a typed alias call names an alias")
         .clone();
-    let window = CallWindow::active(state);
+    let window = CallWindow::typed_in(state, window);
     run_alias(hwnd, &alias, args, &window, &mut Vec::new()).map(|_| ())
 }
 
-/// Runs `//line`, typed in the active window: `line` evaluated as an
-/// alias's command is, with no parameters, then run as a command. An empty
-/// `$$` identifier stops it silently; a wrong identifier is the command's
-/// error.
-pub(super) unsafe fn run_evaluated_line(hwnd: HWND, line: &str) -> Result<(), String> {
-    let window = CallWindow::active(state_ref(hwnd));
+/// Runs `//line`, typed in `window`: `line` evaluated as an alias's command
+/// is, with no parameters, then run as a command. An empty `$$` identifier
+/// stops it silently; a wrong identifier is the command's error.
+pub(super) unsafe fn run_evaluated_line(
+    hwnd: HWND,
+    window: &ViewId,
+    line: &str,
+) -> Result<(), String> {
+    let window = CallWindow::typed_in(state_ref(hwnd), window);
     let context = CallContext {
         params: &[],
         chan: &window.chan,
@@ -67,7 +112,7 @@ pub(super) unsafe fn run_evaluated_line(hwnd: HWND, line: &str) -> Result<(), St
     };
     match evaluate(line, &context) {
         Ok(Evaluated::Command(text)) => {
-            run_command(hwnd, &text, None, &window, &mut Vec::new()).map(|_| ())
+            run_command(hwnd, &text, Caller::Line, &window, &mut Vec::new()).map(|_| ())
         }
         Ok(Evaluated::Halt) => Ok(()),
         Err(reason) => {
@@ -76,7 +121,8 @@ pub(super) unsafe fn run_evaluated_line(hwnd: HWND, line: &str) -> Result<(), St
                 .next()
                 .expect("a line with a wrong identifier has a word")
                 .trim_start_matches('/');
-            report_error_line(hwnd, format!("* /{name}: {reason}"))
+            let acts_in = window.window(state_ref(hwnd));
+            report_error_line(hwnd, &acts_in, format!("* /{name}: {reason}"))
         }
     }
 }
@@ -112,11 +158,12 @@ unsafe fn run_alias_commands(
     for command in &alias.commands {
         let flow = match evaluate(command, &context) {
             Ok(Evaluated::Command(text)) => {
-                run_command(hwnd, &text, Some(&alias.name), window, stack)?
+                run_command(hwnd, &text, Caller::Alias(&alias.name), window, stack)?
             }
             Ok(Evaluated::Halt) => Flow::Stop,
             Err(reason) => {
-                report_error_line(hwnd, format!("* /{}: {reason}", alias.name))?;
+                let acts_in = window.window(state_ref(hwnd));
+                report_error_line(hwnd, &acts_in, format!("* /{}: {reason}", alias.name))?;
                 Flow::Stop
             }
         };
@@ -127,13 +174,13 @@ unsafe fn run_alias_commands(
     Ok(Flow::Continue)
 }
 
-/// Runs one evaluated command of the alias `alias_name`, or of a typed
-/// `//line` (`None`). Its leading `/` is optional, and `//` the same as
-/// `/`: the command is evaluated already.
+/// Runs one evaluated command that `caller` runs, in the window `window`
+/// says. Its leading `/` is optional, and `//` the same as `/`: the command
+/// is evaluated already.
 unsafe fn run_command(
     hwnd: HWND,
     text: &str,
-    alias_name: Option<&str>,
+    caller: Caller,
     window: &CallWindow,
     stack: &mut Vec<String>,
 ) -> Result<Flow, String> {
@@ -142,6 +189,7 @@ unsafe fn run_command(
         return Ok(Flow::Continue);
     }
     let line = format!("/{}", text.trim_start_matches('/'));
+    let acts_in = window.window(state_ref(hwnd));
     let submission = {
         let aliases = state_ref(hwnd).aliases.aliases();
         classify_command(&line, |name| {
@@ -149,16 +197,12 @@ unsafe fn run_command(
         })
     };
     let failed = |error: CommandError| {
-        let line = match alias_name {
-            Some(alias_name) => format!("{error} (in alias /{alias_name})"),
-            None => error.to_string(),
-        };
-        report_error_line(hwnd, line).map(|()| Flow::Stop)
+        report_error_line(hwnd, &acts_in, caller.error_line(error)).map(|()| Flow::Stop)
     };
     match submission {
         // Never the editbox's armed reply or edit: the alias sends text.
         ComposeSubmission::Message { presentation, body } => {
-            match submit_compose(state_mut(hwnd), presentation, body, None) {
+            match submit_compose(state_mut(hwnd), &acts_in, presentation, body, None) {
                 Ok(_) => Ok(Flow::Continue),
                 Err(reason) => failed(CommandError::new(
                     message_command_name(presentation),
@@ -167,7 +211,7 @@ unsafe fn run_command(
             }
         }
         ComposeSubmission::LocalCommand(Ok(command)) => {
-            match execute_slash_command(hwnd, command) {
+            match execute_slash_command(hwnd, &acts_in, command) {
                 Ok(Some(status)) => {
                     set_local_command_status(hwnd, status)?;
                     Ok(Flow::Continue)

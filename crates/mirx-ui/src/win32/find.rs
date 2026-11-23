@@ -45,9 +45,10 @@ pub(super) struct ActiveViewFindOutcome {
 /// Find searches a window's text; the Rooms List has none of its own.
 const FIND_NOT_AVAILABLE: &str = "Find: not available in this window";
 
-pub(super) unsafe fn begin_find_dialog(hwnd: HWND) -> Result<(), String> {
-    let active_view = state_ref(hwnd).active_view.clone();
-    if active_view == ViewId::RoomList {
+/// Edit > Find..., picked in `window`: asks for the text, then finds it
+/// there.
+pub(super) unsafe fn begin_find_dialog(hwnd: HWND, window: &ViewId) -> Result<(), String> {
+    if *window == ViewId::RoomList {
         log_status(
             state_mut(hwnd),
             StatusLineKind::Error,
@@ -57,13 +58,13 @@ pub(super) unsafe fn begin_find_dialog(hwnd: HWND) -> Result<(), String> {
     }
     let initial_query = state_ref(hwnd)
         .find_states
-        .get(&active_view)
+        .get(window)
         .map(|find_state| find_state.raw_query.clone())
         .unwrap_or_default();
     let Some(query) = show_single_field_dialog(hwnd, "Find", "Find", &initial_query)? else {
         return Ok(());
     };
-    execute_active_view_find(hwnd, &query)?;
+    execute_view_find(hwnd, window, &query)?;
     Ok(())
 }
 
@@ -309,15 +310,15 @@ fn active_view_find_outcome_without_state(view_id: &ViewId, query: &str) -> Acti
 
 unsafe fn handle_invalid_find_query(
     hwnd: HWND,
+    window: &ViewId,
     query: &str,
 ) -> Result<ActiveViewFindOutcome, String> {
     set_local_command_status(hwnd, "usage: /find <text>".to_owned())?;
-    let active_view = state_ref(hwnd).active_view.clone();
     Ok(state_ref(hwnd)
         .find_states
-        .get(&active_view)
-        .map(|find_state| view_find_outcome(&active_view, find_state))
-        .unwrap_or_else(|| active_view_find_outcome_without_state(&active_view, query)))
+        .get(window)
+        .map(|find_state| view_find_outcome(window, find_state))
+        .unwrap_or_else(|| active_view_find_outcome_without_state(window, query)))
 }
 
 pub(super) fn recompute_find_for_view(
@@ -458,28 +459,29 @@ fn build_timeline_find_state_and_maybe_submit_history_backfill(
     ))
 }
 
+/// Finds `query` in `window`, the window Find or `/find` was given in.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(super) unsafe fn execute_active_view_find(
+pub(super) unsafe fn execute_view_find(
     hwnd: HWND,
+    window: &ViewId,
     query: &str,
 ) -> Result<ActiveViewFindOutcome, String> {
     if query.trim().is_empty() {
-        return handle_invalid_find_query(hwnd, query);
+        return handle_invalid_find_query(hwnd, window, query);
     }
 
-    let active_view = state_ref(hwnd).active_view.clone();
-    if active_view == ViewId::RoomList {
+    if *window == ViewId::RoomList {
         return Err(FIND_NOT_AVAILABLE.to_owned());
     }
-    let previous_state = state_ref(hwnd).find_states.get(&active_view).cloned();
+    let previous_state = state_ref(hwnd).find_states.get(window).cloned();
     let folded_query = fold_find_query(query);
 
     let (matches, selected_match_index) = {
         let view = state_ref(hwnd)
             .views
-            .get(&active_view)
+            .get(window)
             .ok_or_else(|| "view state was not tracked".to_owned())?;
-        let timeline = view_timeline(&active_view, view.content);
+        let timeline = view_timeline(window, view.content);
         let timeline_state = timeline_state_ref(timeline);
         let start_source_row_index =
             timeline_source_row_index_for_top_line(timeline, timeline_state.top_line).unwrap_or(0);
@@ -495,7 +497,7 @@ pub(super) unsafe fn execute_active_view_find(
         (matches, selected_match_index)
     };
     // Only rooms have older history to search.
-    let next_state = match &active_view {
+    let next_state = match window {
         ViewId::Status => {
             build_view_find_state(query, &folded_query, matches, selected_match_index)
         }
@@ -503,7 +505,7 @@ pub(super) unsafe fn execute_active_view_find(
         ViewId::Room(_) | ViewId::Thread { .. } => {
             build_timeline_find_state_and_maybe_submit_history_backfill(
                 state_mut(hwnd),
-                &active_view,
+                window,
                 query,
                 &folded_query,
                 matches,
@@ -514,30 +516,30 @@ pub(super) unsafe fn execute_active_view_find(
 
     state_mut(hwnd)
         .find_states
-        .insert(active_view.clone(), next_state);
-    apply_find_to_active_view(hwnd, &active_view)?;
+        .insert(window.clone(), next_state);
+    apply_find_to_active_view(hwnd, window)?;
 
-    if let Some(find_state) = state_ref(hwnd).find_states.get(&active_view)
+    if let Some(find_state) = state_ref(hwnd).find_states.get(window)
         && let Some(selected_match_index) = find_state.selected_match_index
         && let Some(selected_match) = find_state.matches.get(selected_match_index)
     {
         let view = state_ref(hwnd)
             .views
-            .get(&active_view)
+            .get(window)
             .ok_or_else(|| "view state was not tracked".to_owned())?;
         scroll_timeline_to_source_row_index(
-            view_timeline(&active_view, view.content),
+            view_timeline(window, view.content),
             selected_match.source_row_index,
         );
     }
 
     refresh_status_bar(hwnd)?;
     Ok(view_find_outcome(
-        &active_view,
+        window,
         state_ref(hwnd)
             .find_states
-            .get(&active_view)
-            .expect("active view find state must be stored"),
+            .get(window)
+            .expect("the window's find state must be stored"),
     ))
 }
 

@@ -17,7 +17,7 @@ use mirx_core::{
     HighlightWord, IdentityChange, IdentityTrust, RoomActivity as CoreRoomActivity,
     RoomActivityKind as CoreRoomActivityKind, RoomActivityRelation as CoreRoomActivityRelation,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomHistoryBackfill,
-    RoomHistoryBackfillEvent, RoomIdentityChanges, RoomMedia as CoreRoomMedia,
+    RoomHistoryBackfillEvent, RoomIdentityChanges, RoomJoined, RoomMedia as CoreRoomMedia,
     RoomMediaFormat as CoreRoomMediaFormat, RoomMediaKind as CoreRoomMediaKind, RoomMemberRank,
     RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
@@ -18640,6 +18640,7 @@ const COMMANDS_MENU_JOIN: usize = 0;
 const COMMANDS_MENU_LIST: usize = 1;
 const COMMANDS_MENU_PART: usize = 2;
 const COMMANDS_MENU_QUERY: usize = 3;
+const COMMANDS_MENU_INVITE: usize = 7;
 const MENU_ID_HELP_TOPICS: usize = 40034;
 const MENU_ID_HELP_ABOUT: usize = 40035;
 const ABOUT_DIALOG_VERSION_ID: i32 = 5019;
@@ -18995,6 +18996,61 @@ fn commands_menu_part_parts_the_active_room_and_empty_join_echoes_the_error()
         find_view(&ui_state, &beta),
         "* /join: insufficient parameters"
     ));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// A Commands prompt runs its command in the window it was opened from,
+/// even when a join completing meanwhile activated another one.
+#[test]
+fn a_commands_menu_prompt_acts_in_the_window_it_was_opened_from()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let alpha = room_identity("!alpha:example");
+    let beta = room_identity("!beta:example");
+    app.select_view(alpha.clone())?;
+
+    let frame_value = app.automation_frame_hwnd();
+    let menu_thread = std::thread::spawn(move || unsafe {
+        SendMessageW(
+            frame_value as HWND,
+            WM_COMMAND,
+            (MENU_ID_COMMANDS_FIRST + COMMANDS_MENU_INVITE) as WPARAM,
+            0,
+        );
+    });
+    let class_name = wide_null("mirxWin32SingleFieldDialog");
+    wait_for_window(&class_name, "Commands prompt")?;
+    // The prompt's modal loop handles the core's answer to an earlier join.
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::RoomJoined(
+        RoomJoined {
+            room_id: "!beta:example".to_owned(),
+        },
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.dump_ui_state()?.mdi.active, beta);
+
+    answer_commands_prompt("@carol:example")?;
+    menu_thread
+        .join()
+        .expect("Commands menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_member_moderation_commands,
+        vec![SubmittedMemberModerationCommand {
+            action: MemberModerationAction::Invite,
+            room_id: "!alpha:example".to_owned(),
+            user_id: "@carol:example".to_owned(),
+            reason: None,
+        }]
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

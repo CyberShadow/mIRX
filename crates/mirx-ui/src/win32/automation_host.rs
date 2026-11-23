@@ -480,7 +480,8 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             serialize_success_json(&id, SelectViewResponse { active })
         }
         ParsedCommand::FindActiveView { id, args } => {
-            let response = execute_active_view_find(hwnd, &args.query)
+            let window = state_ref(hwnd).active_view.clone();
+            let response = execute_view_find(hwnd, &window, &args.query)
                 .map(find_active_view_response)
                 .map_err(|message| failure_response(Some(id.clone()), "find_failed", message))?;
             serialize_success_json(&id, response)

@@ -291,13 +291,15 @@ pub(super) struct RoomActionState {
     pub(super) notification_mode: Option<RoomNotificationMode>,
 }
 
+/// What the Room menu can do in the window in front, which greys it.
 pub(super) fn active_room_action_state(state: &WindowState) -> RoomActionState {
-    let joined_room = resolve_joined_room_target(state, None);
+    let front = &state.active_view;
+    let joined_room = resolve_joined_room_target(state, front, None);
     RoomActionState {
-        accept_invite_enabled: resolve_invite_command_room_id(state, "accept", None).is_ok(),
-        reject_invite_enabled: resolve_invite_command_room_id(state, "reject", None).is_ok(),
+        accept_invite_enabled: resolve_invite_command_room_id(state, front, "accept", None).is_ok(),
+        reject_invite_enabled: resolve_invite_command_room_id(state, front, "reject", None).is_ok(),
         part_room_enabled: joined_room.is_ok(),
-        channel_central_enabled: channel_central_room(state, None).is_ok(),
+        channel_central_enabled: channel_central_room(state, front, None).is_ok(),
         notification_mode: joined_room.ok().map(|room_id| {
             joined_room_notification_mode(
                 sendable_room_by_id(&state.model.rooms, &room_id)
@@ -315,18 +317,18 @@ pub(super) enum DoubleClick {
     Whois(String),
 }
 
-/// What a double-click in the active window's text does, as mIRC's
-/// defaults (Options > Mouse): a channel window opens Channel Central
-/// while it can, a query runs `/whois` on its user; Status, a thread, an
-/// invite and a direct room that is not one user's query do nothing.
-pub(super) fn double_click_action(state: &WindowState) -> Option<DoubleClick> {
-    let ViewId::Room(room_id) = &state.active_view else {
+/// What a double-click in `window`'s text does, as mIRC's defaults
+/// (Options > Mouse): a channel window opens Channel Central while it can,
+/// a query runs `/whois` on its user; Status, a thread, an invite and a
+/// direct room that is not one user's query do nothing.
+pub(super) fn double_click_action(state: &WindowState, window: &ViewId) -> Option<DoubleClick> {
+    let ViewId::Room(room_id) = window else {
         return None;
     };
     let room = room_by_id(&state.model.rooms, room_id).expect("a room window's room exists");
     match (room_window_kind(room), room.direct_user_ids.as_slice()) {
-        (RoomWindowKind::Channel, _) => active_room_action_state(state)
-            .channel_central_enabled
+        (RoomWindowKind::Channel, _) => channel_central_room(state, window, None)
+            .is_ok()
             .then_some(DoubleClick::ChannelCentral),
         (RoomWindowKind::Query, [user_id]) => Some(DoubleClick::Whois(user_id.clone())),
         (RoomWindowKind::Query, _) | (RoomWindowKind::Invite, _) => None,
@@ -745,55 +747,65 @@ unsafe fn window_menu_command(
 /// Export or Import Room Keys...: `/e2ee export|import` without a file.
 unsafe fn room_keys_menu_command(
     hwnd: HWND,
+    window: &ViewId,
     transfer: RoomKeyTransfer,
 ) -> (&'static str, Result<Option<()>, String>) {
     let command = SlashCommand::E2ee(E2eeSlashCommand::RoomKeys {
         transfer,
         path: None,
     });
-    ("Tools", run_local_command(hwnd, command).map(|_| Some(())))
+    (
+        "Tools",
+        run_local_command(hwnd, window, command).map(|_| Some(())),
+    )
 }
 
+/// Runs a menu command. It acts in the window active when it was picked,
+/// taken before any prompt opens: a prompt's modal loop handles core
+/// events, and a join landing meanwhile activates another window.
 unsafe fn menu_command_result(
     hwnd: HWND,
     wparam: WPARAM,
 ) -> Option<(&'static str, Result<Option<()>, String>)> {
     let command_id = wparam & 0xffff;
+    let window = state_ref(hwnd).active_view.clone();
+    let window = &window;
     let (title, result) = match command_id {
-        MENU_ID_FIND => ("Find", begin_find_dialog(hwnd).map(|_| Some(()))),
+        MENU_ID_FIND => ("Find", begin_find_dialog(hwnd, window).map(|_| Some(()))),
         MENU_ID_WINDOW_CASCADE => window_menu_command(hwnd, MdiArrangement::Cascade),
         MENU_ID_WINDOW_TILE_HORIZONTAL => window_menu_command(hwnd, MdiArrangement::TileHorizontal),
         MENU_ID_WINDOW_TILE_VERTICAL => window_menu_command(hwnd, MdiArrangement::TileVertical),
         MENU_ID_WINDOW_ARRANGE_ICONS => window_menu_command(hwnd, MdiArrangement::ArrangeIcons),
         MENU_ID_ROOM_ACCEPT_INVITE => (
             "Room",
-            submit_room_menu_action(hwnd, submit_accept_slash_command).map(|_| Some(())),
+            submit_room_menu_action(hwnd, window, submit_accept_slash_command).map(|_| Some(())),
         ),
         MENU_ID_ROOM_REJECT_INVITE => (
             "Room",
-            submit_room_menu_action(hwnd, submit_reject_slash_command).map(|_| Some(())),
+            submit_room_menu_action(hwnd, window, submit_reject_slash_command).map(|_| Some(())),
         ),
         MENU_ID_ROOM_PART => (
             "Room",
-            submit_room_menu_action(hwnd, submit_part_slash_command).map(|_| Some(())),
+            submit_room_menu_action(hwnd, window, submit_part_slash_command).map(|_| Some(())),
         ),
         MENU_ID_ROOM_CHANNEL_CENTRAL => (
             "Channel Central",
-            run_local_command(hwnd, SlashCommand::Channel { target: None }).map(|_| Some(())),
+            run_local_command(hwnd, window, SlashCommand::Channel { target: None })
+                .map(|_| Some(())),
         ),
         MENU_ID_ROOM_NOTIFY_ALL | MENU_ID_ROOM_NOTIFY_MENTIONS | MENU_ID_ROOM_NOTIFY_MUTE => {
             let mode = notification_menu_mode(command_id).expect("a Notifications item");
             (
                 "Room",
-                submit_room_menu_action(hwnd, |state, target| {
-                    submit_room_notification_mode(state, target, mode)
+                submit_room_menu_action(hwnd, window, |state, window, target| {
+                    submit_room_notification_mode(state, window, target, mode)
                 })
                 .map(|_| Some(())),
             )
         }
         MENU_ID_MESSAGE_REPLY => (
             "Message",
-            arm_compose_target_on_selected_message(hwnd, |event_id| ComposeTarget::Reply {
+            arm_compose_target_on_selected_message(hwnd, window, |event_id| ComposeTarget::Reply {
                 event_id,
             })
             .map(|_| Some(())),
@@ -804,7 +816,7 @@ unsafe fn menu_command_result(
         ),
         MENU_ID_MESSAGE_EDIT => (
             "Message",
-            arm_compose_target_on_selected_message(hwnd, |event_id| ComposeTarget::Edit {
+            arm_compose_target_on_selected_message(hwnd, window, |event_id| ComposeTarget::Edit {
                 event_id,
             })
             .map(|_| Some(())),
@@ -815,7 +827,7 @@ unsafe fn menu_command_result(
         ),
         MENU_ID_MESSAGE_REDACT => (
             "Message",
-            submit_redact_selected_message(hwnd).map(|_| Some(())),
+            submit_redact_selected_message(hwnd, window).map(|_| Some(())),
         ),
         MENU_ID_MESSAGE_SAVE_ATTACHMENT => (
             "Message",
@@ -836,7 +848,7 @@ unsafe fn menu_command_result(
         | MENU_ID_MEMBER_KICK
         | MENU_ID_MEMBER_BAN => (
             "Member",
-            run_member_menu_item(hwnd, command_id).map(|_| Some(())),
+            run_member_menu_item(hwnd, window, command_id).map(|_| Some(())),
         ),
         MENU_ID_FILE_CONNECT => (
             "File",
@@ -849,11 +861,11 @@ unsafe fn menu_command_result(
         ),
         MENU_ID_FILE_EXIT => (
             "File",
-            run_local_command(hwnd, SlashCommand::Exit).map(|_| Some(())),
+            run_local_command(hwnd, window, SlashCommand::Exit).map(|_| Some(())),
         ),
         MENU_ID_HELP_TOPICS => (
             "Help",
-            run_local_command(hwnd, SlashCommand::Help { topic: None }).map(|_| Some(())),
+            run_local_command(hwnd, window, SlashCommand::Help { topic: None }).map(|_| Some(())),
         ),
         MENU_ID_HELP_ABOUT => ("Help", show_about_dialog(hwnd).map(|()| Some(()))),
         MENU_ID_TOOLS_OPTIONS => ("Options", run_options_dialog(hwnd).map(|()| Some(()))),
@@ -876,7 +888,8 @@ unsafe fn menu_command_result(
             };
             (
                 "View",
-                run_local_command(hwnd, SlashCommand::Bar { bar, command }).map(|_| Some(())),
+                run_local_command(hwnd, window, SlashCommand::Bar { bar, command })
+                    .map(|_| Some(())),
             )
         }
         MENU_ID_RECOVER_E2EE => (
@@ -891,12 +904,13 @@ unsafe fn menu_command_result(
             "Tools",
             show_reset_e2ee_menu_dialog(hwnd).map(|handled| handled.then_some(())),
         ),
-        MENU_ID_EXPORT_ROOM_KEYS => room_keys_menu_command(hwnd, RoomKeyTransfer::Export),
-        MENU_ID_IMPORT_ROOM_KEYS => room_keys_menu_command(hwnd, RoomKeyTransfer::Import),
+        MENU_ID_EXPORT_ROOM_KEYS => room_keys_menu_command(hwnd, window, RoomKeyTransfer::Export),
+        MENU_ID_IMPORT_ROOM_KEYS => room_keys_menu_command(hwnd, window, RoomKeyTransfer::Import),
         MENU_ID_VERIFY_THIS_SESSION => (
             "Tools",
             run_local_command(
                 hwnd,
+                window,
                 SlashCommand::VerifyStart {
                     target: None,
                     device_id: None,
@@ -927,13 +941,14 @@ unsafe fn menu_command_result(
         MENU_ID_LOGOUT => ("File", log_out(hwnd).map(|_| Some(()))),
         TOOLBAR_ID_SEND_FILE => (
             "Send File",
-            run_local_command(hwnd, SlashCommand::SendFile { path: None }).map(|_| Some(())),
+            run_local_command(hwnd, window, SlashCommand::SendFile { path: None })
+                .map(|_| Some(())),
         ),
         _ => {
             let item = commands_menu_item(command_id)?;
             (
                 "Commands",
-                run_commands_menu_item(hwnd, item).map(|performed| performed.then_some(())),
+                run_commands_menu_item(hwnd, window, item).map(|performed| performed.then_some(())),
             )
         }
     };
@@ -1177,9 +1192,10 @@ unsafe fn timeline_event_context_lparam_for_automation(
 
 unsafe fn submit_room_menu_action(
     hwnd: HWND,
-    submit: impl FnOnce(&mut WindowState, Option<&str>) -> Result<String, String>,
+    window: &ViewId,
+    submit: impl FnOnce(&mut WindowState, &ViewId, Option<&str>) -> Result<String, String>,
 ) -> Result<(), String> {
-    let result = submit(state_mut(hwnd), None);
+    let result = submit(state_mut(hwnd), window, None);
     match result {
         Ok(message) => set_local_command_status(hwnd, message),
         Err(message) => {
@@ -1387,6 +1403,7 @@ pub(super) unsafe fn log_out_warning(hwnd: HWND) -> Result<(), String> {
 /// commands' do. Returns whether it ran rather than the user cancelling.
 unsafe fn run_commands_menu_item(
     hwnd: HWND,
+    window: &ViewId,
     item: &menus::CommandsMenuItem,
 ) -> Result<bool, String> {
     let input = match item.prompt {
@@ -1399,8 +1416,8 @@ unsafe fn run_commands_menu_item(
         None => String::new(),
     };
     match commands::parse(&commands_menu_line(item, &input)) {
-        Ok(command) => run_local_command(hwnd, command)?,
-        Err(error) => report_command_error(hwnd, error)?,
+        Ok(command) => run_local_command(hwnd, window, command)?,
+        Err(error) => report_command_error(hwnd, window, error)?,
     }
     Ok(true)
 }
@@ -1565,23 +1582,23 @@ mod tests {
         ];
         state.active_view = room_view_id("!ops:example");
         assert_eq!(
-            channel_central_room(&state, None),
+            channel_central_room(&state, &state.active_view, None),
             Err("not connected to server".to_owned())
         );
-        assert_eq!(double_click_action(&state), None);
+        assert_eq!(double_click_action(&state, &state.active_view), None);
 
         state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
         state.model.connection = ConnectionState::Syncing;
         assert_eq!(
-            channel_central_room(&state, None),
+            channel_central_room(&state, &state.active_view, None),
             Ok("!ops:example".to_owned())
         );
         assert_eq!(
-            double_click_action(&state),
+            double_click_action(&state, &state.active_view),
             Some(DoubleClick::ChannelCentral)
         );
         assert_eq!(
-            channel_central_room(&state, Some("Ops")),
+            channel_central_room(&state, &state.active_view, Some("Ops")),
             Ok("!ops:example".to_owned())
         );
         for (target, refusal) in [
@@ -1590,7 +1607,7 @@ mod tests {
             (Some("Nowhere"), "unknown room: Nowhere"),
         ] {
             assert_eq!(
-                channel_central_room(&state, target),
+                channel_central_room(&state, &state.active_view, target),
                 Err(refusal.to_owned()),
                 "{target:?}"
             );
@@ -1604,13 +1621,17 @@ mod tests {
             (ViewId::Status, None),
         ] {
             state.active_view = view.clone();
-            assert_eq!(double_click_action(&state), action, "{view:?}");
+            assert_eq!(
+                double_click_action(&state, &state.active_view),
+                action,
+                "{view:?}"
+            );
         }
         state.active_view = thread_view_id("!ops:example", "$thread:example");
         assert!(active_room_action_state(&state).channel_central_enabled);
         state.active_view = ViewId::Status;
         assert_eq!(
-            channel_central_room(&state, None),
+            channel_central_room(&state, &state.active_view, None),
             Err("no room selected".to_owned())
         );
     }
@@ -1647,12 +1668,16 @@ mod tests {
             (ViewId::Status, None),
         ] {
             state.active_view = view.clone();
-            assert_eq!(double_click_action(&state), action, "{view:?}");
+            assert_eq!(
+                double_click_action(&state, &state.active_view),
+                action,
+                "{view:?}"
+            );
         }
         // Channel Central greyed: signed out.
         state.model.connection = ConnectionState::SignedOut;
         state.active_view = room_view_id("!ops:example");
-        assert_eq!(double_click_action(&state), None);
+        assert_eq!(double_click_action(&state, &state.active_view), None);
     }
 
     #[test]

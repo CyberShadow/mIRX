@@ -1189,7 +1189,12 @@ mod tests {
         unsafe {
             with_test_frame(800, 600, |hwnd| {
                 let bar_command = |bar, command| {
-                    run_slash_command(hwnd, SlashCommand::Bar { bar, command }).unwrap()
+                    run_slash_command(
+                        hwnd,
+                        &state_ref(hwnd).active_view.clone(),
+                        SlashCommand::Bar { bar, command },
+                    )
+                    .unwrap()
                 };
                 let mut client = RECT::default();
                 GetClientRect(hwnd, &mut client);

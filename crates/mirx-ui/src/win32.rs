@@ -312,7 +312,7 @@ use command_runner::clear_window;
 #[cfg(test)]
 use command_runner::run_slash_command;
 use command_runner::{
-    channel_central_room, devices_lines, echo_in_active_view, echo_lines_in_active_view,
+    channel_central_room, devices_lines, echo_in_window, echo_lines_in_front_window,
     echo_lines_in_view, echo_view, enqueue_command, known_nick, open_room_link, own_server,
     push_lines_in_view, report_command_error, report_error_line, resolve_invite_command_room_id,
     resolve_joined_room_target, run_local_command, send_edit, send_reply, set_local_command_status,
@@ -363,9 +363,9 @@ use file_dialogs::FileDialog;
 use find::build_view_find_state;
 use find::{
     ViewFindState, active_view_find_feedback, apply_find_to_active_view, begin_find_dialog,
-    continue_timeline_find_history_search_after_refresh, dump_active_find_state,
-    execute_active_view_find, find_active_view_response, pending_timeline_find_history_views,
-    recompute_find_for_view, scroll_timeline_to_source_row_index,
+    continue_timeline_find_history_search_after_refresh, dump_active_find_state, execute_view_find,
+    find_active_view_response, pending_timeline_find_history_views, recompute_find_for_view,
+    scroll_timeline_to_source_row_index,
 };
 use fonts::{
     OwnedFont, TextFont, apply_font_setting, font_line_height, run_font_dialog, set_timeline_font,
@@ -534,7 +534,8 @@ use views::{
     ensure_status_view, ensure_view, layout_mdi_child, mdi_child_content, mdi_child_edit,
     mdi_window_placement, refresh_every_view_content, refresh_view_content,
     register_mdi_child_class, register_room_content_class, room_content_member_list,
-    room_content_timeline, set_view_window_state, show_view, sync_view_content, view_timeline,
+    room_content_timeline, set_view_window_state, show_view, sync_view_content, timeline_view,
+    view_timeline,
 };
 #[cfg(test)]
 use views::{ROOM_CONTENT_CLASS_NAME, take_stale_room_views};
