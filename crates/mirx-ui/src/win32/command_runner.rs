@@ -561,6 +561,7 @@ pub(super) unsafe fn run_slash_command(
                 window,
                 &target_event_id,
                 RoomMessagePresentationKind::Text,
+                ComposeFormat::Markdown,
                 &body,
             )?;
             Ok(Some(format!("Reply queued for {target_event_id}")))
@@ -604,6 +605,7 @@ pub(super) unsafe fn run_slash_command(
                 window,
                 &target_event_id,
                 presentation,
+                ComposeFormat::Markdown,
                 &body,
             )?;
             Ok(Some(format!("Edit queued for {target_event_id}")))
@@ -1568,6 +1570,7 @@ pub(super) fn send_edit(
     window: &ViewId,
     target_event_id: &str,
     presentation: RoomMessagePresentationKind,
+    format: ComposeFormat,
     input: &str,
 ) -> Result<(), String> {
     let message = replies::editable_message(
@@ -1575,8 +1578,8 @@ pub(super) fn send_edit(
             .ok_or_else(|| "no such message in this window".to_owned())?,
         state.model.own_user_id(),
     )?;
-    let (body, styles) = message_text_from_input(input)?;
-    if message.presentation == presentation && message.body == body && message.styles == styles {
+    let body = message_text_from_input(input)?;
+    if message.presentation == presentation && replies::edit_source(message) == body {
         return Ok(());
     }
     let room_id = resolve_joined_room_target(state, window, None)?;
@@ -1587,7 +1590,7 @@ pub(super) fn send_edit(
             target_event_id: target_event_id.to_owned(),
             presentation,
             body,
-            styles,
+            format,
         }),
     )
 }
@@ -1599,9 +1602,10 @@ pub(super) fn send_reply(
     window: &ViewId,
     target_event_id: &str,
     presentation: RoomMessagePresentationKind,
+    format: ComposeFormat,
     input: &str,
 ) -> Result<(), String> {
-    let (body, styles) = message_text_from_input(input)?;
+    let body = message_text_from_input(input)?;
     let destination = resolve_compose_destination(state, window, None)?;
     let sender_user_id = room_activity_sender_user_id(
         window_message(&state.model, window, target_event_id)
@@ -1616,7 +1620,7 @@ pub(super) fn send_reply(
             room_id: destination.room_id.clone(),
             presentation,
             body,
-            styles,
+            format,
             thread: destination.thread,
             reply: Some(SendMessageReplyTarget {
                 event_id: target_event_id.to_owned(),
@@ -1787,7 +1791,7 @@ mod tests {
             room_id: room_id.to_owned(),
             presentation,
             body: body.to_owned(),
-            styles: Vec::new(),
+            format: ComposeFormat::Markdown,
             thread: None,
             reply: None,
         })
@@ -1903,7 +1907,7 @@ mod tests {
                 assert_eq!(state_ref(hwnd).model.status, "sent to 2 rooms");
                 type_compose_line(hwnd, "/ame waves");
                 // Refused before the first send.
-                type_compose_line(hwnd, "/amsg \x02\x02");
+                type_compose_line(hwnd, "/amsg \u{3000}");
                 type_compose_line(hwnd, "/describe alice nods");
                 type_compose_line(hwnd, "/describe #Dev");
                 assert_eq!(
@@ -1948,36 +1952,25 @@ mod tests {
     }
 
     #[test]
-    fn msg_sends_formatting_codes_as_styles_and_echoes_the_text() {
+    fn msg_sends_markdown_and_echoes_it_as_typed() {
         let (state, handle) = irc_command_state();
         unsafe {
             with_test_compose_window(state, |hwnd| {
                 install_test_view_content(hwnd);
-                type_compose_line(hwnd, "/msg alice \x034red\x03 alert");
+                type_compose_line(hwnd, "/msg alice **red** alert");
                 assert_eq!(
                     state_ref(hwnd).recorded_commands,
                     vec![Command::SendMessage(SendMessageRequest {
                         room_id: "!dm:example".to_owned(),
                         presentation: RoomMessagePresentationKind::Text,
-                        body: "red alert".to_owned(),
-                        styles: vec![TextStyleSpan {
-                            start: 0,
-                            end: 3,
-                            style: mirx_core::TextStyle {
-                                foreground: Some(mirx_core::TextColor {
-                                    red: 0xff,
-                                    green: 0,
-                                    blue: 0
-                                }),
-                                ..mirx_core::TextStyle::default()
-                            },
-                        }],
+                        body: "**red** alert".to_owned(),
+                        format: ComposeFormat::Markdown,
                         thread: None,
                         reply: None,
                     })]
                 );
                 let lines = render_room_lines(state_ref(hwnd), "!ops:example");
-                assert_eq!(lines.last().unwrap(), "[22:12] -> *alice* red alert");
+                assert_eq!(lines.last().unwrap(), "[22:12] -> *alice* **red** alert");
             });
         }
         stop_test_core(handle);
@@ -3286,6 +3279,7 @@ mod tests {
             &window,
             "$q",
             RoomMessagePresentationKind::Text,
+            ComposeFormat::Markdown,
             "hello there",
         )
         .unwrap();
@@ -3304,7 +3298,7 @@ mod tests {
                 target_event_id: "$q".to_owned(),
                 sender_user_id: "@alice:example".to_owned(),
                 body: "hello there".to_owned(),
-                styles: Vec::new(),
+                format: ComposeFormat::Markdown,
                 thread: None,
             }]
         );
@@ -3352,6 +3346,7 @@ mod tests {
             &window,
             "$thread-1:example",
             RoomMessagePresentationKind::Text,
+            ComposeFormat::Markdown,
             "threaded acknowledgement",
         )
         .unwrap();
@@ -3362,7 +3357,7 @@ mod tests {
                 room_id: "!ops:example".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
                 body: "threaded acknowledgement".to_owned(),
-                styles: Vec::new(),
+                format: ComposeFormat::Markdown,
                 thread: Some(SendMessageThreadTarget {
                     thread_root_event_id: "$thread-root:example".to_owned(),
                     latest_event_id: "$thread-1:example".to_owned(),
@@ -3385,7 +3380,7 @@ mod tests {
                 target_event_id: "$thread-1:example".to_owned(),
                 sender_user_id: "@alice:example".to_owned(),
                 body: "threaded acknowledgement".to_owned(),
-                styles: Vec::new(),
+                format: ComposeFormat::Markdown,
                 thread: Some(DumpSubmittedReplyThreadTarget {
                     thread_root_event_id: "$thread-root:example".to_owned(),
                     latest_event_id: "$thread-1:example".to_owned(),
@@ -3404,6 +3399,7 @@ mod tests {
                 &window,
                 "$elsewhere",
                 RoomMessagePresentationKind::Text,
+                ComposeFormat::Markdown,
                 "hello"
             ),
             Err("no such message in this window".to_owned())
@@ -3414,6 +3410,7 @@ mod tests {
                 &window,
                 "$elsewhere",
                 RoomMessagePresentationKind::Text,
+                ComposeFormat::Markdown,
                 "hello"
             ),
             Err("no such message in this window".to_owned())
@@ -3432,6 +3429,7 @@ mod tests {
                 &window,
                 "$q",
                 RoomMessagePresentationKind::Text,
+                ComposeFormat::Markdown,
                 "hello",
             ),
             send_edit(
@@ -3439,6 +3437,7 @@ mod tests {
                 &window,
                 "$mine",
                 RoomMessagePresentationKind::Text,
+                ComposeFormat::Markdown,
                 "hello",
             ),
         ] {
@@ -3460,6 +3459,7 @@ mod tests {
             &window,
             "$mine",
             RoomMessagePresentationKind::Text,
+            ComposeFormat::Markdown,
             "replacement text",
         )
         .unwrap();
@@ -3471,7 +3471,7 @@ mod tests {
                 target_event_id: "$mine".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
                 body: "replacement text".to_owned(),
-                styles: Vec::new(),
+                format: ComposeFormat::Markdown,
             })]
         );
         assert_eq!(
@@ -3480,7 +3480,7 @@ mod tests {
                 room_id: "!ops:example".to_owned(),
                 target_event_id: "$mine".to_owned(),
                 body: "replacement text".to_owned(),
-                styles: Vec::new(),
+                format: ComposeFormat::Markdown,
             }]
         );
     }
@@ -3510,6 +3510,7 @@ mod tests {
             &window,
             "$mine-in-thread",
             RoomMessagePresentationKind::Text,
+            ComposeFormat::Markdown,
             "thread final",
         )
         .unwrap();
@@ -3521,7 +3522,7 @@ mod tests {
                 target_event_id: "$mine-in-thread".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
                 body: "thread final".to_owned(),
-                styles: Vec::new(),
+                format: ComposeFormat::Markdown,
             })]
         );
     }

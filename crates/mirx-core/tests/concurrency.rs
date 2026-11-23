@@ -14,11 +14,11 @@ use matrix_sdk::ruma::events::AnyStrippedStateEvent;
 use matrix_sdk::ruma::serde::Raw;
 use matrix_sdk_test::{InvitedRoomBuilder, JoinedRoomBuilder};
 use mirx_core::{
-    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CreateDirectRoomRequest,
-    EditMessageRequest, Event, HistoryFrom, ListPublicRoomsRequest, LoginMethod, LoginRequest,
-    MemberPowerLevelChange, MemberPowerRole, Operation, RestoreSessionRequest,
-    RoomMessagePresentationKind, SendFileRequest, SendMessageRequest, SessionAuth, StoredSession,
-    UpdateRoomSettingsRequest,
+    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, ComposeFormat,
+    CreateDirectRoomRequest, EditMessageRequest, Event, HistoryFrom, ListPublicRoomsRequest,
+    LoginMethod, LoginRequest, MemberPowerLevelChange, MemberPowerRole, Operation,
+    RestoreSessionRequest, RoomMessagePresentationKind, SendFileRequest, SendMessageRequest,
+    SessionAuth, StoredSession, UpdateRoomSettingsRequest,
 };
 use serde_json::json;
 use wiremock::matchers::{method, path_regex};
@@ -75,7 +75,7 @@ fn line(room_id: &str, body: &str) -> Command {
         room_id: room_id.to_owned(),
         presentation: RoomMessagePresentationKind::Text,
         body: body.to_owned(),
-        styles: Vec::new(),
+        format: ComposeFormat::Markdown,
         thread: None,
         reply: None,
     })
@@ -278,7 +278,7 @@ fn an_edit_goes_before_the_line_typed_after_it() {
         target_event_id: "$orig".to_owned(),
         presentation: RoomMessagePresentationKind::Text,
         body: "edited".to_owned(),
-        styles: Vec::new(),
+        format: ComposeFormat::Markdown,
     }));
     harness.send(line(ROOM, "after"));
     seen.until_acks(2);

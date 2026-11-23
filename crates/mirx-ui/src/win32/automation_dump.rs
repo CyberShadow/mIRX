@@ -642,7 +642,6 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         sessions: state
             .sessions_dialog
             .map(|dialog| sessions_dialog::dump(dialog)),
-        color_index: color_index::dump(hwnd),
         tray: dump_tray(hwnd),
         ignored_users: state.model.ignored_users.clone(),
         aliases: state.aliases.aliases().source().to_vec(),
@@ -961,7 +960,7 @@ fn dump_submitted_edit_command(command: &Command) -> Option<DumpSubmittedEditCom
             room_id: request.room_id.clone(),
             target_event_id: request.target_event_id.clone(),
             body: request.body.clone(),
-            styles: request.styles.clone(),
+            format: request.format,
         }),
         _ => None,
     }
@@ -978,7 +977,7 @@ fn dump_submitted_reply_command(command: &Command) -> Option<DumpSubmittedReplyC
                     target_event_id: reply.event_id.clone(),
                     sender_user_id: reply.sender_user_id.clone(),
                     body: request.body.clone(),
-                    styles: request.styles.clone(),
+                    format: request.format,
                     thread: request.thread.as_ref().map(dump_submitted_thread_target),
                 })
         }
@@ -1002,7 +1001,7 @@ fn dump_submitted_message_command(command: &Command) -> Option<DumpSubmittedMess
                 room_id: request.room_id.clone(),
                 presentation: request.presentation,
                 body: request.body.clone(),
-                styles: request.styles.clone(),
+                format: request.format,
                 thread: request.thread.as_ref().map(dump_submitted_thread_target),
             })
         }

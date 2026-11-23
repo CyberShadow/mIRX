@@ -1,0 +1,74 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!topic:example",
+        "display_name": "Topic Room",
+        "topic": "incident review",
+        "membership": "join",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!topic:example",
+      "activity_id": "event:$release",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$release",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "nick": "Alice",
+          "nick_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "release is today",
+        "styles": [
+          {
+            "start": 0,
+            "end": 7,
+            "style": {
+              "bold": true,
+              "italic": false,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": null,
+              "background": null
+            }
+          },
+          {
+            "start": 11,
+            "end": 16,
+            "style": {
+              "bold": false,
+              "italic": true,
+              "underline": false,
+              "strikethrough": false,
+              "foreground": null,
+              "background": null
+            }
+          }
+        ],
+        "user_links": [],
+        "source_body": "**release** is *today*",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  }
+]

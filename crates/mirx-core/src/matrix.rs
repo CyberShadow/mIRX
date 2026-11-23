@@ -138,7 +138,7 @@ use tokio_stream::StreamMap;
 use url::Url;
 
 use crate::api::{
-    BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent,
+    BackfillRoomHistoryRequest, BanRoomMemberRequest, ComposeFormat, CoreConfig, CoreErrorEvent,
     CreateRoomRequest, CreateRoomVisibility, DeviceSummary, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeRecoveryState, E2eeSessionState, E2eeStatus, EditMessageRequest,
     Event, FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, HistoryFrom,
@@ -165,12 +165,11 @@ use crate::api::{
     UserPresence, UserProfile, VerificationDecimals, VerificationDirection, VerificationEmoji,
     VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
 };
-use crate::api::{
-    PresenceChange, PresenceKind, TextStyleSpan, UserLinkSpan, check_text_styles,
-    validate_highlight_word,
-};
+use crate::api::{PresenceChange, PresenceKind, UserLinkSpan, validate_highlight_word};
 use crate::mentions::body_mentions;
-use crate::rich_text::{StyledText, html_from_styled_text, styled_text_from_html};
+use crate::rich_text::{
+    StyledText, html_from_markdown, html_from_plain_text, styled_text_from_html,
+};
 use crate::runtime::{E2eeStatusWatch, EventSender, FirstContact, RoomSnapshots, emit_event};
 
 mod room_keys;
@@ -2974,7 +2973,8 @@ fn room_activity_from_sync_message(
     let relation = room_activity_relation_from_content(event.content.relates_to.as_ref());
     let event_id = event.event_id.to_string();
     let message = |presentation, body: &String, formatted: Option<&FormattedBody>| {
-        let text = styled_message_text(body, formatted, relation.as_ref());
+        let MessageText { shown, source_body } =
+            styled_message_text(body, formatted, relation.as_ref());
         RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some(event_id.clone()),
             transaction_id: event
@@ -2984,9 +2984,10 @@ fn room_activity_from_sync_message(
                 .map(ToString::to_string),
             sender: sender.clone(),
             presentation,
-            body: text.body,
-            styles: text.styles,
-            user_links: text.user_links,
+            body: shown.body,
+            styles: shown.styles,
+            user_links: shown.user_links,
+            source_body,
             send_state: RoomMessageSendState::Sent,
         })
     };
@@ -3237,10 +3238,11 @@ fn room_activity_update_from_sync_message_replacement(
     // The replacement's own content is a `* `-prefixed fallback for
     // clients without edits (the SDK even writes a `* ` formatted body
     // there); the edit is `m.new_content`, which has no relation.
-    let (presentation, text) = room_message_presentation_and_text_from_message_type(
-        &replacement.new_content.msgtype,
-        None,
-    )?;
+    let (presentation, MessageText { shown, source_body }) =
+        room_message_presentation_and_text_from_message_type(
+            &replacement.new_content.msgtype,
+            None,
+        )?;
 
     Some(RoomActivityUpdate {
         room_id: room_id.to_owned(),
@@ -3252,9 +3254,10 @@ fn room_activity_update_from_sync_message_replacement(
             sender: event.sender.to_string(),
             timestamp_ms: event.origin_server_ts.get().into(),
             presentation,
-            body: text.body,
-            styles: text.styles,
-            user_links: text.user_links,
+            body: shown.body,
+            styles: shown.styles,
+            user_links: shown.user_links,
+            source_body,
         },
     })
 }
@@ -3431,7 +3434,7 @@ fn room_video_info_from_matrix(info: &VideoInfo) -> RoomVideoInfo {
 fn room_message_presentation_and_text_from_message_type(
     message_type: &MessageType,
     relation: Option<&RoomActivityRelation>,
-) -> Option<(RoomMessagePresentationKind, StyledText)> {
+) -> Option<(RoomMessagePresentationKind, MessageText)> {
     let (presentation, body, formatted) = match message_type {
         MessageType::Text(text) => (
             RoomMessagePresentationKind::Text,
@@ -3463,17 +3466,33 @@ fn room_message_presentation_and_text_from_message_type(
     Some((presentation, styled_message_text(body, formatted, relation)))
 }
 
+/// A text, notice or emote's text as shown, and the body it was typed as
+/// when that is not it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MessageText {
+    shown: StyledText,
+    source_body: Option<String>,
+}
+
 /// A text, notice or emote's text: its HTML `formatted_body` when it has
-/// one with text, else its plain body without a reply fallback for
-/// `relation`.
+/// one with text, its plain body (without a reply fallback for `relation`)
+/// then the source; else that plain body.
 fn styled_message_text(
     body: &str,
     formatted: Option<&FormattedBody>,
     relation: Option<&RoomActivityRelation>,
-) -> StyledText {
-    formatted
-        .and_then(styled_text_from_formatted_body)
-        .unwrap_or_else(|| StyledText::plain(strip_reply_fallback(relation, body.to_owned())))
+) -> MessageText {
+    let plain = strip_reply_fallback(relation, body.to_owned());
+    match formatted.and_then(styled_text_from_formatted_body) {
+        Some(shown) => MessageText {
+            shown,
+            source_body: Some(plain),
+        },
+        None => MessageText {
+            shown: StyledText::plain(plain),
+            source_body: None,
+        },
+    }
 }
 
 /// An HTML formatted body's text, or `None` for another format or HTML
@@ -5313,7 +5332,7 @@ fn take_pending_outgoing_kind(
 #[derive(Debug, PartialEq, Eq)]
 struct LocalEchoMessageDetails {
     presentation: RoomMessagePresentationKind,
-    text: StyledText,
+    text: MessageText,
     relation: Option<RoomActivityRelation>,
 }
 
@@ -5326,7 +5345,7 @@ fn map_local_message_activity(
 ) -> Result<Option<RoomActivity>, MatrixCoreError> {
     let Some(LocalEchoMessageDetails {
         presentation,
-        text,
+        text: MessageText { shown, source_body },
         relation,
     }) = message_presentation_and_text_from_serialized_event(serialized_event)?
     else {
@@ -5345,9 +5364,10 @@ fn map_local_message_activity(
             transaction_id: Some(transaction_id),
             sender: own_profile.clone(),
             presentation,
-            body: text.body,
-            styles: text.styles,
-            user_links: text.user_links,
+            body: shown.body,
+            styles: shown.styles,
+            user_links: shown.user_links,
+            source_body,
             send_state: RoomMessageSendState::Pending,
         }),
     }))
@@ -5425,27 +5445,26 @@ fn reaction_target_and_key_from_serialized_event(
     )))
 }
 
-/// The message type for a text, notice or emote: plain `body`, plus an
-/// HTML `formatted_body` when `styles` format it or `pills` link names in
-/// it. Text with neither has no `formatted_body` at all.
+/// The message type for a text, notice or emote: `body` as typed, plus an
+/// HTML `formatted_body` when `format` renders it formatted or `pills`
+/// link names in it. Text with neither has no `formatted_body` at all.
 fn room_message_type(
     presentation: RoomMessagePresentationKind,
     body: String,
-    styles: &[TextStyleSpan],
+    format: ComposeFormat,
     pills: &[UserLinkSpan],
 ) -> MessageType {
-    if styles.is_empty() && pills.is_empty() {
-        return match presentation {
-            RoomMessagePresentationKind::Text => MessageType::text_plain(body),
-            RoomMessagePresentationKind::Notice => MessageType::notice_plain(body),
-            RoomMessagePresentationKind::Emote => MessageType::emote_plain(body),
-        };
-    }
-    let html = html_from_styled_text(&body, styles, pills);
-    match presentation {
-        RoomMessagePresentationKind::Text => MessageType::text_html(body, html),
-        RoomMessagePresentationKind::Notice => MessageType::notice_html(body, html),
-        RoomMessagePresentationKind::Emote => MessageType::emote_html(body, html),
+    let html = match format {
+        ComposeFormat::Markdown => html_from_markdown(&body, pills),
+        ComposeFormat::Plain => (!pills.is_empty()).then(|| html_from_plain_text(&body, pills)),
+    };
+    match (presentation, html) {
+        (RoomMessagePresentationKind::Text, None) => MessageType::text_plain(body),
+        (RoomMessagePresentationKind::Notice, None) => MessageType::notice_plain(body),
+        (RoomMessagePresentationKind::Emote, None) => MessageType::emote_plain(body),
+        (RoomMessagePresentationKind::Text, Some(html)) => MessageType::text_html(body, html),
+        (RoomMessagePresentationKind::Notice, Some(html)) => MessageType::notice_html(body, html),
+        (RoomMessagePresentationKind::Emote, Some(html)) => MessageType::emote_html(body, html),
     }
 }
 
@@ -5570,8 +5589,6 @@ pub(crate) async fn send_message(
     client: &Client,
     request: SendMessageRequest,
 ) -> Result<(), MatrixCoreError> {
-    // The UI builds the styles from what was typed: invalid ones are its bug.
-    check_text_styles(&request.body, &request.styles).expect("a sent message's styles are valid");
     let room = joined_room_by_id(client, &request.room_id)?;
 
     let (mentions, pills) =
@@ -5579,7 +5596,7 @@ pub(crate) async fn send_message(
     let mut content = RoomMessageEventContent::new(room_message_type(
         request.presentation,
         request.body,
-        &request.styles,
+        request.format,
         &pills,
     ));
     content.mentions = Some(mentions);
@@ -5733,7 +5750,6 @@ pub(crate) async fn edit_message(
     client: &Client,
     request: EditMessageRequest,
 ) -> Result<(), MatrixCoreError> {
-    check_text_styles(&request.body, &request.styles).expect("an edit's styles are valid");
     let room = joined_room_by_id(client, &request.room_id)?;
     let target_event_id = <&EventId>::try_from(request.target_event_id.as_str())
         .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))?;
@@ -5746,7 +5762,7 @@ pub(crate) async fn edit_message(
     let mut new_content = RoomMessageEventContentWithoutRelation::new(room_message_type(
         request.presentation,
         request.body,
-        &request.styles,
+        request.format,
         &pills,
     ));
     new_content.mentions = Some(mentions);
@@ -6015,12 +6031,13 @@ async fn room_history_backfill_event_from_timeline_event(
                 .filter(|mapped| {
                     matches!(
                         mapped,
-                        RoomHistoryBackfillEvent::ActivityUpdate(RoomActivityUpdate {
-                            target: update_target,
-                            kind: RoomActivityUpdateKind::MessageReplaced { .. }
-                                | RoomActivityUpdateKind::ReactionAdded { .. },
-                            ..
-                        }) if *update_target == target
+                        RoomHistoryBackfillEvent::ActivityUpdate(update)
+                            if update.target == target
+                                && matches!(
+                                    update.kind,
+                                    RoomActivityUpdateKind::MessageReplaced { .. }
+                                        | RoomActivityUpdateKind::ReactionAdded { .. }
+                                )
                     )
                 }),
         );
@@ -6093,7 +6110,7 @@ async fn timeline_event_mapping(
                 &event,
                 replacement,
             )
-            .map(RoomHistoryBackfillEvent::ActivityUpdate)
+            .map(|update| RoomHistoryBackfillEvent::ActivityUpdate(Box::new(update)))
             .into_iter()
             .collect());
         }
@@ -6116,22 +6133,25 @@ async fn timeline_event_mapping(
             });
         return Ok(
             std::iter::once(RoomHistoryBackfillEvent::Activity(Box::new(activity)))
-                .chain(bundled_edit.map(RoomHistoryBackfillEvent::ActivityUpdate))
+                .chain(
+                    bundled_edit
+                        .map(|edit| RoomHistoryBackfillEvent::ActivityUpdate(Box::new(edit))),
+                )
                 .collect(),
         );
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncReactionEvent>() {
-        return Ok(vec![RoomHistoryBackfillEvent::ActivityUpdate(
+        return Ok(vec![RoomHistoryBackfillEvent::ActivityUpdate(Box::new(
             room_activity_update_from_sync_reaction(room_id, &event),
-        )]);
+        ))]);
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomRedactionEvent>() {
         let redacted_event_id = event.redacts(redaction_rules).to_string();
-        return Ok(vec![RoomHistoryBackfillEvent::ActivityUpdate(
+        return Ok(vec![RoomHistoryBackfillEvent::ActivityUpdate(Box::new(
             room_activity_update_from_sync_redaction(room_id, &event, redacted_event_id),
-        )]);
+        ))]);
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomTopicEvent>() {
@@ -6334,7 +6354,7 @@ async fn fetch_room_event_activity(
     };
     let updates = mapped
         .map(|event| match event {
-            RoomHistoryBackfillEvent::ActivityUpdate(update) => update,
+            RoomHistoryBackfillEvent::ActivityUpdate(update) => *update,
             RoomHistoryBackfillEvent::Activity(activity) => {
                 unreachable!("a line is followed by its updates only: {activity:?}")
             }
@@ -6429,17 +6449,17 @@ mod tests {
 
     use super::edit_message;
     use super::{
-        EventBatchLookups, LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry,
-        PowerLevelsChange, activity_highlight, add_highlight_word, attach_reply_relation,
-        attach_thread_relation, attach_thread_reply_relation, backfill_room_history,
-        ban_room_member, cancelled_state, content_type_for_file_name, create_room,
-        direct_user_ids_by_room_from_content, emit_member_snapshots_after_sync, fetch_room_event,
-        fetch_room_media, fetch_user_profile, highlight_word_actions, highlight_words_from_ruleset,
-        ignore_user, ignored_users, insert_pending_outgoing_kind, invite_room_member,
-        joined_room_members, joined_room_members_no_sync, joined_room_update_changes_members,
-        kick_room_member, list_public_rooms, map_cross_signing_status, map_decimals,
-        map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
-        map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
+        EventBatchLookups, LocalEchoMessageDetails, MessageText, PendingOutgoingKind,
+        PendingOutgoingRegistry, PowerLevelsChange, activity_highlight, add_highlight_word,
+        attach_reply_relation, attach_thread_relation, attach_thread_reply_relation,
+        backfill_room_history, ban_room_member, cancelled_state, content_type_for_file_name,
+        create_room, direct_user_ids_by_room_from_content, emit_member_snapshots_after_sync,
+        fetch_room_event, fetch_room_media, fetch_user_profile, highlight_word_actions,
+        highlight_words_from_ruleset, ignore_user, ignored_users, insert_pending_outgoing_kind,
+        invite_room_member, joined_room_members, joined_room_members_no_sync,
+        joined_room_update_changes_members, kick_room_member, list_public_rooms,
+        map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
+        map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, member_nick, member_target_display_name, member_target_nick,
         message_presentation_and_text_from_serialized_event, outgoing_events_from_local_echo_event,
         own_room_user_profile, owned_event_id_from_str, power_levels_change,
@@ -6462,12 +6482,13 @@ mod tests {
     use super::{RoomKeysAtRisk, SteadyStateError, backup_failure_risk};
     use crate::api::PresenceKind;
     use crate::api::{
+        ComposeFormat, EditMessageRequest, SessionAuth, TextColor, TextStyle, TextStyleSpan,
+        UserLinkSpan,
+    };
+    use crate::api::{
         CreateRoomRequest, CreateRoomVisibility, HighlightWord, ListPublicRoomsRequest, PublicRoom,
         PublicRoomsPage, PublicRoomsResult, RoomNotificationMode, RoomSummary, SendFileRequest,
         SetRoomNotificationModeRequest, UserPresence, UserProfile,
-    };
-    use crate::api::{
-        EditMessageRequest, SessionAuth, TextColor, TextStyle, TextStyleSpan, UserLinkSpan,
     };
     use crate::rich_text::StyledText;
     use matrix_sdk::ruma::api::client::presence::get_presence;
@@ -9109,6 +9130,7 @@ mod tests {
                     body: "hello".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Sent,
                 }),
             }
@@ -9119,7 +9141,12 @@ mod tests {
         presentation: RoomMessagePresentationKind,
         body: String,
     ) -> RoomMessageEventContent {
-        RoomMessageEventContent::new(room_message_type(presentation, body, &[], &[]))
+        RoomMessageEventContent::new(room_message_type(
+            presentation,
+            body,
+            ComposeFormat::Plain,
+            &[],
+        ))
     }
 
     fn room_message_event_content_without_relation(
@@ -9129,7 +9156,7 @@ mod tests {
         super::RoomMessageEventContentWithoutRelation::new(room_message_type(
             presentation,
             body,
-            &[],
+            ComposeFormat::Plain,
             &[],
         ))
     }
@@ -9144,18 +9171,18 @@ mod tests {
             assert_eq!(
                 serde_json::to_value(room_message_type(
                     presentation,
-                    "hi there".to_owned(),
-                    &[],
+                    "hi **there**".to_owned(),
+                    ComposeFormat::Plain,
                     &[]
                 ))
                 .unwrap(),
-                serde_json::json!({ "msgtype": msgtype, "body": "hi there" })
+                serde_json::json!({ "msgtype": msgtype, "body": "hi **there**" })
             );
         }
     }
 
     #[test]
-    fn styled_message_types_carry_an_html_formatted_body() {
+    fn markdown_message_types_carry_an_html_formatted_body() {
         for (presentation, msgtype) in [
             (RoomMessagePresentationKind::Text, "m.text"),
             (RoomMessagePresentationKind::Notice, "m.notice"),
@@ -9164,16 +9191,16 @@ mod tests {
             assert_eq!(
                 serde_json::to_value(room_message_type(
                     presentation,
-                    "hi <there>".to_owned(),
-                    &[style_span(3, 10, bold())],
+                    "hi **<there>**".to_owned(),
+                    ComposeFormat::Markdown,
                     &[]
                 ))
                 .unwrap(),
                 serde_json::json!({
                     "msgtype": msgtype,
-                    "body": "hi <there>",
+                    "body": "hi **<there>**",
                     "format": "org.matrix.custom.html",
-                    "formatted_body": "hi <b>&lt;there&gt;</b>"
+                    "formatted_body": "hi <strong>&lt;there&gt;</strong>"
                 })
             );
         }
@@ -9351,6 +9378,7 @@ mod tests {
                 body: "edited body".to_owned(),
                 styles: vec![style_span(7, 11, bold())],
                 user_links: Vec::new(),
+                source_body: Some("edited **body**".to_owned()),
             })
         );
     }
@@ -9367,10 +9395,13 @@ mod tests {
                 .expect("read local echo text"),
             Some(LocalEchoMessageDetails {
                 presentation: RoomMessagePresentationKind::Text,
-                text: StyledText {
-                    body: "hi there".to_owned(),
-                    styles: vec![style_span(3, 8, bold())],
-                    user_links: Vec::new(),
+                text: MessageText {
+                    shown: StyledText {
+                        body: "hi there".to_owned(),
+                        styles: vec![style_span(3, 8, bold())],
+                        user_links: Vec::new(),
+                    },
+                    source_body: Some("hi **there**".to_owned()),
                 },
                 relation: None,
             })
@@ -9433,6 +9464,67 @@ mod tests {
         );
     }
 
+    /// The source body a sync message keeps, its text as typed.
+    fn sync_message_source_body(content: serde_json::Value) -> Option<String> {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": content,
+            "event_id": "$event:example.org",
+            "sender": "@bob:example.org",
+            "origin_server_ts": 1700000000000u64
+        }))
+        .expect("deserialize sync message event");
+        let activity = room_activity_from_sync_message(
+            "!room:example.org",
+            &event,
+            profile("@bob:example.org"),
+            false,
+        );
+        let RoomActivityKind::Message(message) = activity.kind else {
+            panic!("expected a message activity");
+        };
+        message.source_body
+    }
+
+    #[test]
+    fn a_formatted_message_keeps_its_source_body_without_a_reply_fallback() {
+        assert_eq!(
+            sync_message_source_body(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "**deploy**  now",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<strong>deploy</strong>  now"
+            })),
+            Some("**deploy**  now".to_owned())
+        );
+        assert_eq!(
+            sync_message_source_body(serde_json::json!({
+                "msgtype": "m.emote",
+                "body": "> * <@alice:example.org> waves\n\n*waves* back",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply>quote</mx-reply><em>waves</em> back",
+                "m.relates_to": { "m.in_reply_to": { "event_id": "$wave:example.org" } }
+            })),
+            Some("*waves* back".to_owned())
+        );
+        // A plain message is its own source, and so is one whose HTML has
+        // no text: its plain body is shown.
+        assert_eq!(
+            sync_message_source_body(serde_json::json!({ "msgtype": "m.text", "body": "*hi*" })),
+            None
+        );
+        assert_eq!(
+            sync_message_source_body(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "> <@alice:example.org> hi\n\nhello",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<mx-reply>quote</mx-reply>",
+                "m.relates_to": { "m.in_reply_to": { "event_id": "$hi:example.org" } }
+            })),
+            None
+        );
+    }
+
     #[test]
     fn sync_body_without_a_reply_keeps_a_quote_like_start() {
         let body = "> <@alice:example.org> hi\n\nhello";
@@ -9477,6 +9569,7 @@ mod tests {
                     body: "heads up".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Sent,
                 }),
             }
@@ -9518,6 +9611,7 @@ mod tests {
                     body: "waves".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Sent,
                 }),
             }
@@ -9561,6 +9655,7 @@ mod tests {
                     body: "edited body".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                 },
             })
         );
@@ -9623,6 +9718,7 @@ mod tests {
                     body: "heads up".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                 },
             })
         );
@@ -9641,6 +9737,7 @@ mod tests {
                     body: "waves".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                 },
             })
         );
@@ -9691,6 +9788,7 @@ mod tests {
                     body: "thread reply edited".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                 },
             })
         );
@@ -9762,6 +9860,7 @@ mod tests {
                     body: "older message".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Sent,
                 }),
             })))
@@ -9794,7 +9893,7 @@ mod tests {
 
         assert_eq!(
             mapped,
-            Some(RoomHistoryBackfillEvent::ActivityUpdate(
+            Some(RoomHistoryBackfillEvent::ActivityUpdate(Box::new(
                 RoomActivityUpdate {
                     room_id: "!room:example.org".to_owned(),
                     target: RoomActivityUpdateTarget::Event {
@@ -9808,9 +9907,10 @@ mod tests {
                         body: "edited body".to_owned(),
                         styles: Vec::new(),
                         user_links: Vec::new(),
+                        source_body: None,
                     },
                 }
-            ))
+            )))
         );
     }
 
@@ -9835,7 +9935,7 @@ mod tests {
 
         assert_eq!(
             mapped,
-            Some(RoomHistoryBackfillEvent::ActivityUpdate(
+            Some(RoomHistoryBackfillEvent::ActivityUpdate(Box::new(
                 RoomActivityUpdate {
                     room_id: "!room:example.org".to_owned(),
                     target: RoomActivityUpdateTarget::Event {
@@ -9848,7 +9948,7 @@ mod tests {
                         key: "heart".to_owned(),
                     },
                 }
-            ))
+            )))
         );
     }
 
@@ -9880,6 +9980,7 @@ mod tests {
                 body: "tpyo".to_owned(),
                 styles: Vec::new(),
                 user_links: Vec::new(),
+                source_body: None,
                 send_state: RoomMessageSendState::Sent,
             }),
         }))
@@ -9912,7 +10013,7 @@ mod tests {
             events,
             vec![
                 typo_line(),
-                RoomHistoryBackfillEvent::ActivityUpdate(RoomActivityUpdate {
+                RoomHistoryBackfillEvent::ActivityUpdate(Box::new(RoomActivityUpdate {
                     room_id: "!room:example.org".to_owned(),
                     target: RoomActivityUpdateTarget::Event {
                         event_id: "$typo:example.org".to_owned(),
@@ -9925,8 +10026,9 @@ mod tests {
                         body: "typo".to_owned(),
                         styles: Vec::new(),
                         user_links: Vec::new(),
+                        source_body: None,
                     },
-                }),
+                })),
             ]
         );
     }
@@ -10015,6 +10117,7 @@ mod tests {
                         body: "older".to_owned(),
                         styles: Vec::new(),
                         user_links: Vec::new(),
+                        source_body: None,
                         send_state: RoomMessageSendState::Sent,
                     }),
                 })),
@@ -10032,6 +10135,7 @@ mod tests {
                         body: "newer".to_owned(),
                         styles: Vec::new(),
                         user_links: Vec::new(),
+                        source_body: None,
                         send_state: RoomMessageSendState::Sent,
                     }),
                 })),
@@ -10075,7 +10179,7 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                RoomHistoryBackfillEvent::ActivityUpdate(RoomActivityUpdate {
+                RoomHistoryBackfillEvent::ActivityUpdate(Box::new(RoomActivityUpdate {
                     room_id: "!room:example.org".to_owned(),
                     target: RoomActivityUpdateTarget::Event {
                         event_id: "$original:example.org".to_owned(),
@@ -10086,8 +10190,8 @@ mod tests {
                         timestamp_ms: 1_700_000_001_501,
                         key: "heart".to_owned(),
                     },
-                }),
-                RoomHistoryBackfillEvent::ActivityUpdate(RoomActivityUpdate {
+                })),
+                RoomHistoryBackfillEvent::ActivityUpdate(Box::new(RoomActivityUpdate {
                     room_id: "!room:example.org".to_owned(),
                     target: RoomActivityUpdateTarget::Event {
                         event_id: "$reaction:example.org".to_owned(),
@@ -10095,7 +10199,7 @@ mod tests {
                     kind: RoomActivityUpdateKind::ActivityRedacted {
                         redaction_event_id: "$redaction:example.org".to_owned(),
                     },
-                }),
+                })),
             ]
         );
     }
@@ -10270,6 +10374,7 @@ mod tests {
                     body: "edited body".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                 },
             })
         );
@@ -10365,6 +10470,7 @@ mod tests {
                     body: "hello from thread".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Sent,
                 }),
             }
@@ -10413,6 +10519,7 @@ mod tests {
                     body: "reply only".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Sent,
                 }),
             }
@@ -12347,6 +12454,7 @@ mod tests {
                 body: body.to_owned(),
                 styles: Vec::new(),
                 user_links: Vec::new(),
+                source_body: None,
             },
         }
     }
@@ -12410,7 +12518,7 @@ mod tests {
         assert_eq!(line.activity_id, format!("event:{event_id}"));
         events
             .map(|event| match event {
-                RoomHistoryBackfillEvent::ActivityUpdate(update) => update,
+                RoomHistoryBackfillEvent::ActivityUpdate(update) => *update,
                 RoomHistoryBackfillEvent::Activity(activity) => {
                     panic!("a second line {activity:?}")
                 }
@@ -12497,11 +12605,13 @@ mod tests {
                 // The reaction alone: the UI has no line for it.
                 assert_eq!(
                     latest_page(&client).await,
-                    vec![RoomHistoryBackfillEvent::ActivityUpdate(reaction_added(
-                        "$react:localhost",
-                        "@bob:localhost",
-                        "$old:localhost",
-                        "👍"
+                    vec![RoomHistoryBackfillEvent::ActivityUpdate(Box::new(
+                        reaction_added(
+                            "$react:localhost",
+                            "@bob:localhost",
+                            "$old:localhost",
+                            "👍"
+                        )
                     ))]
                 );
                 let older = backfill_room_history(
@@ -15856,6 +15966,7 @@ mod tests {
                     body: "hello".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Pending,
                 }),
             }
@@ -15872,7 +15983,7 @@ mod tests {
         let content = RoomMessageEventContent::new(room_message_type(
             RoomMessagePresentationKind::Text,
             "Alice: hi".to_owned(),
-            &[],
+            ComposeFormat::Markdown,
             std::slice::from_ref(&pill),
         ));
         let serialized_event =
@@ -15931,6 +16042,7 @@ mod tests {
                     body: "heads up".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Pending,
                 }),
             }
@@ -15971,6 +16083,7 @@ mod tests {
                     body: "waves".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Pending,
                 }),
             }
@@ -15997,7 +16110,10 @@ mod tests {
                 .expect("read local echo body"),
             Some(LocalEchoMessageDetails {
                 presentation: RoomMessagePresentationKind::Text,
-                text: StyledText::plain("hello from thread".to_owned()),
+                text: MessageText {
+                    shown: StyledText::plain("hello from thread".to_owned()),
+                    source_body: None,
+                },
                 relation: Some(RoomActivityRelation::Thread {
                     thread_root_event_id: "$thread-root:example.org".to_owned(),
                     in_reply_to_event_id: Some("$thread-1:example.org".to_owned()),
@@ -16027,7 +16143,10 @@ mod tests {
                 .expect("read local echo body"),
             Some(LocalEchoMessageDetails {
                 presentation: RoomMessagePresentationKind::Text,
-                text: StyledText::plain("hello in reply".to_owned()),
+                text: MessageText {
+                    shown: StyledText::plain("hello in reply".to_owned()),
+                    source_body: None,
+                },
                 relation: Some(RoomActivityRelation::Reply {
                     in_reply_to_event_id: "$parent:example.org".to_owned(),
                 }),
@@ -16081,6 +16200,7 @@ mod tests {
                     body: "hello from thread".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Pending,
                 }),
             }
@@ -16131,6 +16251,7 @@ mod tests {
                     body: "hello in reply".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Pending,
                 }),
             }
@@ -16493,6 +16614,7 @@ mod tests {
                     body: "hello".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Pending,
                 }),
             }))]
@@ -16547,6 +16669,7 @@ mod tests {
                     body: "hello from thread".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Pending,
                 }),
             }))]
@@ -16599,6 +16722,7 @@ mod tests {
                     body: "hello in reply".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Pending,
                 }),
             }))]
@@ -16642,6 +16766,7 @@ mod tests {
                         body: "hello".to_owned(),
                         styles: Vec::new(),
                         user_links: Vec::new(),
+                        source_body: None,
                         send_state: RoomMessageSendState::Pending,
                     }),
                 })),
@@ -17055,7 +17180,7 @@ mod tests {
     }
 
     #[test]
-    fn styled_sends_and_edits_carry_an_html_formatted_body() {
+    fn markdown_sends_and_edits_carry_an_html_formatted_body() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -17090,35 +17215,26 @@ mod tests {
                 .ok(timeline_event(mine))
                 .mount()
                 .await;
-            let red = TextStyle {
-                foreground: Some(TextColor {
-                    red: 0xff,
-                    green: 0,
-                    blue: 0,
-                }),
-                ..TextStyle::default()
-            };
-
             send_message(
                 &client,
                 SendMessageRequest {
                     room_id: room_id().to_string(),
                     presentation: RoomMessagePresentationKind::Emote,
-                    body: "waves at <you>".to_owned(),
-                    styles: vec![style_span(0, 5, bold()), style_span(9, 14, red)],
+                    body: "**waves** at <you>, bob".to_owned(),
+                    format: ComposeFormat::Markdown,
                     thread: None,
                     reply: None,
                 },
             )
             .await
-            .expect("send the styled emote");
+            .expect("send the Markdown emote");
             send_message(
                 &client,
                 SendMessageRequest {
                     room_id: room_id().to_string(),
                     presentation: RoomMessagePresentationKind::Text,
-                    body: "plain line".to_owned(),
-                    styles: Vec::new(),
+                    body: "**plain** line".to_owned(),
+                    format: ComposeFormat::Plain,
                     thread: None,
                     reply: None,
                 },
@@ -17131,12 +17247,12 @@ mod tests {
                     room_id: room_id().to_string(),
                     target_event_id: "$mine:localhost".to_owned(),
                     presentation: RoomMessagePresentationKind::Text,
-                    body: "fixed it".to_owned(),
-                    styles: vec![style_span(6, 8, bold())],
+                    body: "fixed ~~it~~ `bob`".to_owned(),
+                    format: ComposeFormat::Markdown,
                 },
             )
             .await
-            .expect("send the styled edit");
+            .expect("send the Markdown edit");
 
             let bodies = tokio::time::timeout(Duration::from_secs(10), async {
                 loop {
@@ -17154,30 +17270,35 @@ mod tests {
                 bodies[0],
                 serde_json::json!({
                     "msgtype": "m.emote",
-                    "body": "waves at <you>",
+                    "body": "**waves** at <you>, bob",
                     "format": "org.matrix.custom.html",
-                    "formatted_body":
-                        "<b>waves</b> at <span data-mx-color=\"#ff0000\">&lt;you&gt;</span>",
-                    "m.mentions": {},
+                    "formatted_body": "<strong>waves</strong> at &lt;you&gt;, \
+                         <a href=\"https://matrix.to/#/@bob:localhost\">bob</a>",
+                    "m.mentions": { "user_ids": ["@bob:localhost"] },
                 })
             );
             assert_eq!(
                 bodies[1],
-                serde_json::json!({ "msgtype": "m.text", "body": "plain line", "m.mentions": {} })
+                serde_json::json!({
+                    "msgtype": "m.text",
+                    "body": "**plain** line",
+                    "m.mentions": {},
+                })
             );
+            // A name in code is no pill, but the text still names them.
             assert_eq!(
                 bodies[2]["m.new_content"],
                 serde_json::json!({
                     "msgtype": "m.text",
-                    "body": "fixed it",
+                    "body": "fixed ~~it~~ `bob`",
                     "format": "org.matrix.custom.html",
-                    "formatted_body": "fixed <b>it</b>",
-                    "m.mentions": {},
+                    "formatted_body": "fixed <del>it</del> <code>bob</code>",
+                    "m.mentions": { "user_ids": ["@bob:localhost"] },
                 })
             );
             // The fallback for clients without edits is the SDK's, from the
             // new content.
-            assert_eq!(bodies[2]["body"], "* fixed it");
+            assert_eq!(bodies[2]["body"], "* fixed ~~it~~ `bob`");
             assert_eq!(bodies[2]["format"], "org.matrix.custom.html");
         });
     }
@@ -17227,7 +17348,7 @@ mod tests {
                     target_event_id: "$mine:localhost".to_owned(),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "bob, @sam1:localhost: fixed".to_owned(),
-                    styles: Vec::new(),
+                    format: ComposeFormat::Markdown,
                 },
             )
             .await
@@ -17309,7 +17430,7 @@ mod tests {
                         room_id: room_id().to_string(),
                         presentation,
                         body: body.to_owned(),
-                        styles: Vec::new(),
+                        format: ComposeFormat::Markdown,
                         thread: None,
                         reply,
                     },
@@ -17377,8 +17498,9 @@ mod tests {
                     "msgtype": "m.text",
                     "body": "bob: deploy  done",
                     "format": "org.matrix.custom.html",
+                    // Markdown keeps the spaces, which HTML collapses, as in Element.
                     "formatted_body":
-                        "<a href=\"https://matrix.to/#/@bob:localhost\">bob</a>: deploy &nbsp;done",
+                        "<a href=\"https://matrix.to/#/@bob:localhost\">bob</a>: deploy  done",
                     "m.mentions": { "user_ids": ["@bob:localhost"] },
                 })
             );

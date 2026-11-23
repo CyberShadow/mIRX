@@ -299,6 +299,7 @@ pub(super) struct MessageReplacementFields {
     pub(super) body: String,
     pub(super) styles: Vec<TextStyleSpan>,
     pub(super) user_links: Vec<UserLinkSpan>,
+    pub(super) source_body: Option<String>,
 }
 
 impl MessageReplacementFields {
@@ -309,6 +310,7 @@ impl MessageReplacementFields {
             body: message.body.clone(),
             styles: message.styles.clone(),
             user_links: message.user_links.clone(),
+            source_body: message.source_body.clone(),
         }
     }
 
@@ -317,6 +319,7 @@ impl MessageReplacementFields {
         message.body = self.body;
         message.styles = self.styles;
         message.user_links = self.user_links;
+        message.source_body = self.source_body;
     }
 }
 
@@ -1258,6 +1261,7 @@ impl RoomViewModel {
                     body,
                     styles,
                     user_links,
+                    source_body,
                 },
             ) => self.replace_message(
                 event_id,
@@ -1272,6 +1276,7 @@ impl RoomViewModel {
                         body: body.clone(),
                         styles: styles.clone(),
                         user_links: user_links.clone(),
+                        source_body: source_body.clone(),
                     },
                 },
             ),
@@ -2037,6 +2042,7 @@ mod tests {
                         body: "edited".to_owned(),
                         styles: Vec::new(),
                         user_links: Vec::new(),
+                        source_body: None,
                     },
                 })]
             ),

@@ -1530,7 +1530,6 @@ unsafe fn apply_view_activation_state(
         let state = state_mut(hwnd);
         if newly_active {
             state.selected_timeline_event = None;
-            hide_color_index(state);
         }
         state.active_view = view_id.clone();
     }

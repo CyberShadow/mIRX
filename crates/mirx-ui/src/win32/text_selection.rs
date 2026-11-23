@@ -4,8 +4,7 @@
 
 use std::ops::Range;
 
-use super::format_codes::mirc_input_from_styled;
-use super::timeline_layout::{TimelinePaintLine, TimelinePaintLineVisual, clip_styles};
+use super::timeline_layout::{TimelinePaintLine, TimelinePaintLineVisual};
 use super::{TimelineRow, TimelineRowLayout};
 
 /// A place in a timeline's text: a byte offset, at a char boundary, in a
@@ -189,13 +188,8 @@ pub(super) fn exact_point_at(
 /// The text between `a` and `b` in either order, rows joined by CRLF as
 /// the clipboard takes lines. A wrapped row is one line, so what wrapping
 /// dropped comes back. The line marker is no line of text and copies as
-/// nothing. `with_codes`: as mIRC control codes for its styles.
-pub(super) fn selected_text(
-    rows: &[TimelineRow],
-    a: TextPoint,
-    b: TextPoint,
-    with_codes: bool,
-) -> String {
+/// nothing. Styles are not text: they copy as nothing too.
+pub(super) fn selected_text(rows: &[TimelineRow], a: TextPoint, b: TextPoint) -> String {
     let (start, end) = (a.min(b), a.max(b));
     (start.row..=end.row)
         .filter(|index| rows[*index].layout != TimelineRowLayout::Rule)
@@ -207,13 +201,7 @@ pub(super) fn selected_text(
             } else {
                 row.logical_text.len()
             };
-            let slice = &row.logical_text[from..to];
-            let text = if with_codes {
-                mirc_input_from_styled(slice, &clip_styles(&row.styles, &(from..to)))
-            } else {
-                slice.to_owned()
-            };
-            text.replace('\n', "\r\n")
+            row.logical_text[from..to].replace('\n', "\r\n")
         })
         .collect::<Vec<_>>()
         .join("\r\n")
@@ -423,13 +411,10 @@ mod tests {
             None
         );
         // Across it: the lines above and below, one CRLF apart.
-        assert_eq!(
-            selected_text(&rows, point(0, 2), point(2, 3), false),
-            "ove\r\nbel"
-        );
+        assert_eq!(selected_text(&rows, point(0, 2), point(2, 3)), "ove\r\nbel");
         // From or to it: only the other line's part.
-        assert_eq!(selected_text(&rows, point(1, 0), point(2, 3), false), "bel");
-        assert_eq!(selected_text(&rows, point(0, 2), point(1, 0), false), "ove");
+        assert_eq!(selected_text(&rows, point(1, 0), point(2, 3)), "bel");
+        assert_eq!(selected_text(&rows, point(0, 2), point(1, 0)), "ove");
     }
 
     #[test]
@@ -461,24 +446,21 @@ mod tests {
             row("[22:15] <bob> six", "c"),
         ];
         // Within a line.
-        assert_eq!(
-            selected_text(&rows, point(0, 14), point(0, 17), false),
-            "one"
-        );
+        assert_eq!(selected_text(&rows, point(0, 14), point(0, 17)), "one");
         // Across a wrap at the space after "two": one line again.
         assert_eq!(
-            selected_text(&rows, point(0, 18), point(0, 27), false),
+            selected_text(&rows, point(0, 18), point(0, 27)),
             "two three"
         );
         // Across rows, reversed, with a newline inside a row.
         assert_eq!(
-            selected_text(&rows, point(2, 3), point(0, 22), false),
+            selected_text(&rows, point(2, 3), point(0, 22)),
             "three\r\n[22:14] <amy> four\r\nfive\r\n[22"
         );
     }
 
     #[test]
-    fn selected_text_with_codes_writes_the_styles() {
+    fn selected_text_is_plain_whatever_the_styles() {
         let bold = TextStyle {
             bold: true,
             ..TextStyle::default()
@@ -506,14 +488,10 @@ mod tests {
         ];
         let rows = vec![styled];
         assert_eq!(
-            selected_text(&rows, point(0, 14), point(0, 29), true),
-            "a \x02bold\x0f \x0304,99red\x0f word"
+            selected_text(&rows, point(0, 14), point(0, 29)),
+            "a bold red word"
         );
-        // A mark inside a span keeps the span's codes.
-        assert_eq!(
-            selected_text(&rows, point(0, 17), point(0, 19), true),
-            "\x02ol"
-        );
+        assert_eq!(selected_text(&rows, point(0, 17), point(0, 19)), "ol");
     }
 
     #[test]

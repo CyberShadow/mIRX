@@ -2,32 +2,33 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use mirx_core::{
-    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CoreConfig,
-    CoreHandle, CreateDirectRoomRequest, CreateRoomRequest, CreateRoomVisibility, DeviceSummary,
-    E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation,
-    E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeSessionState,
-    E2eeStatus, EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
-    HighlightWord, HistoryFrom, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
-    LeaveRoomRequest, ListPublicRoomsRequest, LoginMethod, LoginRequest, MarkRoomReadRequest,
-    MemberPowerLevelChange, MemberPowerRole, Operation, PresenceChange, PresenceKind, PublicRoom,
-    PublicRoomsPage, PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
-    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
-    RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest, RoomActivity,
-    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-    RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
-    RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
-    RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
-    RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
-    RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomSummary, RoomTagSummary, RoomTyping, RoomUserProfile, SendFileRequest, SendMessageRequest,
-    SendReactionRequest, SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest,
-    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetTypingRequest,
-    SetupE2eeRecoveryRequest, SignOutDeviceRequest, SpaceChildSummary, StoredSession,
-    SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity,
-    UpdateRoomSettingsRequest, UserDevices, UserIdentityState, UserPresence, UserProfile,
-    VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start, validate_highlight_word,
+    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command,
+    ComposeFormat, CoreConfig, CoreHandle, CreateDirectRoomRequest, CreateRoomRequest,
+    CreateRoomVisibility, DeviceSummary, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
+    E2eeRecoveryOperation, E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded,
+    E2eeSessionState, E2eeStatus, EditMessageRequest, Event, FetchRoomEventRequest,
+    FetchRoomMediaRequest, HighlightWord, HistoryFrom, InviteRoomMemberRequest, JoinRoomRequest,
+    KickRoomMemberRequest, LeaveRoomRequest, ListPublicRoomsRequest, LoginMethod, LoginRequest,
+    MarkRoomReadRequest, MemberPowerLevelChange, MemberPowerRole, Operation, PresenceChange,
+    PresenceKind, PublicRoom, PublicRoomsPage, PublicRoomsResult,
+    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest,
+    RedactEventRequest, RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
+    RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
+    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat,
+    RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank, RoomMemberSummary,
+    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomNotificationMode, RoomReadState, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
+    RoomUserProfile, SendFileRequest, SendMessageRequest, SendReactionRequest, SessionAuth,
+    SetDisplayNameRequest, SetReadMarkerRequest, SetRoomNotificationModeRequest,
+    SetRoomTopicRequest, SetTypingRequest, SetupE2eeRecoveryRequest, SignOutDeviceRequest,
+    SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
+    UnsupportedRoomMessageActivity, UpdateRoomSettingsRequest, UserDevices, UserIdentityState,
+    UserPresence, UserProfile, VerificationDecimals, VerificationDirection, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
+    validate_highlight_word,
 };
 use tempfile::TempDir;
 
@@ -372,7 +373,7 @@ fn invalid_command_ordering_emits_typed_error_events() {
             room_id: "!room:example.org".to_owned(),
             presentation: RoomMessagePresentationKind::Text,
             body: "hello".to_owned(),
-            styles: Vec::new(),
+            format: ComposeFormat::Markdown,
             thread: None,
             reply: None,
         }))
@@ -631,7 +632,7 @@ fn edit_message_before_login_emits_edit_message_error() {
             target_event_id: "$event:example.org".to_owned(),
             presentation: RoomMessagePresentationKind::Text,
             body: "edited body".to_owned(),
-            styles: Vec::new(),
+            format: ComposeFormat::Markdown,
         }),
         Operation::EditMessage,
         "edit message requires an authenticated session",
@@ -2334,6 +2335,7 @@ fn room_activity_events_round_trip_through_serde() {
             body: "hello".to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: None,
             send_state: RoomMessageSendState::Sent,
         }),
     }));
@@ -2351,6 +2353,7 @@ fn room_activity_events_round_trip_through_serde() {
             body: "hello".to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: None,
             send_state: RoomMessageSendState::Pending,
         }),
     }));
@@ -2582,6 +2585,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             body: "hello".to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: None,
             send_state: RoomMessageSendState::Pending,
         }),
     }));
@@ -2719,6 +2723,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             body: "edited body".to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: None,
         },
     });
     let redacted_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
@@ -2745,7 +2750,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
 
     assert_eq!(
         serde_json::to_string(&pending_message_event).expect("serialize pending room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"pending"}}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"source_body":null,"send_state":{"state":"pending"}}}}"#
     );
     assert_eq!(
         serde_json::to_string(&member_notice_event).expect("serialize member room activity"),
@@ -2779,7 +2784,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
     assert_eq!(
         serde_json::to_string(&replaced_update_event)
             .expect("serialize replaced room activity update"),
-        r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"event","event_id":"$original:example.org"},"kind":{"type":"message_replaced","replacement_event_id":"$edit:example.org","sender":"@alice:example.org","timestamp_ms":1700000001000,"presentation":"text","body":"edited body","styles":[],"user_links":[]}}}"#
+        r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"event","event_id":"$original:example.org"},"kind":{"type":"message_replaced","replacement_event_id":"$edit:example.org","sender":"@alice:example.org","timestamp_ms":1700000001000,"presentation":"text","body":"edited body","styles":[],"user_links":[],"source_body":null}}}"#
     );
     assert_eq!(
         serde_json::to_string(&redacted_update_event)
@@ -2929,10 +2934,11 @@ fn room_history_backfill_event_round_trips_through_serde() {
                     body: "older message".to_owned(),
                     styles: Vec::new(),
                     user_links: Vec::new(),
+                    source_body: None,
                     send_state: RoomMessageSendState::Sent,
                 }),
             })),
-            RoomHistoryBackfillEvent::ActivityUpdate(RoomActivityUpdate {
+            RoomHistoryBackfillEvent::ActivityUpdate(Box::new(RoomActivityUpdate {
                 room_id: "!ops:example.org".to_owned(),
                 target: RoomActivityUpdateTarget::Event {
                     event_id: "$message:example.org".to_owned(),
@@ -2943,14 +2949,14 @@ fn room_history_backfill_event_round_trips_through_serde() {
                     timestamp_ms: 1_700_000_000_100,
                     key: "heart".to_owned(),
                 },
-            }),
+            })),
         ],
     });
 
     let json = serde_json::to_string(&event).expect("serialize room history backfill event");
     assert_eq!(
         json,
-        r#"{"RoomHistoryBackfill":{"room_id":"!ops:example.org","end":"t4747337_219379_2603","events":[{"type":"activity","room_id":"!ops:example.org","activity_id":"event:$message:example.org","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$message:example.org","transaction_id":null,"sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"presentation":"text","body":"older message","styles":[],"user_links":[],"send_state":{"state":"sent"}}},{"type":"activity_update","room_id":"!ops:example.org","target":{"type":"event","event_id":"$message:example.org"},"kind":{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@bob:example.org","timestamp_ms":1700000000100,"key":"heart"}}]}}"#
+        r#"{"RoomHistoryBackfill":{"room_id":"!ops:example.org","end":"t4747337_219379_2603","events":[{"type":"activity","room_id":"!ops:example.org","activity_id":"event:$message:example.org","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$message:example.org","transaction_id":null,"sender":{"user_id":"@alice:example.org","nick":"Alice","nick_ambiguous":false},"presentation":"text","body":"older message","styles":[],"user_links":[],"source_body":null,"send_state":{"state":"sent"}}},{"type":"activity_update","room_id":"!ops:example.org","target":{"type":"event","event_id":"$message:example.org"},"kind":{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@bob:example.org","timestamp_ms":1700000000100,"key":"heart"}}]}}"#
     );
 
     let restored: Event =
@@ -3579,7 +3585,7 @@ fn edit_message_request_round_trips_through_json() {
         target_event_id: "$event:example.org".to_owned(),
         presentation: RoomMessagePresentationKind::Notice,
         body: "updated incident note".to_owned(),
-        styles: Vec::new(),
+        format: ComposeFormat::Markdown,
     };
 
     assert_eq!(
@@ -3589,7 +3595,7 @@ fn edit_message_request_round_trips_through_json() {
             "target_event_id": "$event:example.org",
             "presentation": "notice",
             "body": "updated incident note",
-            "styles": []
+            "format": "markdown"
         })
     );
     assert_eq!(
@@ -3598,7 +3604,7 @@ fn edit_message_request_round_trips_through_json() {
             "target_event_id": "$event:example.org",
             "presentation": "notice",
             "body": "updated incident note",
-            "styles": []
+            "format": "markdown"
         }))
         .expect("deserialize edit message request"),
         request
@@ -3614,6 +3620,15 @@ fn edit_message_request_rejects_unknown_fields() {
         .is_err(),
         "edit message request must reject unknown fields"
     );
+    for format in [r#""html""#, r#""Markdown""#, "null"] {
+        assert!(
+            serde_json::from_str::<EditMessageRequest>(&format!(
+                r#"{{"room_id":"!ops:example.org","target_event_id":"$event:example.org","presentation":"text","body":"edited body","format":{format}}}"#
+            ))
+            .is_err(),
+            "edit message request must reject format {format}"
+        );
+    }
 }
 
 #[test]

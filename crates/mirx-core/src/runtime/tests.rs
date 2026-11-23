@@ -13,7 +13,7 @@ use crate::api::{
     RoomMemberSummary, RoomMembers, RoomMembership, RoomNotificationMode, RoomReadState,
     RoomSummary, RoomUserProfile, SyncStopReason,
 };
-use crate::api::{CommandId, CoreConfig};
+use crate::api::{CommandId, ComposeFormat, CoreConfig};
 use crate::api::{
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
     RoomMessagePresentationKind, SendMessageRequest, SetTypingRequest,
@@ -2377,7 +2377,7 @@ fn send_line(body: &str) -> Command {
         room_id: room_id().to_string(),
         presentation: RoomMessagePresentationKind::Text,
         body: body.to_owned(),
-        styles: Vec::new(),
+        format: ComposeFormat::Markdown,
         thread: None,
         reply: None,
     })

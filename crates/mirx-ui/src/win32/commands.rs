@@ -8,8 +8,9 @@
 use std::fmt;
 
 use mirx_core::{
-    AwayChanged, MemberPowerLevelChange, MemberPowerRole, PresenceKind, RoomMemberRank,
-    RoomMemberSummary, RoomMessagePresentationKind, UserDevices, UserIdentityState, UserProfile,
+    AwayChanged, ComposeFormat, MemberPowerLevelChange, MemberPowerRole, PresenceKind,
+    RoomMemberRank, RoomMemberSummary, RoomMessagePresentationKind, UserDevices, UserIdentityState,
+    UserProfile,
 };
 
 use super::address_book::AddressBookTab;
@@ -24,6 +25,7 @@ use super::timestamp::{LocalTimeFn, TimestampFormat};
 pub(super) enum ComposeSubmission<'a> {
     Message {
         presentation: RoomMessagePresentationKind,
+        format: ComposeFormat,
         body: &'a str,
     },
     LocalCommand(Result<SlashCommand, CommandError>),
@@ -704,6 +706,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         summary: "leave this room, or the named one",
     },
     CommandSpec {
+        name: "plain",
+        usage: "<text>",
+        summary: "send text as it is, without Markdown",
+    },
+    CommandSpec {
         name: "query",
         usage: "<nick> [message]",
         summary: "open direct messages with a user, and send a message there",
@@ -837,6 +844,7 @@ pub(super) fn classify_input<'a>(input: &'a str, aliases: &Aliases) -> ComposeIn
     let Some(line) = input.strip_prefix('/') else {
         return ComposeInput::Line(ComposeSubmission::Message {
             presentation: RoomMessagePresentationKind::Text,
+            format: ComposeFormat::Markdown,
             body: input,
         });
     };
@@ -848,7 +856,7 @@ pub(super) fn classify_input<'a>(input: &'a str, aliases: &Aliases) -> ComposeIn
 
 /// Classifies a command line, `/name arguments`: `/!name` is always the
 /// built-in `name`; otherwise a name `is_alias` takes is an alias call.
-/// The rest are built-ins: `/me` and `/say` are messages, anything else a
+/// The rest are built-ins: `/me`, `/say` and `/plain` are messages, anything else a
 /// command.
 pub(super) fn classify_command<'a>(
     line: &'a str,
@@ -868,10 +876,12 @@ pub(super) fn classify_command<'a>(
 }
 
 fn classify_builtin<'a>(name: &str, argument: &'a str) -> ComposeSubmission<'a> {
-    let presentation = if name.eq_ignore_ascii_case("me") {
-        RoomMessagePresentationKind::Emote
+    let (presentation, format) = if name.eq_ignore_ascii_case("me") {
+        (RoomMessagePresentationKind::Emote, ComposeFormat::Markdown)
     } else if name.eq_ignore_ascii_case("say") {
-        RoomMessagePresentationKind::Text
+        (RoomMessagePresentationKind::Text, ComposeFormat::Markdown)
+    } else if name.eq_ignore_ascii_case("plain") {
+        (RoomMessagePresentationKind::Text, ComposeFormat::Plain)
     } else {
         return ComposeSubmission::LocalCommand(parse_named(name, argument));
     };
@@ -882,6 +892,7 @@ fn classify_builtin<'a>(name: &str, argument: &'a str) -> ComposeSubmission<'a> 
     }
     ComposeSubmission::Message {
         presentation,
+        format,
         body: argument,
     }
 }
@@ -2083,6 +2094,7 @@ mod tests {
     fn text(body: &str) -> ComposeSubmission<'_> {
         ComposeSubmission::Message {
             presentation: RoomMessagePresentationKind::Text,
+            format: ComposeFormat::Markdown,
             body,
         }
     }
@@ -2133,6 +2145,7 @@ mod tests {
             classify("hello"),
             ComposeSubmission::Message {
                 presentation: RoomMessagePresentationKind::Text,
+                format: ComposeFormat::Markdown,
                 body: "hello",
             }
         );
@@ -2141,10 +2154,25 @@ mod tests {
                 classify(input),
                 ComposeSubmission::Message {
                     presentation: RoomMessagePresentationKind::Emote,
+                    format: ComposeFormat::Markdown,
                     body: "waves",
                 }
             );
         }
+        for input in ["/plain **as is**", "/PLAIN   **as is**"] {
+            assert_eq!(
+                classify(input),
+                ComposeSubmission::Message {
+                    presentation: RoomMessagePresentationKind::Text,
+                    format: ComposeFormat::Plain,
+                    body: "**as is**",
+                }
+            );
+        }
+        assert_eq!(
+            classify("/plain"),
+            ComposeSubmission::LocalCommand(insufficient("plain"))
+        );
         for input in ["/me", "/me    "] {
             assert_eq!(
                 classify(input),
@@ -2214,6 +2242,7 @@ mod tests {
             classify("/!me waves"),
             ComposeSubmission::Message {
                 presentation: RoomMessagePresentationKind::Emote,
+                format: ComposeFormat::Markdown,
                 body: "waves",
             }
         );

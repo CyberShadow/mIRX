@@ -16,6 +16,8 @@ matrix-sdk-crypto = "=0.18.0"
 mime = "0.3"
 # The Matrix HTML parser and sanitizer, the version matrix-sdk 0.18 locks.
 ruma-html = "=0.8.0"
+# Compose is Markdown, as in Element; the version ruma-events 0.34 asks for.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }

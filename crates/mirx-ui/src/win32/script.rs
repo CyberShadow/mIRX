@@ -433,15 +433,17 @@ unsafe fn run_command(hwnd: HWND, run: &mut Run, text: &str) -> Result<Flow, Str
     };
     match submission {
         // Never the editbox's armed reply or edit: the alias sends text.
-        ComposeSubmission::Message { presentation, body } => {
-            match submit_compose(state_mut(hwnd), &acts_in, presentation, body, None) {
-                Ok(_) => Ok(Flow::Continue),
-                Err(reason) => failed(CommandError::new(
-                    message_command_name(presentation),
-                    reason,
-                )),
-            }
-        }
+        ComposeSubmission::Message {
+            presentation,
+            format,
+            body,
+        } => match submit_compose(state_mut(hwnd), &acts_in, presentation, format, body, None) {
+            Ok(_) => Ok(Flow::Continue),
+            Err(reason) => failed(CommandError::new(
+                message_command_name(presentation, format),
+                reason,
+            )),
+        },
         ComposeSubmission::LocalCommand(Ok(command)) => {
             match execute_slash_command(hwnd, &acts_in, command) {
                 Ok(Some(status)) => {
@@ -466,11 +468,18 @@ unsafe fn run_command(hwnd: HWND, run: &mut Run, text: &str) -> Result<Flow, Str
 }
 
 /// The command a message line was: `/say` or `/me`.
-fn message_command_name(presentation: RoomMessagePresentationKind) -> &'static str {
-    match presentation {
-        RoomMessagePresentationKind::Text => "say",
-        RoomMessagePresentationKind::Emote => "me",
-        RoomMessagePresentationKind::Notice => unreachable!("no command line is a notice"),
+fn message_command_name(
+    presentation: RoomMessagePresentationKind,
+    format: ComposeFormat,
+) -> &'static str {
+    match (presentation, format) {
+        (RoomMessagePresentationKind::Text, ComposeFormat::Markdown) => "say",
+        (RoomMessagePresentationKind::Text, ComposeFormat::Plain) => "plain",
+        (RoomMessagePresentationKind::Emote, ComposeFormat::Markdown) => "me",
+        (RoomMessagePresentationKind::Emote, ComposeFormat::Plain)
+        | (RoomMessagePresentationKind::Notice, _) => {
+            unreachable!("no command line is a notice or a plain emote")
+        }
     }
 }
 

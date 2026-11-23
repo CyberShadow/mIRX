@@ -31,33 +31,32 @@ use mirx_core::{
 };
 use mirx_testkit::{
     AutomationDialog, ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult,
-    FindActiveViewResult, FrameSize, HistoryFrom, IdentityWarning, IdentityWarningKind,
+    FindActiveViewResult, FormatKey, FrameSize, HistoryFrom, IdentityWarning, IdentityWarningKind,
     LaunchOptions, MdiArrangement, MdiView, MdiWindowPlacement, MdiWindowState,
-    MemberModerationAction, MemberPowerRole, MembershipCommandAction, MircFormatKey, MirxApp,
-    Model, NavigationNode, NavigationNodeKey, NavigationPathSegment, Room, RoomActivity,
-    RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
-    RoomImageActivity, RoomImageInfo, RoomImageMediaState, RoomKeyTransferDirection,
-    RoomMediaSource, RoomMemberChange, RoomMessageActivity, RoomMessageActivityLine,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SessionAuth, ShownTip, SpaceChild,
-    StoredSession, SubmittedAwayCommand, SubmittedDirectRoomCommand, SubmittedEditCommand,
-    SubmittedFileCommand, SubmittedHistoryCommand, SubmittedIdentityReset,
-    SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedMessageCommand,
-    SubmittedNotificationCommand, SubmittedPowerLevelChange, SubmittedProfileCommand,
-    SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
-    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomKeyTransfer,
-    SubmittedRoomListRequest, SubmittedRoomSettingsCommand, SubmittedRoomTopicCommand,
-    SubmittedSessionCommand, SubmittedSetupRecoveryCommand, SubmittedTypingCommand,
-    SubmittedUserCommand, SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem,
-    TestkitError, UiActiveTimeline, UiActivityColors, UiAddressBook, UiChannelCentral,
-    UiChatOptions, UiCheckState, UiColorCodePart, UiColorItem, UiColorsDialog, UiComposeTarget,
-    UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState,
-    UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
-    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiSessions, UiState,
-    UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiTipsOptions, UiTrayOptions,
-    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionKind,
-    VerificationState, ViewActivityLevel, ViewIdentity,
+    MemberModerationAction, MemberPowerRole, MembershipCommandAction, MirxApp, Model,
+    NavigationNode, NavigationNodeKey, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
+    RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
+    RoomImageMediaState, RoomKeyTransferDirection, RoomMediaSource, RoomMemberChange,
+    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomTag, SessionAuth, ShownTip, SpaceChild, StoredSession,
+    SubmittedAwayCommand, SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedFileCommand,
+    SubmittedHistoryCommand, SubmittedIdentityReset, SubmittedMemberModerationCommand,
+    SubmittedMembershipCommand, SubmittedMessageCommand, SubmittedNotificationCommand,
+    SubmittedPowerLevelChange, SubmittedProfileCommand, SubmittedReactionCommand,
+    SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
+    SubmittedReplyThreadTarget, SubmittedRoomKeyTransfer, SubmittedRoomListRequest,
+    SubmittedRoomSettingsCommand, SubmittedRoomTopicCommand, SubmittedSessionCommand,
+    SubmittedSetupRecoveryCommand, SubmittedTypingCommand, SubmittedUserCommand,
+    SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem, TestkitError,
+    UiActiveTimeline, UiActivityColors, UiAddressBook, UiChannelCentral, UiChatOptions,
+    UiCheckState, UiColorItem, UiColorsDialog, UiComposeTarget, UiComposeTargetKind,
+    UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState, UiLoggingOptions,
+    UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRoomHistoryBackfillState,
+    UiRoomReadState, UiRoomState, UiSessions, UiState, UiTimelineLineKind, UiTimelineLink,
+    UiTimestamp, UiTipsOptions, UiTrayOptions, UnsupportedRoomMessageActivity, UserCommandAction,
+    Verification, VerificationActionKind, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -71,8 +70,8 @@ use windows_sys::Win32::UI::Controls::{
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, IsWindowEnabled, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
-    VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_NEXT, VK_OEM_COMMA,
-    VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_X,
+    VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_NEXT, VK_PRIOR,
+    VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_X,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, DM_GETDEFID, ES_READONLY,
@@ -1801,6 +1800,7 @@ fn message_event(
             body: body.to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: None,
             send_state: CoreRoomMessageSendState::Sent,
         }),
     }))
@@ -1858,6 +1858,7 @@ fn message_event_with_event_id_and_relation(
             body: body.to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: None,
             send_state: CoreRoomMessageSendState::Sent,
         }),
     }))
@@ -1883,7 +1884,9 @@ fn text_event_with_event_id(
 fn history_backfill_event_from_event(event: Event) -> RoomHistoryBackfillEvent {
     match event {
         Event::RoomActivity(activity) => RoomHistoryBackfillEvent::Activity(activity),
-        Event::RoomActivityUpdate(update) => RoomHistoryBackfillEvent::ActivityUpdate(update),
+        Event::RoomActivityUpdate(update) => {
+            RoomHistoryBackfillEvent::ActivityUpdate(Box::new(update))
+        }
         other => panic!("expected room history backfill event payload, got {other:?}"),
     }
 }
@@ -1922,6 +1925,7 @@ fn pending_message_event_with_presentation(
             body: body.to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: None,
             send_state: CoreRoomMessageSendState::Pending,
         }),
     }))
@@ -1996,6 +2000,7 @@ fn message_replaced_update_event(
             body: body.to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: None,
         },
     })
 }
@@ -3595,7 +3600,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 92);
+    assert_eq!(version.protocol_version, 93);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -9398,7 +9403,7 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
          [switchbar]\r\nshow=on\r\nbuttons=120\r\n\
          event=5\r\nmessage=4\r\nhighlight=12\r\n\
          [treebar]\r\nshow=on\r\nwidth=240\r\n\
-         [logging]\r\nrooms=off\r\ndirect=off\r\nstrip=off\r\ntimestamp=on\r\n\
+         [logging]\r\nrooms=off\r\ndirect=off\r\ntimestamp=on\r\n\
          [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
          [tips]\r\nhighlights=on\r\ndirect=on\r\nrooms=off\r\n\
          [marker]\r\nshow=on\r\ncolor=4\r\n\
@@ -9809,7 +9814,7 @@ fn a_closed_query_reopened_by_a_message_logs_it() -> Result<(), Box<dyn std::err
 }
 
 #[test]
-fn logging_options_strip_codes_and_drop_timestamps() -> Result<(), Box<dyn std::error::Error>> {
+fn logs_are_plain_text_and_timestamps_can_go() -> Result<(), Box<dyn std::error::Error>> {
     let styled_event = || {
         let mut event = text_event("!beta:example", "@bob:example", now_ms(), "bold plain");
         let Event::RoomActivity(activity) = &mut event else {
@@ -9829,7 +9834,7 @@ fn logging_options_strip_codes_and_drop_timestamps() -> Result<(), Box<dyn std::
         event
     };
     let mut logs = Vec::new();
-    for logging in ["", "[logging]\r\nstrip=on\r\ntimestamp=off\r\n"] {
+    for logging in ["", "[logging]\r\ntimestamp=off\r\n"] {
         let local_app_data = unique_local_app_data_path();
         write_settings(&local_app_data, logging)?;
         let (app, local_app_data) = launch_close_lifecycle_app_in(local_app_data)?;
@@ -9841,7 +9846,9 @@ fn logging_options_strip_codes_and_drop_timestamps() -> Result<(), Box<dyn std::
         drop(app);
         let _ = fs::remove_dir_all(&local_app_data);
     }
-    assert_eq!(untimed(&logs[0][3]), "<@bob:example> \x02bold\x0f plain");
+    // The bold is no text: a log never holds formatting.
+    assert_ne!(logs[0][3], "<@bob:example> bold plain");
+    assert_eq!(untimed(&logs[0][3]), "<@bob:example> bold plain");
     assert_eq!(logs[1][3], "<@bob:example> bold plain");
     Ok(())
 }
@@ -19472,7 +19479,6 @@ const OPTIONS_HIGHLIGHT_DELETE_ID: i32 = 6404;
 const OPTIONS_HIGHLIGHT_NOTE_ID: i32 = 6405;
 const OPTIONS_LOG_ROOMS_ID: i32 = 6501;
 const OPTIONS_LOG_DIRECT_ID: i32 = 6502;
-const OPTIONS_LOG_STRIP_CODES_ID: i32 = 6503;
 const OPTIONS_LOG_TIMESTAMP_ID: i32 = 6504;
 const OPTIONS_LOG_FOLDER_ID: i32 = 6505;
 const OPTIONS_TRAY_ALWAYS_ID: i32 = 6601;
@@ -19690,7 +19696,6 @@ fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn 
         [
             OPTIONS_LOG_ROOMS_ID as u16,
             OPTIONS_LOG_DIRECT_ID as u16,
-            OPTIONS_LOG_STRIP_CODES_ID as u16,
             OPTIONS_LOG_TIMESTAMP_ID as u16,
             OPTIONS_LOG_FOLDER_ID as u16,
         ]
@@ -19700,7 +19705,6 @@ fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn 
         UiLoggingOptions {
             rooms: false,
             direct: false,
-            strip_codes: false,
             timestamp: true,
         }
     );
@@ -19710,7 +19714,6 @@ fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn 
     );
     unsafe {
         set_options_check(dialog, OPTIONS_LOG_DIRECT_ID, true);
-        set_options_check(dialog, OPTIONS_LOG_STRIP_CODES_ID, true);
         set_options_check(dialog, OPTIONS_LOG_TIMESTAMP_ID, false);
     }
     assert_eq!(
@@ -19721,7 +19724,6 @@ fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn 
         UiLoggingOptions {
             rooms: false,
             direct: true,
-            strip_codes: true,
             timestamp: false,
         }
     );
@@ -19730,7 +19732,7 @@ fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn 
     app.wait_idle(Duration::from_secs(5))?;
     assert!(
         fs::read_to_string(settings_file_path(&local_app_data))?
-            .contains("[logging]\r\nrooms=off\r\ndirect=on\r\nstrip=on\r\ntimestamp=off\r\n")
+            .contains("[logging]\r\nrooms=off\r\ndirect=on\r\ntimestamp=off\r\n")
     );
     // Windows already open have decided; a query that opens now logs.
     assert_eq!(view_log(&app, &room_identity("!alpha:example"))?, None);
@@ -24487,7 +24489,7 @@ fn automation_driver_slash_reply_records_submitted_reply_without_appending_text(
             target_event_id: "$react-normal".to_owned(),
             sender_user_id: "@normal:example".to_owned(),
             body: "thanks for the detail".to_owned(),
-            styles: Vec::new(),
+            format: mirx_core::ComposeFormat::Markdown,
             thread: None,
         }]
     );
@@ -24533,7 +24535,7 @@ fn automation_driver_slash_edit_records_submitted_edit_without_appending_text()
             room_id: "!reactions:example".to_owned(),
             target_event_id: "$react-normal".to_owned(),
             body: "replacement text".to_owned(),
-            styles: Vec::new(),
+            format: mirx_core::ComposeFormat::Markdown,
         }]
     );
     assert!(model.submitted_reaction_commands.is_empty());
@@ -25038,7 +25040,7 @@ fn automation_driver_slash_reply_from_thread_uses_compose_thread_destination()
             target_event_id: "$react-thread-reply".to_owned(),
             sender_user_id: "@reply:example".to_owned(),
             body: "threaded acknowledgement".to_owned(),
-            styles: Vec::new(),
+            format: mirx_core::ComposeFormat::Markdown,
             thread: Some(SubmittedReplyThreadTarget {
                 thread_root_event_id: "$react-thread-root".to_owned(),
                 latest_event_id: "$react-thread-reply".to_owned(),
@@ -25085,7 +25087,7 @@ fn automation_driver_slash_edit_from_thread_targets_parent_room()
             room_id: "!reactions:example".to_owned(),
             target_event_id: "$react-thread-reply".to_owned(),
             body: "replacement text".to_owned(),
-            styles: Vec::new(),
+            format: mirx_core::ComposeFormat::Markdown,
         }]
     );
     assert!(model.submitted_reaction_commands.is_empty());
@@ -26233,7 +26235,7 @@ fn automation_driver_reply_menu_arms_and_sends_reply() -> Result<(), Box<dyn std
             target_event_id: "$replies-question".to_owned(),
             sender_user_id: "@alice:example".to_owned(),
             body: "yes, at 14:00".to_owned(),
-            styles: Vec::new(),
+            format: mirx_core::ComposeFormat::Markdown,
             thread: None,
         }]
     );
@@ -26308,7 +26310,7 @@ fn automation_driver_edit_menu_prefills_own_message_and_escape_cancels()
             room_id: "!reactions:example".to_owned(),
             target_event_id: "$react-normal".to_owned(),
             body: "normal reaction target, fixed".to_owned(),
-            styles: Vec::new(),
+            format: mirx_core::ComposeFormat::Markdown,
         }]
     );
 
@@ -27789,191 +27791,76 @@ fn wait_for_compose_text(app: &MirxApp, text: &str) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
-/// Waits for the colour index to show for `part`, or for it to be hidden.
-fn wait_for_color_index(
-    app: &MirxApp,
-    part: Option<UiColorCodePart>,
-) -> Result<UiState, Box<dyn std::error::Error>> {
-    Ok(app.wait_for_ui_state(
-        &format!("the colour index for {part:?}"),
-        Duration::from_secs(5),
-        |ui_state| ui_state.color_index.as_ref().map(|index| index.part) == part,
-    )?)
+/// The active editbox's selection, in UTF-16 units.
+fn compose_selection(app: &MirxApp) -> (usize, usize) {
+    let selection = unsafe { SendMessageW(compose_edit_hwnd(app), EM_GETSEL, 0, 0) } as usize;
+    (selection & 0xffff, selection >> 16)
 }
 
 #[test]
-fn ctrl_k_shows_the_colour_index_until_the_number_is_typed()
+fn ctrl_b_and_e_type_markdown_markers_and_the_line_sends_as_markdown()
 -> Result<(), Box<dyn std::error::Error>> {
-    use UiColorCodePart::{Background, Foreground};
     let (app, local_app_data) = launch_replies_app()?;
     let frame = app.automation_frame_hwnd() as HWND;
     unsafe { SetForegroundWindow(frame) };
     assert_compose_has_focus(&app);
-    let edit = unsafe { compose_edit_hwnd(&app) };
-
-    press_keys(&[VK_CONTROL, u16::from(b'K')]);
-    let index = wait_for_color_index(&app, Some(Foreground))?
-        .color_index
-        .expect("the colour index shows");
-    // Just above the editbox, which keeps the focus.
-    let edit_rect = unsafe { window_rect(edit) };
-    assert_eq!(index.rect.y + index.rect.height, edit_rect.top);
-    assert!(
-        (edit_rect.left..edit_rect.right).contains(&index.rect.x),
-        "{index:?} over {:?}",
-        (edit_rect.left, edit_rect.right)
-    );
-    assert_eq!(index.cells.len(), 16);
-    assert_compose_has_focus(&app);
-
-    for (key, text, part) in [
-        (u16::from(b'4'), "\x034", Some(Foreground)),
-        (VK_OEM_COMMA, "\x034,", Some(Background)),
-        (u16::from(b'1'), "\x034,1", Some(Background)),
-        (u16::from(b'2'), "\x034,12", None),
-    ] {
-        press_keys(&[key]);
-        wait_for_compose_text(&app, text)?;
-        wait_for_color_index(&app, part)?;
-    }
-
-    // A click on a colour types its number; the editbox keeps the focus.
-    press_keys(&[VK_CONTROL, u16::from(b'K')]);
-    let index = wait_for_color_index(&app, Some(Foreground))?
-        .color_index
-        .expect("the colour index shows");
-    let popup = wait_for_window(&wide_null("mirxColorIndex"), "the colour index")?;
-    let cell = &index.cells[12];
-    post_left_click(
-        popup,
-        &UiPoint {
-            x: cell.x + cell.width / 2,
-            y: cell.y + cell.height / 2,
-        },
-        false,
-    );
-    wait_for_compose_text(&app, "\x034,12\x0312")?;
-    wait_for_color_index(&app, None)?;
-    assert_compose_has_focus(&app);
-
-    // Esc hides it and keeps the text.
-    press_keys(&[VK_CONTROL, u16::from(b'K')]);
-    wait_for_color_index(&app, Some(Foreground))?;
-    press_keys(&[VK_ESCAPE]);
-    wait_for_color_index(&app, None)?;
-    app.wait_idle(Duration::from_secs(5))?;
-    assert_eq!(app.compose_text()?, "\x034,12\x0312\x03");
-
-    drop(app);
-    let _ = fs::remove_dir_all(&local_app_data);
-    Ok(())
-}
-
-#[test]
-fn ctrl_e_sends_strikethrough() -> Result<(), Box<dyn std::error::Error>> {
-    let (app, local_app_data) = launch_replies_app()?;
-    let frame = app.automation_frame_hwnd() as HWND;
-    unsafe { SetForegroundWindow(frame) };
-    assert_compose_has_focus(&app);
-    press_keys(&[VK_CONTROL, u16::from(b'E')]);
+    press_keys(&[VK_CONTROL, u16::from(b'B')]);
+    wait_for_compose_text(&app, "****")?;
+    assert_eq!(compose_selection(&app), (2, 2));
     press_keys(&[u16::from(b'X')]);
+    press_keys(&[VK_END]);
     press_keys(&[VK_CONTROL, u16::from(b'E')]);
     press_keys(&[u16::from(b'Y')]);
-    wait_for_compose_text(&app, "\x1ex\x1ey")?;
+    wait_for_compose_text(&app, "**x**~~y~~")?;
+    // Markdown has no colour or underline: these keys type nothing.
+    for letter in *b"KURO" {
+        press_keys(&[VK_CONTROL, u16::from(letter)]);
+    }
     press_keys(&[VK_RETURN]);
     wait_for_compose_text(&app, "")?;
     app.wait_idle(Duration::from_secs(5))?;
     let sent = app.dump_model()?.submitted_message_commands;
     assert_eq!(sent.len(), 1, "{sent:?}");
-    assert_eq!(sent[0].body, "xy");
-    assert_eq!(
-        sent[0].styles,
-        [mirx_core::TextStyleSpan {
-            start: 0,
-            end: 1,
-            style: mirx_core::TextStyle {
-                strikethrough: true,
-                ..mirx_core::TextStyle::default()
-            },
-        }]
-    );
+    assert_eq!(sent[0].body, "**x**~~y~~");
+    assert_eq!(sent[0].format, mirx_core::ComposeFormat::Markdown);
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 
 #[test]
-fn editbox_format_keys_insert_mirc_codes() -> Result<(), Box<dyn std::error::Error>> {
+fn editbox_format_keys_insert_markdown_markers() -> Result<(), Box<dyn std::error::Error>> {
     let (app, local_app_data) = launch_replies_app()?;
     let edit = unsafe { compose_edit_hwnd(&app) };
-    let type_text = |text: &str| {
-        for unit in text.encode_utf16() {
-            unsafe { SendMessageW(edit, WM_CHAR, WPARAM::from(unit), 0) };
-        }
-    };
-    let format = |key: MircFormatKey| app.send_compose_key(ComposeKey::Format { key });
+    let format = |key: FormatKey| app.send_compose_key(ComposeKey::Format { key });
 
-    for key in [
-        MircFormatKey::Bold,
-        MircFormatKey::Color,
-        MircFormatKey::Underline,
-        MircFormatKey::Italic,
-        MircFormatKey::Reset,
-        MircFormatKey::Reverse,
-    ] {
-        format(key)?;
-    }
-    assert_eq!(app.compose_text()?, "\x02\x03\x1f\x1d\x0f\x16");
-
-    app.set_compose_text("")?;
-    format(MircFormatKey::Bold)?;
-    type_text("hi");
-    format(MircFormatKey::Bold)?;
-    type_text(" ");
-    format(MircFormatKey::Color)?;
-    type_text("4,1red");
-    assert_eq!(app.compose_text()?, "\x02hi\x02 \x034,1red");
+    app.set_compose_text("ship it now")?;
+    unsafe { SendMessageW(edit, EM_SETSEL, 5, 7) };
+    format(FormatKey::Bold)?;
+    assert_eq!(app.compose_text()?, "ship **it** now");
+    assert_eq!(compose_selection(&app), (7, 9));
+    format(FormatKey::Italic)?;
+    assert_eq!(app.compose_text()?, "ship ***it*** now");
+    unsafe { SendMessageW(edit, EM_SETSEL, 14, 17) };
+    format(FormatKey::Strikethrough)?;
+    assert_eq!(app.compose_text()?, "ship ***it*** ~~now~~");
     app.send_compose_key(ComposeKey::Return)?;
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
 
-    let style = |bold: bool, colors: Option<(u32, u32)>| {
-        let color = |hex: u32| mirx_core::TextColor {
-            red: (hex >> 16) as u8,
-            green: (hex >> 8) as u8,
-            blue: hex as u8,
-        };
-        mirx_core::TextStyle {
-            bold,
-            foreground: colors.map(|(foreground, _)| color(foreground)),
-            background: colors.map(|(_, background)| color(background)),
-            ..mirx_core::TextStyle::default()
-        }
-    };
     assert_eq!(
         app.dump_model()?.submitted_message_commands,
         vec![SubmittedMessageCommand {
             room_id: "!replies:example".to_owned(),
             presentation: RoomMessagePresentationKind::Text,
-            body: "hi red".to_owned(),
-            styles: vec![
-                mirx_core::TextStyleSpan {
-                    start: 0,
-                    end: 2,
-                    style: style(true, None),
-                },
-                mirx_core::TextStyleSpan {
-                    start: 3,
-                    end: 6,
-                    style: style(false, Some((0xff0000, 0x000000))),
-                },
-            ],
+            body: "ship ***it*** ~~now~~".to_owned(),
+            format: mirx_core::ComposeFormat::Markdown,
             thread: None,
         }]
     );
-    // History recalls the line as typed, codes and all.
+    // History recalls the line as typed.
     app.send_compose_key(ComposeKey::Up)?;
-    assert_eq!(app.compose_text()?, "\x02hi\x02 \x034,1red");
+    assert_eq!(app.compose_text()?, "ship ***it*** ~~now~~");
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

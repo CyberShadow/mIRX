@@ -612,7 +612,7 @@ pub struct SubmittedEditCommand {
     pub room_id: String,
     pub target_event_id: String,
     pub body: String,
-    pub styles: Vec<mirx_core::TextStyleSpan>,
+    pub format: mirx_core::ComposeFormat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -622,7 +622,7 @@ pub struct SubmittedReplyCommand {
     pub target_event_id: String,
     pub sender_user_id: String,
     pub body: String,
-    pub styles: Vec<mirx_core::TextStyleSpan>,
+    pub format: mirx_core::ComposeFormat,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<SubmittedReplyThreadTarget>,
 }
@@ -635,7 +635,7 @@ pub struct SubmittedMessageCommand {
     pub room_id: String,
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
-    pub styles: Vec<mirx_core::TextStyleSpan>,
+    pub format: mirx_core::ComposeFormat,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<SubmittedReplyThreadTarget>,
 }
@@ -1263,6 +1263,7 @@ pub enum RoomActivityUpdateKind {
         body: String,
         styles: Vec<mirx_core::TextStyleSpan>,
         user_links: Vec<mirx_core::UserLinkSpan>,
+        source_body: Option<String>,
     },
     ReactionAdded {
         reaction_event_id: String,
@@ -1279,7 +1280,7 @@ pub enum RoomActivityUpdateKind {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoomHistoryBackfillEvent {
     Activity(Box<RoomActivity>),
-    ActivityUpdate(RoomActivityUpdate),
+    ActivityUpdate(Box<RoomActivityUpdate>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1472,8 +1473,6 @@ pub struct UiState {
     pub channel_central: Option<UiChannelCentral>,
     /// The Sessions dialog while it is open, read back from its controls.
     pub sessions: Option<UiSessions>,
-    /// The colour index while it shows.
-    pub color_index: Option<UiColorIndex>,
     /// The tray icon and the frame's place behind it.
     pub tray: UiTray,
     /// The active window's timeline; the Rooms List has none.
@@ -1700,7 +1699,6 @@ pub struct UiLoggingOptions {
     pub rooms: bool,
     /// Automatically log direct messages.
     pub direct: bool,
-    pub strip_codes: bool,
     pub timestamp: bool,
 }
 
@@ -1909,25 +1907,6 @@ pub struct UiColorsPreviewItem {
     pub item: String,
     /// In the preview control's client coordinates.
     pub click_point: UiPoint,
-}
-
-/// The colour index over the editbox while a `^K` colour number is typed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct UiColorIndex {
-    /// Which number of the code is being typed.
-    pub part: UiColorCodePart,
-    /// The popup, in screen coordinates.
-    pub rect: UiRect,
-    /// Boxes 0-15, in the popup's client coordinates.
-    pub cells: Vec<UiRect>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UiColorCodePart {
-    Foreground,
-    Background,
 }
 
 /// Options > Display's Event, Message and Highlight palette indices.
@@ -2277,22 +2256,18 @@ pub enum ComposeKey {
     Tab,
     ShiftTab,
     Escape,
-    /// The mIRC formatting code a Ctrl chord types.
+    /// The Markdown markers a Ctrl chord wraps the selection in.
     Format {
-        key: MircFormatKey,
+        key: FormatKey,
     },
 }
 
-/// The mIRC formatting chords: Ctrl+B, K, U, I, O, R and E.
+/// The formatting chords: Ctrl+B (`**`), Ctrl+I (`*`) and Ctrl+E (`~~`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum MircFormatKey {
+pub enum FormatKey {
     Bold,
-    Color,
-    Underline,
     Italic,
-    Reset,
-    Reverse,
     Strikethrough,
 }
 
@@ -2312,7 +2287,7 @@ impl<'de> Deserialize<'de> for ComposeKey {
             Tab {},
             ShiftTab {},
             Escape {},
-            Format { key: MircFormatKey },
+            Format { key: FormatKey },
         }
 
         Ok(match Wire::deserialize(deserializer)? {

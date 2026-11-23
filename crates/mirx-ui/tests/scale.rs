@@ -143,6 +143,7 @@ fn text_event(index: usize, event_id: &str, sender: &str, timestamp_ms: u64, bod
             body: body.to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: None,
             send_state: RoomMessageSendState::Sent,
         }),
     }))

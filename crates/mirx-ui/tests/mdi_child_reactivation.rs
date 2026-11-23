@@ -121,6 +121,7 @@ fn sent_message_activity(
             body: body.to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: None,
             send_state: RoomMessageSendState::Sent,
         }),
     }

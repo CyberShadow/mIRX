@@ -2,7 +2,7 @@
 //! selection, history backfill anchor and Go to Original.
 
 use super::*;
-use windows_sys::Win32::System::SystemServices::{MK_CONTROL, MK_LBUTTON};
+use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetSystemMetrics, HTCLIENT, IDC_HAND, PostMessageW, SM_CXDRAG, SM_CYDRAG,
@@ -167,7 +167,7 @@ unsafe extern "system" fn timeline_window_proc(
             0
         }
         WM_LBUTTONUP => {
-            finish_text_drag(hwnd, wparam as u32 & MK_CONTROL != 0);
+            finish_text_drag(hwnd);
             0
         }
         // Another window took the mouse: the mark goes, copied or not.
@@ -436,10 +436,8 @@ unsafe fn extend_text_drag(hwnd: HWND, at: (i32, i32)) {
     InvalidateRect(hwnd, null(), 1);
 }
 
-/// The release: copies the mark, with mIRC's control codes if Ctrl is
-/// held, and drops it. The button message's own `MK_CONTROL` says whether
-/// it was, for this very release.
-unsafe fn finish_text_drag(hwnd: HWND, with_codes: bool) {
+/// The release: copies the mark as plain text, and drops it.
+unsafe fn finish_text_drag(hwnd: HWND) {
     // Taken before the capture goes, so WM_CAPTURECHANGED finds no drag.
     let drag = timeline_state_mut(hwnd).drag.take();
     ReleaseCapture();
@@ -447,12 +445,7 @@ unsafe fn finish_text_drag(hwnd: HWND, with_codes: bool) {
         return;
     };
     InvalidateRect(hwnd, null(), 1);
-    let text = selected_text(
-        &timeline_state_ref(hwnd).source_rows,
-        anchor,
-        focus,
-        with_codes,
-    );
+    let text = selected_text(&timeline_state_ref(hwnd).source_rows, anchor, focus);
     if let Err(error) = copy_to_clipboard(hwnd, &text) {
         let frame = frame_window_for(hwnd);
         let window = timeline_view(state_ref(frame), hwnd);
@@ -1234,7 +1227,9 @@ mod tests {
     fn history_backfill_event_from_event(event: Event) -> RoomHistoryBackfillEvent {
         match event {
             Event::RoomActivity(activity) => RoomHistoryBackfillEvent::Activity(activity),
-            Event::RoomActivityUpdate(update) => RoomHistoryBackfillEvent::ActivityUpdate(update),
+            Event::RoomActivityUpdate(update) => {
+                RoomHistoryBackfillEvent::ActivityUpdate(Box::new(update))
+            }
             other => panic!("expected room history backfill event payload, got {other:?}"),
         }
     }

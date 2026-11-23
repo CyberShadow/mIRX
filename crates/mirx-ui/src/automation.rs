@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 92;
+pub(crate) const PROTOCOL_VERSION: u32 = 93;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1138,8 +1138,6 @@ pub(crate) struct UiState {
     pub(crate) channel_central: Option<UiChannelCentral>,
     /// The Sessions dialog while it is open, read back from its controls.
     pub(crate) sessions: Option<UiSessions>,
-    /// The colour index while it shows.
-    pub(crate) color_index: Option<UiColorIndex>,
     /// The tray icon and the frame's place behind it.
     pub(crate) tray: UiTray,
     /// The active window's timeline; the Rooms List has none.
@@ -1366,7 +1364,6 @@ pub(crate) struct UiLoggingOptions {
     pub(crate) rooms: bool,
     /// Automatically log direct messages.
     pub(crate) direct: bool,
-    pub(crate) strip_codes: bool,
     pub(crate) timestamp: bool,
 }
 
@@ -1626,25 +1623,6 @@ pub(crate) struct UiColorsPreviewItem {
     pub(crate) click_point: UiPoint,
 }
 
-/// The colour index over the editbox while a `^K` colour number is typed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct UiColorIndex {
-    /// Which number of the code is being typed.
-    pub(crate) part: UiColorCodePart,
-    /// The popup, in screen coordinates.
-    pub(crate) rect: UiRect,
-    /// Boxes 0-15, in the popup's client coordinates.
-    pub(crate) cells: Vec<UiRect>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum UiColorCodePart {
-    Foreground,
-    Background,
-}
-
 /// Options > Display's Event, Message and Highlight palette indices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1873,22 +1851,18 @@ pub(crate) enum ComposeKey {
     Tab,
     ShiftTab,
     Escape,
-    /// The mIRC formatting code a Ctrl chord types.
+    /// The Markdown markers a Ctrl chord wraps the selection in.
     Format {
-        key: MircFormatKey,
+        key: FormatKey,
     },
 }
 
-/// The mIRC formatting chords: Ctrl+B, K, U, I, O, R and E.
+/// The formatting chords: Ctrl+B (`**`), Ctrl+I (`*`) and Ctrl+E (`~~`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum MircFormatKey {
+pub(crate) enum FormatKey {
     Bold,
-    Color,
-    Underline,
     Italic,
-    Reset,
-    Reverse,
     Strikethrough,
 }
 
@@ -1908,7 +1882,7 @@ impl<'de> Deserialize<'de> for ComposeKey {
             Tab {},
             ShiftTab {},
             Escape {},
-            Format { key: MircFormatKey },
+            Format { key: FormatKey },
         }
 
         Ok(match Wire::deserialize(deserializer)? {
@@ -2262,7 +2236,7 @@ pub(crate) struct DumpSubmittedEditCommand {
     pub(crate) room_id: String,
     pub(crate) target_event_id: String,
     pub(crate) body: String,
-    pub(crate) styles: Vec<mirx_core::TextStyleSpan>,
+    pub(crate) format: mirx_core::ComposeFormat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2272,7 +2246,7 @@ pub(crate) struct DumpSubmittedReplyCommand {
     pub(crate) target_event_id: String,
     pub(crate) sender_user_id: String,
     pub(crate) body: String,
-    pub(crate) styles: Vec<mirx_core::TextStyleSpan>,
+    pub(crate) format: mirx_core::ComposeFormat,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) thread: Option<DumpSubmittedReplyThreadTarget>,
 }
@@ -2285,7 +2259,7 @@ pub(crate) struct DumpSubmittedMessageCommand {
     pub(crate) room_id: String,
     pub(crate) presentation: RoomMessagePresentationKind,
     pub(crate) body: String,
-    pub(crate) styles: Vec<mirx_core::TextStyleSpan>,
+    pub(crate) format: mirx_core::ComposeFormat,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) thread: Option<DumpSubmittedReplyThreadTarget>,
 }
@@ -3750,10 +3724,10 @@ mod tests {
         DumpSubmittedRoomSettingsCommand, DumpSubmittedRoomTopicCommand,
         DumpSubmittedSetupRecoveryCommand, DumpSubmittedTypingCommand, DumpSubmittedUserCommand,
         DumpSubmittedVerificationRequest, DumpUnsupportedRoomMessageActivity,
-        DumpUserCommandAction, FindActiveViewArgs, FindActiveViewResponse, GetVersionResponse,
-        IdleProbe, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiArrangement,
-        MdiState, MdiView, MdiWindowPlacement, MdiWindowState, MircFormatKey, NavigationNode,
-        NavigationNodeKey, NavigationPathSegment, NoArgs, OpenDialogArgs,
+        DumpUserCommandAction, FindActiveViewArgs, FindActiveViewResponse, FormatKey,
+        GetVersionResponse, IdleProbe, LifecycleState, ListRoomsResponse, LoadEventsArgs,
+        LoginArgs, MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState,
+        NavigationNode, NavigationNodeKey, NavigationPathSegment, NoArgs, OpenDialogArgs,
         OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs, PROTOCOL_VERSION,
         ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
         RoomMemberView, SelectMemberArgs, SelectNavigationPathArgs, SelectOptionsPageArgs,
@@ -4273,8 +4247,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_92() {
-        assert_eq!(PROTOCOL_VERSION, 92);
+    fn protocol_version_is_93() {
+        assert_eq!(PROTOCOL_VERSION, 93);
     }
 
     #[test]
@@ -4678,6 +4652,7 @@ mod tests {
                                 body: "hello".to_owned(),
                                 styles: Vec::new(),
                                 user_links: Vec::new(),
+                                source_body: None,
                                 send_state: RoomMessageSendState::Sent,
                             }),
                         })),
@@ -5049,14 +5024,14 @@ mod tests {
             (
                 br#"{"id":"compose-key","args":{"key":{"kind":"format","key":"bold"}}}"#.as_slice(),
                 ComposeKey::Format {
-                    key: MircFormatKey::Bold,
+                    key: FormatKey::Bold,
                 },
             ),
             (
-                br#"{"id":"compose-key","args":{"key":{"kind":"format","key":"reverse"}}}"#
+                br#"{"id":"compose-key","args":{"key":{"kind":"format","key":"strikethrough"}}}"#
                     .as_slice(),
                 ComposeKey::Format {
-                    key: MircFormatKey::Reverse,
+                    key: FormatKey::Strikethrough,
                 },
             ),
         ] {
@@ -6317,7 +6292,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":92,
+                    "protocol_version":93,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -7026,7 +7001,6 @@ mod tests {
                         logging: super::UiLoggingOptions {
                             rooms: true,
                             direct: false,
-                            strip_codes: false,
                             timestamp: true,
                         },
                         tray: super::UiTrayOptions {
@@ -7138,21 +7112,6 @@ mod tests {
                         rename_enabled: true,
                         sign_out_enabled: false,
                         refresh_enabled: true,
-                    }),
-                    color_index: Some(super::UiColorIndex {
-                        part: super::UiColorCodePart::Background,
-                        rect: super::UiRect {
-                            x: 10,
-                            y: 500,
-                            width: 180,
-                            height: 44,
-                        },
-                        cells: vec![super::UiRect {
-                            x: 2,
-                            y: 2,
-                            width: 20,
-                            height: 18,
-                        }],
                     }),
                     active_timeline: Some(super::UiActiveTimeline {
                         top_line: 2,
@@ -7382,7 +7341,7 @@ mod tests {
                         "send_typing":true,
                         "chat":{"rank_prefix":true,"join_on_invite":false,"active_away":true,"active_invites":false,"active_whois":true},
                         "marker":{"show":true,"color":4},
-                        "logging":{"rooms":true,"direct":false,"strip_codes":false,"timestamp":true},
+                        "logging":{"rooms":true,"direct":false,"timestamp":true},
                         "tray":{"always":true,"startup":false,"minimize":true,"single_click":false},
                         "tips":{"highlights":true,"direct":false,"rooms":true}
                     },
@@ -7442,11 +7401,6 @@ mod tests {
                         "rename_enabled":true,
                         "sign_out_enabled":false,
                         "refresh_enabled":true
-                    },
-                    "color_index":{
-                        "part":"background",
-                        "rect":{"x":10,"y":500,"width":180,"height":44},
-                        "cells":[{"x":2,"y":2,"width":20,"height":18}]
                     },
                     "active_timeline":{
                         "top_line":2,
@@ -7765,7 +7719,7 @@ mod tests {
                 room_id: "!ops:example".to_owned(),
                 target_event_id: "$target:example".to_owned(),
                 body: "replacement text".to_owned(),
-                styles: Vec::new(),
+                format: mirx_core::ComposeFormat::Markdown,
             }],
             submitted_reply_commands: Vec::new(),
             submitted_message_commands: Vec::new(),
@@ -7803,7 +7757,7 @@ mod tests {
                         "room_id":"!ops:example",
                         "target_event_id":"$target:example",
                         "body":"replacement text",
-                        "styles":[]
+                        "format":"markdown"
                     }
                 ],
                 "last_error":null,
@@ -7829,7 +7783,7 @@ mod tests {
                     "room_id":"!ops:example",
                     "target_event_id":"$target:example",
                     "body":"replacement text",
-                    "styles":[],
+                    "format":"markdown",
                     "unexpected":true
                 }
             ],
@@ -7870,7 +7824,7 @@ mod tests {
                 target_event_id: "$target:example".to_owned(),
                 sender_user_id: "@alice:example".to_owned(),
                 body: "reply text".to_owned(),
-                styles: Vec::new(),
+                format: mirx_core::ComposeFormat::Markdown,
                 thread: None,
             }],
             submitted_message_commands: Vec::new(),
@@ -7909,7 +7863,7 @@ mod tests {
                         "target_event_id":"$target:example",
                         "sender_user_id":"@alice:example",
                         "body":"reply text",
-                        "styles":[]
+                        "format":"markdown"
                     }
                 ],
                 "last_error":null,
@@ -7937,7 +7891,7 @@ mod tests {
                     "target_event_id":"$target:example",
                     "sender_user_id":"@alice:example",
                     "body":"reply text",
-                    "styles":[],
+                    "format":"markdown",
                     "unexpected":true
                 }
             ],
@@ -7979,7 +7933,7 @@ mod tests {
                 target_event_id: "$target:example".to_owned(),
                 sender_user_id: "@alice:example".to_owned(),
                 body: "reply text".to_owned(),
-                styles: Vec::new(),
+                format: mirx_core::ComposeFormat::Markdown,
                 thread: Some(DumpSubmittedReplyThreadTarget {
                     thread_root_event_id: "$thread-root:example".to_owned(),
                     latest_event_id: "$latest:example".to_owned(),
@@ -8021,7 +7975,7 @@ mod tests {
                         "target_event_id":"$target:example",
                         "sender_user_id":"@alice:example",
                         "body":"reply text",
-                        "styles":[],
+                        "format":"markdown",
                         "thread":{
                             "thread_root_event_id":"$thread-root:example",
                             "latest_event_id":"$latest:example"
@@ -8053,7 +8007,7 @@ mod tests {
                     "target_event_id":"$target:example",
                     "sender_user_id":"@alice:example",
                     "body":"reply text",
-                    "styles":[],
+                    "format":"markdown",
                     "thread":{
                         "thread_root_event_id":"$thread-root:example",
                         "latest_event_id":"$latest:example",
@@ -8552,6 +8506,7 @@ mod tests {
                 body: "plain".to_owned(),
                 styles: Vec::new(),
                 user_links: Vec::new(),
+                source_body: None,
                 send_state: RoomMessageSendState::Sent,
             }),
         };
@@ -8592,6 +8547,7 @@ mod tests {
                 body: "hello".to_owned(),
                 styles: Vec::new(),
                 user_links: Vec::new(),
+                source_body: None,
                 send_state: RoomMessageSendState::Sent,
             }),
         };

@@ -241,7 +241,7 @@ fn apply_room_events_decrypted(state: &mut WindowState, decrypted: RoomEventsDec
                     update.room_id, room_id,
                     "a decrypted update of another room"
                 );
-                apply_room_activity_update_event(state, update);
+                apply_room_activity_update_event(state, *update);
             }
         }
     }
@@ -6420,8 +6420,8 @@ mod tests {
             unreachable!()
         };
         let updates = vec![
-            RoomHistoryBackfillEvent::ActivityUpdate(edit),
-            RoomHistoryBackfillEvent::ActivityUpdate(reaction),
+            RoomHistoryBackfillEvent::ActivityUpdate(Box::new(edit)),
+            RoomHistoryBackfillEvent::ActivityUpdate(Box::new(reaction)),
         ];
 
         apply_core_event(&mut state, decrypted("!ops:example", updates.clone())).unwrap();
@@ -6470,8 +6470,8 @@ mod tests {
             room_history_backfill(
                 "!ops:example",
                 None,
-                vec![RoomHistoryBackfillEvent::ActivityUpdate(reaction(
-                    "$after", "$history",
+                vec![RoomHistoryBackfillEvent::ActivityUpdate(Box::new(
+                    reaction("$after", "$history"),
                 ))],
             ),
         )
@@ -6480,9 +6480,8 @@ mod tests {
             &mut state,
             decrypted(
                 "!ops:example",
-                vec![RoomHistoryBackfillEvent::ActivityUpdate(reaction(
-                    "$secret",
-                    "$decrypted",
+                vec![RoomHistoryBackfillEvent::ActivityUpdate(Box::new(
+                    reaction("$secret", "$decrypted"),
                 ))],
             ),
         )
@@ -6609,7 +6608,7 @@ mod tests {
                 None,
                 vec![
                     RoomHistoryBackfillEvent::Activity(Box::new(old)),
-                    RoomHistoryBackfillEvent::ActivityUpdate(bundled),
+                    RoomHistoryBackfillEvent::ActivityUpdate(Box::new(bundled)),
                 ],
             ),
         )
@@ -6796,7 +6795,7 @@ mod tests {
                 None,
                 vec![
                     RoomHistoryBackfillEvent::Activity(Box::new(from_long_ago())),
-                    RoomHistoryBackfillEvent::ActivityUpdate(bundled),
+                    RoomHistoryBackfillEvent::ActivityUpdate(Box::new(bundled)),
                 ],
             ),
         )
@@ -7036,7 +7035,7 @@ mod tests {
             &mut state,
             decrypted(
                 "!ops:example",
-                vec![RoomHistoryBackfillEvent::ActivityUpdate(older)],
+                vec![RoomHistoryBackfillEvent::ActivityUpdate(Box::new(older))],
             ),
         )
         .unwrap();

@@ -1023,7 +1023,6 @@ fn data_models_round_trip_through_json() {
         address_book: None,
         channel_central: None,
         sessions: None,
-        color_index: None,
         options_dialog: Some(UiOptionsDialog {
             tree: vec!["Display".to_owned()],
             selected: "Display".to_owned(),
@@ -1053,7 +1052,6 @@ fn data_models_round_trip_through_json() {
             logging: UiLoggingOptions {
                 rooms: false,
                 direct: true,
-                strip_codes: true,
                 timestamp: false,
             },
             tray: UiTrayOptions {
@@ -1418,7 +1416,7 @@ fn data_models_round_trip_through_json() {
                 "send_typing": false,
                 "chat": {"rank_prefix": true, "join_on_invite": true, "active_away": false, "active_invites": true, "active_whois": false},
                 "marker": {"show": false, "color": 14},
-                "logging": {"rooms": false, "direct": true, "strip_codes": true, "timestamp": false},
+                "logging": {"rooms": false, "direct": true, "timestamp": false},
                 "tray": {"always": false, "startup": true, "minimize": false, "single_click": true},
                 "tips": {"highlights": false, "direct": true, "rooms": false},
             },
@@ -1426,7 +1424,6 @@ fn data_models_round_trip_through_json() {
             "address_book": null,
             "channel_central": null,
             "sessions": null,
-            "color_index": null,
             "active_timeline": {
                 "top_line": 0,
                 "visible_lines": [{
@@ -3400,6 +3397,7 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
             body: "edited body".to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: Some("edited **body**".to_owned()),
         },
     };
     let redacted = RoomActivityUpdate {
@@ -3471,7 +3469,8 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
             "presentation": "text",
             "body": "edited body",
             "styles": [],
-            "user_links": []
+            "user_links": [],
+            "source_body": "edited **body**"
         }
     });
     let redacted_json = serde_json::json!({
@@ -3579,6 +3578,7 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
                 body: "edited body".to_owned(),
                 styles: Vec::new(),
                 user_links: Vec::new(),
+                source_body: Some("edited **body**".to_owned()),
             },
         }
     );
@@ -4204,7 +4204,8 @@ fn room_history_backfill_event_activity_ingests_core_json_and_defaults_reactions
 
 #[test]
 fn room_history_backfill_event_activity_update_round_trips_through_json_across_packages() {
-    let event = RoomHistoryBackfillEvent::ActivityUpdate(sample_room_history_activity_update());
+    let event =
+        RoomHistoryBackfillEvent::ActivityUpdate(Box::new(sample_room_history_activity_update()));
     let json = serde_json::json!({
         "type": "activity_update",
         "room_id": "!ops:example.org",
@@ -4231,8 +4232,9 @@ fn room_history_backfill_event_activity_update_round_trips_through_json_across_p
         event
     );
 
-    let core_event =
-        CoreRoomHistoryBackfillEvent::ActivityUpdate(sample_core_room_history_activity_update());
+    let core_event = CoreRoomHistoryBackfillEvent::ActivityUpdate(Box::new(
+        sample_core_room_history_activity_update(),
+    ));
     assert_eq!(
         serde_json::to_value(&core_event).expect("serialize core backfill activity update event"),
         json.clone()
@@ -4249,9 +4251,9 @@ fn room_history_backfill_with_updates_round_trips_through_json_across_packages()
     let backfill = RoomHistoryBackfill {
         room_id: "!ops:example.org".to_owned(),
         end: Some("t4747337_219379_2603".to_owned()),
-        events: vec![RoomHistoryBackfillEvent::ActivityUpdate(
+        events: vec![RoomHistoryBackfillEvent::ActivityUpdate(Box::new(
             sample_room_history_activity_update(),
-        )],
+        ))],
     };
     let json = serde_json::json!({
         "room_id": "!ops:example.org",
@@ -4288,9 +4290,9 @@ fn room_history_backfill_with_updates_round_trips_through_json_across_packages()
     let core_backfill = CoreRoomHistoryBackfill {
         room_id: "!ops:example.org".to_owned(),
         end: Some("t4747337_219379_2603".to_owned()),
-        events: vec![CoreRoomHistoryBackfillEvent::ActivityUpdate(
+        events: vec![CoreRoomHistoryBackfillEvent::ActivityUpdate(Box::new(
             sample_core_room_history_activity_update(),
-        )],
+        ))],
     };
 
     assert_eq!(
@@ -4311,7 +4313,9 @@ fn room_history_backfill_with_activity_ingests_core_json_and_defaults_reactions(
         end: Some("t4747337_219379_2603".to_owned()),
         events: vec![
             RoomHistoryBackfillEvent::Activity(Box::new(sample_room_history_activity())),
-            RoomHistoryBackfillEvent::ActivityUpdate(sample_room_history_activity_update()),
+            RoomHistoryBackfillEvent::ActivityUpdate(Box::new(
+                sample_room_history_activity_update(),
+            )),
         ],
     };
     let testkit_json = serde_json::json!({
@@ -4397,7 +4401,9 @@ fn room_history_backfill_with_activity_ingests_core_json_and_defaults_reactions(
         end: Some("t4747337_219379_2603".to_owned()),
         events: vec![
             CoreRoomHistoryBackfillEvent::Activity(Box::new(sample_core_room_history_activity())),
-            CoreRoomHistoryBackfillEvent::ActivityUpdate(sample_core_room_history_activity_update()),
+            CoreRoomHistoryBackfillEvent::ActivityUpdate(Box::new(
+                sample_core_room_history_activity_update(),
+            )),
         ],
     };
 
@@ -5468,7 +5474,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
 }
 
 #[test]
-fn model_submitted_message_commands_round_trip_with_their_styles() {
+fn model_submitted_message_commands_round_trip_with_their_format() {
     let model = Model {
         status: "synced".to_owned(),
         lifecycle_state: "ready".to_owned(),
@@ -5494,15 +5500,8 @@ fn model_submitted_message_commands_round_trip_with_their_styles() {
         submitted_message_commands: vec![SubmittedMessageCommand {
             room_id: "!ops:example.org".to_owned(),
             presentation: RoomMessagePresentationKind::Emote,
-            body: "waves hard".to_owned(),
-            styles: vec![mirx_core::TextStyleSpan {
-                start: 6,
-                end: 10,
-                style: mirx_core::TextStyle {
-                    bold: true,
-                    ..mirx_core::TextStyle::default()
-                },
-            }],
+            body: "waves **hard**".to_owned(),
+            format: mirx_core::ComposeFormat::Plain,
             thread: None,
         }],
         submitted_file_commands: Vec::new(),
@@ -5536,21 +5535,8 @@ fn model_submitted_message_commands_round_trip_with_their_styles() {
             {
                 "room_id": "!ops:example.org",
                 "presentation": "emote",
-                "body": "waves hard",
-                "styles": [
-                    {
-                        "start": 6,
-                        "end": 10,
-                        "style": {
-                            "bold": true,
-                            "italic": false,
-                            "underline": false,
-                            "strikethrough": false,
-                            "foreground": null,
-                            "background": null
-                        }
-                    }
-                ]
+                "body": "waves **hard**",
+                "format": "plain"
             }
         ],
         "last_error": null,
@@ -5592,7 +5578,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
             target_event_id: "$target:example.org".to_owned(),
             sender_user_id: "@alice:example.org".to_owned(),
             body: "follow-up".to_owned(),
-            styles: Vec::new(),
+            format: mirx_core::ComposeFormat::Markdown,
             thread: None,
         }],
         submitted_message_commands: Vec::new(),
@@ -5632,7 +5618,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
                     "target_event_id": "$target:example.org",
                     "sender_user_id": "@alice:example.org",
                     "body": "follow-up",
-                    "styles": []
+                    "format": "markdown"
                 }
             ],
             "last_error": null,
@@ -5655,7 +5641,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
                     "target_event_id": "$target:example.org",
                     "sender_user_id": "@alice:example.org",
                     "body": "follow-up",
-                    "styles": []
+                    "format": "markdown"
                 }
             ],
             "last_error": null,
@@ -5694,7 +5680,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
             target_event_id: "$target:example.org".to_owned(),
             sender_user_id: "@alice:example.org".to_owned(),
             body: "thread follow-up".to_owned(),
-            styles: Vec::new(),
+            format: mirx_core::ComposeFormat::Markdown,
             thread: Some(SubmittedReplyThreadTarget {
                 thread_root_event_id: "$root:example.org".to_owned(),
                 latest_event_id: "$latest:example.org".to_owned(),
@@ -5737,7 +5723,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
                     "target_event_id": "$target:example.org",
                     "sender_user_id": "@alice:example.org",
                     "body": "thread follow-up",
-                    "styles": [],
+                    "format": "markdown",
                     "thread": {
                         "thread_root_event_id": "$root:example.org",
                         "latest_event_id": "$latest:example.org"
@@ -5764,7 +5750,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
                     "target_event_id": "$target:example.org",
                     "sender_user_id": "@alice:example.org",
                     "body": "thread follow-up",
-                    "styles": [],
+                    "format": "markdown",
                     "thread": {
                         "thread_root_event_id": "$root:example.org",
                         "latest_event_id": "$latest:example.org"
@@ -5891,7 +5877,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
                 "target_event_id": "$target:example.org",
                 "sender_user_id": "@alice:example.org",
                 "body": "thread follow-up",
-                "styles": [],
+                "format": "markdown",
                 "thread": {
                     "thread_root_event_id": "$root:example.org",
                     "latest_event_id": "$latest:example.org"
@@ -5951,7 +5937,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
                 target_event_id: "$target:example.org".to_owned(),
                 sender_user_id: "@alice:example.org".to_owned(),
                 body: "thread follow-up".to_owned(),
-                styles: Vec::new(),
+                format: mirx_core::ComposeFormat::Markdown,
                 thread: Some(SubmittedReplyThreadTarget {
                     thread_root_event_id: "$root:example.org".to_owned(),
                     latest_event_id: "$latest:example.org".to_owned(),
@@ -5997,7 +5983,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
                     "target_event_id": "$target:example.org",
                     "sender_user_id": "@alice:example.org",
                     "body": "thread follow-up",
-                    "styles": [],
+                    "format": "markdown",
                     "thread": {
                         "thread_root_event_id": "$root:example.org",
                         "latest_event_id": "$latest:example.org"
@@ -6247,7 +6233,7 @@ fn model_submitted_reply_commands_reject_unknown_nested_fields() {
                 "target_event_id": "$target:example.org",
                 "sender_user_id": "@alice:example.org",
                 "body": "follow-up",
-                "styles": [],
+                "format": "markdown",
                 "unexpected": true
             }
         ],
@@ -6281,7 +6267,7 @@ fn model_submitted_reply_command_threads_reject_unknown_nested_fields() {
                 "target_event_id": "$target:example.org",
                 "sender_user_id": "@alice:example.org",
                 "body": "thread follow-up",
-                "styles": [],
+                "format": "markdown",
                 "thread": {
                     "thread_root_event_id": "$root:example.org",
                     "latest_event_id": "$latest:example.org",
@@ -7472,7 +7458,6 @@ fn switchbar_helpers_find_items_and_active_item() {
         address_book: None,
         channel_central: None,
         sessions: None,
-        color_index: None,
         tray: UiTray {
             icon: false,
             hidden: false,

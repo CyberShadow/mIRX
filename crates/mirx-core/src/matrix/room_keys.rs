@@ -46,7 +46,7 @@ pub(super) async fn emit_undecrypted_sync_event(
                             Event::RoomActivity(activity)
                         }
                         RoomHistoryBackfillEvent::ActivityUpdate(update) => {
-                            Event::RoomActivityUpdate(update)
+                            Event::RoomActivityUpdate(*update)
                         }
                     },
                 );
@@ -929,11 +929,14 @@ mod tests {
             assert!(
                 matches!(
                     &decrypted.events[1],
-                    RoomHistoryBackfillEvent::ActivityUpdate(RoomActivityUpdate {
-                        target: RoomActivityUpdateTarget::Event { event_id },
-                        kind: RoomActivityUpdateKind::ReactionAdded { reaction_event_id, .. },
-                        ..
-                    }) if event_id == "$late" && reaction_event_id == "$react"
+                    RoomHistoryBackfillEvent::ActivityUpdate(update) if matches!(
+                        &**update,
+                        RoomActivityUpdate {
+                            target: RoomActivityUpdateTarget::Event { event_id },
+                            kind: RoomActivityUpdateKind::ReactionAdded { reaction_event_id, .. },
+                            ..
+                        } if event_id == "$late" && reaction_event_id == "$react"
+                    )
                 ),
                 "{decrypted:#?}"
             );

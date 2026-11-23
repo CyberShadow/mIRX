@@ -2,15 +2,29 @@
 //! colours each part of every window takes, and the palette boxes the
 //! Colors dialog draws.
 //!
-//! The scheme holds palette indices, as mIRC's does: the palette itself is
-//! fixed, so a colour code typed in a message means the same colour to
-//! every reader whatever their scheme.
+//! The scheme holds palette indices, as mIRC's does, into mirx's fixed
+//! theme palette: messages carry their own colours, as Matrix HTML.
 
 use mirx_core::TextColor;
 use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, FillRect, HBRUSH, HDC};
 
-use super::format_codes::MIRC_PALETTE;
+const fn color(hex: u32) -> TextColor {
+    TextColor {
+        red: (hex >> 16) as u8,
+        green: (hex >> 8) as u8,
+        blue: hex as u8,
+    }
+}
+
+/// The 16 colours a scheme picks from, mIRC's defaults.
+#[rustfmt::skip]
+const PALETTE: [TextColor; PALETTE_COLORS] = [
+    color(0xffffff), color(0x000000), color(0x00007f), color(0x009300),
+    color(0xff0000), color(0x7f0000), color(0x9c009c), color(0xfc7f00),
+    color(0xffff00), color(0x00fc00), color(0x009393), color(0x00ffff),
+    color(0x0000fc), color(0xff00ff), color(0x7f7f7f), color(0xd2d2d2),
+];
 
 pub(super) const fn rgb(r: u8, g: u8, b: u8) -> u32 {
     r as u32 | ((g as u32) << 8) | ((b as u32) << 16)
@@ -27,7 +41,7 @@ pub(super) fn colorref_hex(colorref: u32) -> String {
     format!("#{red:02x}{green:02x}{blue:02x}")
 }
 
-/// One of mIRC's 16 configurable colours, `MIRC_PALETTE[..16]`.
+/// One of the 16 colours of [`PALETTE`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct PaletteIndex(u8);
 
@@ -52,7 +66,7 @@ impl PaletteIndex {
     }
 
     pub(super) fn color(self) -> TextColor {
-        MIRC_PALETTE[usize::from(self.0)]
+        PALETTE[usize::from(self.0)]
     }
 
     pub(super) fn colorref(self) -> u32 {
@@ -285,9 +299,9 @@ pub(super) fn contrasting_text(background: TextColor) -> TextColor {
         + 587 * u32::from(background.green)
         + 114 * u32::from(background.blue);
     if luma >= 128_000 {
-        MIRC_PALETTE[1]
+        PALETTE[1]
     } else {
-        MIRC_PALETTE[0]
+        PALETTE[0]
     }
 }
 
@@ -581,16 +595,12 @@ mod tests {
     #[test]
     fn numbers_are_white_on_dark_boxes_and_black_on_light_ones() {
         for dark in [1, 2, 5, 12] {
-            assert_eq!(
-                contrasting_text(index(dark).color()),
-                MIRC_PALETTE[0],
-                "{dark}"
-            );
+            assert_eq!(contrasting_text(index(dark).color()), PALETTE[0], "{dark}");
         }
         for light in [0, 8, 15] {
             assert_eq!(
                 contrasting_text(index(light).color()),
-                MIRC_PALETTE[1],
+                PALETTE[1],
                 "{light}"
             );
         }

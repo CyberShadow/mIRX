@@ -88,7 +88,6 @@ pub(super) const OPTIONS_HIGHLIGHT_DELETE_ID: u16 = 6404;
 pub(super) const OPTIONS_HIGHLIGHT_NOTE_ID: u16 = 6405;
 pub(super) const OPTIONS_LOG_ROOMS_ID: u16 = 6501;
 pub(super) const OPTIONS_LOG_DIRECT_ID: u16 = 6502;
-pub(super) const OPTIONS_LOG_STRIP_CODES_ID: u16 = 6503;
 pub(super) const OPTIONS_LOG_TIMESTAMP_ID: u16 = 6504;
 pub(super) const OPTIONS_LOG_FOLDER_ID: u16 = 6505;
 pub(super) const OPTIONS_TRAY_ALWAYS_ID: u16 = 6601;
@@ -147,7 +146,6 @@ struct Fields {
     marker_color: HWND,
     log_rooms: HWND,
     log_direct: HWND,
-    log_strip_codes: HWND,
     log_timestamp: HWND,
     tray_always: HWND,
     tray_startup: HWND,
@@ -189,7 +187,6 @@ impl Fields {
             logging: LoggingSetting {
                 rooms: checked(self.log_rooms),
                 direct: checked(self.log_direct),
-                strip_codes: checked(self.log_strip_codes),
                 timestamp: checked(self.log_timestamp),
             },
             tray: TraySetting {
@@ -312,7 +309,6 @@ impl OptionsDialog {
                 marker_color: null_mut(),
                 log_rooms: null_mut(),
                 log_direct: null_mut(),
-                log_strip_codes: null_mut(),
                 log_timestamp: null_mut(),
                 tray_always: null_mut(),
                 tray_startup: null_mut(),
@@ -800,14 +796,11 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     state.fields.log_rooms = check_box_row("Rooms", OPTIONS_LOG_ROOMS_ID, margin, &mut row_y)?;
     state.fields.log_direct =
         check_box_row("Direct messages", OPTIONS_LOG_DIRECT_ID, margin, &mut row_y)?;
-    state.fields.log_strip_codes =
-        check_box_row("Strip codes", OPTIONS_LOG_STRIP_CODES_ID, 0, &mut row_y)?;
     state.fields.log_timestamp =
         check_box_row("Timestamp logs", OPTIONS_LOG_TIMESTAMP_ID, 0, &mut row_y)?;
     for control in [
         state.fields.log_rooms,
         state.fields.log_direct,
-        state.fields.log_strip_codes,
         state.fields.log_timestamp,
     ] {
         state
@@ -1008,7 +1001,6 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         (state.fields.marker_show, form.marker.show),
         (state.fields.log_rooms, form.logging.rooms),
         (state.fields.log_direct, form.logging.direct),
-        (state.fields.log_strip_codes, form.logging.strip_codes),
         (state.fields.log_timestamp, form.logging.timestamp),
         (state.fields.tray_always, form.tray.always),
         (state.fields.tray_startup, form.tray.startup),
@@ -1413,7 +1405,6 @@ fn dump_logging_options(logging: &LoggingSetting) -> UiLoggingOptions {
     UiLoggingOptions {
         rooms: logging.rooms,
         direct: logging.direct,
-        strip_codes: logging.strip_codes,
         timestamp: logging.timestamp,
     }
 }

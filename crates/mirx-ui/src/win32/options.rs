@@ -478,7 +478,6 @@ mod tests {
         for change in [
             |form: &mut OptionsForm| form.logging.rooms = true,
             |form: &mut OptionsForm| form.logging.direct = true,
-            |form: &mut OptionsForm| form.logging.strip_codes = true,
             |form: &mut OptionsForm| form.logging.timestamp = false,
             |form: &mut OptionsForm| form.tray.always = true,
             |form: &mut OptionsForm| form.tray.startup = true,

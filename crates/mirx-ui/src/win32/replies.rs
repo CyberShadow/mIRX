@@ -18,7 +18,6 @@ use mirx_core::{
 };
 
 use super::ViewId;
-use super::format_codes::mirc_input_from_styled;
 
 /// How many characters of the quoted line a quote shows.
 const QUOTE_EXCERPT_CHARS: usize = 60;
@@ -114,14 +113,20 @@ pub(super) fn editable_message<'a>(
     }
 }
 
-/// The editbox text that would send `message` as it is: its styles as mIRC
-/// codes, `/me` for an emote, and `/say` before a text that starts with `/`.
+/// The text `message` was typed as: the Markdown source of a formatted
+/// message (also a rich-text editor's plain `body`, which Element edits
+/// too), else the text shown.
+pub(super) fn edit_source(message: &RoomMessageActivity) -> &str {
+    message.source_body.as_deref().unwrap_or(&message.body)
+}
+
+/// The editbox text that would send `message` as it is: its source, `/me`
+/// for an emote, and `/say` before a text that starts with `/`.
 pub(super) fn compose_text_for_edit(message: &RoomMessageActivity) -> String {
-    let input = mirc_input_from_styled(&message.body, &message.styles);
+    let input = edit_source(message);
     match message.presentation {
-        // Codes before a `/` already keep it from reading as a command.
         RoomMessagePresentationKind::Text if input.starts_with('/') => format!("/say {input}"),
-        RoomMessagePresentationKind::Text => input,
+        RoomMessagePresentationKind::Text => input.to_owned(),
         RoomMessagePresentationKind::Emote => format!("/me {input}"),
         RoomMessagePresentationKind::Notice => {
             panic!("notices are not editable; editable_message rejects them")
@@ -268,6 +273,7 @@ mod tests {
                 body: body.to_owned(),
                 styles: Vec::new(),
                 user_links: Vec::new(),
+                source_body: None,
                 send_state: RoomMessageSendState::Sent,
             }),
         }
@@ -294,48 +300,54 @@ mod tests {
         );
     }
 
-    fn bolded(mut activity: RoomActivity, start: usize, end: usize) -> RoomActivity {
+    fn formatted(mut activity: RoomActivity, source_body: &str) -> RoomActivity {
         let RoomActivityKind::Message(message) = &mut activity.kind else {
             unreachable!("message() makes messages")
         };
         message.styles = vec![mirx_core::TextStyleSpan {
-            start,
-            end,
+            start: 0,
+            end: 2,
             style: mirx_core::TextStyle {
                 bold: true,
                 ..mirx_core::TextStyle::default()
             },
         }];
+        message.source_body = Some(source_body.to_owned());
         activity
     }
 
     #[test]
-    fn styled_messages_edit_as_their_mirc_codes() {
+    fn formatted_messages_edit_as_their_markdown_source() {
         use RoomMessagePresentationKind::{Emote, Text};
         assert_eq!(
-            edit_text(&bolded(message("@me:example", Text, "hi there"), 0, 2)),
-            Ok("\x02hi\x0f there".to_owned())
-        );
-        assert_eq!(
-            edit_text(&bolded(message("@me:example", Emote, "waves hard"), 6, 10)),
-            Ok("/me waves \x02hard".to_owned())
-        );
-        // A code before the `/` keeps it from being a command already.
-        assert_eq!(
-            edit_text(&bolded(
-                message("@me:example", Text, "/not a command"),
-                0,
-                4
+            edit_text(&formatted(
+                message("@me:example", Text, "hi there"),
+                "**hi** there"
             )),
-            Ok("\x02/not\x0f a command".to_owned())
+            Ok("**hi** there".to_owned())
         );
         assert_eq!(
-            edit_text(&bolded(
-                message("@me:example", Text, "/not a command"),
-                5,
-                6
+            edit_text(&formatted(
+                message("@me:example", Emote, "waves hard"),
+                "waves **hard**"
             )),
-            Ok("/say /not \x02a\x0f command".to_owned())
+            Ok("/me waves **hard**".to_owned())
+        );
+        assert_eq!(
+            edit_text(&formatted(
+                message("@me:example", Text, "/not a command"),
+                "/not *a* command"
+            )),
+            Ok("/say /not *a* command".to_owned())
+        );
+        // Another client's rich-text editor sent a body that is no
+        // Markdown: that body is what is edited, as in Element.
+        assert_eq!(
+            edit_text(&formatted(
+                message("@me:example", Text, "bold and red"),
+                "bold and red"
+            )),
+            Ok("bold and red".to_owned())
         );
     }
 

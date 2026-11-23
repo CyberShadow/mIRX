@@ -1288,17 +1288,7 @@ fn log_line_row(
             } else {
                 String::new()
             };
-            let (body, styles) = format_codes::parse_mirc_input(text);
-            let styles = styles
-                .into_iter()
-                .map(|span| TextStyleSpan {
-                    start: prefix.len() + span.start,
-                    end: prefix.len() + span.end,
-                    style: span.style,
-                })
-                .collect();
-            return TimelineRow::log(TimelineRowKind::Echo { color }, format!("{prefix}{body}"))
-                .with_styles(styles);
+            return TimelineRow::log(TimelineRowKind::Echo { color }, format!("{prefix}{text}"));
         }
     };
     let prefix = timestamps.prefix(timestamp_ms);
@@ -4625,7 +4615,7 @@ mod tests {
     }
 
     #[test]
-    fn echo_lines_render_their_codes_and_a_stamp_only_when_asked() {
+    fn echo_lines_are_plain_text_with_a_stamp_only_when_asked() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         let red = PaletteIndex::new(4).unwrap();
@@ -4639,7 +4629,7 @@ mod tests {
             1_700_000_000_000,
             None,
             echo(Some(red), true),
-            "\x02bold\x02 and \x0312blue".to_owned(),
+            "\x02**bold**\x02 and \x0312blue".to_owned(),
         );
 
         let rows = build_room_timeline_rows(
@@ -4649,44 +4639,26 @@ mod tests {
             None,
             false,
         );
-        let [plain, styled] = &rows[rows.len() - 2..] else {
+        let [plain, stamped] = &rows[rows.len() - 2..] else {
             unreachable!("two echo lines")
         };
         assert_eq!(plain.logical_text, "plain");
         assert_eq!(plain.kind, TimelineRowKind::Echo { color: None });
         assert_eq!(plain.styles, []);
-        assert_eq!(styled.logical_text, "[22:13] bold and blue");
-        assert_eq!(styled.kind, TimelineRowKind::Echo { color: Some(red) });
-        let bold = mirx_core::TextStyle {
-            bold: true,
-            ..mirx_core::TextStyle::default()
-        };
-        let blue = mirx_core::TextStyle {
-            foreground: Some(PaletteIndex::new(12).unwrap().color()),
-            ..mirx_core::TextStyle::default()
-        };
+        // Neither control codes nor Markdown format an echo.
         assert_eq!(
-            styled.styles,
-            [
-                TextStyleSpan {
-                    start: 8,
-                    end: 12,
-                    style: bold
-                },
-                TextStyleSpan {
-                    start: 17,
-                    end: 21,
-                    style: blue
-                },
-            ]
+            stamped.logical_text,
+            "[22:13] \x02**bold**\x02 and \x0312blue"
         );
+        assert_eq!(stamped.kind, TimelineRowKind::Echo { color: Some(red) });
+        assert_eq!(stamped.styles, []);
 
         // Status rows are built the same way.
         let mut log = StatusLog::default();
         log.push(0, echo(None, false), "\x1fs\x1f".to_owned());
         let rows = build_status_timeline_rows(&log, state.timestamps());
-        assert_eq!(rows[0].logical_text, "s");
-        assert_eq!(rows[0].styles.len(), 1);
+        assert_eq!(rows[0].logical_text, "\x1fs\x1f");
+        assert_eq!(rows[0].styles, []);
     }
 
     #[test]

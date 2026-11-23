@@ -10,7 +10,7 @@ mod cli {
 
     use mirx_core::RoomMembership;
     use mirx_testkit::{
-        AutomationDialog, MdiArrangement, MdiWindowState, MircFormatKey, NavigationNodeKey,
+        AutomationDialog, FormatKey, MdiArrangement, MdiWindowState, NavigationNodeKey,
         ViewActivityLevel, ViewIdentity,
     };
 
@@ -117,7 +117,7 @@ mod cli {
         /// without sending it.
         ComposeText(String),
         /// Presses a formatting chord in the active window's editbox.
-        ComposeKey(MircFormatKey),
+        ComposeKey(FormatKey),
         Append(String),
         Arrange(MdiArrangement),
         WindowState(ViewIdentity, MdiWindowState),
@@ -1213,7 +1213,7 @@ mod cli {
         };
         use mirx_core::RoomMembership;
         use mirx_testkit::{
-            AutomationDialog, MdiArrangement, MdiWindowState, MircFormatKey, NavigationNodeKey,
+            AutomationDialog, FormatKey, MdiArrangement, MdiWindowState, NavigationNodeKey,
             ViewActivityLevel, ViewIdentity,
         };
         use std::time::Duration;
@@ -1612,7 +1612,7 @@ mod cli {
                     "--action",
                     "compose-text:hello ",
                     "--action",
-                    "compose-key:color",
+                    "compose-key:bold",
                     "--action",
                     "compose-key:strikethrough",
                 ]
@@ -1624,11 +1624,11 @@ mod cli {
                 config.actions,
                 [
                     Action::ComposeText("hello ".to_owned()),
-                    Action::ComposeKey(MircFormatKey::Color),
-                    Action::ComposeKey(MircFormatKey::Strikethrough)
+                    Action::ComposeKey(FormatKey::Bold),
+                    Action::ComposeKey(FormatKey::Strikethrough)
                 ]
             );
-            for bad in ["compose-key:", "compose-key:Color", "compose-key:return"] {
+            for bad in ["compose-key:", "compose-key:Bold", "compose-key:return"] {
                 assert!(
                     parse_args(["--action", bad].into_iter().map(str::to_owned)).is_err(),
                     "{bad}"

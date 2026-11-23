@@ -1,16 +1,12 @@
 //! The editbox: history, Tab completion, format keys, reply and edit
 //! targets, and submitting what was typed.
 
-use super::*;
-use windows_sys::Win32::UI::Controls::EM_UNDO;
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetWindowTextLengthW, WM_CLEAR, WM_CUT, WM_KILLFOCUS, WM_LBUTTONUP, WM_MOUSEWHEEL, WM_UNDO,
-};
+use std::ops::Range;
 
-use super::color_index::{
-    color_code_at_caret, color_index_shown, edit_selection, hide_color_index, update_color_index,
-};
-use super::colors::PaletteIndex;
+use super::*;
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, WM_MOUSEWHEEL};
+
+use crate::automation::FormatKey;
 
 const VK_DELETE_KEY: WPARAM = 46;
 const VK_TAB_KEY: WPARAM = 9;
@@ -125,8 +121,9 @@ pub(super) unsafe fn replace_edit_selection(edit: HWND, text: &str) {
     SendMessageW(edit, EM_REPLACESEL, 0, text.as_ptr() as LPARAM);
 }
 
-/// The compose text as UTF-16 and the caret position in it.
-unsafe fn compose_text_and_caret(edit: HWND) -> (Vec<u16>, usize) {
+/// The compose text as UTF-16 and the selection in it, which ends at the
+/// caret.
+unsafe fn compose_text_and_selection(edit: HWND) -> (Vec<u16>, Range<usize>) {
     let text_len = SendMessageW(edit, WM_GETTEXTLENGTH, 0, 0) as usize;
     let mut text = vec![0u16; text_len + 1];
     let copied = SendMessageW(edit, WM_GETTEXT, text.len(), text.as_mut_ptr() as LPARAM) as usize;
@@ -139,9 +136,7 @@ unsafe fn compose_text_and_caret(edit: HWND) -> (Vec<u16>, usize) {
         (&mut start as *mut u32) as WPARAM,
         (&mut end as *mut u32) as LPARAM,
     );
-    // The caret is at the selection's end; completing replaces the word
-    // before it, which drops any selection.
-    (text, end as usize)
+    (text, start as usize..end as usize)
 }
 
 /// Tab (or Shift+Tab when `reverse`) in the compose box: continues the last
@@ -149,7 +144,10 @@ unsafe fn compose_text_and_caret(edit: HWND) -> (Vec<u16>, usize) {
 /// the word before the caret against the active view's members.
 unsafe fn complete_compose_nick(hwnd: HWND, reverse: bool) -> Result<(), String> {
     let edit = compose_edit(hwnd);
-    let (text, caret) = compose_text_and_caret(edit);
+    // Completing replaces the word before the caret, which drops any
+    // selection.
+    let (text, selection) = compose_text_and_selection(edit);
+    let caret = selection.end;
     let state = state_mut(hwnd);
     let view_id = state.active_view.clone();
     let edit_op = match state.nick_completion.as_mut() {
@@ -366,17 +364,21 @@ pub(super) unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> 
     };
     let empty = wide_null("");
     match classify_input(&input, state_ref(hwnd).aliases.aliases()) {
-        ComposeInput::Line(ComposeSubmission::Message { presentation, body }) => {
+        ComposeInput::Line(ComposeSubmission::Message {
+            presentation,
+            format,
+            body,
+        }) => {
             let target = state_ref(hwnd).views[&view].compose().target.clone();
             match &target {
                 None => {
-                    submit_compose(state_mut(hwnd), &view, presentation, body, None)?;
+                    submit_compose(state_mut(hwnd), &view, presentation, format, body, None)?;
                 }
                 Some(ComposeTarget::Reply { event_id }) => {
-                    send_reply(state_mut(hwnd), &view, event_id, presentation, body)?;
+                    send_reply(state_mut(hwnd), &view, event_id, presentation, format, body)?;
                 }
                 Some(ComposeTarget::Edit { event_id }) => {
-                    send_edit(state_mut(hwnd), &view, event_id, presentation, body)?;
+                    send_edit(state_mut(hwnd), &view, event_id, presentation, format, body)?;
                 }
             }
             record(input.clone());
@@ -450,7 +452,6 @@ pub(super) unsafe fn set_compose_text(hwnd: HWND, text: &str) -> Result<(), Stri
     let edit = compose_edit(hwnd);
     active_compose_history(state_mut(hwnd)).reset_navigation();
     set_compose_edit_text(edit, text);
-    update_color_index(hwnd, edit);
     Ok(())
 }
 
@@ -467,7 +468,7 @@ pub(super) unsafe fn send_compose_key(hwnd: HWND, key: ComposeKey) -> Result<(),
         ComposeKey::ShiftTab => return complete_compose_nick(hwnd, true),
         // Nor Ctrl state, for the format chords.
         ComposeKey::Format { key } => {
-            insert_mirc_format_code(hwnd, edit, format_codes::mirc_format_code(key));
+            wrap_compose_selection(hwnd, edit, key);
             return Ok(());
         }
     };
@@ -475,29 +476,54 @@ pub(super) unsafe fn send_compose_key(hwnd: HWND, key: ComposeKey) -> Result<(),
     Ok(())
 }
 
-/// Types a formatting code at the editbox's caret, as one undoable edit.
-unsafe fn insert_mirc_format_code(frame: HWND, edit: HWND, code: char) {
-    insert_compose_text(frame, edit, code.encode_utf8(&mut [0; 4]));
+/// The format chord a key pressed with Ctrl is, Alt not held (AltGr is
+/// Ctrl+Alt, and types): B, I and E, the keys of Markdown's markers.
+fn format_key(ctrl: bool, alt: bool, virtual_key: WPARAM) -> Option<FormatKey> {
+    if !ctrl || alt {
+        return None;
+    }
+    match u8::try_from(virtual_key).ok()? {
+        b'B' => Some(FormatKey::Bold),
+        b'I' => Some(FormatKey::Italic),
+        b'E' => Some(FormatKey::Strikethrough),
+        _ => None,
+    }
 }
 
-/// A click in the colour index: the colour's two digits replace the
-/// number's digits typed so far, so a digit typed next cannot extend it.
-pub(super) unsafe fn insert_color_number(frame: HWND, index: PaletteIndex) {
-    let edit = compose_edit(frame);
-    let code = color_code_at_caret(edit)
-        .expect("the colour index shows only while a colour number is typed");
-    let (_, caret) = edit_selection(edit);
-    SendMessageW(edit, EM_SETSEL, caret - code.typed_digits, caret as LPARAM);
-    insert_compose_text(frame, edit, &format!("{:02}", index.get()));
+/// The Markdown marker a format chord types on each side of the selection.
+fn format_marker(key: FormatKey) -> &'static str {
+    match key {
+        FormatKey::Bold => "**",
+        FormatKey::Italic => "*",
+        FormatKey::Strikethrough => "~~",
+    }
 }
 
-/// Types `text` at the editbox's caret, as one undoable edit.
-unsafe fn insert_compose_text(frame: HWND, edit: HWND, text: &str) {
+/// What wrapping `selection` of the UTF-16 `text` in `marker` replaces it
+/// with, and the selection after: the same text, between the markers, so
+/// with nothing selected the caret goes between them.
+fn wrap_selection_in_marker(
+    text: &[u16],
+    selection: Range<usize>,
+    marker: &str,
+) -> (Vec<u16>, Range<usize>) {
+    let marker: Vec<u16> = marker.encode_utf16().collect();
+    let replacement = [&marker[..], &text[selection.clone()], &marker[..]].concat();
+    let start = selection.start + marker.len();
+    (replacement, start..start + selection.len())
+}
+
+/// Wraps the editbox's selection in `key`'s Markdown marker, as one
+/// undoable edit, keeping the selection on the same text.
+unsafe fn wrap_compose_selection(frame: HWND, edit: HWND, key: FormatKey) {
     active_compose_history(state_mut(frame)).reset_navigation();
-    let text = wide_null(text);
+    let (text, selection) = compose_text_and_selection(edit);
+    let (mut replacement, selection) =
+        wrap_selection_in_marker(&text, selection, format_marker(key));
+    replacement.push(0);
     // wParam TRUE: the replacement can be undone.
-    SendMessageW(edit, EM_REPLACESEL, 1, text.as_ptr() as LPARAM);
-    update_color_index(frame, edit);
+    SendMessageW(edit, EM_REPLACESEL, 1, replacement.as_ptr() as LPARAM);
+    SendMessageW(edit, EM_SETSEL, selection.start, selection.end as LPARAM);
 }
 
 pub(super) unsafe fn submit_compose_from_control(
@@ -511,23 +537,23 @@ pub(super) unsafe fn submit_compose_from_control(
         state_mut(hwnd),
         &window,
         RoomMessagePresentationKind::Text,
+        ComposeFormat::Markdown,
         &input,
         explicit_room_id,
     )?;
     let empty = wide_null("");
     SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
-    update_color_index(hwnd, edit);
     Ok(room_id)
 }
 
-/// The message an editbox line sends: its text without mIRC codes, in the
-/// styles they set. Codes alone send nothing.
-pub(super) fn message_text_from_input(input: &str) -> Result<(String, Vec<TextStyleSpan>), String> {
-    let (body, styles) = format_codes::parse_mirc_input(input);
+/// The message an editbox line sends: its text as typed, which the core
+/// reads as Markdown or as it is. Spaces alone send nothing.
+pub(super) fn message_text_from_input(input: &str) -> Result<String, String> {
+    let body = input.trim();
     if body.is_empty() {
         return Err("message body must not be empty".to_owned());
     }
-    Ok((body, styles))
+    Ok(body.to_owned())
 }
 
 /// Sends a line given in `window` to its room, or to `explicit_room_id`.
@@ -535,10 +561,11 @@ pub(super) fn submit_compose(
     state: &mut WindowState,
     window: &ViewId,
     presentation: RoomMessagePresentationKind,
+    format: ComposeFormat,
     input: &str,
     explicit_room_id: Option<&str>,
 ) -> Result<String, String> {
-    let (body, styles) = message_text_from_input(input)?;
+    let body = message_text_from_input(input)?;
     let destination = resolve_compose_destination(state, window, explicit_room_id)?;
 
     let clears_thread_marker = explicit_room_id.is_none() && destination.thread.is_some();
@@ -548,7 +575,7 @@ pub(super) fn submit_compose(
             room_id: destination.room_id.clone(),
             presentation,
             body,
-            styles,
+            format,
             thread: destination.thread,
             reply: None,
         },
@@ -574,14 +601,14 @@ pub(super) fn send_room_message(
     if sendable_room_by_id(&state.model.rooms, &room_id).is_none() {
         return Err(format!("room is not joined: {room_id}"));
     }
-    let (body, styles) = message_text_from_input(input)?;
+    let body = message_text_from_input(input)?;
     enqueue_send_message(
         state,
         SendMessageRequest {
             room_id,
             presentation,
             body: body.clone(),
-            styles,
+            format: ComposeFormat::Markdown,
             thread: None,
             reply: None,
         },
@@ -801,37 +828,6 @@ unsafe extern "system" fn edit_window_proc(
     // The editbox is a child of its MDI child, which is a child of the MDI
     // client: the state lives on the frame.
     let parent = frame_window_for(hwnd);
-    if message == WM_KILLFOCUS {
-        hide_color_index(state_ref(parent));
-    }
-    // While the colour index shows, Esc only hides it (and its character
-    // is swallowed below); the reply or edit target stays armed.
-    if message == WM_KEYDOWN && wparam == VK_ESCAPE_KEY && color_index_shown(parent) {
-        hide_color_index(state_ref(parent));
-        return 0;
-    }
-    let result = edit_message(parent, hwnd, message, wparam, lparam);
-    // Keys, clicks and edit commands go to the focused editbox, which is
-    // the active window's; any of them can start or end a colour number
-    // at its caret. Esc, which hides the index, is not one of them.
-    let escape = matches!(message, WM_KEYDOWN | WM_CHAR) && wparam == VK_ESCAPE_KEY;
-    if matches!(
-        message,
-        WM_KEYDOWN | WM_CHAR | WM_LBUTTONUP | WM_PASTE | WM_CUT | WM_CLEAR | WM_UNDO | EM_UNDO
-    ) && !escape
-    {
-        update_color_index(parent, hwnd);
-    }
-    result
-}
-
-unsafe fn edit_message(
-    parent: HWND,
-    hwnd: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
     let original = state_ref(parent).edit_window_proc;
 
     if message == WM_SETFOCUS {
@@ -918,7 +914,7 @@ unsafe fn edit_message(
     }
 
     if message == WM_KEYDOWN
-        && let Some(key) = format_codes::mirc_format_key(
+        && let Some(key) = format_key(
             GetKeyState(VK_CONTROL as i32) < 0,
             GetKeyState(VK_MENU as i32) < 0,
             wparam,
@@ -929,14 +925,15 @@ unsafe fn edit_message(
             hwnd,
             "format keys must arrive at the active window's editbox"
         );
-        insert_mirc_format_code(parent, hwnd, format_codes::mirc_format_code(key));
+        wrap_compose_selection(parent, hwnd, key);
         return 0;
     }
 
-    // TranslateMessage also turns the Tab and Esc keys, and the format
-    // chords, into these characters: Ctrl+B, K, U, O, R and E, and Ctrl+I
-    // is Tab's. The key down already acted, so the edit box must not see them:
-    // a single-line edit box rejects them, with a beep on Windows.
+    // TranslateMessage also turns the Tab and Esc keys, and Ctrl+letter
+    // chords, into control characters: Ctrl+B and E, and Ctrl+I is Tab's,
+    // Ctrl+K, U, O and R mean nothing. A single-line edit box rejects
+    // them, with a beep on Windows, and the editbox holds text: it never
+    // sees them.
     if message == WM_CHAR
         && matches!(
             wparam,
@@ -1365,7 +1362,7 @@ mod tests {
                         target_event_id: "$wave".to_owned(),
                         presentation: RoomMessagePresentationKind::Emote,
                         body: "waves back".to_owned(),
-                        styles: Vec::new(),
+                        format: ComposeFormat::Markdown,
                     })]
                 );
                 assert_eq!(active_compose_target(hwnd), None);
@@ -1399,7 +1396,7 @@ mod tests {
                         target_event_id: "$wave".to_owned(),
                         presentation: RoomMessagePresentationKind::Emote,
                         body: "waves twice".to_owned(),
-                        styles: Vec::new(),
+                        format: ComposeFormat::Markdown,
                     })]
                 );
                 assert_eq!(active_compose_target(hwnd), None);
@@ -1407,26 +1404,18 @@ mod tests {
         }
     }
 
-    fn bold_span(start: usize, end: usize) -> TextStyleSpan {
-        TextStyleSpan {
-            start,
-            end,
-            style: bold_style(),
-        }
-    }
-
     #[test]
-    fn formatting_codes_send_as_styles_and_codes_alone_send_nothing() {
+    fn lines_send_as_typed_as_markdown_and_plain_sends_them_as_is() {
         unsafe {
             with_compose_target_window(|hwnd| {
-                type_compose_line(hwnd, "\x02hi\x02 there");
+                type_compose_line(hwnd, "**hi** there ");
                 assert_eq!(
                     state_ref(hwnd).recorded_commands,
                     vec![Command::SendMessage(SendMessageRequest {
                         room_id: "!ops:example".to_owned(),
                         presentation: RoomMessagePresentationKind::Text,
-                        body: "hi there".to_owned(),
-                        styles: vec![bold_span(0, 2)],
+                        body: "**hi** there".to_owned(),
+                        format: ComposeFormat::Markdown,
                         thread: None,
                         reply: None,
                     })]
@@ -1436,51 +1425,73 @@ mod tests {
                     vec![DumpSubmittedMessageCommand {
                         room_id: "!ops:example".to_owned(),
                         presentation: RoomMessagePresentationKind::Text,
-                        body: "hi there".to_owned(),
-                        styles: vec![bold_span(0, 2)],
+                        body: "**hi** there".to_owned(),
+                        format: ComposeFormat::Markdown,
                         thread: None,
                     }]
                 );
 
-                set_compose_text(hwnd, "\x02\x02").unwrap();
+                set_compose_text(hwnd, "   ").unwrap();
                 assert_eq!(
                     submit_compose_from_edit(hwnd),
                     Err("message body must not be empty".to_owned())
                 );
-                type_compose_line(hwnd, "/me \x1fwaves\x0f");
-                type_compose_line(hwnd, "/reply $q \x02yes");
-                let styled = |command: &Command| match command {
-                    Command::SendMessage(request) => (request.body.clone(), request.styles.clone()),
+                type_compose_line(hwnd, "/me *waves*");
+                type_compose_line(hwnd, "/plain **as is**");
+                type_compose_line(hwnd, "/reply $q **yes**");
+                type_compose_line(hwnd, "/reply $q");
+                type_compose_line(hwnd, "/plain `no`");
+                let sent = |command: &Command| match command {
+                    Command::SendMessage(request) => (
+                        request.presentation,
+                        request.body.clone(),
+                        request.format,
+                        request.reply.is_some(),
+                    ),
                     other => panic!("unexpected command {other:?}"),
-                };
-                let underline = TextStyleSpan {
-                    start: 0,
-                    end: 5,
-                    style: mirx_core::TextStyle {
-                        underline: true,
-                        ..mirx_core::TextStyle::default()
-                    },
                 };
                 assert_eq!(
                     state_ref(hwnd).recorded_commands[1..]
                         .iter()
-                        .map(styled)
+                        .map(sent)
                         .collect::<Vec<_>>(),
                     [
-                        ("waves".to_owned(), vec![underline]),
-                        ("yes".to_owned(), vec![bold_span(0, 3)]),
+                        (
+                            RoomMessagePresentationKind::Emote,
+                            "*waves*".to_owned(),
+                            ComposeFormat::Markdown,
+                            false
+                        ),
+                        (
+                            RoomMessagePresentationKind::Text,
+                            "**as is**".to_owned(),
+                            ComposeFormat::Plain,
+                            false
+                        ),
+                        (
+                            RoomMessagePresentationKind::Text,
+                            "**yes**".to_owned(),
+                            ComposeFormat::Markdown,
+                            true
+                        ),
+                        (
+                            RoomMessagePresentationKind::Text,
+                            "`no`".to_owned(),
+                            ComposeFormat::Plain,
+                            true
+                        ),
                     ]
                 );
                 assert_eq!(
-                    dump_model_from_state(state_ref(hwnd)).submitted_reply_commands[0].styles,
-                    [bold_span(0, 3)]
+                    dump_model_from_state(state_ref(hwnd)).submitted_reply_commands[1].format,
+                    ComposeFormat::Plain
                 );
             });
         }
     }
 
     #[test]
-    fn editing_a_formatted_message_prefills_its_codes() {
+    fn editing_a_formatted_message_prefills_its_markdown_source() {
         let mut state = compose_target_state();
         let mut activity = sent_message_activity_with_presentation(
             "!ops:example",
@@ -1494,43 +1505,68 @@ mod tests {
             unreachable!()
         };
         message.sender = user_profile("@me:example");
-        message.styles = vec![bold_span(7, 10)];
+        message.styles = vec![TextStyleSpan {
+            start: 7,
+            end: 10,
+            style: bold_style(),
+        }];
+        message.source_body = Some("deploy **now**".to_owned());
         apply_core_event(&mut state, Event::RoomActivity(Box::new(activity))).unwrap();
         unsafe {
             with_test_compose_window(state, |hwnd| {
                 install_test_view_content(hwnd);
                 refresh_view_content(hwnd, &room_view_id("!ops:example")).unwrap();
                 type_compose_line(hwnd, "/edit $styled");
-                assert_eq!(dump_compose_text(hwnd).unwrap(), "deploy \x02now");
-                // The same text in other codes is the same message.
-                set_compose_text(hwnd, "deploy \x02now\x02").unwrap();
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "deploy **now**");
+                // The source as it was is the same message.
                 submit_compose_from_edit(hwnd).unwrap();
                 assert!(state_ref(hwnd).recorded_commands.is_empty());
 
+                // Its shown text is another: the bold goes.
                 type_compose_line(hwnd, "/edit $styled");
                 set_compose_text(hwnd, "deploy now").unwrap();
                 submit_compose_from_edit(hwnd).unwrap();
+                type_compose_line(hwnd, "/edit $styled deploy *now*");
                 assert_eq!(
                     state_ref(hwnd).recorded_commands,
-                    vec![Command::EditMessage(EditMessageRequest {
-                        room_id: "!ops:example".to_owned(),
-                        target_event_id: "$styled".to_owned(),
-                        presentation: RoomMessagePresentationKind::Text,
-                        body: "deploy now".to_owned(),
-                        styles: Vec::new(),
-                    })]
+                    ["deploy now", "deploy *now*"]
+                        .map(|body| Command::EditMessage(EditMessageRequest {
+                            room_id: "!ops:example".to_owned(),
+                            target_event_id: "$styled".to_owned(),
+                            presentation: RoomMessagePresentationKind::Text,
+                            body: body.to_owned(),
+                            format: ComposeFormat::Markdown,
+                        }))
+                        .to_vec()
                 );
-                type_compose_line(hwnd, "/edit $styled \x02deploy\x02 now");
                 assert_eq!(
-                    dump_model_from_state(state_ref(hwnd)).submitted_edit_commands[1].styles,
-                    [bold_span(0, 6)]
+                    dump_model_from_state(state_ref(hwnd)).submitted_edit_commands[1].format,
+                    ComposeFormat::Markdown
                 );
             });
         }
     }
 
     #[test]
-    fn format_chords_type_codes_and_the_edit_box_never_sees_their_characters() {
+    fn a_marker_wraps_the_selection_in_utf16_units() {
+        let text: Vec<u16> = "👋 hi".encode_utf16().collect();
+        let wide = |text: &str| text.encode_utf16().collect::<Vec<_>>();
+        assert_eq!(
+            wrap_selection_in_marker(&text, 3..5, "**"),
+            (wide("**hi**"), 5..7)
+        );
+        assert_eq!(
+            wrap_selection_in_marker(&text, 5..5, "~~"),
+            (wide("~~~~"), 7..7)
+        );
+        assert_eq!(
+            wrap_selection_in_marker(&text, 0..2, "*"),
+            (wide("*👋*"), 1..3)
+        );
+    }
+
+    #[test]
+    fn format_chords_wrap_the_selection_in_markdown_markers() {
         use windows_sys::Win32::UI::Controls::EM_UNDO;
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardState, SetKeyboardState};
         unsafe {
@@ -1545,152 +1581,65 @@ mod tests {
                     SendMessageW(edit, WM_KEYDOWN, usize::from(letter), 0);
                     SendMessageW(edit, WM_CHAR, ch, 0);
                 };
+                let selection = || compose_text_and_selection(edit).1;
 
+                set_compose_text(hwnd, "say hi").unwrap();
+                SendMessageW(edit, EM_SETSEL, 4, 6);
                 keys[VK_CONTROL as usize] = 0x80;
                 assert_ne!(SetKeyboardState(keys.as_ptr()), 0);
-                for (letter, ch) in [
-                    (b'B', 0x02),
-                    (b'K', 0x0b),
-                    (b'U', 0x15),
-                    (b'I', 0x09),
-                    (b'O', 0x0f),
-                    (b'R', 0x12),
-                    (b'E', 0x05),
-                ] {
+                chord(b'B', 0x02);
+                assert_eq!(read_window_text(edit), "say **hi**");
+                assert_eq!(selection(), 6..8);
+                chord(b'I', 0x09);
+                assert_eq!(read_window_text(edit), "say ***hi***");
+                assert_eq!(selection(), 7..9);
+                // Each wrap is one undoable edit.
+                SendMessageW(edit, EM_UNDO, 0, 0);
+                assert_eq!(read_window_text(edit), "say **hi**");
+                // No selection: the pair, and the caret between them.
+                SendMessageW(edit, EM_SETSEL, 10, 10);
+                chord(b'E', 0x05);
+                assert_eq!(read_window_text(edit), "say **hi**~~~~");
+                assert_eq!(selection(), 12..12);
+                // Markdown has no underline, colour, reverse or reset.
+                for (letter, ch) in [(b'U', 0x15), (b'K', 0x0b), (b'R', 0x12), (b'O', 0x0f)] {
                     chord(letter, ch);
                 }
-                assert_eq!(read_window_text(edit), "\x02\x03\x1f\x1d\x0f\x16\x1e");
-                // The codes undo as typing does: a run of them at once.
-                SendMessageW(edit, EM_UNDO, 0, 0);
-                assert_eq!(read_window_text(edit), "");
-                chord(b'B', 0x02);
+                assert_eq!(read_window_text(edit), "say **hi**~~~~");
 
                 // AltGr is Ctrl+Alt: it types, it does not format.
                 keys[VK_MENU as usize] = 0x80;
                 assert_ne!(SetKeyboardState(keys.as_ptr()), 0);
                 SendMessageW(edit, WM_KEYDOWN, usize::from(b'B'), 0);
-                assert_eq!(read_window_text(edit), "\x02");
+                assert_eq!(read_window_text(edit), "say **hi**~~~~");
 
                 keys = saved;
                 keys[VK_CONTROL as usize] = 0;
                 keys[VK_MENU as usize] = 0;
                 assert_ne!(SetKeyboardState(keys.as_ptr()), 0);
                 chord(b'B', usize::from(b'b'));
-                assert_eq!(read_window_text(edit), "\x02b");
+                assert_eq!(read_window_text(edit), "say **hi**~~b~~");
                 assert_ne!(SetKeyboardState(saved.as_ptr()), 0);
             });
         }
     }
 
     #[test]
-    fn the_automation_format_key_types_its_code() {
+    fn the_automation_format_key_wraps_the_selection() {
         unsafe {
             with_compose_target_window(|hwnd| {
                 set_compose_text(hwnd, "a").unwrap();
                 let edit = compose_edit(hwnd);
-                SendMessageW(edit, EM_SETSEL, 1, 1);
+                SendMessageW(edit, EM_SETSEL, 0, 1);
                 send_compose_key(
                     hwnd,
                     ComposeKey::Format {
-                        key: crate::automation::MircFormatKey::Color,
+                        key: FormatKey::Italic,
                     },
                 )
                 .unwrap();
-                assert_eq!(read_window_text(edit), "a\x03");
-            });
-        }
-    }
-
-    unsafe fn type_chars(edit: HWND, text: &str) {
-        for ch in text.encode_utf16() {
-            SendMessageW(edit, WM_CHAR, usize::from(ch), 0);
-        }
-    }
-
-    unsafe fn press_color_key(hwnd: HWND) {
-        send_compose_key(
-            hwnd,
-            ComposeKey::Format {
-                key: crate::automation::MircFormatKey::Color,
-            },
-        )
-        .unwrap();
-    }
-
-    unsafe fn color_index_part(hwnd: HWND) -> Option<crate::automation::UiColorCodePart> {
-        color_index::dump(hwnd).map(|index| index.part)
-    }
-
-    #[test]
-    fn the_colour_index_shows_while_a_colour_number_is_typed() {
-        use crate::automation::UiColorCodePart::{Background, Foreground};
-        unsafe {
-            with_compose_target_window(|hwnd| {
-                let edit = compose_edit(hwnd);
-                subclass_compose_edit(hwnd, edit).unwrap();
-                set_compose_text(hwnd, "hi ").unwrap();
-                assert!(!color_index_shown(hwnd));
-                press_color_key(hwnd);
-                assert_eq!(color_index_part(hwnd), Some(Foreground));
-                for (typed, part) in [
-                    ("4", Some(Foreground)),
-                    (",", Some(Background)),
-                    ("1", Some(Background)),
-                    ("2", None),
-                ] {
-                    type_chars(edit, typed);
-                    assert_eq!(color_index_part(hwnd), part, "after {typed:?}");
-                }
-                assert_eq!(read_window_text(edit), "hi \x034,12");
-
-                // A click types the colour's two digits over what was
-                // typed of the number.
-                press_color_key(hwnd);
-                type_chars(edit, "1");
-                let cell = color_index::dump(hwnd).unwrap().cells[12];
-                let (x, y) = (cell.x + cell.width / 2, cell.y + cell.height / 2);
-                SendMessageW(
-                    state_ref(hwnd).controls.color_index,
-                    WM_LBUTTONDOWN,
-                    0,
-                    ((y as LPARAM) << 16) | x as LPARAM,
-                );
-                assert_eq!(read_window_text(edit), "hi \x034,12\x0312");
-                assert!(!color_index_shown(hwnd));
-                type_chars(edit, ",");
-                assert_eq!(color_index_part(hwnd), Some(Background));
-                // Moving the caret off the code hides it.
-                SendMessageW(edit, EM_SETSEL, 0, 0);
-                SendMessageW(edit, WM_KEYDOWN, VK_HOME_KEY, 0);
-                assert!(!color_index_shown(hwnd));
-            });
-        }
-    }
-
-    #[test]
-    fn escape_hides_the_colour_index_before_it_cancels_a_reply() {
-        unsafe {
-            with_compose_target_window(|hwnd| {
-                let edit = compose_edit(hwnd);
-                subclass_compose_edit(hwnd, edit).unwrap();
-                type_compose_line(hwnd, "/reply $q");
-                set_compose_text(hwnd, "draft ").unwrap();
-                press_color_key(hwnd);
-                assert!(color_index_shown(hwnd));
-                SendMessageW(edit, WM_KEYDOWN, VK_ESCAPE_KEY, 0);
-                SendMessageW(edit, WM_CHAR, VK_ESCAPE_KEY, 0);
-                assert!(!color_index_shown(hwnd));
-                assert!(active_compose_target(hwnd).is_some());
-                assert_eq!(read_window_text(edit), "draft \x03");
-
-                SendMessageW(edit, WM_KEYDOWN, VK_ESCAPE_KEY, 0);
-                assert_eq!(active_compose_target(hwnd), None);
-                assert_eq!(read_window_text(edit), "draft \x03");
-                // Losing the focus hides it too.
-                type_chars(edit, "4");
-                assert!(color_index_shown(hwnd));
-                SendMessageW(edit, WM_KILLFOCUS, 0, 0);
-                assert!(!color_index_shown(hwnd));
+                assert_eq!(read_window_text(edit), "*a*");
+                assert_eq!(compose_text_and_selection(edit).1, 1..2);
             });
         }
     }
@@ -1793,6 +1742,7 @@ mod tests {
             &mut state,
             &window,
             RoomMessagePresentationKind::Text,
+            ComposeFormat::Markdown,
             "hello",
             None,
         )
@@ -1802,6 +1752,7 @@ mod tests {
             &mut state,
             &window,
             RoomMessagePresentationKind::Emote,
+            ComposeFormat::Markdown,
             "waves",
             None,
         )
@@ -1814,7 +1765,7 @@ mod tests {
                     room_id: "!selected:example".to_owned(),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
-                    styles: Vec::new(),
+                    format: ComposeFormat::Markdown,
                     thread: None,
                     reply: None,
                 }),
@@ -1822,7 +1773,7 @@ mod tests {
                     room_id: "!selected:example".to_owned(),
                     presentation: RoomMessagePresentationKind::Emote,
                     body: "waves".to_owned(),
-                    styles: Vec::new(),
+                    format: ComposeFormat::Markdown,
                     thread: None,
                     reply: None,
                 }),
@@ -1884,6 +1835,7 @@ mod tests {
             &mut state,
             &window,
             RoomMessagePresentationKind::Text,
+            ComposeFormat::Markdown,
             "hi",
             None,
         )
@@ -1897,6 +1849,7 @@ mod tests {
                 &mut state,
                 &window,
                 RoomMessagePresentationKind::Text,
+                ComposeFormat::Markdown,
                 "hi",
                 None,
             )
@@ -1939,6 +1892,7 @@ mod tests {
             &mut state,
             &window,
             RoomMessagePresentationKind::Text,
+            ComposeFormat::Markdown,
             "/status",
             None,
         )
@@ -1950,7 +1904,7 @@ mod tests {
                 room_id: "!beta:example".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
                 body: "/status".to_owned(),
-                styles: Vec::new(),
+                format: ComposeFormat::Markdown,
                 thread: None,
                 reply: None,
             })]
@@ -2007,6 +1961,7 @@ mod tests {
             &mut state,
             &window,
             RoomMessagePresentationKind::Text,
+            ComposeFormat::Markdown,
             "hello",
             None,
         )
@@ -2021,6 +1976,7 @@ mod tests {
             &mut state,
             &window,
             RoomMessagePresentationKind::Emote,
+            ComposeFormat::Markdown,
             "waves",
             None,
         )
@@ -2033,7 +1989,7 @@ mod tests {
                     room_id: "!ops:example".to_owned(),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
-                    styles: Vec::new(),
+                    format: ComposeFormat::Markdown,
                     thread: Some(SendMessageThreadTarget {
                         thread_root_event_id: "$thread-root:example".to_owned(),
                         latest_event_id: "$thread-1:example".to_owned(),
@@ -2044,7 +2000,7 @@ mod tests {
                     room_id: "!ops:example".to_owned(),
                     presentation: RoomMessagePresentationKind::Emote,
                     body: "waves".to_owned(),
-                    styles: Vec::new(),
+                    format: ComposeFormat::Markdown,
                     thread: Some(SendMessageThreadTarget {
                         thread_root_event_id: "$thread-root:example".to_owned(),
                         latest_event_id: "$thread-1:example".to_owned(),
@@ -2090,6 +2046,7 @@ mod tests {
             &mut state,
             &window,
             RoomMessagePresentationKind::Text,
+            ComposeFormat::Markdown,
             "hello",
             Some("!ops:example"),
         )
@@ -2101,7 +2058,7 @@ mod tests {
                 room_id: "!ops:example".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
                 body: "hello".to_owned(),
-                styles: Vec::new(),
+                format: ComposeFormat::Markdown,
                 thread: None,
                 reply: None,
             })]
@@ -2129,6 +2086,7 @@ mod tests {
                 &mut state,
                 &window,
                 RoomMessagePresentationKind::Text,
+                ComposeFormat::Markdown,
                 "",
                 Some("!room:example"),
             ),
@@ -2140,6 +2098,7 @@ mod tests {
                 &mut state,
                 &window,
                 RoomMessagePresentationKind::Emote,
+                ComposeFormat::Markdown,
                 "waves",
                 Some("!missing:example"),
             ),
@@ -2150,6 +2109,7 @@ mod tests {
                 &mut state,
                 &window,
                 RoomMessagePresentationKind::Emote,
+                ComposeFormat::Markdown,
                 "waves",
                 Some("!invite:example"),
             ),
@@ -2160,6 +2120,7 @@ mod tests {
                 &mut state,
                 &window,
                 RoomMessagePresentationKind::Emote,
+                ComposeFormat::Markdown,
                 "waves",
                 Some("!space:example"),
             ),
@@ -2170,6 +2131,7 @@ mod tests {
                 &mut state,
                 &window,
                 RoomMessagePresentationKind::Emote,
+                ComposeFormat::Markdown,
                 "waves",
                 None,
             ),
@@ -2190,6 +2152,7 @@ mod tests {
                 &mut state,
                 &ViewId::Status,
                 RoomMessagePresentationKind::Text,
+                ComposeFormat::Markdown,
                 "hi",
                 None,
             ),
@@ -2213,6 +2176,7 @@ mod tests {
                 &mut state,
                 &window,
                 RoomMessagePresentationKind::Text,
+                ComposeFormat::Markdown,
                 "hello",
                 None,
             ),

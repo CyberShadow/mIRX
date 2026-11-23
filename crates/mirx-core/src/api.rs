@@ -282,8 +282,7 @@ pub struct SendMessageRequest {
     pub room_id: String,
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
-    /// Formats `body`; must pass [`check_text_styles`].
-    pub styles: Vec<TextStyleSpan>,
+    pub format: ComposeFormat,
     pub thread: Option<SendMessageThreadTarget>,
     pub reply: Option<SendMessageReplyTarget>,
 }
@@ -304,8 +303,7 @@ pub struct EditMessageRequest {
     pub target_event_id: String,
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
-    /// Formats `body`; must pass [`check_text_styles`].
-    pub styles: Vec<TextStyleSpan>,
+    pub format: ComposeFormat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1055,6 +1053,18 @@ pub enum RoomUnableToDecryptCause {
     UnknownDevice,
 }
 
+/// How a sent message's typed `body` reads: as Markdown, which Element
+/// also composes in, or as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComposeFormat {
+    /// `body` is sent as typed, with the HTML its Markdown renders as
+    /// `formatted_body` when that formats something.
+    Markdown,
+    /// `body` is the text exactly (`/plain`).
+    Plain,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoomMessagePresentationKind {
@@ -1262,6 +1272,10 @@ pub struct RoomMessageActivity {
     pub body: String,
     pub styles: Vec<TextStyleSpan>,
     pub user_links: Vec<UserLinkSpan>,
+    /// The event's own `body`, without a reply fallback, when the text
+    /// shown came from its HTML `formatted_body`: what its sender typed,
+    /// Markdown for mirx and Element. `None` when `body` is that text.
+    pub source_body: Option<String>,
     pub send_state: RoomMessageSendState,
 }
 
@@ -1275,6 +1289,7 @@ struct WireRoomMessageActivity {
     body: String,
     styles: Vec<TextStyleSpan>,
     user_links: Vec<UserLinkSpan>,
+    source_body: Option<String>,
     send_state: RoomMessageSendState,
 }
 
@@ -1302,6 +1317,7 @@ impl TryFrom<WireRoomMessageActivity> for RoomMessageActivity {
             body: message.body,
             styles: message.styles,
             user_links: message.user_links,
+            source_body: message.source_body,
             send_state: message.send_state,
         })
     }
@@ -1637,7 +1653,7 @@ impl TryFrom<WireRoomActivityUpdate> for RoomActivityUpdate {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoomHistoryBackfillEvent {
     Activity(Box<RoomActivity>),
-    ActivityUpdate(RoomActivityUpdate),
+    ActivityUpdate(Box<RoomActivityUpdate>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1931,6 +1947,8 @@ pub enum RoomActivityUpdateKind {
         body: String,
         styles: Vec<TextStyleSpan>,
         user_links: Vec<UserLinkSpan>,
+        /// The new content's typed body, as [`RoomMessageActivity`]'s.
+        source_body: Option<String>,
     },
     ReactionAdded {
         reaction_event_id: String,
@@ -2931,6 +2949,7 @@ mod tests {
             "body": "hi there",
             "styles": styles,
             "user_links": [],
+            "source_body": "hi **there**",
             "send_state": { "state": "sent" },
         })
     }
@@ -2942,6 +2961,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(message.styles, vec![span(0, 2, bold())]);
+        assert_eq!(message.source_body.as_deref(), Some("hi **there**"));
         assert_eq!(
             serde_json::to_value(&message).unwrap(),
             message_json(serde_json::json!([{ "start": 0, "end": 2, "style": bold() }]))

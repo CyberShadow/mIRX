@@ -411,8 +411,6 @@ pub(super) struct LoggingSetting {
     pub(super) rooms: bool,
     /// ... and direct messages.
     pub(super) direct: bool,
-    /// Logs the plain text, without bold, colour and other control codes.
-    pub(super) strip_codes: bool,
     /// Stamps each logged line with the window's timestamp format.
     pub(super) timestamp: bool,
 }
@@ -422,7 +420,6 @@ impl Default for LoggingSetting {
         Self {
             rooms: false,
             direct: false,
-            strip_codes: false,
             timestamp: true,
         }
     }
@@ -704,9 +701,6 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Logging, "direct") => {
                 settings.logging.direct = parse_on_off(value, "direct").map_err(error)?;
             }
-            (Section::Logging, "strip") => {
-                settings.logging.strip_codes = parse_on_off(value, "strip").map_err(error)?;
-            }
             (Section::Logging, "timestamp") => {
                 settings.logging.timestamp = parse_on_off(value, "timestamp").map_err(error)?;
             }
@@ -873,7 +867,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
          [switchbar]\r\nshow={}\r\nbuttons={}\r\n\
          event={}\r\nmessage={}\r\nhighlight={}\r\n\
          [treebar]\r\nshow={}\r\nwidth={}\r\n\
-         [logging]\r\nrooms={}\r\ndirect={}\r\nstrip={}\r\ntimestamp={}\r\n\
+         [logging]\r\nrooms={}\r\ndirect={}\r\ntimestamp={}\r\n\
          [tray]\r\nalways={}\r\nstartup={}\r\nminimize={}\r\nsingle_click={}\r\n\
          [tips]\r\nhighlights={}\r\ndirect={}\r\nrooms={}\r\n\
          [marker]\r\nshow={}\r\ncolor={}\r\n\
@@ -904,7 +898,6 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         settings.treebar.width,
         on_off(logging.rooms),
         on_off(logging.direct),
-        on_off(logging.strip_codes),
         on_off(logging.timestamp),
         on_off(tray.always),
         on_off(tray.startup),
@@ -1063,7 +1056,7 @@ mod tests {
         [toolbar]\r\nshow=on\r\n\
         [switchbar]\r\nshow=on\r\nbuttons=120\r\nevent=5\r\nmessage=4\r\nhighlight=12\r\n\
         [treebar]\r\nshow=on\r\nwidth=240\r\n\
-        [logging]\r\nrooms=off\r\ndirect=off\r\nstrip=off\r\ntimestamp=on\r\n\
+        [logging]\r\nrooms=off\r\ndirect=off\r\ntimestamp=on\r\n\
         [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
         [tips]\r\nhighlights=on\r\ndirect=on\r\nrooms=off\r\n\
         [marker]\r\nshow=on\r\ncolor=4\r\n\
@@ -1268,7 +1261,6 @@ mod tests {
             logging: LoggingSetting {
                 rooms: true,
                 direct: false,
-                strip_codes: true,
                 timestamp: false,
             },
             ..Settings::default()
@@ -1276,7 +1268,7 @@ mod tests {
         let text = to_ini(&settings);
         assert!(text.contains(
             "[treebar]\r\nshow=on\r\nwidth=240\r\n\
-             [logging]\r\nrooms=on\r\ndirect=off\r\nstrip=on\r\ntimestamp=off\r\n[tray]"
+             [logging]\r\nrooms=on\r\ndirect=off\r\ntimestamp=off\r\n[tray]"
         ));
         assert_eq!(parse_ini(&text), Ok(settings));
         assert_eq!(
@@ -1289,18 +1281,19 @@ mod tests {
         for (text, error) in [
             ("[logging]\nrooms=yes", "line 2: rooms must be on or off"),
             ("[logging]\ndirect=1", "line 2: direct must be on or off"),
-            ("[logging]\nstrip=", "line 2: strip must be on or off"),
             (
                 "[logging]\ntimestamp=no",
                 "line 2: timestamp must be on or off",
             ),
             (
-                "[logging]\nstrip=on\nstrip=off",
-                "line 3: duplicate key strip",
+                "[logging]\nrooms=on\nrooms=off",
+                "line 3: duplicate key rooms",
             ),
             ("[logging]\nfolder=logs", "line 2: unknown key folder"),
             ("[logging]\nchannels=on", "line 2: unknown key channels"),
             ("[logging]\nqueries=on", "line 2: unknown key queries"),
+            // Logs are plain text: there are no codes to strip.
+            ("[logging]\nstrip=on", "line 2: unknown key strip"),
         ] {
             assert_eq!(parse_ini(text), Err(error.to_owned()), "{text}");
         }

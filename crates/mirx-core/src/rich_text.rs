@@ -10,6 +10,7 @@
 use std::ops::Range;
 
 use matrix_sdk::ruma::UserId;
+use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 use ruma_html::{Html, NodeData, NodeRef, SanitizerConfig};
 
 use crate::api::{
@@ -405,86 +406,163 @@ impl Writer {
     }
 }
 
-/// Matrix HTML for `body` formatted by `styles` and linked by `pills`,
-/// which must pass [`check_text_styles`] and [`check_user_links`].
+/// Matrix HTML for `body` typed as Markdown, as Element renders it
+/// (CommonMark with GFM strikethrough), with `pills` (which must pass
+/// [`check_user_links`]) linking names to users; `None` when it renders
+/// `body` as typed and links no name, as the message is then plain text.
 ///
-/// Each style span is a `<span>` with its colours (new messages use `span`,
-/// not the deprecated `font`; spec v1.10) around `<b><i><u><del>`, in that
-/// order, and each pill an `<a>` to the user's matrix.to permalink, which
-/// clients show as a pill. Spans are flat and a style span is cut at a
-/// pill's edges, so the elements always nest properly. `\n` is `<br>`, and
-/// spaces that HTML would collapse or drop are `&nbsp;`, so the text reads
-/// as typed: see [`push_escaped_html`].
-pub(crate) fn html_from_styled_text(
-    body: &str,
-    styles: &[TextStyleSpan],
-    pills: &[UserLinkSpan],
-) -> String {
-    check_text_styles(body, styles).expect("styles sent must describe their body");
+/// HTML typed in `body` is text: nothing but Markdown formats a message. A
+/// pill links only a name Markdown keeps as typed and outside code and
+/// links: an escaped character, a code span or a link's text is not one.
+/// One paragraph is sent without its `<p>`, as Element does.
+pub(crate) fn html_from_markdown(body: &str, pills: &[UserLinkSpan]) -> Option<String> {
     check_user_links(body, pills).expect("pills sent must describe their body");
-    let mut edges = vec![0, body.len()];
-    edges.extend(styles.iter().flat_map(|span| [span.start, span.end]));
-    edges.extend(pills.iter().flat_map(|pill| [pill.start, pill.end]));
-    edges.sort_unstable();
-    edges.dedup();
-    let mut styles = styles.iter().peekable();
-    let mut pills = pills.iter().peekable();
-    let mut html = String::new();
-    for segment in edges.windows(2) {
-        let (start, end) = (segment[0], segment[1]);
-        if let Some(pill) = pills.peek().filter(|pill| pill.start == start) {
-            let user_id = <&UserId>::try_from(pill.user_id.as_str()).expect("checked user ID");
-            html.push_str(&format!("<a href=\"{}\">", user_id.matrix_to_uri()));
+    let mut markdown = MarkdownEvents {
+        body,
+        pills,
+        events: Vec::new(),
+        formats: false,
+        unpillable_depth: 0,
+    };
+    // Text as typed, not yet pushed: consecutive text events that each
+    // render their source as it is, so a pill may span them.
+    let mut verbatim: Option<Range<usize>> = None;
+    // Where text as typed goes on in a paragraph. Text starting elsewhere
+    // hides the source before it: an escape's backslash.
+    let mut typed_to: Option<usize> = None;
+    for (event, range) in Parser::new_ext(body, Options::ENABLE_STRIKETHROUGH).into_offset_iter() {
+        let event = match event {
+            Event::Html(html) | Event::InlineHtml(html) => Event::Text(html),
+            Event::Start(Tag::HtmlBlock) => Event::Start(Tag::Paragraph),
+            Event::End(TagEnd::HtmlBlock) => Event::End(TagEnd::Paragraph),
+            event => event,
+        };
+        if matches!(&event, Event::Text(text) if **text == body[range.clone()]) {
+            markdown.formats |= typed_to != Some(range.start);
+            typed_to = Some(range.end);
+            verbatim = match verbatim {
+                Some(run) if run.end == range.start => Some(run.start..range.end),
+                run => {
+                    run.into_iter().for_each(|run| markdown.push_verbatim(run));
+                    Some(range)
+                }
+            };
+            continue;
         }
-        // A segment is wholly inside one style span or outside them all.
-        let style = styles
-            .peek()
-            .filter(|span| span.start <= start)
-            .map(|span| span.style);
-        push_styled_html(&mut html, body, start..end, style);
-        if styles.peek().is_some_and(|span| span.end == end) {
-            styles.next();
-        }
-        if pills.peek().is_some_and(|pill| pill.end == end) {
-            html.push_str("</a>");
-            pills.next();
-        }
+        verbatim
+            .take()
+            .into_iter()
+            .for_each(|run| markdown.push_verbatim(run));
+        typed_to = match event {
+            Event::Start(Tag::Paragraph) => Some(range.start),
+            Event::SoftBreak => Some(range.end),
+            _ => None,
+        };
+        markdown.push(event);
     }
-    html
+    verbatim
+        .into_iter()
+        .for_each(|run| markdown.push_verbatim(run));
+    markdown.html()
 }
 
-/// `body[range]` as HTML in `style`, if any.
-fn push_styled_html(html: &mut String, body: &str, range: Range<usize>, style: Option<TextStyle>) {
-    let Some(style) = style else {
-        return push_escaped_html(html, body, range);
-    };
-    let mut closing = Vec::new();
-    if style.foreground.is_some() || style.background.is_some() {
-        html.push_str("<span");
-        if let Some(color) = style.foreground {
-            html.push_str(&format!(" data-mx-color=\"{color}\""));
+/// The events [`html_from_markdown`] renders, and what they hold.
+struct MarkdownEvents<'a> {
+    body: &'a str,
+    pills: &'a [UserLinkSpan],
+    events: Vec<Event<'a>>,
+    /// Whether an event renders other than as typed text.
+    formats: bool,
+    /// How many links, images and code blocks the next event is in.
+    unpillable_depth: usize,
+}
+
+impl<'a> MarkdownEvents<'a> {
+    fn push(&mut self, event: Event<'a>) {
+        match &event {
+            Event::Start(Tag::Link { .. } | Tag::Image { .. } | Tag::CodeBlock(_)) => {
+                self.unpillable_depth += 1;
+            }
+            Event::End(TagEnd::Link | TagEnd::Image | TagEnd::CodeBlock) => {
+                self.unpillable_depth -= 1;
+            }
+            _ => {}
         }
-        if let Some(color) = style.background {
-            html.push_str(&format!(" data-mx-bg-color=\"{color}\""));
+        self.formats |= !matches!(
+            event,
+            Event::Start(Tag::Paragraph) | Event::End(TagEnd::Paragraph) | Event::SoftBreak
+        );
+        self.events.push(event);
+    }
+
+    /// `body[run]`, text as typed, with the pills wholly inside it.
+    fn push_verbatim(&mut self, run: Range<usize>) {
+        let body = self.body;
+        let mut at = run.start;
+        if self.unpillable_depth == 0 {
+            let pills = self.pills;
+            for pill in pills
+                .iter()
+                .filter(|pill| run.start <= pill.start && pill.end <= run.end)
+            {
+                let user_id = <&UserId>::try_from(pill.user_id.as_str()).expect("checked user ID");
+                self.events.push(Event::Text(body[at..pill.start].into()));
+                self.push(Event::Start(Tag::Link {
+                    link_type: LinkType::Inline,
+                    dest_url: user_id.matrix_to_uri().to_string().into(),
+                    title: "".into(),
+                    id: "".into(),
+                }));
+                self.events
+                    .push(Event::Text(body[pill.start..pill.end].into()));
+                self.push(Event::End(TagEnd::Link));
+                at = pill.end;
+            }
         }
-        html.push('>');
-        closing.push("</span>");
+        self.events.push(Event::Text(body[at..run.end].into()));
     }
-    for (on, open, close) in [
-        (style.bold, "<b>", "</b>"),
-        (style.italic, "<i>", "</i>"),
-        (style.underline, "<u>", "</u>"),
-        (style.strikethrough, "<del>", "</del>"),
-    ] {
-        if on {
-            html.push_str(open);
-            closing.push(close);
+
+    fn html(mut self) -> Option<String> {
+        if !self.formats {
+            return None;
         }
+        let paragraphs = self
+            .events
+            .iter()
+            .filter(|event| matches!(event, Event::Start(Tag::Paragraph)))
+            .count();
+        if paragraphs == 1
+            && matches!(self.events.first(), Some(Event::Start(Tag::Paragraph)))
+            && matches!(self.events.last(), Some(Event::End(TagEnd::Paragraph)))
+        {
+            self.events.pop();
+            self.events.remove(0);
+        }
+        let mut html = String::new();
+        pulldown_cmark::html::push_html(&mut html, self.events.into_iter());
+        Some(html)
     }
-    push_escaped_html(html, body, range);
-    for close in closing.into_iter().rev() {
-        html.push_str(close);
+}
+
+/// Matrix HTML for plain `body` linked by `pills`, which must pass
+/// [`check_user_links`]: each pill an `<a>` to the user's matrix.to
+/// permalink, which clients show as a pill. `\n` is `<br>`, and spaces
+/// that HTML would collapse or drop are `&nbsp;`, so the text reads as
+/// typed: see [`push_escaped_html`].
+pub(crate) fn html_from_plain_text(body: &str, pills: &[UserLinkSpan]) -> String {
+    check_user_links(body, pills).expect("pills sent must describe their body");
+    let mut html = String::new();
+    let mut at = 0;
+    for pill in pills {
+        let user_id = <&UserId>::try_from(pill.user_id.as_str()).expect("checked user ID");
+        push_escaped_html(&mut html, body, at..pill.start);
+        html.push_str(&format!("<a href=\"{}\">", user_id.matrix_to_uri()));
+        push_escaped_html(&mut html, body, pill.start..pill.end);
+        html.push_str("</a>");
+        at = pill.end;
     }
+    push_escaped_html(&mut html, body, at..body.len());
+    html
 }
 
 /// `body[range]` as HTML text, `\n` as `<br>`.
@@ -921,54 +999,12 @@ mod tests {
         assert_eq!(plain_text("<p> </p><br>"), "");
     }
 
-    fn span(start: usize, end: usize, style: TextStyle) -> TextStyleSpan {
-        TextStyleSpan { start, end, style }
-    }
-
     #[test]
-    fn styled_text_becomes_flat_matrix_html() {
-        assert_eq!(html_from_styled_text("plain", &[], &[]), "plain");
+    fn plain_text_becomes_matrix_html() {
+        assert_eq!(html_from_plain_text("plain", &[]), "plain");
         assert_eq!(
-            html_from_styled_text("a & <b> \"c\"\nnext", &[], &[]),
+            html_from_plain_text("a & <b> \"c\"\nnext", &[]),
             "a &amp; &lt;b&gt; &quot;c&quot;<br>next"
-        );
-        let everything = TextStyle {
-            bold: true,
-            italic: true,
-            underline: true,
-            strikethrough: true,
-            foreground: Some(color(0xff, 0, 0)),
-            background: Some(color(0, 0, 0x7f)),
-        };
-        assert_eq!(
-            html_from_styled_text("all of it", &[span(4, 6, everything)], &[]),
-            "all <span data-mx-color=\"#ff0000\" data-mx-bg-color=\"#00007f\">\
-             <b><i><u><del>of</del></u></i></b></span> it"
-        );
-        assert_eq!(
-            html_from_styled_text(
-                "bold, red bg <tag>",
-                &[
-                    span(0, 4, bold()),
-                    span(6, 9, foreground(color(0xff, 0, 0))),
-                    span(
-                        10,
-                        18,
-                        TextStyle {
-                            background: Some(color(0, 0, 0)),
-                            ..TextStyle::default()
-                        }
-                    ),
-                ],
-                &[]
-            ),
-            "<b>bold</b>, <span data-mx-color=\"#ff0000\">red</span> \
-             <span data-mx-bg-color=\"#000000\">bg &lt;tag&gt;</span>"
-        );
-        // Without a colour there is no span.
-        assert_eq!(
-            html_from_styled_text("x", &[span(0, 1, italic())], &[]),
-            "<i>x</i>"
         );
     }
 
@@ -992,9 +1028,8 @@ mod tests {
     #[test]
     fn pills_link_their_text_to_the_user() {
         assert_eq!(
-            html_from_styled_text(
+            html_from_plain_text(
                 "Alice: ask Bob&Co",
-                &[],
                 &[
                     pill(0, 5, "@alice:example.org"),
                     pill(11, 17, "@bob:example.org")
@@ -1004,9 +1039,8 @@ mod tests {
              <a href=\"https://matrix.to/#/@bob:example.org\">Bob&amp;Co</a>"
         );
         assert_eq!(
-            html_from_styled_text(
+            html_from_plain_text(
                 "AB",
-                &[],
                 &[pill(0, 1, "@a:example.org"), pill(1, 2, "@b:example.org")]
             ),
             "<a href=\"https://matrix.to/#/@a:example.org\">A</a>\
@@ -1016,32 +1050,8 @@ mod tests {
     }
 
     #[test]
-    fn styles_crossing_a_pill_edge_nest_inside_and_outside_it() {
-        assert_eq!(
-            html_from_styled_text(
-                "hey Alice ok",
-                &[span(0, 6, bold()), span(6, 12, italic())],
-                &[pill(4, 9, "@alice:example.org")]
-            ),
-            "<b>hey </b><a href=\"https://matrix.to/#/@alice:example.org\"><b>Al</b>\
-             <i>ice</i></a><i> ok</i>"
-        );
-        assert_eq!(
-            html_from_styled_text(
-                "x Alice y",
-                &[span(0, 9, foreground(color(0xff, 0, 0)))],
-                &[pill(2, 7, "@alice:example.org")]
-            ),
-            "<span data-mx-color=\"#ff0000\">x </span>\
-             <a href=\"https://matrix.to/#/@alice:example.org\">\
-             <span data-mx-color=\"#ff0000\">Alice</span></a>\
-             <span data-mx-color=\"#ff0000\"> y</span>"
-        );
-    }
-
-    #[test]
     fn spaces_html_would_lose_are_no_break_spaces() {
-        let html = |body: &str| html_from_styled_text(body, &[], &[]);
+        let html = |body: &str| html_from_plain_text(body, &[]);
         assert_eq!(html("a b"), "a b");
         assert_eq!(html("a  b"), "a &nbsp;b");
         assert_eq!(html("a    b"), "a &nbsp;&nbsp;&nbsp;b");
@@ -1049,10 +1059,10 @@ mod tests {
         assert_eq!(html("a "), "a&nbsp;");
         assert_eq!(html("a\n  b \nc"), "a<br>&nbsp;&nbsp;b&nbsp;<br>c");
         assert_eq!(html(" "), "&nbsp;");
-        // Across element edges, the body decides.
+        // Across a pill's edges, the body decides.
         assert_eq!(
-            html_from_styled_text("a  b", &[span(2, 4, bold())], &[]),
-            "a <b>&nbsp;b</b>"
+            html_from_plain_text("a  Al", &[pill(3, 5, "@al:example.org")]),
+            "a &nbsp;<a href=\"https://matrix.to/#/@al:example.org\">Al</a>"
         );
     }
 
@@ -1065,66 +1075,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "styles sent must describe their body")]
-    fn styled_text_html_refuses_invalid_styles() {
-        html_from_styled_text("x", &[span(0, 2, bold())], &[]);
-    }
-
-    #[test]
-    fn styled_text_round_trips_through_html() {
-        let styles = [
-            TextStyle::default(),
-            bold(),
-            italic(),
-            TextStyle {
-                underline: true,
-                strikethrough: true,
-                ..TextStyle::default()
-            },
-            foreground(color(0x12, 0x34, 0x56)),
-            TextStyle {
-                bold: true,
-                foreground: Some(color(0xff, 0xff, 0xff)),
-                background: Some(color(0, 0, 0)),
-                ..TextStyle::default()
-            },
-        ];
-        let words = ["héllo", "<w&>", "x", "👋", "two words", "\"q\"", " pad  "];
-        for (first, first_style) in styles.iter().enumerate() {
-            for (second, second_style) in styles.iter().enumerate() {
-                for separator in [" ", "", "\n", "   ", " \n ", "\n\n"] {
-                    let mut body = String::new();
-                    let mut spans = Vec::new();
-                    for (word, style) in
-                        [(words[first], first_style), (words[second], second_style)]
-                    {
-                        if !body.is_empty() {
-                            body.push_str(separator);
-                        }
-                        let start = body.len();
-                        body.push_str(word);
-                        if *style != TextStyle::default() {
-                            match spans.last_mut() {
-                                Some(TextStyleSpan {
-                                    end, style: last, ..
-                                }) if *end == start && last == style => *end = body.len(),
-                                _ => spans.push(span(start, body.len(), *style)),
-                            }
-                        }
-                    }
-                    let html = html_from_styled_text(&body, &spans, &[]);
-                    assert_eq!(
-                        styled_text_from_html(&html),
-                        StyledText {
-                            body: body.clone(),
-                            styles: spans.clone(),
-                            user_links: Vec::new(),
-                        },
-                        "{html}"
-                    );
-                }
-            }
-        }
+    #[should_panic(expected = "pills sent must describe their body")]
+    fn plain_text_html_refuses_invalid_pills() {
+        html_from_plain_text("x", &[pill(0, 2, "@x:example.org")]);
     }
 
     /// Each user link's text and user ID.
@@ -1224,33 +1177,123 @@ mod tests {
     }
 
     #[test]
-    fn pills_and_styles_round_trip_through_html() {
+    fn pills_round_trip_through_html() {
         let alice = "@alice:example.org";
         let bob = "@bob:example.org";
-        for (body, styles, pills) in [
-            ("Alice: hi", vec![], vec![pill(0, 5, alice)]),
-            ("AliceBob", vec![], vec![pill(0, 5, alice), pill(5, 8, bob)]),
+        for (body, pills) in [
+            ("Alice: hi", vec![pill(0, 5, alice)]),
+            ("AliceBob", vec![pill(0, 5, alice), pill(5, 8, bob)]),
             (
                 "  Alice  ok\nBob ",
-                vec![span(0, 4, bold()), span(9, 11, italic())],
                 vec![pill(2, 7, alice), pill(12, 15, bob)],
             ),
-            (
-                "ärger Ärger",
-                vec![span(7, 9, bold())],
-                vec![pill(7, 13, alice)],
-            ),
+            ("ärger Ärger", vec![pill(7, 13, alice)]),
         ] {
-            let html = html_from_styled_text(body, &styles, &pills);
+            let html = html_from_plain_text(body, &pills);
             assert_eq!(
                 styled_text_from_html(&html),
                 StyledText {
                     body: body.to_owned(),
-                    styles,
+                    styles: Vec::new(),
                     user_links: pills,
                 },
                 "{html}"
             );
+        }
+    }
+
+    /// `html_from_markdown(body, pills)` with each pill named by its text.
+    fn markdown(body: &str, pills: &[(&str, &str)]) -> Option<String> {
+        let pills: Vec<_> = pills
+            .iter()
+            .map(|(name, user_id)| {
+                let start = body.find(name).expect("the pill's name is in the body");
+                pill(start, start + name.len(), user_id)
+            })
+            .collect();
+        html_from_markdown(body, &pills)
+    }
+
+    #[test]
+    fn markdown_renders_like_element() {
+        let bob = "@bob:example.org";
+        let bob_link = "<a href=\"https://matrix.to/#/@bob:example.org\">Bob</a>";
+        // Nothing formats: the message is plain.
+        for body in [
+            "plain text",
+            "a  b",
+            "1 * 2",
+            "a_b_c",
+            "<b>x</b> & co",
+            "<div>x</div>",
+            "x\ny",
+            "C:\\dir",
+        ] {
+            assert_eq!(markdown(body, &[]), None, "{body}");
+        }
+        for (body, pills, html) in [
+            ("**b**", &[][..], "<strong>b</strong>".to_owned()),
+            ("*i* and _i_", &[], "<em>i</em> and <em>i</em>".to_owned()),
+            ("~~s~~", &[], "<del>s</del>".to_owned()),
+            ("`a < b`", &[], "<code>a &lt; b</code>".to_owned()),
+            (
+                "see [docs](https://example.org/a?b&c)",
+                &[],
+                "see <a href=\"https://example.org/a?b&amp;c\">docs</a>".to_owned(),
+            ),
+            (
+                "<https://example.org>",
+                &[],
+                "<a href=\"https://example.org\">https://example.org</a>".to_owned(),
+            ),
+            (
+                "> quoted",
+                &[],
+                "<blockquote>\n<p>quoted</p>\n</blockquote>\n".to_owned(),
+            ),
+            ("# Title", &[], "<h1>Title</h1>\n".to_owned()),
+            ("1. item", &[], "<ol>\n<li>item</li>\n</ol>\n".to_owned()),
+            // Typed HTML is text, even beside Markdown.
+            (
+                "**<b>x</b>**",
+                &[],
+                "<strong>&lt;b&gt;x&lt;/b&gt;</strong>".to_owned(),
+            ),
+            (
+                "<div>Bob</div>",
+                &[("Bob", bob)],
+                format!("&lt;div&gt;{bob_link}&lt;/div&gt;"),
+            ),
+            // An escape renders as other than typed.
+            ("\\*not italic\\*", &[], "*not italic*".to_owned()),
+            ("\\*x", &[], "*x".to_owned()),
+            ("a &amp; b", &[], "a &amp; b".to_owned()),
+            // A pill alone makes the message HTML; inside Markdown it nests.
+            ("hi Bob", &[("Bob", bob)], format!("hi {bob_link}")),
+            (
+                "**Bob** hi",
+                &[("Bob", bob)],
+                format!("<strong>{bob_link}</strong> hi"),
+            ),
+            (
+                "Bob! *x*",
+                &[("Bob", bob)],
+                format!("{bob_link}! <em>x</em>"),
+            ),
+            // Not in code, a link or an escaped name.
+            (
+                "`Bob` hi",
+                &[("Bob", bob)],
+                "<code>Bob</code> hi".to_owned(),
+            ),
+            (
+                "[Bob](https://example.org)",
+                &[("Bob", bob)],
+                "<a href=\"https://example.org\">Bob</a>".to_owned(),
+            ),
+            ("a\\*b hi", &[("a\\*b", bob)], "a*b hi".to_owned()),
+        ] {
+            assert_eq!(markdown(body, pills), Some(html), "{body}");
         }
     }
 }

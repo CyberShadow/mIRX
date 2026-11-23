@@ -143,6 +143,7 @@ pub(super) fn sent_message_activity_with_presentation(
             body: body.to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: None,
             send_state: RoomMessageSendState::Sent,
         }),
     }
@@ -306,6 +307,7 @@ pub(super) fn pending_message_activity_with_presentation(
             body: body.to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: None,
             send_state: RoomMessageSendState::Pending,
         }),
     }
@@ -414,6 +416,7 @@ pub(super) fn edit_by(
             body: body.to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: None,
         },
     }
 }
@@ -510,6 +513,7 @@ pub(super) fn failed_message_activity_with_presentation(
             body: body.to_owned(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            source_body: None,
             send_state: RoomMessageSendState::Failed {
                 message: message.to_owned(),
                 recoverable: false,
@@ -1069,7 +1073,6 @@ pub(super) unsafe fn with_test_compose_window<T>(
     window_data::lend(frame, &mut *data);
     let state = state_mut(frame);
     state.controls.status_bar = status_bar;
-    state.controls.color_index = create_color_index(frame).unwrap();
     let active_view = state.active_view.clone();
     state.hwnd_views.insert(child as isize, active_view.clone());
     state.views.insert(
@@ -1372,7 +1375,7 @@ pub(super) fn reply_command(presentation: RoomMessagePresentationKind, body: &st
         room_id: "!ops:example".to_owned(),
         presentation,
         body: body.to_owned(),
-        styles: Vec::new(),
+        format: ComposeFormat::Markdown,
         thread: None,
         reply: Some(SendMessageReplyTarget {
             event_id: "$q".to_owned(),

@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CommandId,
-    CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
+    CommandSender, ComposeFormat, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
     CreateRoomRequest, CreateRoomVisibility, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeIdentityResetOutcome, E2eeRecoveryState, E2eeSessionState,
     E2eeStatus, EditMessageRequest, Event, ExportRoomKeysRequest, FetchRoomEventRequest,
@@ -206,7 +206,6 @@ mod channel_central_dialog;
 mod clipboard;
 mod cmap;
 mod color_drop_down;
-mod color_index;
 mod colors;
 mod colors_dialog;
 mod command_acks;
@@ -223,7 +222,6 @@ mod errors;
 mod file_dialogs;
 mod find;
 mod fonts;
-mod format_codes;
 mod frame;
 mod frame_menus;
 mod glyph_fonts;
@@ -311,7 +309,6 @@ use automation_host::{
     AutomationState, destroy_automation_state, enable_automation, handle_copydata,
     send_automation_request,
 };
-use color_index::{create_color_index, hide_color_index};
 use colors::{ColorItem, ColorScheme, EventItem, SchemeBrushes};
 use command_runner::clear_window;
 #[cfg(test)]
@@ -626,9 +623,6 @@ struct Controls {
     file_menu: HMENU,
     view_menu: HMENU,
     tools_menu: HMENU,
-    /// The colour index popup over the editbox, hidden but while a `^K`
-    /// colour number is typed (`color_index`).
-    color_index: HWND,
     /// Right-click menus. They hang in no menubar, so `WM_DESTROY`
     /// destroys them.
     room_menu: HMENU,

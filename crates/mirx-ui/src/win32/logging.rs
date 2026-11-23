@@ -13,7 +13,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use super::format_codes::mirc_input_from_styled;
 use super::*;
 
 const LOGS_SUBDIR: &str = "logs";
@@ -152,7 +151,7 @@ impl LogDiff {
     /// (messages, events, echo and Status lines) from `from` on, once each.
     /// A message waiting to be sent is not said yet, and is written once it
     /// is.
-    fn lines(&mut self, rows: &[TimelineRow], strip_codes: bool) -> Vec<String> {
+    fn lines(&mut self, rows: &[TimelineRow]) -> Vec<String> {
         let mut lines = Vec::new();
         for row in rows {
             let Some(arrival) = row.arrival else {
@@ -169,13 +168,9 @@ impl LogDiff {
             if arrival < self.from || unsent || !self.written.insert(row.identity.clone()) {
                 continue;
             }
-            let text = if strip_codes {
-                row.logical_text.clone()
-            } else {
-                mirc_input_from_styled(&row.logical_text, &row.styles)
-            };
             lines.extend(
-                text.split('\n')
+                row.logical_text
+                    .split('\n')
                     .map(|line| line.strip_suffix('\r').unwrap_or(line).to_owned()),
             );
         }
@@ -239,10 +234,10 @@ impl LogSession {
 
     /// Appends the lines of `rows` not yet logged, unbuffered: the file is
     /// whole after each batch.
-    fn write_new_lines(&mut self, rows: &[TimelineRow], strip_codes: bool) -> io::Result<()> {
+    fn write_new_lines(&mut self, rows: &[TimelineRow]) -> io::Result<()> {
         let text = self
             .diff
-            .lines(rows, strip_codes)
+            .lines(rows)
             .into_iter()
             .map(|line| line + "\r\n")
             .collect::<String>();
@@ -407,7 +402,6 @@ pub(super) fn write_view_log(state: &mut WindowState, view_id: &ViewId) {
         return;
     }
     let rows = log_rows(state, view_id);
-    let strip_codes = state.settings.settings().logging.strip_codes;
     let view = state
         .views
         .get_mut(view_id)
@@ -415,7 +409,7 @@ pub(super) fn write_view_log(state: &mut WindowState, view_id: &ViewId) {
     let ViewLog::On(session) = &mut view.log else {
         unreachable!("the window logs")
     };
-    if let Err(error) = session.write_new_lines(&rows, strip_codes) {
+    if let Err(error) = session.write_new_lines(&rows) {
         let line = format!("* Logging stopped: {}: {error}", session.path().display());
         view.log = ViewLog::Off;
         echo_lines_in_view(state, view_id, [line]);
@@ -577,7 +571,7 @@ mod tests {
         ];
         let mut session =
             LogSession::start(path.clone(), "Rust (#rust:x)", 0, clock, utc_local_time).unwrap();
-        session.write_new_lines(&rows, false).unwrap();
+        session.write_new_lines(&rows).unwrap();
         drop(session);
         let session =
             LogSession::start(path.clone(), "Rust (#rust:x)", 2, clock, utc_local_time).unwrap();
@@ -612,25 +606,25 @@ mod tests {
             TimelineRow::full_width(TimelineRowKind::Plain, "context".to_owned()),
             line(FROM, "at the start"),
         ];
-        assert_eq!(diff.lines(&rows, false), ["at the start"]);
-        assert!(diff.lines(&rows, false).is_empty());
+        assert_eq!(diff.lines(&rows), ["at the start"]);
+        assert!(diff.lines(&rows).is_empty());
         rows.push(line(FROM + 5, "two\r\nlines"));
         // The same line again, restamped: still logged once.
         rows[2].logical_text = "[10:00] at the start".to_owned();
-        assert_eq!(diff.lines(&rows, false), ["two", "lines"]);
+        assert_eq!(diff.lines(&rows), ["two", "lines"]);
     }
 
     #[test]
     fn a_dropped_line_is_forgotten_and_its_history_copy_not_written() {
         let mut diff = LogDiff::new(FROM);
         let rows = vec![line(FROM, "old"), line(FROM + 1, "new")];
-        assert_eq!(diff.lines(&rows, false), ["old", "new"]);
+        assert_eq!(diff.lines(&rows), ["old", "new"]);
         // The window buffer drops the old line.
-        assert!(diff.lines(&rows[1..], false).is_empty());
+        assert!(diff.lines(&rows[1..]).is_empty());
         assert_eq!(diff.written.len(), 1);
         // Scrolling back loads it again, as history: not written again.
         let history = rows[0].clone().arrived(None);
-        assert!(diff.lines(&[history, rows[1].clone()], false).is_empty());
+        assert!(diff.lines(&[history, rows[1].clone()]).is_empty());
     }
 
     #[test]
@@ -643,7 +637,7 @@ mod tests {
             Vec::new(),
         )
         .arrived(None);
-        assert!(diff.lines(&[history], false).is_empty());
+        assert!(diff.lines(&[history]).is_empty());
     }
 
     fn message_row(
@@ -683,7 +677,7 @@ mod tests {
                 crate::win32::colors::PaletteIndex::new(4).unwrap(),
             )),
         });
-        assert_eq!(LogDiff::new(FROM).lines(&[row], false), ["<bob> hi"]);
+        assert_eq!(LogDiff::new(FROM).lines(&[row]), ["<bob> hi"]);
     }
 
     #[test]
@@ -695,7 +689,7 @@ mod tests {
             "* alice sent an encrypted message that could not be decrypted",
             Vec::new(),
         );
-        assert_eq!(diff.lines(&[undecrypted], false).len(), 1);
+        assert_eq!(diff.lines(&[undecrypted]).len(), 1);
         // The same activity, decrypted in place: the log keeps what the
         // window showed when the line arrived.
         let decrypted = message_row(
@@ -704,7 +698,7 @@ mod tests {
             "<alice> the plan",
             Vec::new(),
         );
-        assert!(diff.lines(&[decrypted], false).is_empty());
+        assert!(diff.lines(&[decrypted]).is_empty());
     }
 
     #[test]
@@ -722,19 +716,19 @@ mod tests {
             "<me> lost",
             Vec::new(),
         );
-        assert!(diff.lines(&[pending, failed], false).is_empty());
+        assert!(diff.lines(&[pending, failed]).is_empty());
         let sent = message_row(
             "event:$1",
             TimelineMessageSendState::Sent,
             "<me> hi",
             Vec::new(),
         );
-        assert_eq!(diff.lines(std::slice::from_ref(&sent), false), ["<me> hi"]);
-        assert!(diff.lines(&[sent], false).is_empty());
+        assert_eq!(diff.lines(std::slice::from_ref(&sent)), ["<me> hi"]);
+        assert!(diff.lines(&[sent]).is_empty());
     }
 
     #[test]
-    fn formatting_is_written_as_codes_unless_stripped() {
+    fn formatting_is_never_written() {
         let bold = vec![TextStyleSpan {
             start: 5,
             end: 9,
@@ -749,10 +743,6 @@ mod tests {
             "<me> bold",
             bold,
         );
-        assert_eq!(
-            LogDiff::new(FROM).lines(std::slice::from_ref(&row), false),
-            ["<me> \u{2}bold"]
-        );
-        assert_eq!(LogDiff::new(FROM).lines(&[row], true), ["<me> bold"]);
+        assert_eq!(LogDiff::new(FROM).lines(&[row]), ["<me> bold"]);
     }
 }

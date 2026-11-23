@@ -23,7 +23,7 @@ dpi144_prefix=
 # as <case>-dpi144 with their own baselines: the base case's state and
 # expectations, the default frame size (scaled, clamped to the screen) and
 # --expect-dpi 144.
-dpi144_cases=(multi-room image-message-loaded room-list-listing compose-color-index
+dpi144_cases=(multi-room image-message-loaded room-list-listing
   dialog-options-display dialog-options-chat dialog-colors dialog-sign-out-session dialog-log-out
   dialog-export-room-keys dialog-address-book-notify dialog-address-book-colors toolbar-connected
   line-marker dialog-channel-central dialog-sessions)
@@ -529,11 +529,15 @@ configure_case_expectations() {
       )
       ;;
 
-    # Ctrl+K over the editbox of a small room window: the colour index.
-    compose-color-index)
+    # Markdown typed in the editbox of a small room window, and the same
+    # message received as Matrix HTML.
+    compose-markdown)
       expect_selected='!topic:example'
       expect_active_view='room:!topic:example'
-      ordered_actions=('compose-text:the fix is ' compose-key:color)
+      room_view_expect_args=(
+        --expect-room-view '!topic:example::[22:14] <Alice> release is today'
+      )
+      ordered_actions=('compose-text:**release** is *today*')
       ;;
 
     multi-room)
