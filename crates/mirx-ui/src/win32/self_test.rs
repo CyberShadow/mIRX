@@ -75,6 +75,7 @@ pub(super) unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 notification_mode: Some(RoomNotificationMode::AllMessages),
                 canonical_alias: None,
                 alt_aliases: Vec::new(),
+                invite: None,
             },
             RoomSummary {
                 room_id: "!two:example".to_owned(),
@@ -90,6 +91,7 @@ pub(super) unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 notification_mode: Some(RoomNotificationMode::AllMessages),
                 canonical_alias: None,
                 alt_aliases: Vec::new(),
+                invite: None,
             },
         ]),
         Event::RoomActivity(Box::new(RoomActivity {

@@ -68,6 +68,7 @@ fn space(room_id: &str, display_name: &str, children: Vec<&str>) -> RoomSummary 
         notification_mode: Some(RoomNotificationMode::AllMessages),
         canonical_alias: None,
         alt_aliases: Vec::new(),
+        invite: None,
     }
 }
 
@@ -92,6 +93,7 @@ fn room(room_id: &str, display_name: &str) -> RoomSummary {
         notification_mode: Some(RoomNotificationMode::AllMessages),
         canonical_alias: None,
         alt_aliases: Vec::new(),
+        invite: None,
     }
 }
 

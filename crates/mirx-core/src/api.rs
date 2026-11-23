@@ -818,6 +818,22 @@ pub struct RoomSummary {
     pub canonical_alias: Option<String>,
     /// `m.room.canonical_alias`'s `alt_aliases`, in event order.
     pub alt_aliases: Vec<String>,
+    /// Who invited the user and how: `Some` exactly for
+    /// [`RoomMembership::Invite`].
+    pub invite: Option<RoomInviteSummary>,
+}
+
+/// An invite as the invitee's own `m.room.member` invite event tells it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomInviteSummary {
+    /// The invite event's sender, with the nick the invite's stripped state
+    /// gives them (`None` when it carries no member event for them).
+    pub inviter: RoomUserProfile,
+    /// The invite event's `is_direct`: an invite to a direct room. Unlike
+    /// [`RoomSummary::is_direct`], this does not need `m.direct`, which the
+    /// invitee's account has no entry in yet.
+    pub direct: bool,
 }
 
 /// A joined room's effective notification mode under the user's push
@@ -851,6 +867,7 @@ impl<'de> serde::Deserialize<'de> for RoomSummary {
             notification_mode: serde_json::Value,
             canonical_alias: serde_json::Value,
             alt_aliases: Vec<String>,
+            invite: Option<RoomInviteSummary>,
         }
 
         let room = WireRoomSummary::deserialize(deserializer)?;
@@ -895,6 +912,20 @@ impl<'de> serde::Deserialize<'de> for RoomSummary {
             }
         };
 
+        match (room.membership, &room.invite) {
+            (RoomMembership::Join, None) | (RoomMembership::Invite, Some(_)) => {}
+            (membership, invite) => {
+                return Err(serde::de::Error::custom(format!(
+                    "invalid invite for {membership:?} room {}: expected {}, got {invite:?}",
+                    room.room_id,
+                    match membership {
+                        RoomMembership::Join => "none",
+                        RoomMembership::Invite => "an invite",
+                    }
+                )));
+            }
+        }
+
         Ok(Self {
             room_id: room.room_id,
             display_name: room.display_name,
@@ -909,6 +940,7 @@ impl<'de> serde::Deserialize<'de> for RoomSummary {
             notification_mode,
             canonical_alias,
             alt_aliases: room.alt_aliases,
+            invite: room.invite,
         })
     }
 }

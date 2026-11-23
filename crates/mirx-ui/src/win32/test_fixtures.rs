@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use mirx_core::{RoomMemberRank, RoomStateNoticeActivity};
+use mirx_core::{RoomInviteSummary, RoomMemberRank, RoomStateNoticeActivity, RoomUserProfile};
 
 use super::*;
 
@@ -48,6 +48,7 @@ pub(super) fn room(room_id: &str, display_name: &str, encrypted: bool) -> RoomSu
         notification_mode: Some(RoomNotificationMode::AllMessages),
         canonical_alias: None,
         alt_aliases: Vec::new(),
+        invite: None,
     }
 }
 
@@ -66,6 +67,14 @@ pub(super) fn invited_room(room_id: &str, display_name: &str) -> RoomSummary {
         notification_mode: None,
         canonical_alias: None,
         alt_aliases: Vec::new(),
+        invite: Some(RoomInviteSummary {
+            inviter: RoomUserProfile {
+                user_id: "@bob:example".to_owned(),
+                nick: Some("Bob".to_owned()),
+                nick_ambiguous: false,
+            },
+            direct: false,
+        }),
     }
 }
 
@@ -84,6 +93,7 @@ pub(super) fn space(room_id: &str, display_name: &str) -> RoomSummary {
         notification_mode: Some(RoomNotificationMode::AllMessages),
         canonical_alias: None,
         alt_aliases: Vec::new(),
+        invite: None,
     }
 }
 

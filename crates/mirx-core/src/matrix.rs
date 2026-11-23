@@ -149,21 +149,21 @@ use crate::api::{
     RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
     RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomEventFetch,
     RoomEventFetchResult, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
-    RoomHistoryBackfillEvent, RoomIdentityChanges, RoomImageActivity, RoomImageInfo, RoomJoinRule,
-    RoomKeysAtRisk, RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange,
-    RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomPollActivity,
-    RoomPollContent, RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    RoomUnableToDecryptActivity, RoomUnableToDecryptCause, RoomUserProfile,
-    RoomVerificationRequestActivity, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
-    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
-    SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest, SetRoomNotificationModeRequest,
-    SetRoomTopicRequest, SetTypingRequest, SetupE2eeRecoveryRequest, SpaceChildSummary,
-    StoredSession, SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity,
-    UserDevices, UserIdentityState, UserPresence, UserProfile, VerificationDecimals,
-    VerificationDirection, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent,
+    RoomHistoryBackfillEvent, RoomIdentityChanges, RoomImageActivity, RoomImageInfo,
+    RoomInviteSummary, RoomJoinRule, RoomKeysAtRisk, RoomMedia, RoomMediaFormat, RoomMediaKind,
+    RoomMediaSource, RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers,
+    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomNotificationMode, RoomPollActivity, RoomPollContent, RoomPowerLevelUserChange,
+    RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity, RoomUnableToDecryptCause,
+    RoomUserProfile, RoomVerificationRequestActivity, RoomVideoActivity, RoomVideoInfo,
+    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
+    SendReactionRequest, SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest,
+    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetTypingRequest,
+    SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, SyncStopReason,
+    UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserDevices, UserIdentityState,
+    UserPresence, UserProfile, VerificationDecimals, VerificationDirection, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::api::{
     PresenceChange, PresenceKind, TextStyleSpan, UserLinkSpan, check_text_styles,
@@ -713,7 +713,20 @@ fn room_tag_summaries_from_tags(tags: Option<Tags>) -> Vec<RoomTagSummary> {
         .collect()
 }
 
+/// The rooms as the store has them now. A room whose membership changes
+/// while it is being read (an invite accepted on another lane) makes the
+/// read start over, so the list is the rooms of one moment.
 pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>, MatrixCoreError> {
+    loop {
+        if let Some(rooms) = read_rooms(client).await? {
+            return Ok(rooms);
+        }
+    }
+}
+
+/// [`summarize_rooms`]'s one read: `None` when an invite it listed stopped
+/// being one before it was read.
+async fn read_rooms(client: &Client) -> Result<Option<Vec<RoomSummary>>, MatrixCoreError> {
     let direct_content = client
         .account()
         .account_data::<DirectEventContent>()
@@ -781,6 +794,7 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
             notification_mode: Some(notification_mode),
             canonical_alias: room.canonical_alias().map(|alias| alias.to_string()),
             alt_aliases: alias_strings(room.alt_aliases()),
+            invite: None,
         });
     }
 
@@ -796,6 +810,9 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
             .get(room.room_id().as_str())
             .cloned()
             .unwrap_or_default();
+        let Some(invite) = room_invite_summary(&room).await? else {
+            return Ok(None);
+        };
 
         invited_summaries.push(RoomSummary {
             room_id: room.room_id().to_string(),
@@ -811,6 +828,7 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
             notification_mode: None,
             canonical_alias: room.canonical_alias().map(|alias| alias.to_string()),
             alt_aliases: alias_strings(room.alt_aliases()),
+            invite: Some(invite),
         });
     }
     invited_summaries.sort_by(|left, right| {
@@ -820,7 +838,33 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
     });
     rooms.extend(invited_summaries);
 
-    Ok(rooms)
+    Ok(Some(rooms))
+}
+
+/// Who invited the user to `room` and whether to a direct room, from the
+/// invite's stripped state in the store (no request). `None` when the room
+/// is no longer an invite.
+async fn room_invite_summary(room: &Room) -> Result<Option<RoomInviteSummary>, MatrixCoreError> {
+    let details = match room.invite_details().await {
+        Ok(details) => details,
+        Err(matrix_sdk::Error::WrongRoomState(_)) => return Ok(None),
+        Err(err) => {
+            return Err(MatrixCoreError::new(format!(
+                "failed to read the invite to {}: {err}",
+                room.room_id()
+            )));
+        }
+    };
+    let direct = room.is_direct().await.map_err(|err| {
+        MatrixCoreError::new(format!(
+            "failed to read whether the invite to {} is direct: {err}",
+            room.room_id()
+        ))
+    })?;
+    Ok(Some(RoomInviteSummary {
+        inviter: member_profile(&details.inviter_id, details.inviter.as_ref()),
+        direct,
+    }))
 }
 
 fn alias_strings(aliases: Vec<OwnedRoomAliasId>) -> Vec<String> {
@@ -2171,7 +2215,15 @@ async fn room_user_profile(
             room.room_id()
         ))
     })?;
-    Ok(match member {
+    Ok(member_profile(user_id, member.as_ref()))
+}
+
+/// `user_id`'s profile from their member in the store, if it has one.
+fn member_profile(
+    user_id: &UserId,
+    member: Option<&matrix_sdk::room::RoomMember>,
+) -> RoomUserProfile {
+    match member {
         Some(member) => RoomUserProfile {
             user_id: user_id.to_string(),
             nick: Some(member_nick(member.display_name(), user_id).to_owned()),
@@ -2182,7 +2234,7 @@ async fn room_user_profile(
             nick: None,
             nick_ambiguous: false,
         },
-    })
+    }
 }
 
 /// Builds the profile of a membership event's target from the nick that
@@ -14264,7 +14316,7 @@ mod tests {
                         .add_joined_room(JoinedRoomBuilder::new(&muted))
                         .add_joined_room(JoinedRoomBuilder::new(&mentions))
                         .add_joined_room(JoinedRoomBuilder::new(&default))
-                        .add_invited_room(InvitedRoomBuilder::new(&invite))
+                        .add_invited_room(invited_by_bob(&client, &invite))
                         .add_custom_global_account_data(rules);
                 })
                 .await;
@@ -14285,6 +14337,22 @@ mod tests {
                 ]
             );
         });
+    }
+
+    /// An invite to `room_id` as a server sends it: its stripped state holds
+    /// the client's own `m.room.member` invite, here from Bob.
+    fn invited_by_bob(client: &Client, room_id: &RoomId) -> InvitedRoomBuilder {
+        InvitedRoomBuilder::new(room_id).add_state_event(
+            serde_json::from_value::<Raw<matrix_sdk::ruma::events::AnyStrippedStateEvent>>(
+                serde_json::json!({
+                    "type": "m.room.member",
+                    "state_key": client.user_id().expect("own user id"),
+                    "sender": "@bob:example.org",
+                    "content": { "membership": "invite" },
+                }),
+            )
+            .expect("stripped member event"),
+        )
     }
 
     /// A server refuses an invitee the room's state, so an invite's
@@ -14325,9 +14393,9 @@ mod tests {
                 .ok_and_run(&client, |builder| {
                     builder
                         .add_invited_room(
-                            InvitedRoomBuilder::new(&encrypted).add_state_event(encryption),
+                            invited_by_bob(&client, &encrypted).add_state_event(encryption),
                         )
-                        .add_invited_room(InvitedRoomBuilder::new(&plain));
+                        .add_invited_room(invited_by_bob(&client, &plain));
                 })
                 .await;
 
@@ -14341,6 +14409,96 @@ mod tests {
                 vec![
                     (encrypted.as_str(), crate::RoomMembership::Invite, true),
                     (plain.as_str(), crate::RoomMembership::Invite, false),
+                ]
+            );
+        });
+    }
+
+    /// An invite names its inviter from the invite's stripped state, and is
+    /// direct when the invitee's own member event says so; no request goes
+    /// out (the mock serves no members).
+    #[test]
+    fn summarize_rooms_names_an_invites_inviter_and_whether_it_is_direct() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_room_state_encryption()
+                .plain()
+                .mount()
+                .await;
+            let own = client.user_id().expect("own user id").to_string();
+            let stripped =
+                |value: serde_json::Value| -> Raw<matrix_sdk::ruma::events::AnyStrippedStateEvent> {
+                    serde_json::from_value(value).expect("stripped state event")
+                };
+            let room = OwnedRoomId::try_from("!a-room:example.org").expect("room id");
+            let direct = OwnedRoomId::try_from("!b-direct:example.org").expect("room id");
+            let joined = OwnedRoomId::try_from("!c-joined:example.org").expect("room id");
+
+            mock_server
+                .mock_sync()
+                .ok_and_run(&client, |builder| {
+                    builder
+                        .add_invited_room(InvitedRoomBuilder::new(&room).add_state_bulk([
+                            stripped(serde_json::json!({
+                                "type": "m.room.member",
+                                "state_key": "@bob:example.org",
+                                "sender": "@bob:example.org",
+                                "content": { "membership": "join", "displayname": "Bob" },
+                            })),
+                            stripped(serde_json::json!({
+                                "type": "m.room.member",
+                                "state_key": own,
+                                "sender": "@bob:example.org",
+                                "content": { "membership": "invite" },
+                            })),
+                        ]))
+                        .add_invited_room(InvitedRoomBuilder::new(&direct).add_state_event(
+                            stripped(serde_json::json!({
+                                "type": "m.room.member",
+                                "state_key": own,
+                                "sender": "@carol:example.org",
+                                "content": { "membership": "invite", "is_direct": true },
+                            })),
+                        ))
+                        .add_joined_room(JoinedRoomBuilder::new(&joined));
+                })
+                .await;
+
+            let mut rooms = summarize_rooms(&client).await.expect("summarize rooms");
+            rooms.sort_by(|left, right| left.room_id.cmp(&right.room_id));
+            let profile = |user_id: &str, nick: Option<&str>| RoomUserProfile {
+                user_id: user_id.to_owned(),
+                nick: nick.map(str::to_owned),
+                nick_ambiguous: false,
+            };
+            assert_eq!(
+                rooms
+                    .iter()
+                    .map(|room| (room.room_id.as_str(), room.invite.clone()))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (
+                        room.as_str(),
+                        Some(crate::RoomInviteSummary {
+                            inviter: profile("@bob:example.org", Some("Bob")),
+                            direct: false,
+                        })
+                    ),
+                    (
+                        direct.as_str(),
+                        Some(crate::RoomInviteSummary {
+                            inviter: profile("@carol:example.org", None),
+                            direct: true,
+                        })
+                    ),
+                    (joined.as_str(), None),
                 ]
             );
         });
@@ -14600,7 +14758,7 @@ mod tests {
                                 &["#hall:example.org", "#ops:other.org"],
                             ),
                         ))
-                        .add_invited_room(InvitedRoomBuilder::new(&invite));
+                        .add_invited_room(invited_by_bob(&client, &invite));
                 })
                 .await;
 

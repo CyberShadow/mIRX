@@ -88,6 +88,7 @@ fn room_summary(index: usize, display_name: &str) -> RoomSummary {
         notification_mode: Some(RoomNotificationMode::AllMessages),
         canonical_alias: None,
         alt_aliases: Vec::new(),
+        invite: None,
     }
 }
 

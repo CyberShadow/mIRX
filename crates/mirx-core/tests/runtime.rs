@@ -1865,6 +1865,7 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
             notification_mode: Some(RoomNotificationMode::AllMessages),
             canonical_alias: None,
             alt_aliases: Vec::new(),
+            invite: None,
         },
         RoomSummary {
             room_id: "!alpha:example.org".to_owned(),
@@ -1880,6 +1881,7 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
             notification_mode: Some(RoomNotificationMode::AllMessages),
             canonical_alias: None,
             alt_aliases: Vec::new(),
+            invite: None,
         },
         RoomSummary {
             room_id: "!beta:example.org".to_owned(),
@@ -1895,6 +1897,7 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
             notification_mode: Some(RoomNotificationMode::AllMessages),
             canonical_alias: None,
             alt_aliases: Vec::new(),
+            invite: None,
         },
         RoomSummary {
             room_id: "!lobby:example.org".to_owned(),
@@ -1910,13 +1913,14 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
             notification_mode: Some(RoomNotificationMode::AllMessages),
             canonical_alias: None,
             alt_aliases: Vec::new(),
+            invite: None,
         },
     ]);
 
     let json = serde_json::to_string(&event).expect("serialize synced rooms");
     assert_eq!(
         json,
-        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","topic":null,"membership":"join","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!alpha:example.org","suggested":true,"order":"aaa"},{"room_id":"!beta:example.org","suggested":false,"order":null}],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]},{"room_id":"!alpha:example.org","display_name":"Alpha","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]},{"room_id":"!beta:example.org","display_name":"Beta","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]},{"room_id":"!lobby:example.org","display_name":"Lobby","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]}"#
+        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","topic":null,"membership":"join","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!alpha:example.org","suggested":true,"order":"aaa"},{"room_id":"!beta:example.org","suggested":false,"order":null}],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[],"invite":null},{"room_id":"!alpha:example.org","display_name":"Alpha","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[],"invite":null},{"room_id":"!beta:example.org","display_name":"Beta","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[],"invite":null},{"room_id":"!lobby:example.org","display_name":"Lobby","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[],"invite":null}]}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize synced rooms");
@@ -1937,7 +1941,7 @@ fn room_summary_and_space_child_reject_unknown_fields() {
     );
 
     let child_error = serde_json::from_str::<Event>(
-        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","topic":null,"membership":"join","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!alpha:example.org","suggested":true,"order":"aaa","unexpected":true}],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]}"#,
+        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","topic":null,"membership":"join","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!alpha:example.org","suggested":true,"order":"aaa","unexpected":true}],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[],"invite":null}]}"#,
     )
     .expect_err("space child summary must reject unknown fields");
     assert!(
@@ -1951,19 +1955,38 @@ fn room_summary_and_space_child_reject_unknown_fields() {
 #[test]
 fn room_summary_requires_explicit_topic_field() {
     let error = serde_json::from_str::<Event>(
-        r#"{"SyncedRooms":[{"room_id":"!ops:example.org","display_name":"Ops","membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]}"#,
+        r#"{"SyncedRooms":[{"room_id":"!ops:example.org","display_name":"Ops","membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[],"invite":null}]}"#,
     )
     .expect_err("room summary without topic must be rejected");
 
     assert!(error.to_string().contains("missing field `topic`"));
 }
 
+/// An invite from Bob, as `RoomSummary.invite`'s JSON.
+const BOB_INVITE_JSON: &str = r#"{"inviter":{"user_id":"@bob:example.org","nick":"Bob","nick_ambiguous":false},"direct":false}"#;
+
+/// One room of `membership` with the `invite` its membership needs.
 fn synced_room_json(membership: &str, notification_mode: Option<&str>) -> String {
+    let invite = match membership {
+        "join" => "null",
+        "invite" => BOB_INVITE_JSON,
+        membership => panic!("no such membership: {membership}"),
+    };
+    synced_room_json_with_invite(membership, notification_mode, Some(invite))
+}
+
+/// One room of `membership`; `None` leaves out the key it names.
+fn synced_room_json_with_invite(
+    membership: &str,
+    notification_mode: Option<&str>,
+    invite: Option<&str>,
+) -> String {
     let mode = notification_mode.map_or_else(String::new, |mode| {
         format!(r#","notification_mode":{mode}"#)
     });
+    let invite = invite.map_or_else(String::new, |invite| format!(r#","invite":{invite}"#));
     format!(
-        r#"{{"SyncedRooms":[{{"room_id":"!ops:example.org","display_name":"Ops","topic":null,"membership":"{membership}","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]{mode},"canonical_alias":null,"alt_aliases":[]}}]}}"#
+        r#"{{"SyncedRooms":[{{"room_id":"!ops:example.org","display_name":"Ops","topic":null,"membership":"{membership}","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]{mode},"canonical_alias":null,"alt_aliases":[]{invite}}}]}}"#
     )
 }
 
@@ -2077,6 +2100,65 @@ fn room_summary_notification_mode_is_required_and_matches_membership() {
 }
 
 #[test]
+fn room_summary_invite_is_there_exactly_for_an_invite() {
+    let joined_invite = serde_json::from_str::<Event>(&synced_room_json_with_invite(
+        "join",
+        Some(r#""all_messages""#),
+        Some(BOB_INVITE_JSON),
+    ))
+    .expect_err("a joined room with an invite must be rejected");
+    assert!(
+        joined_invite
+            .to_string()
+            .contains("invalid invite for Join room !ops:example.org: expected none, got Some("),
+        "{joined_invite}"
+    );
+
+    for invite in [None, Some("null")] {
+        let missing = serde_json::from_str::<Event>(&synced_room_json_with_invite(
+            "invite",
+            Some("null"),
+            invite,
+        ))
+        .expect_err("an invite without one must be rejected");
+        assert!(
+            missing.to_string().contains(
+                "invalid invite for Invite room !ops:example.org: expected an invite, got None"
+            ),
+            "{missing}"
+        );
+    }
+
+    let Event::SyncedRooms(joined) = serde_json::from_str::<Event>(&synced_room_json_with_invite(
+        "join",
+        Some(r#""all_messages""#),
+        None,
+    ))
+    .expect("a joined room without the key") else {
+        panic!("expected SyncedRooms");
+    };
+    assert_eq!(joined[0].invite, None);
+
+    let Event::SyncedRooms(invites) =
+        serde_json::from_str::<Event>(&synced_room_json("invite", Some("null")))
+            .expect("an invite with one")
+    else {
+        panic!("expected SyncedRooms");
+    };
+    assert_eq!(
+        invites[0].invite,
+        Some(mirx_core::RoomInviteSummary {
+            inviter: mirx_core::RoomUserProfile {
+                user_id: "@bob:example.org".to_owned(),
+                nick: Some("Bob".to_owned()),
+                nick_ambiguous: false,
+            },
+            direct: false,
+        })
+    );
+}
+
+#[test]
 fn room_notification_modes_round_trip_by_snake_case_name() {
     for (mode, name) in [
         (RoomNotificationMode::AllMessages, "all_messages"),
@@ -2128,12 +2210,13 @@ fn flat_room_summary_payload_round_trips_with_explicit_space_defaults() {
         notification_mode: Some(RoomNotificationMode::AllMessages),
         canonical_alias: None,
         alt_aliases: Vec::new(),
+        invite: None,
     }]);
 
     let json = serde_json::to_string(&event).expect("serialize flat synced rooms");
     assert_eq!(
         json,
-        r#"{"SyncedRooms":[{"room_id":"!ops:example.org","display_name":"Ops","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]}"#
+        r#"{"SyncedRooms":[{"room_id":"!ops:example.org","display_name":"Ops","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[],"invite":null}]}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize flat synced rooms");
@@ -2165,12 +2248,13 @@ fn synced_rooms_event_round_trips_account_data_metadata_payload() {
         notification_mode: Some(RoomNotificationMode::AllMessages),
         canonical_alias: None,
         alt_aliases: Vec::new(),
+        invite: None,
     }]);
 
     let json = serde_json::to_string(&event).expect("serialize synced rooms");
     assert_eq!(
         json,
-        r#"{"SyncedRooms":[{"room_id":"!dm:example.org","display_name":"Alice","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example.org"],"tags":[{"tag":"m.favourite","order":"0.25"},{"tag":"u.work","order":null}],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]}"#
+        r#"{"SyncedRooms":[{"room_id":"!dm:example.org","display_name":"Alice","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example.org"],"tags":[{"tag":"m.favourite","order":"0.25"},{"tag":"u.work","order":null}],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[],"invite":null}]}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize synced rooms");

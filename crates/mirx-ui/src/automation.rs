@@ -4648,6 +4648,7 @@ mod tests {
                             notification_mode: Some(RoomNotificationMode::AllMessages),
                             canonical_alias: None,
                             alt_aliases: Vec::new(),
+                            invite: None,
                         }]),
                         Event::RoomActivity(Box::new(RoomActivity {
                             room_id: "!room:example".to_owned(),
@@ -5392,6 +5393,7 @@ mod tests {
                 notification_mode: Some(RoomNotificationMode::AllMessages),
                 canonical_alias: None,
                 alt_aliases: Vec::new(),
+                invite: None,
             }]),
             Event::VerificationRequest(VerificationRequest {
                 flow_id: "flow-1".to_owned(),
@@ -8398,6 +8400,7 @@ mod tests {
                 notification_mode: Some(RoomNotificationMode::AllMessages),
                 canonical_alias: None,
                 alt_aliases: Vec::new(),
+                invite: None,
             }),
             super::DumpRoom {
                 room_id: "!room:example".to_owned(),

@@ -119,6 +119,7 @@ mod tests {
                 .skip(1)
                 .map(|alias| (*alias).to_owned())
                 .collect(),
+            invite: None,
         }
     }
 

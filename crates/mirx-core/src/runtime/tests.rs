@@ -9,8 +9,9 @@ use crate::api::{
     AcceptRoomInviteRequest, AwayChanged, BanRoomMemberRequest, Command, CreateDirectRoomRequest,
     CreateRoomRequest, CreateRoomVisibility, Event, ExportRoomKeysRequest, HighlightWord,
     JoinRoomRequest, KickRoomMemberRequest, LoginMethod, LoginRequest, Operation, PresenceChange,
-    PresenceKind, RestoreSessionRequest, RoomJoined, RoomMemberRank, RoomMemberSummary,
-    RoomMembers, RoomMembership, RoomNotificationMode, RoomReadState, RoomSummary, SyncStopReason,
+    PresenceKind, RestoreSessionRequest, RoomInviteSummary, RoomJoined, RoomMemberRank,
+    RoomMemberSummary, RoomMembers, RoomMembership, RoomNotificationMode, RoomReadState,
+    RoomSummary, RoomUserProfile, SyncStopReason,
 };
 use crate::api::{CommandId, CoreConfig};
 use crate::api::{
@@ -591,6 +592,17 @@ fn room_summary(room_id: &str, display_name: &str, membership: RoomMembership) -
         },
         canonical_alias: None,
         alt_aliases: Vec::new(),
+        invite: match membership {
+            RoomMembership::Join => None,
+            RoomMembership::Invite => Some(RoomInviteSummary {
+                inviter: RoomUserProfile {
+                    user_id: "@bob:example.org".to_owned(),
+                    nick: None,
+                    nick_ambiguous: false,
+                },
+                direct: false,
+            }),
+        },
     }
 }
 

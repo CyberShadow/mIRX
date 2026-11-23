@@ -96,6 +96,7 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
         notification_mode: Some(RoomNotificationMode::AllMessages),
         canonical_alias: None,
         alt_aliases: Vec::new(),
+        invite: None,
     }
 }
 

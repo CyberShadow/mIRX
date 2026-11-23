@@ -17,12 +17,13 @@ use mirx_core::{
     HighlightWord, IdentityChange, IdentityTrust, RoomActivity as CoreRoomActivity,
     RoomActivityKind as CoreRoomActivityKind, RoomActivityRelation as CoreRoomActivityRelation,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomHistoryBackfill,
-    RoomHistoryBackfillEvent, RoomIdentityChanges, RoomJoined, RoomMedia as CoreRoomMedia,
-    RoomMediaFormat as CoreRoomMediaFormat, RoomMediaKind as CoreRoomMediaKind, RoomMemberRank,
-    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity as CoreRoomMessageActivity,
+    RoomHistoryBackfillEvent, RoomIdentityChanges, RoomInviteSummary, RoomJoined,
+    RoomMedia as CoreRoomMedia, RoomMediaFormat as CoreRoomMediaFormat,
+    RoomMediaKind as CoreRoomMediaKind, RoomMemberRank, RoomMemberSummary, RoomMembers,
+    RoomMembership, RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomNotificationMode, RoomSummary,
-    RoomTyping, SessionAuth as CoreSessionAuth, SpaceChildSummary,
+    RoomTyping, RoomUserProfile, SessionAuth as CoreSessionAuth, SpaceChildSummary,
     StoredSession as CoreStoredSession, UserDevices, UserIdentityState, UserProfile,
     VerificationDecimals as CoreVerificationDecimals, VerificationDirection,
     VerificationEmoji as CoreVerificationEmoji, VerificationState as CoreVerificationState,
@@ -1474,6 +1475,19 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
         notification_mode: Some(RoomNotificationMode::AllMessages),
         canonical_alias: None,
         alt_aliases: Vec::new(),
+        invite: None,
+    }
+}
+
+/// An invite to a group room from Bob, whose member event it carries.
+fn bob_invite() -> RoomInviteSummary {
+    RoomInviteSummary {
+        inviter: RoomUserProfile {
+            user_id: "@bob:example".to_owned(),
+            nick: Some("Bob".to_owned()),
+            nick_ambiguous: false,
+        },
+        direct: false,
     }
 }
 
@@ -1483,6 +1497,7 @@ fn invited_room_summary(room_id: &str, display_name: &str, encrypted: bool) -> R
         notification_mode: None,
         canonical_alias: None,
         alt_aliases: Vec::new(),
+        invite: Some(bob_invite()),
         ..room_summary(room_id, display_name, encrypted)
     }
 }
@@ -1506,6 +1521,7 @@ fn joined_space_summary(
         notification_mode: Some(RoomNotificationMode::AllMessages),
         canonical_alias: None,
         alt_aliases: Vec::new(),
+        invite: None,
     }
 }
 
@@ -1519,6 +1535,7 @@ fn invited_space_summary(
         notification_mode: None,
         canonical_alias: None,
         alt_aliases: Vec::new(),
+        invite: Some(bob_invite()),
         ..joined_space_summary(room_id, display_name, children)
     }
 }
@@ -3732,6 +3749,7 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
                 notification_mode: Some(RoomNotificationMode::AllMessages),
                 canonical_alias: None,
                 alt_aliases: Vec::new(),
+                invite: None,
             },
             room_summary("!room:example", "Room", true),
         ]),
@@ -22850,6 +22868,7 @@ fn automation_driver_slash_query_opens_existing_direct_room_match()
                 notification_mode: Some(RoomNotificationMode::AllMessages),
                 canonical_alias: None,
                 alt_aliases: Vec::new(),
+                invite: None,
             },
         ]),
         text_event(
@@ -22919,6 +22938,7 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
                 notification_mode: Some(RoomNotificationMode::AllMessages),
                 canonical_alias: None,
                 alt_aliases: Vec::new(),
+                invite: None,
             },
             RoomSummary {
                 room_id: "!direct-two:example".to_owned(),
@@ -22934,6 +22954,7 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
                 notification_mode: Some(RoomNotificationMode::AllMessages),
                 canonical_alias: None,
                 alt_aliases: Vec::new(),
+                invite: None,
             },
         ]),
         text_event(

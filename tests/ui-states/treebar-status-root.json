@@ -115,7 +115,8 @@
         "notification_mode": null,
         "canonical_alias": null,
         "alt_aliases": [],
-        "membership": "invite"
+        "membership": "invite",
+        "invite": {"inviter": {"user_id": "@bob:example", "nick": "Bob", "nick_ambiguous": false}, "direct": false}
       }
     ]
   },

@@ -30,7 +30,8 @@
         "space_children": [],
         "notification_mode": null,
         "canonical_alias": null,
-        "alt_aliases": []
+        "alt_aliases": [],
+        "invite": {"inviter": {"user_id": "@daria:example", "nick": "Daria", "nick_ambiguous": false}, "direct": true}
       }
     ]
   },
