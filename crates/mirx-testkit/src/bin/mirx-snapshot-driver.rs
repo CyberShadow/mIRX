@@ -127,6 +127,9 @@ mod cli {
         /// the user does: the item drop-down, a click on the palette box
         /// and OK.
         Colors(Vec<(String, u8)>),
+        /// Checks or clears Options checkboxes, by control ID, as the user
+        /// does, and presses OK.
+        OptionsChecks(Vec<(u16, bool)>),
         /// Opens a dialog, and for Options shows the page at the tree path.
         /// The dialog disables the frame, so this is the last action.
         Dialog {
@@ -832,7 +835,8 @@ mod cli {
             "  --trigger-history-backfill",
             "  --append-events <path>",
             "  --find-active-view <query>",
-            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|dialog:opened|drag:<point>:<point>|drag-treebar-splitter:<dx>|colors:<item>=<index>[,...]|compose-text:<text>|compose-key:<format key>> (repeatable)",
+            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|dialog:opened|drag:<point>:<point>|drag-treebar-splitter:<dx>|colors:<item>=<index>[,...]|options-check:<id>=<on|off>[,...]|compose-text:<text>|compose-key:<format key>> (repeatable)",
+            "  <id> is an Options checkbox's control ID such as 6901 (Show mode prefix)",
             "  <item> is a Colors dialog item's mirx.ini key such as join or editbox_text, and <index> a palette index 0-15",
             "  <format key> is bold, color, underline, italic, reset, reverse, or strikethrough",
             "  <node> is a treebar item: space:<room_id> for a space folder, or a view identity",
@@ -931,6 +935,22 @@ mod cli {
                 })
                 .collect::<Option<Vec<_>>>()
                 .map(Action::Colors)
+                .ok_or_else(invalid);
+        }
+        if let Some(pairs) = value.strip_prefix("options-check:") {
+            return pairs
+                .split(',')
+                .map(|pair| {
+                    let (id, checked) = pair.split_once('=')?;
+                    let checked = match checked {
+                        "on" => true,
+                        "off" => false,
+                        _ => return None,
+                    };
+                    Some((id.parse::<u16>().ok()?, checked))
+                })
+                .collect::<Option<Vec<_>>>()
+                .map(Action::OptionsChecks)
                 .ok_or_else(invalid);
         }
         if let Some(text) = value.strip_prefix("compose-text:") {
@@ -1206,7 +1226,7 @@ mod cli {
             assert!(usage().contains("--select-view <identity> (repeatable)"));
             assert!(usage().contains("--append-events <path>"));
             assert!(usage().contains(
-                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|dialog:opened|drag:<point>:<point>|drag-treebar-splitter:<dx>|colors:<item>=<index>[,...]|compose-text:<text>|compose-key:<format key>> (repeatable)"
+                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|dialog:opened|drag:<point>:<point>|drag-treebar-splitter:<dx>|colors:<item>=<index>[,...]|options-check:<id>=<on|off>[,...]|compose-text:<text>|compose-key:<format key>> (repeatable)"
             ));
             assert!(usage().contains(
                 "--expect-navigation-node <node>::<expanded|collapsed>::<event|message|highlight|none>"
@@ -1638,6 +1658,32 @@ mod cli {
                 "colors:=4",
                 "colors:join=4,",
                 "colors:join=x",
+            ] {
+                assert!(
+                    parse_args(["--action", bad].into_iter().map(str::to_owned)).is_err(),
+                    "{bad}"
+                );
+            }
+        }
+
+        #[test]
+        fn parse_args_reads_options_check_actions() {
+            let config = parse_args(
+                ["--action", "options-check:6901=on,6903=off"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+            assert_eq!(
+                config.actions,
+                [Action::OptionsChecks(vec![(6901, true), (6903, false)])]
+            );
+            for bad in [
+                "options-check:",
+                "options-check:6901",
+                "options-check:6901=yes",
+                "options-check:x=on",
+                "options-check:6901=on,",
             ] {
                 assert!(
                     parse_args(["--action", bad].into_iter().map(str::to_owned)).is_err(),
@@ -2606,8 +2652,8 @@ mod windows_main {
         DPI_AWARENESS_CONTEXT_SYSTEM_AWARE, SetProcessDpiAwarenessContext,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CB_SETCURSEL, CBN_SELCHANGE, GetDlgItem, IDOK, IsWindow, PostMessageW, SMTO_NORMAL,
-        SendMessageTimeoutW, WM_COMMAND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+        BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, GetDlgItem, IDOK, IsWindow, PostMessageW,
+        SMTO_NORMAL, SendMessageTimeoutW, WM_COMMAND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     };
 
     use crate::cli::{
@@ -2802,6 +2848,9 @@ mod windows_main {
                 }
                 Action::Colors(pairs) => {
                     set_colors(&app, &config, pairs)?;
+                }
+                Action::OptionsChecks(checks) => {
+                    set_options_checks(&app, &config, checks)?;
                 }
                 Action::ComposeText(text) => {
                     app.set_compose_text(text)
@@ -3759,6 +3808,41 @@ mod windows_main {
         }
         app.wait_idle(config.wait_idle)
             .map_err(|error| format!("WAIT_IDLE after the Colors dialog failed: {error}"))
+    }
+
+    /// Opens Options, checks or clears each checkbox, and presses OK.
+    fn set_options_checks(
+        app: &MirxApp,
+        config: &Config,
+        checks: &[(u16, bool)],
+    ) -> Result<(), String> {
+        let opened = open_dialog(app, config, AutomationDialog::Options, &None)?;
+        let dialog = opened.hwnd as HWND;
+        for (id, checked) in checks {
+            let check_box = unsafe { GetDlgItem(dialog, i32::from(*id)) };
+            if check_box.is_null() {
+                return Err(format!(
+                    "options-check: the Options dialog has no control {id}"
+                ));
+            }
+            // BST_CHECKED and BST_UNCHECKED (the driver has no Controls).
+            send(check_box, BM_SETCHECK, WPARAM::from(*checked), 0)?;
+        }
+        if unsafe { PostMessageW(dialog, WM_COMMAND, IDOK as WPARAM, 0) } == 0 {
+            return Err(format!(
+                "posting OK to the Options dialog failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let deadline = std::time::Instant::now() + config.find_timeout;
+        while unsafe { IsWindow(dialog) } != 0 {
+            if std::time::Instant::now() > deadline {
+                return Err("the Options dialog did not close on OK".to_owned());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        app.wait_idle(config.wait_idle)
+            .map_err(|error| format!("WAIT_IDLE after the Options dialog failed: {error}"))
     }
 
     fn open_dialog(

@@ -24,7 +24,7 @@ dpi144_prefix=
 # expectations, the default frame size (scaled, clamped to the screen) and
 # --expect-dpi 144.
 dpi144_cases=(multi-room image-message-loaded room-list-listing compose-color-index
-  dialog-options-display dialog-colors dialog-sign-out-session dialog-log-out
+  dialog-options-display dialog-options-irc dialog-colors dialog-sign-out-session dialog-log-out
   dialog-export-room-keys dialog-address-book-notify dialog-address-book-colors toolbar-connected
   line-marker dialog-channel-central dialog-sessions)
 
@@ -318,6 +318,10 @@ configure_case_expectations() {
       case "$case_name" in
         dialog-options-connect)
           ordered_actions=(dialog:options:Connect/Options)
+          expect_dialog_title='mirx Options'
+          ;;
+        dialog-options-irc)
+          ordered_actions=(dialog:options:IRC)
           expect_dialog_title='mirx Options'
           ;;
         dialog-options-messages)
@@ -2676,6 +2680,22 @@ configure_case_expectations() {
         --expect-no-switchbar-activity 'status'
       )
       expect_switchbar_active='room:!ops:example'
+      ;;
+    mode-prefix)
+      # Options > IRC > Show mode prefix on: a channel's senders carry
+      # their rank's glyph, members none.
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      ordered_actions=('options-check:6901=on')
+      room_expect_args=(
+        --expect-room '!ops:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::[22:13] <~Owner> the room is mine'
+        --expect-room-view '!ops:example::[22:14] * @Mod keeps the peace'
+        --expect-room-view '!ops:example::[22:15] -+Voice- may speak when moderated'
+        --expect-room-view '!ops:example::[22:16] <Alan> just a member'
+      )
       ;;
     member-ranks)
       expect_selected='!ranks:example'
