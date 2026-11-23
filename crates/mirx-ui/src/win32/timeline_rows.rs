@@ -1287,7 +1287,7 @@ fn log_line_row(
             } else {
                 String::new()
             };
-            let (body, styles) = mirc_format::parse_mirc_input(text);
+            let (body, styles) = format_codes::parse_mirc_input(text);
             let styles = styles
                 .into_iter()
                 .map(|span| TextStyleSpan {

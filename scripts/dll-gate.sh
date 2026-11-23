@@ -110,4 +110,18 @@ if ! grep -a -q -E '<dpiAware[^>]*>true</dpiAware>' "$exe_path"; then
   exit 1
 fi
 
-printf 'dll-gate ok: %s; subsystem GUI; resources: icon, group icon, version, manifest\n' "${imported_dlls[*]}"
+# Nothing shipped names "mIRC" (a trademark), in any case, visible or not:
+# strings, resources, panic messages and the source paths panic locations
+# embed. "mirx" is the product's name. ASCII, then UTF-16LE at any offset.
+trademark_hits=$(
+  LC_ALL=C grep -a -o -b -i -P '[[:print:]]{0,40}mirc(?!x)[[:print:]]{0,40}' "$exe_path" || true
+  LC_ALL=C grep -a -o -b -i -P '(?:[[:print:]]\x00){0,40}m\x00i\x00r\x00c\x00(?!x\x00)(?:[[:print:]]\x00){0,40}' "$exe_path" \
+    | tr -d '\0' || true
+)
+if [[ -n $trademark_hits ]]; then
+  echo "dll-gate failed: $exe_path names mIRC (offset:text):" >&2
+  echo "$trademark_hits" >&2
+  exit 1
+fi
+
+printf 'dll-gate ok: %s; subsystem GUI; resources: icon, group icon, version, manifest; no "mIRC"\n' "${imported_dlls[*]}"

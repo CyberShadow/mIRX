@@ -28,7 +28,8 @@ const DEFAULT_SOURCE: &[&str] = &[
     "/s /server $$1",
 ];
 
-pub(super) const NESTED_BLOCK: &str = "nested blocks need mIRC scripting, which mirx does not have";
+pub(super) const NESTED_BLOCK: &str =
+    "nested blocks need a scripting language, which mirx does not have";
 
 /// The alias lines as the user wrote them (comments and blank lines too),
 /// and the definitions they make. Only `Aliases::from_source` builds one,

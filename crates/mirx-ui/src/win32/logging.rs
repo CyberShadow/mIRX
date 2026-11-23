@@ -13,7 +13,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use super::mirc_format::mirc_input_from_styled;
+use super::format_codes::mirc_input_from_styled;
 use super::*;
 
 const LOGS_SUBDIR: &str = "logs";

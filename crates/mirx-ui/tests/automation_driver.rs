@@ -20313,7 +20313,7 @@ fn options_perform_dialog_edits_what_options_ok_saves() -> Result<(), Box<dyn st
     let (message_box, text) = wait_for_owned_message_box(perform);
     assert_eq!(
         text,
-        "Line 2: nested blocks need mIRC scripting, which mirx does not have"
+        "Line 2: nested blocks need a scripting language, which mirx does not have"
     );
     answer_message_box(&app, message_box, IDOK)?;
     assert_eq!(unsafe { IsWindow(perform) }, 1);

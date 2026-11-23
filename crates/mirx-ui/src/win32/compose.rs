@@ -467,7 +467,7 @@ pub(super) unsafe fn send_compose_key(hwnd: HWND, key: ComposeKey) -> Result<(),
         ComposeKey::ShiftTab => return complete_compose_nick(hwnd, true),
         // Nor Ctrl state, for the format chords.
         ComposeKey::Format { key } => {
-            insert_mirc_format_code(hwnd, edit, mirc_format::mirc_format_code(key));
+            insert_mirc_format_code(hwnd, edit, format_codes::mirc_format_code(key));
             return Ok(());
         }
     };
@@ -523,7 +523,7 @@ pub(super) unsafe fn submit_compose_from_control(
 /// The message an editbox line sends: its text without mIRC codes, in the
 /// styles they set. Codes alone send nothing.
 pub(super) fn message_text_from_input(input: &str) -> Result<(String, Vec<TextStyleSpan>), String> {
-    let (body, styles) = mirc_format::parse_mirc_input(input);
+    let (body, styles) = format_codes::parse_mirc_input(input);
     if body.is_empty() {
         return Err("message body must not be empty".to_owned());
     }
@@ -918,7 +918,7 @@ unsafe fn edit_message(
     }
 
     if message == WM_KEYDOWN
-        && let Some(key) = mirc_format::mirc_format_key(
+        && let Some(key) = format_codes::mirc_format_key(
             GetKeyState(VK_CONTROL as i32) < 0,
             GetKeyState(VK_MENU as i32) < 0,
             wparam,
@@ -929,7 +929,7 @@ unsafe fn edit_message(
             hwnd,
             "format keys must arrive at the active window's editbox"
         );
-        insert_mirc_format_code(parent, hwnd, mirc_format::mirc_format_code(key));
+        insert_mirc_format_code(parent, hwnd, format_codes::mirc_format_code(key));
         return 0;
     }
 

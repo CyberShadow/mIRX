@@ -56,7 +56,7 @@ const SINGLE_FIELD_DIALOG_CANCEL_ID: usize = 5012;
 /// The About box's lines, top to bottom, with the control ids tests read.
 const ABOUT_DIALOG_LINES: [(u16, &str); 5] = [
     (5019, concat!("mirx ", env!("CARGO_PKG_VERSION"))),
-    (5020, "mIRC, but Matrix."),
+    (5020, "A dense, keyboard-driven Matrix client."),
     (5021, "A native Win32 Matrix client"),
     (5022, "End-to-end encryption by matrix-rust-sdk"),
     (5023, "Licensed under the Apache License 2.0"),
@@ -1755,6 +1755,27 @@ mod tests {
 
     use super::super::test_fixtures::*;
     use super::*;
+
+    /// The exe carries no "mIRC" (a trademark); `dll-gate.sh` scans the
+    /// whole release exe, this pins the texts most likely to name it.
+    #[test]
+    fn about_lines_and_the_nested_block_error_never_name_mirc() {
+        let names_mirc = |text: &str| {
+            let lower = text.to_lowercase();
+            lower
+                .match_indices("mirc")
+                .any(|(at, _)| !lower[at + 4..].starts_with('x'))
+        };
+        assert!(names_mirc("mIRC") && !names_mirc("mirx"));
+        for (_, line) in ABOUT_DIALOG_LINES {
+            assert!(!names_mirc(line), "{line}");
+        }
+        assert!(
+            !names_mirc(super::super::aliases::NESTED_BLOCK),
+            "{}",
+            super::super::aliases::NESTED_BLOCK
+        );
+    }
 
     #[test]
     fn dialog_metrics_are_windows_at_96_dpi_and_scale() {

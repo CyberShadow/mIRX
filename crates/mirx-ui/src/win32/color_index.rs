@@ -29,7 +29,7 @@ use super::colors::{
 };
 use super::compose::{compose_edit, insert_color_number};
 use super::dpi::Dpi;
-use super::mirc_format::{ColorCodeInProgress, ColorCodePart, color_code_in_progress};
+use super::format_codes::{ColorCodeInProgress, ColorCodePart, color_code_in_progress};
 use super::{WindowState, last_os_error, read_window_text, state_ref, wide_null};
 use crate::automation::{UiColorCodePart, UiColorIndex, UiRect};
 

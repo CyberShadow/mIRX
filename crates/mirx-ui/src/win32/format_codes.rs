@@ -282,7 +282,7 @@ pub(super) fn parse_mirc_input(input: &str) -> (String, Vec<TextStyleSpan>) {
             }
         }
     }
-    check_text_styles(&body, &styles).expect("parsed mIRC codes make valid styles");
+    check_text_styles(&body, &styles).expect("parsed formatting codes make valid styles");
     (body, styles)
 }
 

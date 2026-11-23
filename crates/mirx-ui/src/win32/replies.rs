@@ -18,7 +18,7 @@ use mirx_core::{
 };
 
 use super::ViewId;
-use super::mirc_format::mirc_input_from_styled;
+use super::format_codes::mirc_input_from_styled;
 
 /// How many characters of the quoted line a quote shows.
 const QUOTE_EXCERPT_CHARS: usize = 60;

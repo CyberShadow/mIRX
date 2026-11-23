@@ -10,7 +10,7 @@ use mirx_core::TextColor;
 use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, FillRect, HBRUSH, HDC};
 
-use super::mirc_format::MIRC_PALETTE;
+use super::format_codes::MIRC_PALETTE;
 
 pub(super) const fn rgb(r: u8, g: u8, b: u8) -> u32 {
     r as u32 | ((g as u32) << 8) | ((b as u32) << 16)

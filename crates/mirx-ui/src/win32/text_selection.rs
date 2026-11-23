@@ -4,7 +4,7 @@
 
 use std::ops::Range;
 
-use super::mirc_format::mirc_input_from_styled;
+use super::format_codes::mirc_input_from_styled;
 use super::timeline_layout::{TimelinePaintLine, TimelinePaintLineVisual, clip_styles};
 use super::{TimelineRow, TimelineRowLayout};
 
