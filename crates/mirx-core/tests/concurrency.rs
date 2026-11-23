@@ -10,10 +10,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use common::Harness;
+use matrix_sdk::ruma::events::AnyStrippedStateEvent;
+use matrix_sdk::ruma::serde::Raw;
+use matrix_sdk_test::InvitedRoomBuilder;
 use mirx_core::{
-    BackfillRoomHistoryRequest, Command, EditMessageRequest, Event, HistoryFrom,
-    ListPublicRoomsRequest, LoginMethod, LoginRequest, Operation, RestoreSessionRequest,
-    RoomMessagePresentationKind, SendFileRequest, SendMessageRequest, SessionAuth, StoredSession,
+    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CreateDirectRoomRequest,
+    EditMessageRequest, Event, HistoryFrom, ListPublicRoomsRequest, LoginMethod, LoginRequest,
+    Operation, RestoreSessionRequest, RoomMessagePresentationKind, SendFileRequest,
+    SendMessageRequest, SessionAuth, StoredSession,
 };
 use serde_json::json;
 use wiremock::matchers::{method, path_regex};
@@ -291,77 +295,113 @@ fn an_edit_goes_before_the_line_typed_after_it() {
     harness.join_stopped();
 }
 
-/// The account's `m.ignored_user_list` as a server keeps it: a GET answers
-/// the last PUT's body, and each PUT is answered after
-/// `delay`. It records every request, with when it came.
+/// A whole document as a server keeps it (account data, or a state
+/// event): a GET answers the last PUT's body (`404 M_NOT_FOUND` before any,
+/// for a document the account does not have yet), and each PUT is answered
+/// `put_answer` after `delay`. It records every request, with when it came.
 #[derive(Clone)]
-struct IgnoreListServer {
-    content: std::sync::Arc<std::sync::Mutex<serde_json::Value>>,
-    requests: std::sync::Arc<std::sync::Mutex<Vec<IgnoreListRequest>>>,
+struct DocumentServer {
+    content: std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>>,
+    requests: std::sync::Arc<std::sync::Mutex<Vec<DocumentRequest>>>,
+    put_answer: serde_json::Value,
     delay: Duration,
 }
 
-/// A request `IgnoreListServer` got: when, its method, and a PUT's body.
+/// A request `DocumentServer` got: when, its method, and a PUT's body.
 #[derive(Debug, Clone)]
-struct IgnoreListRequest {
+struct DocumentRequest {
     at: Instant,
     method: &'static str,
     body: serde_json::Value,
 }
 
-impl IgnoreListServer {
-    fn mount(harness: &Harness, user_ids: &[&str], delay: Duration) -> Self {
+impl DocumentServer {
+    /// Serves the document at the paths that match `path`, above the
+    /// harness's catch-all account data mocks.
+    fn mount(
+        harness: &Harness,
+        path: &str,
+        content: Option<serde_json::Value>,
+        put_answer: serde_json::Value,
+        delay: Duration,
+    ) -> Self {
         let server = Self {
-            content: std::sync::Arc::new(std::sync::Mutex::new(ignore_list(user_ids))),
+            content: std::sync::Arc::new(std::sync::Mutex::new(content)),
             requests: std::sync::Arc::default(),
+            put_answer,
             delay,
         };
         harness.mount(
-            Mock::given(path_regex(r"/account_data/m\.ignored_user_list$"))
+            Mock::given(path_regex(path))
                 .respond_with(server.clone())
                 .with_priority(1),
         );
         server
     }
 
+    /// The account's `m.ignored_user_list`, holding `user_ids`.
+    fn ignore_list(harness: &Harness, user_ids: &[&str], delay: Duration) -> Self {
+        Self::mount(
+            harness,
+            r"/account_data/m\.ignored_user_list$",
+            Some(ignore_list(user_ids)),
+            json!({}),
+            delay,
+        )
+    }
+
+    /// The account's `m.direct`, which it does not have yet.
+    fn direct_rooms(harness: &Harness, delay: Duration) -> Self {
+        Self::mount(harness, r"/account_data/m\.direct$", None, json!({}), delay)
+    }
+
+    /// The requests, in arrival order.
+    fn requests(&self) -> Vec<DocumentRequest> {
+        self.requests.lock().expect("requests lock").clone()
+    }
+
     /// The bodies of the PUTs, in arrival order.
     fn puts(&self) -> Vec<serde_json::Value> {
-        self.requests
-            .lock()
-            .expect("requests lock")
-            .iter()
+        self.requests()
+            .into_iter()
             .filter(|request| request.method == "PUT")
-            .map(|request| request.body.clone())
+            .map(|request| request.body)
             .collect()
     }
 }
 
-impl Respond for IgnoreListServer {
+impl Respond for DocumentServer {
     fn respond(&self, request: &Request) -> ResponseTemplate {
         let mut content = self.content.lock().expect("content lock");
         let mut requests = self.requests.lock().expect("requests lock");
         match request.method.as_str() {
             "GET" => {
-                requests.push(IgnoreListRequest {
+                requests.push(DocumentRequest {
                     at: Instant::now(),
                     method: "GET",
                     body: serde_json::Value::Null,
                 });
-                ResponseTemplate::new(200).set_body_json(&*content)
+                match &*content {
+                    Some(content) => ResponseTemplate::new(200).set_body_json(content),
+                    None => ResponseTemplate::new(404).set_body_json(json!({
+                        "errcode": "M_NOT_FOUND",
+                        "error": "Not found",
+                    })),
+                }
             }
             "PUT" => {
                 let body = body(request);
-                requests.push(IgnoreListRequest {
+                requests.push(DocumentRequest {
                     at: Instant::now(),
                     method: "PUT",
                     body: body.clone(),
                 });
-                *content = body;
+                *content = Some(body);
                 ResponseTemplate::new(200)
-                    .set_body_json(json!({}))
+                    .set_body_json(&self.put_answer)
                     .set_delay(self.delay)
             }
-            other => panic!("unexpected {other} of the ignore list"),
+            other => panic!("unexpected {other} of {}", request.url.path()),
         }
     }
 }
@@ -385,7 +425,7 @@ fn ignoring_bob() -> Harness {
 #[test]
 fn ignoring_two_users_in_a_row_keeps_both() {
     let harness = ignoring_bob();
-    let server = IgnoreListServer::mount(&harness, &["@bob:example.org"], Duration::ZERO);
+    let server = DocumentServer::ignore_list(&harness, &["@bob:example.org"], Duration::ZERO);
     let mut seen = Seen::new(&harness);
 
     // The second comes before any sync echoes the first.
@@ -412,7 +452,7 @@ fn ignoring_two_users_in_a_row_keeps_both() {
 #[test]
 fn unignoring_after_ignoring_keeps_the_others() {
     let harness = ignoring_bob();
-    let server = IgnoreListServer::mount(&harness, &["@bob:example.org"], Duration::ZERO);
+    let server = DocumentServer::ignore_list(&harness, &["@bob:example.org"], Duration::ZERO);
     let mut seen = Seen::new(&harness);
 
     harness.send(Command::IgnoreUser("@carol:example.org".to_owned()));
@@ -435,14 +475,14 @@ fn unignoring_after_ignoring_keeps_the_others() {
 fn unignoring_then_ignoring_writes_one_after_the_other() {
     let harness = ignoring_bob();
     let delay = Duration::from_millis(500);
-    let server = IgnoreListServer::mount(&harness, &["@bob:example.org"], delay);
+    let server = DocumentServer::ignore_list(&harness, &["@bob:example.org"], delay);
     let mut seen = Seen::new(&harness);
 
     harness.send(Command::UnignoreUser("@bob:example.org".to_owned()));
     harness.send(Command::IgnoreUser("@carol:example.org".to_owned()));
     seen.until_acks(2);
 
-    let requests = server.requests.lock().expect("requests lock").clone();
+    let requests = server.requests();
     let methods = requests
         .iter()
         .map(|request| request.method)
@@ -461,6 +501,180 @@ fn unignoring_then_ignoring_writes_one_after_the_other() {
 
     let events = seen.shut_down();
     assert_eq!(acks(&events), 3, "{events:#?}");
+    harness.join_stopped();
+}
+
+const DM_BOB: &str = "!dm-bob:example.org";
+const DM_CAROL: &str = "!dm-carol:example.org";
+
+/// A session invited to a direct room by each inviter: `(room, inviter)`.
+/// The server lets it join them, and answers their members.
+fn invited_to_direct_rooms(invites: &[(&'static str, &'static str)]) -> Harness {
+    let (harness, _) = Harness::restored_with_sync(|sync| {
+        for (room, inviter) in invites {
+            let room_id = matrix_sdk::ruma::OwnedRoomId::try_from(*room).expect("a room ID");
+            sync.add_invited_room(InvitedRoomBuilder::new(&room_id).add_state_bulk([
+                stripped(json!({
+                    "type": "m.room.member",
+                    "state_key": inviter,
+                    "sender": inviter,
+                    "content": { "membership": "join" },
+                })),
+                stripped(json!({
+                    "type": "m.room.member",
+                    "state_key": "@alice:example.org",
+                    "sender": inviter,
+                    "content": { "membership": "invite", "is_direct": true },
+                })),
+            ]));
+        }
+    });
+    let invites = invites.to_vec();
+    harness.mount(
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/_matrix/client/v3/rooms/[^/]+/join$"))
+            .respond_with(|request: &Request| {
+                ResponseTemplate::new(200).set_body_json(json!({ "room_id": path_room(request) }))
+            }),
+    );
+    harness.mount(
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/_matrix/client/v3/rooms/[^/]+/members$"))
+            .respond_with(move |request: &Request| {
+                let room = path_room(request);
+                let (_, inviter) = invites
+                    .iter()
+                    .find(|(invited, _)| *invited == room)
+                    .expect("an invited room");
+                ResponseTemplate::new(200).set_body_json(json!({ "chunk": [
+                    member_join(&room, inviter),
+                    member_join(&room, "@alice:example.org"),
+                ] }))
+            }),
+    );
+    harness
+}
+
+fn stripped(event: serde_json::Value) -> Raw<AnyStrippedStateEvent> {
+    Raw::from_json_string(event.to_string()).expect("a stripped state event")
+}
+
+/// The room ID in a `/rooms/{room_id}/...` path.
+fn path_room(request: &Request) -> String {
+    let segment = request.url.path_segments().expect("a path").nth(4);
+    segment.expect("a room ID segment").to_owned()
+}
+
+fn member_join(room: &str, user_id: &str) -> serde_json::Value {
+    json!({
+        "type": "m.room.member",
+        "room_id": room,
+        "state_key": user_id,
+        "sender": user_id,
+        "event_id": format!("$join-{}", user_id.trim_start_matches('@')),
+        "origin_server_ts": 1,
+        "content": { "membership": "join" },
+    })
+}
+
+fn accept(room_id: &str) -> Command {
+    Command::AcceptRoomInvite(AcceptRoomInviteRequest {
+        room_id: room_id.to_owned(),
+    })
+}
+
+/// Each read of the document came after the write before it was answered:
+/// the read-modify-writes never interleaved.
+fn assert_writes_one_after_the_other(requests: &[DocumentRequest], delay: Duration) {
+    let methods = requests
+        .iter()
+        .map(|request| request.method)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        methods,
+        ["GET", "PUT"].repeat(requests.len() / 2),
+        "{requests:#?}"
+    );
+    for pair in requests.windows(2).skip(1).step_by(2) {
+        let (put_at, get_at) = (pair[0].at, pair[1].at);
+        assert!(
+            get_at.duration_since(put_at) >= delay,
+            "{:?} apart: {requests:#?}",
+            get_at.duration_since(put_at)
+        );
+    }
+}
+
+#[test]
+fn accepting_two_direct_invites_at_once_keeps_both() {
+    let harness = invited_to_direct_rooms(&[
+        (DM_BOB, "@bob:example.org"),
+        (DM_CAROL, "@carol:example.org"),
+    ]);
+    let delay = Duration::from_millis(300);
+    let server = DocumentServer::direct_rooms(&harness, delay);
+    let mut seen = Seen::new(&harness);
+
+    // Two rooms' lanes: the accepts run side by side.
+    harness.send(accept(DM_BOB));
+    harness.send(accept(DM_CAROL));
+    seen.until_acks(2);
+
+    let puts = server.puts();
+    assert_eq!(
+        puts.last(),
+        Some(&json!({
+            "@bob:example.org": [DM_BOB],
+            "@carol:example.org": [DM_CAROL],
+        })),
+        "{:#?}",
+        server.requests()
+    );
+    assert_writes_one_after_the_other(&server.requests(), delay);
+    let events = seen.shut_down();
+    assert!(
+        !events.iter().any(|event| matches!(event, Event::Error(_))),
+        "{events:#?}"
+    );
+    harness.join_stopped();
+}
+
+#[test]
+fn creating_a_direct_room_while_accepting_one_keeps_both() {
+    let harness = invited_to_direct_rooms(&[(DM_BOB, "@bob:example.org")]);
+    harness.mount(
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/_matrix/client/v3/createRoom$"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "room_id": "!dm-dave:example.org" })),
+            ),
+    );
+    let delay = Duration::from_millis(300);
+    let server = DocumentServer::direct_rooms(&harness, delay);
+    let mut seen = Seen::new(&harness);
+
+    harness.send(Command::CreateDirectRoom(CreateDirectRoomRequest {
+        user_id: "@dave:example.org".to_owned(),
+    }));
+    harness.send(accept(DM_BOB));
+    seen.until_acks(2);
+
+    assert_eq!(
+        server.puts().last(),
+        Some(&json!({
+            "@bob:example.org": [DM_BOB],
+            "@dave:example.org": ["!dm-dave:example.org"],
+        })),
+        "{:#?}",
+        server.requests()
+    );
+    assert_writes_one_after_the_other(&server.requests(), delay);
+    let events = seen.shut_down();
+    assert!(
+        !events.iter().any(|event| matches!(event, Event::Error(_))),
+        "{events:#?}"
+    );
     harness.join_stopped();
 }
 
