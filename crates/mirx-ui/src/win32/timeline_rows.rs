@@ -4549,19 +4549,20 @@ mod tests {
             .collect::<Vec<_>>();
         let alice = Some(("@alice:example", "@alice:example"));
         let bob_nick = Some((bob, bob));
-        assert_eq!(
-            senders,
-            [
-                // Now talking, Topic is; the text and its reactions.
-                None, None, alice, None, // The emote, the notice, Bob's six.
+        let expected = [
+            // Now talking, Topic is; the text and its reactions.
+            vec![None, None, alice, None],
+            // The emote, the notice, Bob's six.
+            vec![
                 alice, alice, bob_nick, bob_nick, bob_nick, bob_nick, bob_nick, bob_nick,
-                // The reply's quote, then the reply.
-                None, alice, // The undecryptable line, the topic change.
-                bob_nick, None,
             ],
-            "{:#?}",
-            project_timeline_rows(&rows)
-        );
+            // The reply's quote, then the reply.
+            vec![None, alice],
+            // The undecryptable line, the topic change.
+            vec![bob_nick, None],
+        ]
+        .concat();
+        assert_eq!(senders, expected, "{:#?}", project_timeline_rows(&rows));
 
         let mut settings = Settings::default();
         for value in ["* 12 modes=@", "@bob:example 4"] {
