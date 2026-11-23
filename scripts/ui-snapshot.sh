@@ -2413,13 +2413,13 @@ configure_case_expectations() {
         --expect-room-view '!ops:example::[22:12] * Bob on Ops Lobby'
         --expect-room-view '!ops:example::[22:12] * Bob using example'
         --expect-room-view '!ops:example::[22:12] * Bob End of /WHOIS list'
-        --expect-room-view '!ops:example::[22:12] * Error during set room member power level: you are not allowed to change power levels'
+        --expect-room-view '!ops:example::[22:12] * Error during change room settings: you are not allowed to change power levels'
         --expect-room-view '!ops:example::[22:12] * Ignore list:'
         --expect-room-view '!ops:example::[22:12] *   Spam (@spam:example)'
       )
       # The appended error is the last thing to set the status.
       status_bar_expect_args=(
-        --expect-status-bar 'error during set room member power level'
+        --expect-status-bar 'error during change room settings'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'

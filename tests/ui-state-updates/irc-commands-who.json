@@ -12,7 +12,7 @@
   },
   {
     "Error": {
-      "operation": "SetRoomMemberPowerLevel",
+      "operation": "UpdateRoomSettings",
       "room_id": "!ops:example",
       "message": "you are not allowed to change power levels"
     }
