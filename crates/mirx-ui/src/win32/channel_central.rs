@@ -220,7 +220,7 @@ pub(super) fn status_text(allowed: &RoomSettingsPermissions) -> &'static str {
     } else if all.iter().any(|allowed| *allowed) {
         "Some settings need a higher power level."
     } else {
-        "Only operators can change these settings."
+        "Only moderators can change these settings."
     }
 }
 
@@ -474,7 +474,7 @@ mod tests {
                 directory: false,
                 unban: false,
             }),
-            "Only operators can change these settings."
+            "Only moderators can change these settings."
         );
     }
 

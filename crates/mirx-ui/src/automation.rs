@@ -7089,7 +7089,7 @@ mod tests {
                         color_down_enabled: false,
                     }),
                     channel_central: Some(super::UiChannelCentral {
-                        caption: "Channel Central - Ops".to_owned(),
+                        caption: "Room Settings - Ops".to_owned(),
                         room_id: "!ops:example".to_owned(),
                         status: String::new(),
                         name: "Ops".to_owned(),
@@ -7415,7 +7415,7 @@ mod tests {
                         "color_down_enabled":false
                     },
                     "channel_central":{
-                        "caption":"Channel Central - Ops",
+                        "caption":"Room Settings - Ops",
                         "room_id":"!ops:example",
                         "status":"",
                         "name":"Ops",

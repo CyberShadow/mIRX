@@ -1259,7 +1259,10 @@ pub(super) fn channel_central_room(
     let room_id = resolve_joined_room_target(state, window, target)?;
     let room = room_by_id(&state.model.rooms, &room_id).expect("a joined room target must exist");
     if room.is_direct {
-        return Err(format!("{} is a query, not a channel", room.display_name));
+        return Err(format!(
+            "{} is a direct message; Room Settings are for rooms",
+            room.display_name
+        ));
     }
     Ok(room_id)
 }

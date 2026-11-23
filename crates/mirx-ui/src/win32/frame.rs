@@ -238,7 +238,7 @@ unsafe extern "system" fn window_proc(
                 && let Err(message) =
                     run_local_command(hwnd, &window, SlashCommand::Channel { target: None })
             {
-                show_error_message(hwnd, "Channel Central", &message);
+                show_error_message(hwnd, "Room Settings", &message);
             }
             0
         }

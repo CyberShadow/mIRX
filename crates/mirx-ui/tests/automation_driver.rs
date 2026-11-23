@@ -28530,12 +28530,9 @@ const CHANNEL_CENTRAL_MODERATED_ID: i32 = 7607;
 fn wait_for_channel_central(
     app: &MirxApp,
 ) -> Result<(HWND, UiChannelCentral), Box<dyn std::error::Error>> {
-    let dialog = wait_for_window(
-        &wide_null("mirxWin32ChannelCentralDialog"),
-        "Channel Central",
-    )?;
+    let dialog = wait_for_window(&wide_null("mirxWin32ChannelCentralDialog"), "Room Settings")?;
     let ui_state = app.wait_for_ui_state(
-        "Channel Central's answer",
+        "Room Settings' answer",
         Duration::from_secs(30),
         |ui_state| {
             ui_state
@@ -28576,7 +28573,7 @@ fn channel_central_shows_and_changes_the_room_settings() -> Result<(), Box<dyn s
     app.set_compose_text("/channel")?;
     app.open_dialog(AutomationDialog::ComposeReturn)?;
     let (dialog, central) = wait_for_channel_central(&app)?;
-    assert_eq!(central.caption, "Channel Central - Beta");
+    assert_eq!(central.caption, "Room Settings - Beta");
     assert_eq!(central.room_id, "!beta:example");
     // Alice is the room's 100: everything is hers to change.
     assert_eq!(central.status, "");
@@ -28634,7 +28631,7 @@ fn channel_central_shows_and_changes_the_room_settings() -> Result<(), Box<dyn s
     assert_eq!(central.private.state, UiCheckState::Checked);
 
     post_dialog_command(dialog, IDOK as WPARAM);
-    wait_for_window_gone(dialog, "Channel Central")?;
+    wait_for_window_gone(dialog, "Room Settings")?;
     app.wait_idle(Duration::from_secs(5))?;
     let model = app.dump_model()?;
     assert_eq!(model.status, "room settings sent");
@@ -28741,7 +28738,7 @@ fn double_click_in_a_room_opens_channel_central() -> Result<(), Box<dyn std::err
     let point = text_point(&app, "beta second", 2)?;
     send_left_click(app.active_timeline_hwnd()? as HWND, &point, true);
     let (dialog, central) = wait_for_channel_central(&app)?;
-    assert_eq!(central.caption, "Channel Central - Beta");
+    assert_eq!(central.caption, "Room Settings - Beta");
     // This core has no session: the read's error, and nothing to change.
     assert_eq!(
         central.status,
@@ -28749,7 +28746,7 @@ fn double_click_in_a_room_opens_channel_central() -> Result<(), Box<dyn std::err
     );
     assert!(!central.ok_enabled && !central.name_enabled && !central.topic_by_operators.enabled);
     post_dialog_command(dialog, IDCANCEL as WPARAM);
-    wait_for_window_gone(dialog, "Channel Central")?;
+    wait_for_window_gone(dialog, "Room Settings")?;
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(
         app.dump_model()?.submitted_room_settings_commands,
@@ -28838,10 +28835,10 @@ fn a_channel_double_click_opens_channel_central_of_the_clicked_window()
     let (dialog, central) = wait_for_channel_central(&app)?;
     assert_eq!(
         (central.room_id.as_str(), central.caption.as_str()),
-        ("!alpha:example", "Channel Central - Alpha")
+        ("!alpha:example", "Room Settings - Alpha")
     );
     post_dialog_command(dialog, IDCANCEL as WPARAM);
-    wait_for_window_gone(dialog, "Channel Central")?;
+    wait_for_window_gone(dialog, "Room Settings")?;
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.dump_ui_state()?.mdi.active, beta);
 
@@ -28984,7 +28981,7 @@ fn channel_central_keeps_edits_when_a_later_answer_arrives()
     assert_eq!(central.status, "Some settings need a higher power level.");
 
     post_dialog_command(dialog, IDOK as WPARAM);
-    wait_for_window_gone(dialog, "Channel Central")?;
+    wait_for_window_gone(dialog, "Room Settings")?;
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(
         app.dump_model()?.submitted_room_settings_commands,

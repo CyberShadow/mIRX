@@ -126,7 +126,7 @@ pub(super) unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
         room_menu,
         MF_STRING,
         MENU_ID_ROOM_CHANNEL_CENTRAL,
-        "Channel &Central...",
+        "Room &Settings...",
     )?;
     let room_notifications_menu = create_popup_menu()?;
     for (_, id, label) in ROOM_NOTIFICATIONS_MENU {
@@ -789,7 +789,7 @@ unsafe fn menu_command_result(
             submit_room_menu_action(hwnd, window, submit_part_slash_command).map(|_| Some(())),
         ),
         MENU_ID_ROOM_CHANNEL_CENTRAL => (
-            "Channel Central",
+            "Room Settings",
             run_local_command(hwnd, window, SlashCommand::Channel { target: None })
                 .map(|_| Some(())),
         ),
@@ -1602,7 +1602,10 @@ mod tests {
             Ok("!ops:example".to_owned())
         );
         for (target, refusal) in [
-            (Some("Bob"), "Bob is a query, not a channel"),
+            (
+                Some("Bob"),
+                "Bob is a direct message; Room Settings are for rooms",
+            ),
             (Some("Invite"), "room is not joined: Invite"),
             (Some("Nowhere"), "unknown room: Nowhere"),
         ] {

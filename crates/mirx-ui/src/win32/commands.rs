@@ -546,7 +546,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "channel",
         usage: "[#room]",
-        summary: "Channel Central: this room's name, topic, bans and settings, or the named room's",
+        summary: "open Room Settings: this room's name, topic, bans and permissions, or the named room's",
     },
     CommandSpec {
         name: "clear",
@@ -3072,7 +3072,7 @@ mod tests {
         assert_eq!(
             help_lines(Some("channel")),
             Ok(vec![
-                "* /channel [#room] - Channel Central: this room's name, topic, bans and settings, or the named room's"
+                "* /channel [#room] - open Room Settings: this room's name, topic, bans and permissions, or the named room's"
                     .to_owned()
             ])
         );

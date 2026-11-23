@@ -120,7 +120,7 @@ struct DialogState {
 }
 
 unsafe fn dialog_state(hwnd: HWND) -> &'static mut DialogState {
-    window_data::get(hwnd).expect("channel central has its state")
+    window_data::get(hwnd).expect("Room Settings has its state")
 }
 
 /// Shows the joined room's settings until OK or Cancel. OK sends what
@@ -128,8 +128,8 @@ unsafe fn dialog_state(hwnd: HWND) -> &'static mut DialogState {
 pub(super) unsafe fn run_channel_central_dialog(hwnd: HWND, room_id: String) -> Result<(), String> {
     let state = state_ref(hwnd);
     let room =
-        room_by_id(&state.model.rooms, &room_id).expect("channel central opens for a known room");
-    let caption = format!("Channel Central - {}", room.display_name);
+        room_by_id(&state.model.rooms, &room_id).expect("Room Settings opens for a known room");
+    let caption = format!("Room Settings - {}", room.display_name);
     let room_view = state.model.room_views.get(&room_id);
     let window_topics = room_view
         .map(|view| {
@@ -335,7 +335,7 @@ unsafe fn create_controls(dialog: HWND) -> Result<(), String> {
         })
     };
     state.controls.topic_by_operators = check(
-        "Only ops set topic",
+        "Only moderators set the topic",
         CHANNEL_CENTRAL_TOPIC_BY_OPERATORS_ID,
         0,
         0,

@@ -399,11 +399,11 @@ configure_case_expectations() {
             dialog:compose_return
             "append:$root_dir/tests/ui-state-updates/dialog-channel-central.json"
           )
-          expect_dialog_title='Channel Central - Topic Room'
+          expect_dialog_title='Room Settings - Topic Room'
           ;;
         dialog-channel-central-not-op)
-          # A member who may set only the topic (members may: Only ops set
-          # topic unchecked): the rest greyed, and the line over OK says
+          # A member who may set only the topic (members may: Only moderators
+          # set the topic unchecked): the rest greyed, and the line over OK says
           # why. Knock is neither invite only nor not: Invite only is
           # indeterminate.
           ordered_actions=(
@@ -411,7 +411,7 @@ configure_case_expectations() {
             dialog:compose_return
             "append:$root_dir/tests/ui-state-updates/dialog-channel-central-not-op.json"
           )
-          expect_dialog_title='Channel Central - Topic Room'
+          expect_dialog_title='Room Settings - Topic Room'
           ;;
         dialog-select-server)
           ordered_actions=(dialog:select_server)
