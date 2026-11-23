@@ -52,11 +52,11 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, ClientToScreen,
-    CreateFontIndirectW, CreateSolidBrush, DEFAULT_CHARSET, DT_CENTER, DT_END_ELLIPSIS,
-    DT_SINGLELINE, DeleteObject, DrawFocusRect, EndPaint, FW_BOLD, FW_NORMAL, FillRect, FrameRect,
-    GetDC, GetSysColor, GetSysColorBrush, GetTextFaceW, GetTextMetricsW, HBRUSH, HFONT,
-    InvalidateRect, LOGFONTW, MapWindowPoints, PAINTSTRUCT, ReleaseDC, ScreenToClient,
-    SelectObject, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
+    CreateFontIndirectW, CreateSolidBrush, DEFAULT_CHARSET, DeleteObject, DrawFocusRect, EndPaint,
+    FW_BOLD, FW_NORMAL, FillRect, FrameRect, GetDC, GetSysColor, GetSysColorBrush, GetTextFaceW,
+    GetTextMetricsW, HBRUSH, HFONT, InvalidateRect, LOGFONTW, MapWindowPoints, PAINTSTRUCT,
+    ReleaseDC, ScreenToClient, SelectObject, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT,
+    TextOutW,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
     GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectI,
@@ -82,11 +82,11 @@ use windows_sys::Win32::UI::Controls::Dialogs::{
 use windows_sys::Win32::UI::Controls::{
     BTNS_CHECK, BTNS_SHOWTEXT, CCS_NOPARENTALIGN, CCS_NORESIZE, CDDS_ITEMPREPAINT, CDDS_PREPAINT,
     CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL, EM_SETSEL, HDM_GETITEMCOUNT,
-    HDM_GETITEMRECT, I_IMAGENONE, ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES,
-    ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, LVCF_FMT, LVCF_TEXT,
-    LVCF_WIDTH, LVCFMT_LEFT, LVCFMT_RIGHT, LVCOLUMNW, LVIF_TEXT, LVIR_LABEL, LVIS_FOCUSED,
-    LVIS_SELECTED, LVITEMW, LVM_GETCOLUMNW, LVM_GETCOUNTPERPAGE, LVM_GETHEADER, LVM_GETITEMCOUNT,
-    LVM_GETITEMRECT, LVM_GETITEMTEXTW, LVM_GETNEXTITEM, LVM_GETTOPINDEX, LVM_INSERTCOLUMNW,
+    HDM_GETITEMRECT, ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, ICC_TREEVIEW_CLASSES,
+    INITCOMMONCONTROLSEX, InitCommonControlsEx, LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCFMT_LEFT,
+    LVCFMT_RIGHT, LVCOLUMNW, LVIF_TEXT, LVIR_LABEL, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW,
+    LVM_GETCOLUMNW, LVM_GETCOUNTPERPAGE, LVM_GETHEADER, LVM_GETITEMCOUNT, LVM_GETITEMRECT,
+    LVM_GETITEMTEXTW, LVM_GETNEXTITEM, LVM_GETTOPINDEX, LVM_INSERTCOLUMNW,
     LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMCOUNT, LVM_SETITEMSTATE, LVN_COLUMNCLICK,
     LVN_GETDISPINFOW, LVNI_SELECTED, LVS_EX_FULLROWSELECT, LVS_OWNERDATA, LVS_REPORT,
     LVS_SHOWSELALWAYS, LVS_SINGLESEL, LVSICF_NOSCROLL, MEASUREITEMSTRUCT, NM_CUSTOMDRAW, NM_DBLCLK,
@@ -94,13 +94,14 @@ use windows_sys::Win32::UI::Controls::{
     NMTVCUSTOMDRAW, ODS_FOCUS, ODS_SELECTED, SB_SETTEXTW, SBARS_SIZEGRIP, STATUSCLASSNAMEW,
     SetScrollInfo, TB_ADDBUTTONSW, TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE, TB_CHECKBUTTON,
     TB_DELETEBUTTON, TB_GETBUTTONSIZE, TB_GETITEMRECT, TB_GETROWS, TB_SETBITMAPSIZE,
-    TB_SETBUTTONWIDTH, TB_SETDRAWTEXTFLAGS, TB_SETEXTENDEDSTYLE, TB_SETMAXTEXTROWS, TBBUTTON,
-    TBSTATE_CHECKED, TBSTATE_ENABLED, TBSTYLE_EX_MIXEDBUTTONS, TBSTYLE_FLAT, TBSTYLE_WRAPABLE,
-    TOOLBARCLASSNAMEW, TVC_BYKEYBOARD, TVC_BYMOUSE, TVE_COLLAPSE, TVE_EXPAND, TVGN_CARET,
-    TVGN_CHILD, TVGN_NEXT, TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_TEXT,
-    TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_EXPANDED, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND,
-    TVM_GETITEMRECT, TVM_GETITEMSTATE, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW,
-    TVM_SELECTITEM, TVN_ITEMEXPANDEDW, TVN_SELCHANGEDW, TVS_HASBUTTONS,
+    TB_SETBUTTONWIDTH, TB_SETEXTENDEDSTYLE, TB_SETMAXTEXTROWS, TBBUTTON, TBSTATE_CHECKED,
+    TBSTATE_ENABLED, TBSTYLE_EX_MIXEDBUTTONS, TBSTYLE_FLAT, TBSTYLE_WRAPABLE, TOOLBARCLASSNAMEW,
+    TVC_BYKEYBOARD, TVC_BYMOUSE, TVE_COLLAPSE, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT,
+    TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_IMAGE, TVIF_SELECTEDIMAGE,
+    TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_EXPANDED, TVITEMEXW, TVM_DELETEITEM,
+    TVM_EXPAND, TVM_GETITEMRECT, TVM_GETITEMSTATE, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST,
+    TVM_INSERTITEMW, TVM_SELECTITEM, TVN_ITEMEXPANDEDW, TVN_SELCHANGEDW, TVS_HASBUTTONS,
+    TVS_HASLINES, TVS_LINESATROOT,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetFocus, GetKeyState, SetFocus, VK_CONTROL, VK_MENU, VK_SHIFT, VK_TAB,
@@ -281,6 +282,7 @@ mod verification;
 mod views;
 mod window_buffer;
 mod window_data;
+mod window_icons;
 
 use account::{
     CRASH_LOG_FILE_NAME, PROFILE_SUBDIR, SubmittedIdentityReset, SubmittedRoomKeyTransfer,
@@ -442,14 +444,14 @@ use menus::{
 #[cfg(test)]
 use navigation::navigation_layout;
 use navigation::{
-    NavItem, NavNode, ROOM_LIST_TITLE, TreeItem, cycled_window, dump_navigation_tree,
-    dump_selected_navigation_path, expand_tree_item, handle_tree_selection, insert_tree_item,
-    nth_window, ordered_view_ids, read_tree_item_text, refresh_tree_activity_colors,
-    select_navigation_path, select_navigation_view, select_room, select_tree_item,
-    selected_tree_item, set_navigation_expanded, show_navigation_room_context_menu,
-    switchbar_custom_draw, sync_switchbar, sync_views_and_tree, tree_custom_draw,
-    tree_expansion_changed, view_caption, view_id_from_identity, view_identity_from_view_id,
-    view_short_title,
+    NavItem, NavNode, ROOM_LIST_TITLE, SwitchbarFace, TreeItem, cycled_window,
+    dump_navigation_tree, dump_selected_navigation_path, expand_tree_item, handle_tree_selection,
+    insert_tree_item, nth_window, ordered_view_ids, read_tree_item_text,
+    refresh_tree_activity_colors, select_navigation_path, select_navigation_view, select_room,
+    select_tree_item, selected_tree_item, set_navigation_expanded,
+    show_navigation_room_context_menu, switchbar_custom_draw, sync_switchbar, sync_views_and_tree,
+    tree_custom_draw, tree_expansion_changed, view_caption, view_id_from_identity,
+    view_identity_from_view_id, view_short_title,
 };
 use nick_completion::NickCompletion;
 use nick_list::{
@@ -542,6 +544,7 @@ use views::{
 #[cfg(test)]
 use views::{ROOM_CONTENT_CLASS_NAME, take_stale_room_views};
 use window_buffer::trim_window_buffers;
+use window_icons::{WINDOW_ICON_SIZE, WindowIcon, create_window_icons};
 
 const TIMELINE_CLASS_NAME: &str = "mirxWin32Timeline";
 const FRAME_TITLE: &str = "mirx";
@@ -614,6 +617,8 @@ struct Controls {
     /// mIRC's toolbar, its image list (which the toolbar does not own).
     toolbar: HWND,
     toolbar_images: windows_sys::Win32::UI::Controls::HIMAGELIST,
+    /// The treebar's and switchbar's window icons, which neither owns.
+    window_icons: windows_sys::Win32::UI::Controls::HIMAGELIST,
     tree: HWND,
     mdi_client: HWND,
     status_bar: HWND,
@@ -824,9 +829,9 @@ struct WindowState {
     /// The Go to Original waiting for older history; one at a time.
     pending_jump: Option<replies::EventJump>,
     /// The switchbar's buttons' windows, indexed by command id, and their
-    /// labels; only `rebuild_switchbar` sets them, both together.
+    /// labels and icons; only `rebuild_switchbar` sets them, both together.
     switchbar_views: Vec<ViewId>,
-    switchbar_labels: Vec<String>,
+    switchbar_faces: Vec<SwitchbarFace>,
     /// The treebar's items as `sync_tree` last built them.
     applied_navigation: Option<NavItem>,
     room_activity: BTreeMap<ViewId, ViewActivityLevel>,
@@ -1107,7 +1112,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         find_states: BTreeMap::new(),
         pending_jump: None,
         switchbar_views: Vec::new(),
-        switchbar_labels: Vec::new(),
+        switchbar_faces: Vec::new(),
         applied_navigation: None,
         room_activity: BTreeMap::new(),
         sent_receipts: Default::default(),

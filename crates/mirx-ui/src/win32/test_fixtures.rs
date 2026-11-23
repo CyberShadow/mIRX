@@ -979,7 +979,7 @@ pub(super) fn test_state() -> WindowState {
         find_states: BTreeMap::new(),
         pending_jump: None,
         switchbar_views: Vec::new(),
-        switchbar_labels: Vec::new(),
+        switchbar_faces: Vec::new(),
         applied_navigation: None,
         room_activity: BTreeMap::new(),
         sent_receipts: Default::default(),
@@ -1281,9 +1281,18 @@ pub(super) fn query(room_id: &str, display_name: &str, user_id: &str) -> RoomSum
     room
 }
 
+/// A view's item; a room's is a room's (`nav_direct`, `nav_invite` for
+/// the others).
 pub(super) fn nav_view(label: &str, view: ViewId, children: Vec<NavItem>) -> NavItem {
+    let icon = match view {
+        ViewId::Status => WindowIcon::Status,
+        ViewId::Room(_) => WindowIcon::Room,
+        ViewId::Thread { .. } => WindowIcon::Thread,
+        ViewId::RoomList => WindowIcon::RoomList,
+    };
     NavItem {
         label: label.to_owned(),
+        icon,
         node: NavNode::View(view),
         children,
     }
@@ -1291,6 +1300,20 @@ pub(super) fn nav_view(label: &str, view: ViewId, children: Vec<NavItem>) -> Nav
 
 pub(super) fn nav_room(label: &str, room_id: &str) -> NavItem {
     nav_view(label, room_view_id(room_id), Vec::new())
+}
+
+pub(super) fn nav_direct(label: &str, room_id: &str) -> NavItem {
+    NavItem {
+        icon: WindowIcon::Direct,
+        ..nav_room(label, room_id)
+    }
+}
+
+pub(super) fn nav_invite(label: &str, room_id: &str) -> NavItem {
+    NavItem {
+        icon: WindowIcon::Invite,
+        ..nav_room(label, room_id)
+    }
 }
 
 pub(super) fn highlighted(mut activity: RoomActivity) -> RoomActivity {

@@ -2,7 +2,10 @@
 //! loop.
 
 use windows_sys::Win32::Graphics::Gdi::COLOR_BTNFACE;
-use windows_sys::Win32::UI::Controls::TB_AUTOSIZE;
+use windows_sys::Win32::UI::Controls::{
+    TB_AUTOSIZE, TB_SETBUTTONINFOW, TB_SETIMAGELIST, TBBUTTONINFOW, TBIF_BYINDEX, TBIF_SIZE,
+    TBSTYLE_LIST, TVM_SETIMAGELIST, TVSIL_NORMAL,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_CAPTURECHANGED, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR,
 };
@@ -320,8 +323,9 @@ unsafe extern "system" fn window_proc(
         WM_NCDESTROY => {
             if let Some(state) = window_data::get::<WindowState>(hwnd) {
                 destroy_automation_state(state);
-                // The toolbar went with the other children.
-                toolbar::destroy_toolbar_images(state.controls.toolbar_images);
+                // The bars went with the other children.
+                app_icon::destroy_image_list(state.controls.toolbar_images);
+                app_icon::destroy_image_list(state.controls.window_icons);
             }
             window_data::drop_owned::<WindowState>(hwnd);
             0
@@ -352,6 +356,7 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     // First, so it is the top child, as mIRC's.
     (state.controls.toolbar, state.controls.toolbar_images) =
         toolbar::create_toolbar(hwnd, instance)?;
+    state.controls.window_icons = create_window_icons(hwnd, instance)?;
 
     state.controls.switchbar = CreateWindowExW(
         0,
@@ -362,8 +367,15 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         // edge, painting over it whenever the switchbar repaints. Its
         // buttons wrap onto more rows on its own WM_SIZE (TBSTYLE_WRAPABLE);
         // `layout_controls` shows it as the settings say and sizes it to
-        // its rows.
-        WS_CHILD | TBSTYLE_FLAT | TBSTYLE_WRAPABLE | CCS_NORESIZE as u32 | CCS_NOPARENTALIGN as u32,
+        // its rows. List style: each button's icon, then its label,
+        // left-aligned, vertically centred, on one line, cut with "..."
+        // when it is wider than its button (the style's draw-text flags).
+        WS_CHILD
+            | TBSTYLE_FLAT
+            | TBSTYLE_LIST
+            | TBSTYLE_WRAPABLE
+            | CCS_NORESIZE as u32
+            | CCS_NOPARENTALIGN as u32,
         0,
         0,
         0,
@@ -388,34 +400,48 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         0,
         TBSTYLE_EX_MIXEDBUTTONS as LPARAM,
     );
-    set_switchbar_button_width(
-        state.controls.switchbar,
-        state.settings.settings().switchbar.buttons,
-    );
-    // One line per label, cut with "..." when it is wider than its button.
-    SendMessageW(state.controls.switchbar, TB_SETMAXTEXTROWS, 1, 0);
-    let text_flags = DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
     SendMessageW(
         state.controls.switchbar,
-        TB_SETDRAWTEXTFLAGS,
-        text_flags as WPARAM,
-        text_flags as LPARAM,
+        TB_SETIMAGELIST,
+        0,
+        state.controls.window_icons,
     );
+    // A wrapping toolbar starts a new row once a button would pass the
+    // edge by more than half the toolbar's button width beyond its bitmap
+    // (comctl32's `TOOLBAR_WrapToolbar`: `x + cx - (nButtonWidth -
+    // nBitmapWidth) / 2 > width`). The toolbar's button width is the
+    // icon's, so that slack is nothing and no row ends in a clipped
+    // button; each button has its own width, the setting's
+    // (`set_switchbar_button_width`).
+    let icon_size = Dpi::of_window(hwnd).px(WINDOW_ICON_SIZE);
+    SendMessageW(
+        state.controls.switchbar,
+        TB_SETBUTTONWIDTH,
+        0,
+        pack_size_lparam(icon_size, icon_size),
+    );
+    SendMessageW(state.controls.switchbar, TB_SETMAXTEXTROWS, 1, 0);
 
     // `layout_controls` shows it, as the settings say.
     state.controls.tree = create_child_window(
         hwnd,
         TREE_CLASS_NAME,
         "",
-        // Buttons on the items with children, as mIRC's treebar; no lines,
-        // and none on the root (Status).
-        WS_CHILD | WS_BORDER | TVS_HASBUTTONS,
+        // Lines, and buttons on the items with children, the root
+        // (Status) included, as mIRC's treebar.
+        WS_CHILD | WS_BORDER | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT,
         0,
         TREE_ID,
         instance,
         null_mut(),
     )?;
     set_treebar_colors(state.controls.tree, &state.settings.settings().colors);
+    SendMessageW(
+        state.controls.tree,
+        TVM_SETIMAGELIST,
+        TVSIL_NORMAL as WPARAM,
+        state.controls.window_icons,
+    );
 
     let mut mdi_client: CLIENTCREATESTRUCT = zeroed();
     // No MDI window list in the Window menu: the switchbar is the window
@@ -527,25 +553,24 @@ pub(super) unsafe fn set_treebar_colors(tree: HWND, colors: &ColorScheme) {
 
 /// Gives every switchbar button the setting's width, whatever its label.
 pub(super) unsafe fn set_switchbar_button_width(switchbar: HWND, setting: ButtonWidth) {
-    let dpi = Dpi::of_window(switchbar);
-    let width = dpi.px(setting.pixels());
-    // The minimum and the maximum width.
-    SendMessageW(
-        switchbar,
-        TB_SETBUTTONWIDTH,
-        0,
-        pack_size_lparam(width, width),
-    );
-    // A wrapping toolbar starts a new row only once a button's bitmap would
-    // pass the edge (comctl32's `TOOLBAR_WrapToolbar`), and the buttons have
-    // no bitmap: a bitmap as wide as the button wraps the button itself, so
-    // no row ends in a clipped button. 16 is the default bitmap height.
-    SendMessageW(
-        switchbar,
-        TB_SETBITMAPSIZE,
-        0,
-        pack_size_lparam(width, dpi.px(16)),
-    );
+    let width = u16::try_from(Dpi::of_window(switchbar).px(setting.pixels()))
+        .expect("a switchbar button's width fits a toolbar button's");
+    let count = SendMessageW(switchbar, TB_BUTTONCOUNT, 0, 0) as usize;
+    for index in 0..count {
+        let info = TBBUTTONINFOW {
+            cbSize: size_of::<TBBUTTONINFOW>() as u32,
+            dwMask: TBIF_BYINDEX | TBIF_SIZE,
+            cx: width,
+            ..zeroed()
+        };
+        let set = SendMessageW(
+            switchbar,
+            TB_SETBUTTONINFOW,
+            index,
+            &info as *const TBBUTTONINFOW as LPARAM,
+        );
+        assert_ne!(set, 0, "switchbar button {index} exists");
+    }
 }
 
 pub(super) unsafe fn layout_controls(hwnd: HWND) {
@@ -1079,7 +1104,11 @@ mod tests {
                 let bar = frame_child_layout(hwnd, switchbar);
                 assert_eq!(
                     bar.height,
-                    switchbar::switchbar_height(1, 0, Dpi::of_window(hwnd))
+                    switchbar::switchbar_height(
+                        1,
+                        switchbar_button_height(switchbar),
+                        Dpi::of_window(hwnd)
+                    )
                 );
                 assert_eq!(
                     frame_child_layout(hwnd, state_ref(hwnd).controls.mdi_client).y,

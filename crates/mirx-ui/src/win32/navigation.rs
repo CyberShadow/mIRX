@@ -348,7 +348,7 @@ unsafe fn insert_nav_item(
     collapsed: &BTreeSet<NavNode>,
 ) {
     let tree = state.controls.tree;
-    let tree_item = insert_tree_item(tree, parent, &item.label);
+    let tree_item = insert_nav_tree_item(tree, parent, &item.label, item.icon);
     state.tree_items.insert(
         tree_item,
         TreeItem {
@@ -429,12 +429,36 @@ unsafe fn outermost_collapsed_ancestor(tree: HWND, item: isize) -> Option<isize>
 
 pub(super) unsafe fn insert_tree_item(tree: HWND, parent: isize, text: &str) -> isize {
     let mut text = wide_null(text);
-    let item = TVITEMEXW {
-        mask: TVIF_TEXT,
-        pszText: text.as_mut_ptr(),
-        cchTextMax: text.len() as i32,
-        ..zeroed()
-    };
+    insert_tree_item_as(
+        tree,
+        parent,
+        TVITEMEXW {
+            mask: TVIF_TEXT,
+            pszText: text.as_mut_ptr(),
+            cchTextMax: text.len() as i32,
+            ..zeroed()
+        },
+    )
+}
+
+/// A treebar item: its label and its window's icon, selected or not.
+unsafe fn insert_nav_tree_item(tree: HWND, parent: isize, text: &str, icon: WindowIcon) -> isize {
+    let mut text = wide_null(text);
+    insert_tree_item_as(
+        tree,
+        parent,
+        TVITEMEXW {
+            mask: TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE,
+            pszText: text.as_mut_ptr(),
+            cchTextMax: text.len() as i32,
+            iImage: icon.image(),
+            iSelectedImage: icon.image(),
+            ..zeroed()
+        },
+    )
+}
+
+unsafe fn insert_tree_item_as(tree: HWND, parent: isize, item: TVITEMEXW) -> isize {
     let insert = TVINSERTSTRUCTW {
         hParent: parent as _,
         hInsertAfter: TVI_LAST as _,
@@ -482,6 +506,7 @@ pub(super) struct TreeItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct NavItem {
     pub(super) label: String,
+    pub(super) icon: WindowIcon,
     pub(super) node: NavNode,
     pub(super) children: Vec<NavItem>,
 }
@@ -570,12 +595,14 @@ pub(super) fn navigation_layout(model: &UiModel) -> NavItem {
     if model.room_list.is_some() {
         children.push(NavItem {
             label: ROOM_LIST_TITLE.to_owned(),
+            icon: WindowIcon::RoomList,
             node: NavNode::View(ViewId::RoomList),
             children: Vec::new(),
         });
     }
     NavItem {
         label: view_short_title(model, &ViewId::Status),
+        icon: WindowIcon::Status,
         node: NavNode::View(ViewId::Status),
         children,
     }
@@ -623,6 +650,7 @@ fn space_nav_item(
             } else if chain.contains(child_id) {
                 NavItem {
                     label: space_tree_label(child),
+                    icon: WindowIcon::Space,
                     node: NavNode::Space {
                         room_id: child.room_id.clone(),
                     },
@@ -635,6 +663,7 @@ fn space_nav_item(
         .collect();
     NavItem {
         label: space_tree_label(joined[space_id]),
+        icon: WindowIcon::Space,
         node: NavNode::Space {
             room_id: space_id.to_owned(),
         },
@@ -650,6 +679,7 @@ fn room_nav_item(model: &UiModel, room: &RoomSummary) -> NavItem {
             .iter()
             .map(|(thread_root_event_id, thread)| NavItem {
                 label: thread.label.clone(),
+                icon: WindowIcon::Thread,
                 node: NavNode::View(ViewId::Thread {
                     room_id: room.room_id.clone(),
                     thread_root_event_id: thread_root_event_id.clone(),
@@ -661,6 +691,7 @@ fn room_nav_item(model: &UiModel, room: &RoomSummary) -> NavItem {
     };
     NavItem {
         label: room_tree_label(room),
+        icon: WindowIcon::of_room(room),
         node: NavNode::View(ViewId::Room(room.room_id.clone())),
         children,
     }
@@ -767,33 +798,43 @@ pub(super) fn cycled_window(
     .cloned()
 }
 
-/// Rebuilds the switchbar if its buttons (windows or labels) changed;
-/// otherwise only checks the active window's button and repaints, for the
-/// activity colours.
+/// What a switchbar button shows of its window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SwitchbarFace {
+    label: String,
+    icon: WindowIcon,
+}
+
+/// Rebuilds the switchbar if its buttons (windows, labels or icons)
+/// changed; otherwise only checks the active window's button and repaints,
+/// for the activity colours.
 pub(super) unsafe fn sync_switchbar(hwnd: HWND) -> Result<(), String> {
-    let (view_ids, labels) = {
+    let (view_ids, faces) = {
         let state = state_ref(hwnd);
         let view_ids = ordered_view_ids(state);
-        let labels = view_ids
+        let faces = view_ids
             .iter()
-            .map(|view_id| view_short_title(&state.model, view_id))
+            .map(|view_id| SwitchbarFace {
+                label: view_short_title(&state.model, view_id),
+                icon: WindowIcon::of_view(&state.model, view_id),
+            })
             .collect::<Vec<_>>();
-        (view_ids, labels)
+        (view_ids, faces)
     };
     let state = state_ref(hwnd);
-    if state.switchbar_views == view_ids && state.switchbar_labels == labels {
+    if state.switchbar_views == view_ids && state.switchbar_faces == faces {
         refresh_switchbar_state(hwnd)
     } else {
-        rebuild_switchbar(hwnd, view_ids, labels)
+        rebuild_switchbar(hwnd, view_ids, faces)
     }
 }
 
-/// Replaces every switchbar button with one per `view_ids`, labelled
-/// `labels`.
+/// Replaces every switchbar button with one per `view_ids`, showing
+/// `faces`.
 unsafe fn rebuild_switchbar(
     hwnd: HWND,
     view_ids: Vec<ViewId>,
-    labels: Vec<String>,
+    faces: Vec<SwitchbarFace>,
 ) -> Result<(), String> {
     let switchbar = state_ref(hwnd).controls.switchbar;
     if switchbar.is_null() {
@@ -822,9 +863,9 @@ unsafe fn rebuild_switchbar(
         return Err("switchbar command range exhausted".to_owned());
     }
 
-    let wide_labels = labels
+    let wide_labels = faces
         .iter()
-        .map(|label| wide_null(label))
+        .map(|face| wide_null(&face.label))
         .collect::<Vec<_>>();
     let button_states = {
         let state = state_ref(hwnd);
@@ -837,7 +878,7 @@ unsafe fn rebuild_switchbar(
         .iter()
         .enumerate()
         .map(|(index, _)| TBBUTTON {
-            iBitmap: I_IMAGENONE,
+            iBitmap: faces[index].icon.image(),
             idCommand: (SWITCHBAR_COMMAND_FIRST + index) as i32,
             fsState: button_states[index],
             fsStyle: (BTNS_CHECK | BTNS_SHOWTEXT) as u8,
@@ -848,10 +889,10 @@ unsafe fn rebuild_switchbar(
 
     // `switchbar_views` mirrors the buttons, indexed by command id: switch
     // it while the toolbar is empty, so a paint never sees a button without
-    // its view. `switchbar_labels` goes with it.
+    // its view. `switchbar_faces` goes with it.
     let state = state_mut(hwnd);
     state.switchbar_views = view_ids;
-    state.switchbar_labels = labels;
+    state.switchbar_faces = faces;
     if !buttons.is_empty()
         && SendMessageW(
             switchbar,
@@ -862,6 +903,7 @@ unsafe fn rebuild_switchbar(
     {
         return Err("failed to add switchbar buttons".to_owned());
     }
+    set_switchbar_button_width(switchbar, state.settings.settings().switchbar.buttons);
     // More or fewer buttons may take more or fewer rows.
     layout_controls(hwnd);
     refresh_switchbar_state(hwnd)
@@ -1412,6 +1454,123 @@ mod tests {
         }
     }
 
+    /// Each treebar item's image, selected and not.
+    unsafe fn tree_item_images(tree: HWND, item: isize) -> (i32, i32) {
+        let mut tree_item = TVITEMEXW {
+            mask: TVIF_IMAGE | TVIF_SELECTEDIMAGE,
+            hItem: item as _,
+            ..zeroed()
+        };
+        assert_ne!(
+            SendMessageW(
+                tree,
+                TVM_GETITEMW,
+                0,
+                (&mut tree_item as *mut TVITEMEXW) as LPARAM,
+            ),
+            0
+        );
+        (tree_item.iImage, tree_item.iSelectedImage)
+    }
+
+    /// Each switchbar button's image, in button order.
+    unsafe fn switchbar_images(switchbar: HWND) -> Vec<i32> {
+        use windows_sys::Win32::UI::Controls::TB_GETBUTTON;
+        let count = SendMessageW(switchbar, TB_BUTTONCOUNT, 0, 0) as usize;
+        (0..count)
+            .map(|index| {
+                let mut button = TBBUTTON::default();
+                SendMessageW(
+                    switchbar,
+                    TB_GETBUTTON,
+                    index,
+                    &mut button as *mut TBBUTTON as LPARAM,
+                );
+                button.iBitmap
+            })
+            .collect()
+    }
+
+    #[test]
+    fn both_bars_show_each_windows_icon_and_the_tree_its_lines() {
+        use windows_sys::Win32::UI::Controls::{
+            TB_GETIMAGELIST, TBSTYLE_LIST, TVM_GETIMAGELIST, TVSIL_NORMAL,
+        };
+        unsafe {
+            with_test_frame(800, 600, |hwnd| {
+                state_mut(hwnd).model.rooms = vec![
+                    room("!ops:example", "Ops", false),
+                    query("!alice:example", "Alice", "@alice:example"),
+                    invited_room("!lobby:example", "Lobby"),
+                ];
+                sync_views_and_tree(hwnd).unwrap();
+                let controls = &state_ref(hwnd).controls;
+                let (tree, switchbar, icons) =
+                    (controls.tree, controls.switchbar, controls.window_icons);
+
+                let lines = TVS_HASLINES | TVS_HASBUTTONS | TVS_LINESATROOT;
+                assert_eq!(GetWindowLongPtrW(tree, GWL_STYLE) as u32 & lines, lines);
+                assert_eq!(
+                    SendMessageW(tree, TVM_GETIMAGELIST, TVSIL_NORMAL as WPARAM, 0),
+                    icons
+                );
+                assert_eq!(SendMessageW(switchbar, TB_GETIMAGELIST, 0, 0), icons);
+                assert_ne!(
+                    GetWindowLongPtrW(switchbar, GWL_STYLE) as u32 & TBSTYLE_LIST,
+                    0
+                );
+
+                let shown = |hwnd: HWND| {
+                    let state = state_ref(hwnd);
+                    let tree_images = state
+                        .switchbar_views
+                        .iter()
+                        .map(|view_id| tree_item_images(tree, state.primary_tree_items[view_id]))
+                        .collect::<Vec<_>>();
+                    (tree_images, switchbar_images(switchbar))
+                };
+                let images = |icons: [WindowIcon; 4]| {
+                    let images = icons.map(WindowIcon::image);
+                    (images.map(|image| (image, image)).to_vec(), images.to_vec())
+                };
+                assert_eq!(
+                    state_ref(hwnd).switchbar_views,
+                    [
+                        ViewId::Status,
+                        room_view_id("!ops:example"),
+                        room_view_id("!alice:example"),
+                        room_view_id("!lobby:example"),
+                    ]
+                );
+                assert_eq!(
+                    shown(hwnd),
+                    images([
+                        WindowIcon::Status,
+                        WindowIcon::Room,
+                        WindowIcon::Direct,
+                        WindowIcon::Invite,
+                    ])
+                );
+
+                // A room turning into direct messages keeps its place and its
+                // name: only its icons change.
+                let rooms = &mut state_mut(hwnd).model.rooms;
+                rooms[0].is_direct = true;
+                rooms[0].direct_user_ids = vec!["@bob:example".to_owned()];
+                sync_views_and_tree(hwnd).unwrap();
+                assert_eq!(
+                    shown(hwnd),
+                    images([
+                        WindowIcon::Status,
+                        WindowIcon::Direct,
+                        WindowIcon::Direct,
+                        WindowIcon::Invite,
+                    ])
+                );
+            });
+        }
+    }
+
     #[test]
     fn room_tree_label_has_no_e2ee_or_query_markers() {
         let mut direct_room = room("!direct:example", "Direct", true);
@@ -1572,6 +1731,7 @@ mod tests {
     fn nav_folder(label: &str, room_id: &str, children: Vec<NavItem>) -> NavItem {
         NavItem {
             label: label.to_owned(),
+            icon: WindowIcon::Space,
             node: NavNode::Space {
                 room_id: room_id.to_owned(),
             },
@@ -1618,9 +1778,9 @@ mod tests {
                 vec![
                     nav_room("Ops", "!ops:example"),
                     nav_room("Random", "!random:example"),
-                    nav_room("Alice", "!alice:example"),
-                    nav_room("Bob", "!bob:example"),
-                    nav_room("Lobby [invite]", "!invite:example"),
+                    nav_direct("Alice", "!alice:example"),
+                    nav_direct("Bob", "!bob:example"),
+                    nav_invite("Lobby [invite]", "!invite:example"),
                 ]
             )
         );
@@ -1686,7 +1846,7 @@ mod tests {
                         vec![
                             nav_room("Shared", "!shared:example"),
                             // Rooms under a space stay there whatever their kind.
-                            nav_room("Dm", "!dm:example"),
+                            nav_direct("Dm", "!dm:example"),
                         ]
                     ),
                     nav_folder(
@@ -1699,7 +1859,7 @@ mod tests {
                         )]
                     ),
                     nav_room("Lobby", "!lobby:example"),
-                    nav_room("Direct", "!direct:example"),
+                    nav_direct("Direct", "!direct:example"),
                 ]
             )
         );
@@ -2106,7 +2266,7 @@ mod tests {
             nav_view(
                 "Status",
                 ViewId::Status,
-                vec![nav_room("Alice", "!dm:example")]
+                vec![nav_direct("Alice", "!dm:example")]
             )
         );
     }

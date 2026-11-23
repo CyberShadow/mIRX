@@ -1,11 +1,16 @@
-//! mirx's icon, from the exe's resources (`build/`).
+//! mirx's icon and the glyphs' image lists, from the exe's resources (`build/`).
 
 use std::ffi::c_void;
 
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, HICON, IMAGE_ICON, LR_SHARED, LoadImageW, SM_CXICON, SM_CXSMICON, SM_CYICON,
-    SM_CYSMICON,
+use windows_sys::Win32::UI::Controls::{
+    HIMAGELIST, ILC_COLOR32, ILC_MASK, ImageList_Create, ImageList_Destroy, ImageList_ReplaceIcon,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    DestroyIcon, GetSystemMetrics, HICON, IMAGE_ICON, LR_SHARED, LoadImageW, SM_CXICON,
+    SM_CXSMICON, SM_CYICON, SM_CYSMICON,
+};
+
+use super::last_os_error;
 
 /// The icon group's resource id. `build/resources.rs` has the same constant;
 /// the `app_resources` tests load this id from the exe.
@@ -50,4 +55,49 @@ pub(super) fn app_icon(instance: *mut c_void, size: IconSize) -> HICON {
         "the exe embeds mirx's icon (build/main.rs links it)"
     );
     icon
+}
+
+/// An image list of the exe's icon groups `ids`, in order, at `size` px
+/// square (`LoadImageW` picks the group's nearest size). The caller owns
+/// it: the controls it is set on do not destroy it.
+pub(super) unsafe fn image_list(
+    instance: *mut c_void,
+    ids: &[u16],
+    size: i32,
+) -> Result<HIMAGELIST, String> {
+    let count = i32::try_from(ids.len()).expect("an image list holds few icons");
+    let images = unsafe { ImageList_Create(size, size, ILC_COLOR32 | ILC_MASK, count, 0) };
+    if images == 0 {
+        return Err(last_os_error("ImageList_Create"));
+    }
+    for &id in ids {
+        let icon = unsafe {
+            LoadImageW(
+                instance,
+                id as usize as *const u16,
+                IMAGE_ICON,
+                size,
+                size,
+                0,
+            )
+        };
+        assert!(
+            !icon.is_null(),
+            "the exe embeds icon group {id} (build/main.rs links it)"
+        );
+        let index = unsafe { ImageList_ReplaceIcon(images, -1, icon) };
+        unsafe { DestroyIcon(icon) };
+        if index < 0 {
+            let error = last_os_error("ImageList_ReplaceIcon");
+            unsafe { ImageList_Destroy(images) };
+            return Err(error);
+        }
+    }
+    Ok(images)
+}
+
+/// Destroys an `image_list`, or nothing if the frame failed before making
+/// it (a null list).
+pub(super) unsafe fn destroy_image_list(images: HIMAGELIST) {
+    unsafe { ImageList_Destroy(images) };
 }

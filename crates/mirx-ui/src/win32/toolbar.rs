@@ -6,12 +6,12 @@
 //! image list at the frame's DPI.
 
 use windows_sys::Win32::UI::Controls::{
-    BTNS_AUTOSIZE, BTNS_BUTTON, BTNS_SEP, CCS_TOP, HIMAGELIST, ILC_COLOR32, ILC_MASK,
-    ImageList_Create, ImageList_Destroy, ImageList_ReplaceIcon, TB_ENABLEBUTTON, TB_HIDEBUTTON,
+    BTNS_AUTOSIZE, BTNS_BUTTON, BTNS_SEP, CCS_TOP, HIMAGELIST, TB_ENABLEBUTTON, TB_HIDEBUTTON,
     TB_ISBUTTONENABLED, TB_ISBUTTONHIDDEN, TB_SETIMAGELIST, TBSTYLE_EX_HIDECLIPPEDBUTTONS,
     TBSTYLE_TOOLTIPS,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, IMAGE_ICON, LoadImageW};
+
+use super::app_icon;
 
 use super::*;
 
@@ -109,30 +109,13 @@ pub(super) unsafe fn create_toolbar(
     );
 
     let size = Dpi::of_window(frame).px(16);
-    let images = ImageList_Create(size, size, ILC_COLOR32 | ILC_MASK, 16, 0);
-    if images == 0 {
-        return Err(last_os_error("ImageList_Create toolbar"));
-    }
-    for button in toolbar_buttons() {
-        let icon = LoadImageW(
-            instance,
-            button.icon_id as usize as *const u16,
-            IMAGE_ICON,
-            size,
-            size,
-            0,
-        );
-        assert!(
-            !icon.is_null(),
-            "the exe embeds toolbar icon {} (build/main.rs links it)",
-            button.icon_id
-        );
-        let index = ImageList_ReplaceIcon(images, -1, icon);
-        DestroyIcon(icon);
-        if index < 0 {
-            return Err(last_os_error("ImageList_ReplaceIcon toolbar"));
-        }
-    }
+    let images = app_icon::image_list(
+        instance,
+        &toolbar_buttons()
+            .map(|button| button.icon_id)
+            .collect::<Vec<_>>(),
+        size,
+    )?;
     SendMessageW(toolbar, TB_SETIMAGELIST, 0, images);
     SendMessageW(toolbar, TB_SETBITMAPSIZE, 0, pack_size_lparam(size, size));
 
@@ -168,14 +151,10 @@ pub(super) unsafe fn create_toolbar(
         buttons.as_ptr() as LPARAM,
     ) == 0
     {
-        ImageList_Destroy(images);
+        app_icon::destroy_image_list(images);
         return Err("failed to add the toolbar's buttons".to_owned());
     }
     Ok((toolbar, images))
-}
-
-pub(super) unsafe fn destroy_toolbar_images(images: HIMAGELIST) {
-    ImageList_Destroy(images);
 }
 
 /// The connect button follows the connection, as mIRC's turns into
