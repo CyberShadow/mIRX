@@ -739,7 +739,13 @@ mod tests {
             ),
         )
         .unwrap();
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         let sticker = rows.last().expect("the sticker's row");
         assert_eq!(sticker.kind, TimelineRowKind::Image { highlight: false });
         assert!(
@@ -786,16 +792,22 @@ mod tests {
         )
         .unwrap();
         assert!(
-            build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None)
-                .iter()
-                .any(|row| matches!(
-                    row.image_state,
-                    Some(TimelineImageState::Loaded {
-                        width: 1,
-                        height: 1,
-                        ..
-                    })
-                ))
+            build_room_timeline_rows(
+                &state.model,
+                "!ops:example",
+                state.timestamps(),
+                None,
+                false
+            )
+            .iter()
+            .any(|row| matches!(
+                row.image_state,
+                Some(TimelineImageState::Loaded {
+                    width: 1,
+                    height: 1,
+                    ..
+                })
+            ))
         );
         let view = state.model.room_views.get("!ops:example").unwrap();
         assert!(collect_lazy_room_preview_media_requests(view, view.activities.iter()).is_empty());

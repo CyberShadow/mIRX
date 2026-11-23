@@ -85,17 +85,32 @@ fn line_with_nick(
 
 /// `[ts] <Nick> body`, `[ts] * Nick body`, or `[ts] -Nick- body`. The
 /// timestamp `prefix` is `"[ts] "`, or empty when timestamps are off.
+/// `rank_glyph` goes before the nick, outside its range (mIRC's Show mode
+/// prefix: `<@Nick>`); empty for none.
 pub(super) fn message_line(
     prefix: &str,
     presentation: RoomMessagePresentationKind,
+    rank_glyph: &str,
     sender: &RoomUserProfile,
     body: &str,
 ) -> MessageLine {
-    match presentation {
-        RoomMessagePresentationKind::Text => line_with_nick(prefix, "<", sender, "> ", body),
-        RoomMessagePresentationKind::Emote => action_line(prefix, sender, body),
-        RoomMessagePresentationKind::Notice => line_with_nick(prefix, "-", sender, "- ", body),
-    }
+    let before = match presentation {
+        RoomMessagePresentationKind::Text => "<",
+        RoomMessagePresentationKind::Emote => "* ",
+        RoomMessagePresentationKind::Notice => "-",
+    };
+    let after = match presentation {
+        RoomMessagePresentationKind::Text => "> ",
+        RoomMessagePresentationKind::Emote => " ",
+        RoomMessagePresentationKind::Notice => "- ",
+    };
+    line_with_nick(
+        prefix,
+        &format!("{before}{rank_glyph}"),
+        sender,
+        after,
+        body,
+    )
 }
 
 /// An action-style line, as for an emote or media: `[ts] * Nick sent
@@ -302,8 +317,9 @@ mod tests {
     #[test]
     fn message_lines_use_mirc_sender_prefixes() {
         let alice = profile("@alice:example", Some("Alice"), false);
-        let line =
-            |presentation| message_line_parts(message_line("[12:34] ", presentation, &alice, "hi"));
+        let line = |presentation| {
+            message_line_parts(message_line("[12:34] ", presentation, "", &alice, "hi"))
+        };
 
         // The body offset is where the body starts: message styles shift
         // by it. The nick range is the nick alone, a hotlink.
@@ -320,7 +336,14 @@ mod tests {
             ("[12:34] -Alice- hi".to_owned(), "Alice".to_owned(), 16)
         );
         assert_eq!(
-            message_line("[12:34] ", RoomMessagePresentationKind::Text, &alice, "hi").nick,
+            message_line(
+                "[12:34] ",
+                RoomMessagePresentationKind::Text,
+                "",
+                &alice,
+                "hi"
+            )
+            .nick,
             9..14
         );
         assert_eq!(
@@ -368,20 +391,47 @@ mod tests {
             message_line_parts(message_line(
                 "",
                 RoomMessagePresentationKind::Text,
+                "",
                 &alice,
                 "hi"
             )),
             ("<Alice> hi".to_owned(), "Alice".to_owned(), 8)
         );
         assert_eq!(
-            message_line("", RoomMessagePresentationKind::Notice, &alice, "hi").nick,
+            message_line("", RoomMessagePresentationKind::Notice, "", &alice, "hi").nick,
             1..6
         );
         assert_eq!(
-            message_line("", RoomMessagePresentationKind::Emote, &alice, "hi").nick,
+            message_line("", RoomMessagePresentationKind::Emote, "", &alice, "hi").nick,
             2..7
         );
         assert_eq!(event_line("", "message redacted"), "* message redacted");
+    }
+
+    #[test]
+    fn a_rank_glyph_goes_before_the_nick_outside_its_range() {
+        let moderator = profile("@mod:example", Some("Mod"), false);
+        let line = message_line(
+            "[12:34] ",
+            RoomMessagePresentationKind::Text,
+            "@",
+            &moderator,
+            "hi",
+        );
+        assert_eq!(
+            message_line_parts(line),
+            ("[12:34] <@Mod> hi".to_owned(), "Mod".to_owned(), 15)
+        );
+        assert_eq!(
+            message_line_parts(message_line(
+                "",
+                RoomMessagePresentationKind::Emote,
+                "~",
+                &moderator,
+                "waves"
+            )),
+            ("* ~Mod waves".to_owned(), "Mod".to_owned(), 7)
+        );
     }
 
     #[test]
@@ -391,6 +441,7 @@ mod tests {
             message_line_parts(message_line(
                 "[12:34] ",
                 RoomMessagePresentationKind::Text,
+                "",
                 &sam,
                 "yo"
             )),

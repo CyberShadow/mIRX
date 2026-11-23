@@ -457,6 +457,7 @@ fn push_room_activity_row(
     activity: &RoomActivity,
     timestamps: TimestampStyle,
     own_user_id: Option<&str>,
+    rank_glyphs: bool,
 ) {
     push_reply_quote_row(rows, room_view, activity, own_user_id);
     let ActivityLine {
@@ -471,6 +472,7 @@ fn push_room_activity_row(
         activity,
         &timestamps.prefix(activity.timestamp_ms),
         own_user_id,
+        rank_glyphs,
     );
     let mut row = TimelineRow::log(kind, text)
         .with_styles(styles)
@@ -543,7 +545,7 @@ fn quoted_line(
     activity: &RoomActivity,
     own_user_id: Option<&str>,
 ) -> String {
-    replies::quote_excerpt(&activity_line_text(room_view, activity, "", own_user_id).text)
+    replies::quote_excerpt(&activity_line_text(room_view, activity, "", own_user_id, false).text)
 }
 
 /// The bottom line of a window whose editbox is armed with `target`. It
@@ -711,11 +713,14 @@ fn unable_to_decrypt_text(cause: mirx_core::RoomUnableToDecryptCause) -> String 
 }
 
 /// `own_user_id` is the signed-in user's, `None` while signed out.
+/// `rank_glyphs`: a message's sender has their rank's glyph, as the nick
+/// list ranks them now (Matrix keeps no rank at the time).
 fn activity_line_text(
     room_view: &RoomViewModel,
     activity: &RoomActivity,
     timestamp: &str,
     own_user_id: Option<&str>,
+    rank_glyphs: bool,
 ) -> ActivityLine {
     let (kind, line_text, image_state) = match &activity.kind {
         RoomActivityKind::Message(message) => {
@@ -737,9 +742,19 @@ fn activity_line_text(
                     recoverable: false, ..
                 } => " (failed)",
             };
+            let rank_glyph = if rank_glyphs {
+                room_view
+                    .members
+                    .iter()
+                    .find(|member| member.user_id == message.sender.user_id)
+                    .map_or("", |member| rank_prefix(member.rank))
+            } else {
+                ""
+            };
             let line = message_line(
                 timestamp,
                 message.presentation,
+                rank_glyph,
                 &message.sender,
                 &format!("{}{suffix}", message.body),
             );
@@ -990,12 +1005,14 @@ fn activity_line_text(
 }
 
 /// A room window's rows. `line_marker`: the event the line marker follows,
-/// `None` for no marker (see `room_line_marker`).
+/// `None` for no marker (see `room_line_marker`). `mode_prefix`: Options >
+/// IRC's Show mode prefix, which a channel's lines follow.
 pub(super) fn build_room_timeline_rows(
     model: &UiModel,
     room_id: &str,
     timestamps: TimestampStyle,
     line_marker: Option<&str>,
+    mode_prefix: bool,
 ) -> Vec<TimelineRow> {
     let room = room_by_id(&model.rooms, room_id).expect("room view must target an existing room");
     let room_view = model.room_views.get(room_id);
@@ -1022,7 +1039,10 @@ pub(super) fn build_room_timeline_rows(
             room_view.activities.iter(),
             None,
             timestamps,
-            model.own_user_id(),
+            LineSenders {
+                own_user_id: model.own_user_id(),
+                rank_glyphs: shows_rank_glyphs(room, mode_prefix),
+            },
             line_marker,
         );
         push_room_typing_row(&mut rows, room_view);
@@ -1045,7 +1065,7 @@ fn push_activity_rows_with_echo<'a>(
     activities: impl Iterator<Item = &'a RoomActivity>,
     thread_root: Option<&str>,
     timestamps: TimestampStyle,
-    own_user_id: Option<&str>,
+    senders: LineSenders,
     line_marker: Option<&str>,
 ) {
     let mut echo = room_view.echo.lines_for(thread_root).peekable();
@@ -1057,10 +1077,31 @@ fn push_activity_rows_with_echo<'a>(
         if std::mem::take(&mut marker_due) {
             rows.push(TimelineRow::line_marker());
         }
-        push_room_activity_row(rows, room_view, activity, timestamps, own_user_id);
+        push_room_activity_row(
+            rows,
+            room_view,
+            activity,
+            timestamps,
+            senders.own_user_id,
+            senders.rank_glyphs,
+        );
         marker_due = line_marker.is_some() && room_activity_event_id(activity) == line_marker;
     }
     rows.extend(echo.map(|line| echo_row(line, timestamps)));
+}
+
+/// How a window's lines show their senders: whether each is the signed-in
+/// user (`None` while signed out), and with their rank's glyph.
+#[derive(Clone, Copy)]
+struct LineSenders<'a> {
+    own_user_id: Option<&'a str>,
+    rank_glyphs: bool,
+}
+
+/// Whether `room`'s lines show their senders' rank glyphs: mIRC's Show
+/// mode prefix is for channel messages, so never in a query.
+fn shows_rank_glyphs(room: &RoomSummary, mode_prefix: bool) -> bool {
+    mode_prefix && room_window_kind(room) == RoomWindowKind::Channel
 }
 
 fn echo_row(line: &EchoLine, timestamps: TimestampStyle) -> TimelineRow {
@@ -1076,6 +1117,7 @@ pub(super) fn build_thread_timeline_rows(
     room_id: &str,
     thread_root_event_id: &str,
     timestamps: TimestampStyle,
+    mode_prefix: bool,
 ) -> Vec<TimelineRow> {
     let room = room_by_id(&model.rooms, room_id).expect("thread view must target an existing room");
     let room_view = model
@@ -1093,7 +1135,10 @@ pub(super) fn build_thread_timeline_rows(
             .filter(|activity| room_activity_belongs_to_thread(activity, thread_root_event_id)),
         Some(thread_root_event_id),
         timestamps,
-        model.own_user_id(),
+        LineSenders {
+            own_user_id: model.own_user_id(),
+            rank_glyphs: shows_rank_glyphs(room, mode_prefix),
+        },
         // Matrix keeps one read marker per room, for its room window.
         None,
     );
@@ -1112,6 +1157,7 @@ pub(super) fn render_room_lines(state: &WindowState, room_id: &str) -> Vec<Strin
         room_id,
         state.timestamps(),
         room_line_marker(state, room_id),
+        false,
     ))
 }
 
@@ -1343,7 +1389,7 @@ mod tests {
     use super::*;
 
     fn line_of(room_view: &RoomViewModel, activity: &RoomActivity) -> (TimelineRowKind, String) {
-        let line = activity_line_text(room_view, activity, "[12:00] ", None);
+        let line = activity_line_text(room_view, activity, "[12:00] ", None, false);
         (line.kind, line.text)
     }
 
@@ -1351,7 +1397,7 @@ mod tests {
     fn a_verification_request_links_whom_it_asks() {
         let request =
             verification_request_activity("!room:example", "$verify", 1, "@carol:example");
-        let line = activity_line_text(&RoomViewModel::default(), &request, "[12:00] ", None);
+        let line = activity_line_text(&RoomViewModel::default(), &request, "[12:00] ", None, false);
         assert_eq!(
             line.kind,
             TimelineRowKind::VerificationRequest { highlight: false }
@@ -1459,6 +1505,7 @@ mod tests {
             "!ops:example",
             state.timestamps(),
             None,
+            false,
         ));
         assert!(initial.contains(&"* Now talking in Ops (!ops:example)".to_owned()));
         assert!(initial.contains(&"* Topic is 'incident review'".to_owned()));
@@ -1474,6 +1521,7 @@ mod tests {
             "!ops:example",
             state.timestamps(),
             None,
+            false,
         ));
         assert!(updated.contains(&"* Topic is 'deployment window'".to_owned()));
         assert!(
@@ -1490,6 +1538,7 @@ mod tests {
             "!ops:example",
             state.timestamps(),
             None,
+            false,
         ));
         assert!(!cleared.iter().any(|line| line.starts_with("* Topic is ''")));
     }
@@ -1529,13 +1578,20 @@ mod tests {
             "!ops:example",
             state.timestamps(),
             None,
+            false,
         ))
     }
 
     #[test]
     fn a_reply_quotes_its_loaded_target_above_it_with_the_replys_event() {
         let state = reply_quote_state("$q");
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         assert_eq!(
             project_timeline_rows(&rows)[2..],
             [
@@ -1717,6 +1773,7 @@ mod tests {
             "!ops:example",
             "$!ops:example:root",
             state.timestamps(),
+            false,
         );
         assert!(
             rows.iter()
@@ -1755,7 +1812,13 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
@@ -1836,7 +1899,13 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         assert_eq!(
             rows.iter()
                 .filter(|row| row.kind == TimelineRowKind::ReactionSummary)
@@ -1877,10 +1946,16 @@ mod tests {
             .unwrap();
         }
         let reaction_row = |state: &WindowState| {
-            build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None)
-                .into_iter()
-                .find(|row| row.kind == TimelineRowKind::ReactionSummary)
-                .expect("the message has a reaction row")
+            build_room_timeline_rows(
+                &state.model,
+                "!ops:example",
+                state.timestamps(),
+                None,
+                false,
+            )
+            .into_iter()
+            .find(|row| row.kind == TimelineRowKind::ReactionSummary)
+            .expect("the message has a reaction row")
         };
         assert_eq!(
             reaction_row(&state).logical_text,
@@ -2117,7 +2192,13 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
@@ -2187,6 +2268,7 @@ mod tests {
             "!ops:example",
             "$thread-root",
             state.timestamps(),
+            false,
         );
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
@@ -2276,10 +2358,11 @@ mod tests {
         }];
         apply_core_event(&mut state, Event::RoomActivityUpdate(edit)).unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps(), None)
-            .into_iter()
-            .filter(|row| row.event_id.is_some())
-            .collect::<Vec<_>>();
+        let rows =
+            build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps(), None, false)
+                .into_iter()
+                .filter(|row| row.event_id.is_some())
+                .collect::<Vec<_>>();
         assert_eq!(
             rows.iter()
                 .map(|row| (row.logical_text.as_str(), styled_row_texts(row)))
@@ -2368,10 +2451,11 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps(), None)
-            .into_iter()
-            .filter(|row| row.event_id.is_some())
-            .collect::<Vec<_>>();
+        let rows =
+            build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps(), None, false)
+                .into_iter()
+                .filter(|row| row.event_id.is_some())
+                .collect::<Vec<_>>();
         assert_eq!(
             rows.iter()
                 .map(|row| (row.logical_text.as_str(), row_user_links(row)))
@@ -2410,7 +2494,8 @@ mod tests {
     fn reply_quotes_and_other_rows_have_no_user_links() {
         let mut state = reply_quote_state("$q");
         apply_core_event(&mut state, topic_state("!ops:example", "incident review")).unwrap();
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps(), None);
+        let rows =
+            build_room_timeline_rows(&state.model, "!ops:example", utc_timestamps(), None, false);
         let linked = rows
             .iter()
             .filter(|row| !row.user_links.is_empty())
@@ -2567,7 +2652,13 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
@@ -2836,7 +2927,13 @@ mod tests {
             from: HistoryFrom::Latest,
         };
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
 
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
@@ -2887,7 +2984,13 @@ mod tests {
             message: "homeserver unavailable".to_owned(),
         };
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
 
         assert_eq!(rows[2].kind, TimelineRowKind::Plain);
         assert_eq!(
@@ -2914,7 +3017,13 @@ mod tests {
             .expect("room view exists after room activity")
             .history = RoomHistoryBackfillState::Exhausted;
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
 
         assert_eq!(rows[2].kind, TimelineRowKind::Plain);
         assert_eq!(rows[2].logical_text, "* No older history available.");
@@ -2932,7 +3041,13 @@ mod tests {
         .unwrap();
         apply_core_event(&mut state, timeline("!ops:example", "latest row")).unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
 
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
@@ -2999,8 +3114,13 @@ mod tests {
         direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
         state.model.rooms = vec![direct_room];
 
-        let rows =
-            build_room_timeline_rows(&state.model, "!direct:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!direct:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
@@ -3322,7 +3442,13 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         let image_row = rows
             .iter()
             .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
@@ -3381,7 +3507,13 @@ mod tests {
             })
         );
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         let image_row = rows
             .iter()
             .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
@@ -3422,12 +3554,18 @@ mod tests {
         )
         .unwrap();
         assert!(
-            build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None)
-                .iter()
-                .any(|row| matches!(
-                    row.image_state,
-                    Some(TimelineImageState::Failed { ref message }) if message == "unavailable"
-                ))
+            build_room_timeline_rows(
+                &state.model,
+                "!ops:example",
+                state.timestamps(),
+                None,
+                false
+            )
+            .iter()
+            .any(|row| matches!(
+                row.image_state,
+                Some(TimelineImageState::Failed { ref message }) if message == "unavailable"
+            ))
         );
         apply_core_event(
             &mut state,
@@ -3479,7 +3617,13 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         let image_row = rows
             .iter()
             .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
@@ -3544,7 +3688,13 @@ mod tests {
         );
         assert!(state.decoded_images.contains_key(&image_key));
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         let image_row = rows
             .iter()
             .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
@@ -3593,6 +3743,7 @@ mod tests {
             "!ops:example",
             "$thread-root:example.org",
             state.timestamps(),
+            false,
         );
         let image_row = rows
             .iter()
@@ -3628,6 +3779,7 @@ mod tests {
             "!ops:example",
             "$thread-root:example.org",
             state.timestamps(),
+            false,
         );
         let lines = project_timeline_rows(&rows);
         assert_eq!(
@@ -3673,6 +3825,7 @@ mod tests {
             "!ops:example",
             "$thread-root:example.org",
             state.timestamps(),
+            false,
         );
         let video_row = rows
             .iter()
@@ -3750,6 +3903,7 @@ mod tests {
             "!ops:example",
             "$thread-root",
             state.timestamps(),
+            false,
         ));
         let rendered = lines.join("\n");
         assert!(rendered.contains("message redacted"));
@@ -3797,6 +3951,7 @@ mod tests {
             "!ops:example",
             "$thread-root",
             state.timestamps(),
+            false,
         ));
 
         assert!(
@@ -3857,6 +4012,7 @@ mod tests {
             "!ops:example",
             "$thread-root",
             state.timestamps(),
+            false,
         ));
         assert!(lines.iter().any(|line| line.contains("edited reply")));
         assert!(!lines.iter().any(|line| line.contains("old reply")));
@@ -3897,6 +4053,7 @@ mod tests {
             "!ops:example",
             "$thread-root",
             state.timestamps(),
+            false,
         ));
         let thread_rendered = thread_lines.join("\n");
         assert!(thread_rendered.contains("message redacted"));
@@ -3919,6 +4076,7 @@ mod tests {
             &mention,
             utc_timestamps(),
             None,
+            false,
         );
         let redacted = RoomActivity {
             kind: RoomActivityKind::Redacted(RoomRedactedActivity {
@@ -3932,6 +4090,7 @@ mod tests {
             &redacted,
             utc_timestamps(),
             None,
+            false,
         );
 
         assert_eq!(
@@ -3999,6 +4158,7 @@ mod tests {
                 &notice(content),
                 utc_timestamps(),
                 None,
+                false,
             );
             assert_eq!(rows.len(), 1);
             assert_eq!(
@@ -4054,6 +4214,7 @@ mod tests {
                 &message,
                 utc_timestamps(),
                 own_user_id,
+                false,
             );
         }
         let own = rows
@@ -4096,7 +4257,13 @@ mod tests {
                 ))],
             },
         );
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         let arrivals = rows
             .iter()
             .filter_map(|row| match &row.identity {
@@ -4181,6 +4348,7 @@ mod tests {
             "!ops:example",
             state.timestamps(),
             line_marker,
+            false,
         )
     }
 
@@ -4259,8 +4427,13 @@ mod tests {
             },
         );
         assert_eq!(room_line_marker(&state, "!ops:example"), Some("$a"));
-        let rows =
-            build_thread_timeline_rows(&state.model, "!ops:example", "$a", state.timestamps());
+        let rows = build_thread_timeline_rows(
+            &state.model,
+            "!ops:example",
+            "$a",
+            state.timestamps(),
+            false,
+        );
         assert!(
             rows.iter()
                 .all(|row| row.kind != TimelineRowKind::LineMarker)
@@ -4381,7 +4554,13 @@ mod tests {
             "* tie".to_owned(),
         );
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         let texts = project_timeline_rows(&rows);
         let tail = &texts[texts.len() - 6..];
         assert_eq!(
@@ -4430,7 +4609,13 @@ mod tests {
             "* warning".to_owned(),
         );
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         let kinds = rows[rows.len() - 2..]
             .iter()
             .map(|row| row.kind.clone())
@@ -4456,7 +4641,13 @@ mod tests {
             "\x02bold\x02 and \x0312blue".to_owned(),
         );
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps(), None);
+        let rows = build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+            None,
+            false,
+        );
         let [plain, styled] = &rows[rows.len() - 2..] else {
             unreachable!("two echo lines")
         };
@@ -4536,6 +4727,7 @@ mod tests {
             "!ops:example",
             "$thread-root",
             state.timestamps(),
+            false,
         ));
         assert!(
             thread_lines.contains(&"[22:16] * /clear: nothing to clear in thread view".to_owned())
@@ -4563,9 +4755,115 @@ mod tests {
             "!ops:example",
             "$thread-root",
             state.timestamps(),
+            false,
         ));
         assert!(
             thread_lines.contains(&"[22:16] * /clear: nothing to clear in thread view".to_owned())
+        );
+    }
+
+    /// Options > IRC's Show mode prefix: a channel's message, action and
+    /// notice lines put the sender's rank glyph before the nick, outside
+    /// the nick's range; queries never do, and off, nothing does.
+    #[test]
+    fn show_mode_prefix_puts_the_senders_rank_before_the_nick_in_channels() {
+        use mirx_core::RoomMemberRank;
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!ops:example", "Ops", false),
+            query("!dm:example", "Mod", "@mod:example"),
+        ];
+        let ranked = |user_id: &str, nick: &str, rank| RoomMemberSummary {
+            rank,
+            ..member_summary(user_id, nick, false)
+        };
+        let members = vec![
+            ranked("@owner:example", "Owner", RoomMemberRank::Creator),
+            ranked("@mod:example", "Mod", RoomMemberRank::Moderator),
+            ranked("@voice:example", "Voice", RoomMemberRank::Voiced),
+            ranked("@sam:example", "Sam", RoomMemberRank::Member),
+        ];
+        for (second, (sender, presentation, body)) in [
+            ("@owner:example", RoomMessagePresentationKind::Text, "hi"),
+            ("@mod:example", RoomMessagePresentationKind::Emote, "waves"),
+            (
+                "@voice:example",
+                RoomMessagePresentationKind::Notice,
+                "note",
+            ),
+            ("@sam:example", RoomMessagePresentationKind::Text, "yo"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for room_id in ["!ops:example", "!dm:example"] {
+                let mut activity = sent_message_activity_with_presentation(
+                    room_id,
+                    &format!("${second}"),
+                    None,
+                    presentation,
+                    body,
+                    1_700_000_000_000 + second as u64 * 1000,
+                );
+                let RoomActivityKind::Message(message) = &mut activity.kind else {
+                    unreachable!("a message activity");
+                };
+                message.sender = RoomUserProfile {
+                    user_id: sender.to_owned(),
+                    nick: members
+                        .iter()
+                        .find(|member| member.user_id == sender)
+                        .map(|member| member.nick.clone()),
+                    nick_ambiguous: false,
+                };
+                apply_core_event(&mut state, Event::RoomActivity(Box::new(activity))).unwrap();
+            }
+        }
+        for room_id in ["!ops:example", "!dm:example"] {
+            state.model.room_views.entry_or_default(room_id).members = members.clone();
+        }
+        let lines = |state: &WindowState, room_id: &str, mode_prefix: bool| {
+            build_room_timeline_rows(&state.model, room_id, utc_timestamps(), None, mode_prefix)
+                .into_iter()
+                .filter_map(|row| {
+                    let sender = row.sender?;
+                    Some((
+                        row.logical_text.clone(),
+                        row.logical_text[sender.range].to_owned(),
+                    ))
+                })
+                .collect::<Vec<_>>()
+        };
+        let line = |text: &str, nick: &str| (text.to_owned(), nick.to_owned());
+        assert_eq!(
+            lines(&state, "!ops:example", true),
+            [
+                line("[22:13] <~Owner> hi", "Owner"),
+                line("[22:13] * @Mod waves", "Mod"),
+                line("[22:13] -+Voice- note", "Voice"),
+                line("[22:13] <Sam> yo", "Sam"),
+            ]
+        );
+        let plain = [
+            line("[22:13] <Owner> hi", "Owner"),
+            line("[22:13] * Mod waves", "Mod"),
+            line("[22:13] -Voice- note", "Voice"),
+            line("[22:13] <Sam> yo", "Sam"),
+        ];
+        assert_eq!(lines(&state, "!ops:example", false), plain);
+        assert_eq!(lines(&state, "!dm:example", true), plain);
+
+        // The rank now, not then: an op voiced shows `+` on old lines too.
+        state
+            .model
+            .room_views
+            .get_mut("!ops:example")
+            .unwrap()
+            .members[1]
+            .rank = RoomMemberRank::Voiced;
+        assert_eq!(
+            lines(&state, "!ops:example", true)[1],
+            line("[22:13] * +Mod waves", "Mod")
         );
     }
 
@@ -4620,7 +4918,7 @@ mod tests {
             rank: RoomMemberRank::Moderator,
             ..member_summary("@alice:example", "Alice", false)
         }];
-        let rows = build_room_timeline_rows(&state.model, room_id, utc_timestamps(), None);
+        let rows = build_room_timeline_rows(&state.model, room_id, utc_timestamps(), None, false);
         let senders = rows
             .iter()
             .map(|row| {

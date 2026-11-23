@@ -369,11 +369,23 @@ fn tip_line(state: &WindowState, candidate: &TipCandidate) -> Option<String> {
     };
     let timestamps = TimestampStyle::new(&timestamp, state.local_time);
     let rows = match &candidate.view {
-        ViewId::Room(room_id) => build_room_timeline_rows(&state.model, room_id, timestamps, None),
+        ViewId::Room(room_id) => build_room_timeline_rows(
+            &state.model,
+            room_id,
+            timestamps,
+            None,
+            state.settings.settings().irc.mode_prefix,
+        ),
         ViewId::Thread {
             room_id,
             thread_root_event_id,
-        } => build_thread_timeline_rows(&state.model, room_id, thread_root_event_id, timestamps),
+        } => build_thread_timeline_rows(
+            &state.model,
+            room_id,
+            thread_root_event_id,
+            timestamps,
+            state.settings.settings().irc.mode_prefix,
+        ),
         ViewId::Status | ViewId::RoomList => unreachable!("a room's line is in its window"),
     };
     let identity = TimelineRowIdentity::activity_primary(&candidate.activity_id);

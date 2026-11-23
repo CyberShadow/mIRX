@@ -1241,6 +1241,9 @@ pub(super) struct ViewRowsKey {
     /// ranks they read are the room's members, in its revision. The scheme
     /// is not here: auto colours pick from it as they are drawn.
     nick_colors: Option<(NickColorSetting, Vec<String>)>,
+    /// A room or thread window's Show mode prefix (Options > IRC). The
+    /// ranks it reads are the room's members, in its revision.
+    mode_prefix: bool,
 }
 
 /// The inputs of `view_id`'s rows now; the Rooms List has none.
@@ -1271,6 +1274,7 @@ pub(super) fn view_rows_key(state: &WindowState, view_id: &ViewId) -> ViewRowsKe
             ViewId::RoomList => unreachable!("the Rooms List has no rows to gate"),
         },
         nick_colors: view_nick_colors(state.settings.settings(), view_id),
+        mode_prefix: view_id.room_id().is_some() && state.settings.settings().irc.mode_prefix,
     }
 }
 
@@ -1363,13 +1367,18 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
                 room_id,
                 timestamps,
                 room_line_marker(state, room_id),
+                state.settings.settings().irc.mode_prefix,
             ),
             ViewId::Thread {
                 room_id,
                 thread_root_event_id,
-            } => {
-                build_thread_timeline_rows(&state.model, room_id, thread_root_event_id, timestamps)
-            }
+            } => build_thread_timeline_rows(
+                &state.model,
+                room_id,
+                thread_root_event_id,
+                timestamps,
+                state.settings.settings().irc.mode_prefix,
+            ),
             ViewId::RoomList => unreachable!("the Rooms List returned above"),
         };
         if let Some(room_id) = view_id.room_id() {
@@ -1649,7 +1658,7 @@ mod tests {
     fn view_rows_key_changes_with_each_input() {
         let ops = room_view_id("!ops:example");
         type Change = fn(&mut WindowState);
-        let changes: [(&str, Change, bool, bool); 15] = [
+        let changes: [(&str, Change, bool, bool); 16] = [
             // (what, change, moves the room's key, moves Status's key)
             (
                 "a rename",
@@ -1742,6 +1751,17 @@ mod tests {
                     read_state.num_notifications += 1;
                 },
                 false,
+                false,
+            ),
+            (
+                "Show mode prefix",
+                |state| {
+                    state
+                        .settings
+                        .update(|settings| settings.irc.mode_prefix = true)
+                        .unwrap()
+                },
+                true,
                 false,
             ),
             (

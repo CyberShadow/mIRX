@@ -275,7 +275,13 @@ fn log_rows(state: &WindowState, view_id: &ViewId) -> Vec<TimelineRow> {
     let timestamps = TimestampStyle::new(&timestamp, state.local_time);
     match view_id {
         ViewId::Status => build_status_timeline_rows(&state.model.status_log, timestamps),
-        ViewId::Room(room_id) => build_room_timeline_rows(&state.model, room_id, timestamps, None),
+        ViewId::Room(room_id) => build_room_timeline_rows(
+            &state.model,
+            room_id,
+            timestamps,
+            None,
+            state.settings.settings().irc.mode_prefix,
+        ),
         ViewId::Thread { .. } | ViewId::RoomList => {
             unreachable!("only Status and room windows log")
         }
