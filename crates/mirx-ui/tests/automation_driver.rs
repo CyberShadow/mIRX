@@ -19343,13 +19343,9 @@ fn view_menu_hides_and_shows_the_bars_and_persists_them() -> Result<(), Box<dyn 
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
-    let launch = || {
-        launch_app_with_options(
-            &exe_path,
-            &[OsString::from("--automation")],
-            launch_options(Some(local_app_data.clone())),
-        )
-    };
+    // The core's start sets the status line: wait for it, or it can land
+    // after a bar command and replace that command's status.
+    let launch = || launch_automation_app(&exe_path, &local_app_data);
 
     let app = launch()?;
     let shown = app.dump_ui_state()?.frame_layout;
