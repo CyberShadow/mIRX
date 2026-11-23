@@ -28,26 +28,27 @@ use mirx_testkit::{
     RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
     RoomAudioInfo, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
     RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
-    RoomImageMediaState, RoomMediaSource, RoomMemberChange, RoomMemberView, RoomMessageActivity,
-    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState, RoomPollActivity,
-    RoomPollContent, RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReactionSummary,
-    RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag,
-    RoomUnableToDecryptActivity, RoomUnableToDecryptCause, RoomVerificationRequestActivity,
-    RoomVideoActivity, RoomVideoInfo, SendFileArgs, SessionAuth, SetupE2eeRecoveryArgs, SpaceChild,
-    StatusBarState, StoredSession, SubmittedDirectRoomCommand, SubmittedHistoryCommand,
-    SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedMessageCommand,
-    SubmittedPowerLevelChange, SubmittedPowerLevelCommand, SubmittedProfileCommand,
-    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
-    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
-    SubmittedUserCommand, SwitchbarItem, SwitchbarState, TestkitError, UiActiveTimeline,
-    UiActivityColors, UiColorItem, UiColors, UiComposeTarget, UiComposeTargetKind,
-    UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState, UiFrameLayout,
-    UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiNickColor, UiOptionsDialog, UiPoint,
-    UiRect, UiRefreshCounters, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState,
-    UiRoomState, UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink,
-    UiTimestamp, UiTipsOptions, UiToolbarButton, UiTray, UiTrayMenuItem, UiTrayOptions,
-    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionArgs,
-    VerificationDecimals, VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
+    RoomImageMediaState, RoomJoinRule, RoomMediaSource, RoomMemberChange, RoomMemberView,
+    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomPollActivity, RoomPollContent, RoomPowerLevelUserChange,
+    RoomPowerLevelValueChange, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomTag, RoomUnableToDecryptActivity, RoomUnableToDecryptCause,
+    RoomVerificationRequestActivity, RoomVideoActivity, RoomVideoInfo, SendFileArgs, SessionAuth,
+    SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession, SubmittedDirectRoomCommand,
+    SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
+    SubmittedMessageCommand, SubmittedPowerLevelChange, SubmittedPowerLevelCommand,
+    SubmittedProfileCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
+    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
+    SubmittedSetupRecoveryCommand, SubmittedUserCommand, SwitchbarItem, SwitchbarState,
+    TestkitError, UiActiveTimeline, UiActivityColors, UiColorItem, UiColors, UiComposeTarget,
+    UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState,
+    UiFrameLayout, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiNickColor,
+    UiOptionsDialog, UiPoint, UiRect, UiRefreshCounters, UiRoomHistoryBackfillState, UiRoomList,
+    UiRoomReadState, UiRoomState, UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind,
+    UiTimelineLink, UiTimestamp, UiTipsOptions, UiToolbarButton, UiTray, UiTrayMenuItem,
+    UiTrayOptions, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
+    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
+    ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -2138,6 +2139,62 @@ fn room_activity_power_levels_state_notice_round_trips_through_json() {
             "users_default": { "old": 0, "new": 10, "unexpected": true },
             "other_permissions_changed": false
         }),
+    ] {
+        assert!(
+            serde_json::from_value::<RoomStateNoticeContent>(content.clone()).is_err(),
+            "{content}"
+        );
+    }
+}
+
+#[test]
+fn room_settings_state_notice_contents_round_trip_through_json() {
+    for (content, json) in [
+        (
+            RoomStateNoticeContent::Name {
+                name: Some("Ops".to_owned()),
+            },
+            serde_json::json!({ "type": "name", "name": "Ops" }),
+        ),
+        (
+            RoomStateNoticeContent::Name { name: None },
+            serde_json::json!({ "type": "name", "name": null }),
+        ),
+        (
+            RoomStateNoticeContent::JoinRule {
+                rule: RoomJoinRule::KnockRestricted,
+            },
+            serde_json::json!({ "type": "join_rule", "rule": "knock_restricted" }),
+        ),
+        (
+            RoomStateNoticeContent::JoinRule {
+                rule: RoomJoinRule::Other("org.example.vip".to_owned()),
+            },
+            serde_json::json!({ "type": "join_rule", "rule": { "other": "org.example.vip" } }),
+        ),
+        (
+            RoomStateNoticeContent::Encryption,
+            serde_json::json!({ "type": "encryption" }),
+        ),
+    ] {
+        assert_eq!(serde_json::to_value(&content).expect("serialize"), json);
+        assert_eq!(
+            serde_json::from_value::<RoomStateNoticeContent>(json.clone()).expect("deserialize"),
+            content
+        );
+        // The core's wire shape is the same.
+        assert_eq!(
+            serde_json::to_value(
+                serde_json::from_value::<mirx_core::RoomStateNoticeContent>(json.clone())
+                    .expect("core deserialize")
+            )
+            .expect("core serialize"),
+            json
+        );
+    }
+    for content in [
+        serde_json::json!({ "type": "join_rule", "rule": "secret" }),
+        serde_json::json!({ "type": "name", "name": "Ops", "unexpected": true }),
     ] {
         assert!(
             serde_json::from_value::<RoomStateNoticeContent>(content.clone()).is_err(),

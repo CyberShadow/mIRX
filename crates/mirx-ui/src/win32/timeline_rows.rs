@@ -943,6 +943,16 @@ fn activity_line_text(
                         *other_permissions_changed,
                     ),
                 ),
+                RoomStateNoticeContent::Name { name } => (
+                    EventItem::Topic,
+                    name_change_text(&notice.sender, name.as_deref()),
+                ),
+                RoomStateNoticeContent::JoinRule { rule } => {
+                    (EventItem::Mode, join_rule_change_text(&notice.sender, rule))
+                }
+                RoomStateNoticeContent::Encryption => {
+                    (EventItem::Mode, encryption_change_text(&notice.sender))
+                }
             };
             (
                 TimelineRowKind::StateNotice {
@@ -3924,6 +3934,70 @@ mod tests {
                 TimelineRowKind::Redacted,
             ]
         );
+    }
+
+    #[test]
+    fn room_settings_changes_are_topic_and_mode_lines() {
+        let notice = |content: RoomStateNoticeContent| RoomActivity {
+            room_id: "!room:example".to_owned(),
+            activity_id: "state:$s".to_owned(),
+            timestamp_ms: 1_700_000_120_000,
+            highlight: false,
+            relation: None,
+            kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+                event_id: "$s".to_owned(),
+                sender: RoomUserProfile {
+                    user_id: "@bob:example".to_owned(),
+                    nick: Some("Bob".to_owned()),
+                    nick_ambiguous: false,
+                },
+                content,
+            }),
+        };
+        for (content, item, text) in [
+            (
+                RoomStateNoticeContent::Name {
+                    name: Some("Ops".to_owned()),
+                },
+                EventItem::Topic,
+                "* Bob changes room name to 'Ops'",
+            ),
+            (
+                RoomStateNoticeContent::Name { name: None },
+                EventItem::Topic,
+                "* Bob removes room name",
+            ),
+            (
+                RoomStateNoticeContent::JoinRule {
+                    rule: mirx_core::RoomJoinRule::Invite,
+                },
+                EventItem::Mode,
+                "* Bob makes the room invite only",
+            ),
+            (
+                RoomStateNoticeContent::Encryption,
+                EventItem::Mode,
+                "* Bob turns on end-to-end encryption",
+            ),
+        ] {
+            let mut rows = Vec::new();
+            push_room_activity_row(
+                &mut rows,
+                &RoomViewModel::default(),
+                &notice(content),
+                utc_timestamps(),
+                None,
+            );
+            assert_eq!(rows.len(), 1);
+            assert_eq!(
+                rows[0].kind,
+                TimelineRowKind::StateNotice {
+                    highlight: false,
+                    item
+                }
+            );
+            assert_eq!(rows[0].logical_text, format!("[22:15] {text}"));
+        }
     }
 
     #[test]

@@ -1398,6 +1398,31 @@ pub enum RoomStateNoticeContent {
         /// redact, invite, sending events or state, or notifications.
         other_permissions_changed: bool,
     },
+    /// An `m.room.name` change; `None` when the name was removed (empty).
+    Name {
+        name: Option<String>,
+    },
+    /// An `m.room.join_rules` change.
+    JoinRule {
+        rule: RoomJoinRule,
+    },
+    /// An `m.room.encryption` event: the room turned encryption on.
+    Encryption,
+}
+
+/// A room's join rule (`m.room.join_rules`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomJoinRule {
+    Public,
+    Invite,
+    Knock,
+    /// Open to members of the rooms its allow list names (its spaces).
+    Restricted,
+    KnockRestricted,
+    Private,
+    /// A rule the spec does not define, by its name.
+    Other(String),
 }
 
 /// A user's effective power level before and after a power-level change.

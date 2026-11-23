@@ -488,9 +488,10 @@ use timeline_rows::{
 #[cfg(test)]
 use timeline_rows::{TimelineSyntheticRowLabel, render_room_lines};
 use timeline_text::{
-    ENCRYPTED_ROOM_TEXT, INVITE_RESPONSE_TEXT, action_line, context_line, event_line, invited_text,
-    member_change_text, message_line, nick_label, now_talking_text, power_levels_change_text,
-    rank_prefix, topic_change_text, topic_is_text,
+    ENCRYPTED_ROOM_TEXT, INVITE_RESPONSE_TEXT, action_line, context_line, encryption_change_text,
+    event_line, invited_text, join_rule_change_text, member_change_text, message_line,
+    name_change_text, nick_label, now_talking_text, power_levels_change_text, rank_prefix,
+    topic_change_text, topic_is_text,
 };
 #[cfg(test)]
 use timeline_window::clamped_timeline_top_line;

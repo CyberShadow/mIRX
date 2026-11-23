@@ -1156,6 +1156,25 @@ pub enum RoomStateNoticeContent {
         users_default: Option<RoomPowerLevelValueChange>,
         other_permissions_changed: bool,
     },
+    Name {
+        name: Option<String>,
+    },
+    JoinRule {
+        rule: RoomJoinRule,
+    },
+    Encryption,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomJoinRule {
+    Public,
+    Invite,
+    Knock,
+    Restricted,
+    KnockRestricted,
+    Private,
+    Other(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -5,12 +5,12 @@ use std::fmt;
 use mirx_core::{
     CoreErrorEvent, E2eeStatus, Event, HistoryFrom, Operation, PresenceKind, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomFileActivity,
-    RoomFileInfo, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberChange,
-    RoomMemberRank, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomNotificationMode, RoomPowerLevelValueChange, RoomReadState,
-    RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary,
-    RoomTagSummary, RoomVideoActivity, RoomVideoInfo, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
+    RoomFileInfo, RoomImageActivity, RoomImageInfo, RoomJoinRule, RoomMediaSource,
+    RoomMemberChange, RoomMemberRank, RoomMembership, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
+    RoomPowerLevelValueChange, RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomVideoActivity, RoomVideoInfo,
+    StoredSession, UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -2644,6 +2644,13 @@ pub(crate) enum DumpRoomStateNoticeContent {
         users_default: Option<RoomPowerLevelValueChange>,
         other_permissions_changed: bool,
     },
+    Name {
+        name: Option<String>,
+    },
+    JoinRule {
+        rule: RoomJoinRule,
+    },
+    Encryption,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3057,10 +3064,12 @@ pub(crate) fn dump_room_state_notice_activity_from_core(
         event_id: notice.event_id.clone(),
         sender: notice.sender.user_id.clone(),
         state_key: match &notice.content {
-            // Topic and power levels are room state with an empty state key.
-            RoomStateNoticeContent::Topic { .. } | RoomStateNoticeContent::PowerLevels { .. } => {
-                String::new()
-            }
+            // Room state with an empty state key.
+            RoomStateNoticeContent::Topic { .. }
+            | RoomStateNoticeContent::PowerLevels { .. }
+            | RoomStateNoticeContent::Name { .. }
+            | RoomStateNoticeContent::JoinRule { .. }
+            | RoomStateNoticeContent::Encryption => String::new(),
             RoomStateNoticeContent::Member { target, .. } => target.user_id.clone(),
         },
         content: dump_room_state_notice_content_from_core(&notice.content),
@@ -3107,6 +3116,13 @@ pub(crate) fn dump_room_state_notice_content_from_core(
             users_default: users_default.clone(),
             other_permissions_changed: *other_permissions_changed,
         },
+        RoomStateNoticeContent::Name { name } => {
+            DumpRoomStateNoticeContent::Name { name: name.clone() }
+        }
+        RoomStateNoticeContent::JoinRule { rule } => {
+            DumpRoomStateNoticeContent::JoinRule { rule: rule.clone() }
+        }
+        RoomStateNoticeContent::Encryption => DumpRoomStateNoticeContent::Encryption,
     }
 }
 

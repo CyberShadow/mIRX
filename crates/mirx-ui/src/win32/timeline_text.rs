@@ -9,8 +9,8 @@
 use std::ops::Range;
 
 use mirx_core::{
-    RoomMemberChange, RoomMemberRank, RoomMessagePresentationKind, RoomPowerLevelUserChange,
-    RoomPowerLevelValueChange, RoomUserProfile,
+    RoomJoinRule, RoomMemberChange, RoomMemberRank, RoomMessagePresentationKind,
+    RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomUserProfile,
 };
 
 /// The label for a user: their nick, the nick with the user ID when another
@@ -135,6 +135,32 @@ pub(super) const INVITE_RESPONSE_TEXT: &str = "Use /accept or /reject to respond
 
 pub(super) fn topic_change_text(sender: &RoomUserProfile, topic: &str) -> String {
     format!("{} changes topic to '{topic}'", profile_nick(sender))
+}
+
+pub(super) fn name_change_text(sender: &RoomUserProfile, name: Option<&str>) -> String {
+    let op = profile_nick(sender);
+    match name {
+        Some(name) => format!("{op} changes room name to '{name}'"),
+        None => format!("{op} removes room name"),
+    }
+}
+
+pub(super) fn join_rule_change_text(sender: &RoomUserProfile, rule: &RoomJoinRule) -> String {
+    let op = profile_nick(sender);
+    let made = match rule {
+        RoomJoinRule::Public => "public",
+        RoomJoinRule::Invite => "invite only",
+        RoomJoinRule::Knock => "ask to join",
+        RoomJoinRule::Restricted => "open to members of its spaces",
+        RoomJoinRule::KnockRestricted => "ask to join, or open to members of its spaces",
+        RoomJoinRule::Private => "private",
+        RoomJoinRule::Other(rule) => return format!("{op} sets the join rule to {rule}"),
+    };
+    format!("{op} makes the room {made}")
+}
+
+pub(super) fn encryption_change_text(sender: &RoomUserProfile) -> String {
+    format!("{} turns on end-to-end encryption", profile_nick(sender))
 }
 
 pub(super) fn member_change_text(
@@ -279,6 +305,35 @@ mod tests {
         assert_eq!(
             event_line("[12:34] ", &topic_change_text(&alice, "release day")),
             "[12:34] * Alice changes topic to 'release day'"
+        );
+        assert_eq!(
+            name_change_text(&alice, Some("Ops")),
+            "Alice changes room name to 'Ops'"
+        );
+        assert_eq!(name_change_text(&alice, None), "Alice removes room name");
+        for (rule, text) in [
+            (RoomJoinRule::Public, "Alice makes the room public"),
+            (RoomJoinRule::Invite, "Alice makes the room invite only"),
+            (RoomJoinRule::Knock, "Alice makes the room ask to join"),
+            (
+                RoomJoinRule::Restricted,
+                "Alice makes the room open to members of its spaces",
+            ),
+            (
+                RoomJoinRule::KnockRestricted,
+                "Alice makes the room ask to join, or open to members of its spaces",
+            ),
+            (RoomJoinRule::Private, "Alice makes the room private"),
+            (
+                RoomJoinRule::Other("org.example.vip".to_owned()),
+                "Alice sets the join rule to org.example.vip",
+            ),
+        ] {
+            assert_eq!(join_rule_change_text(&alice, &rule), text);
+        }
+        assert_eq!(
+            encryption_change_text(&alice),
+            "Alice turns on end-to-end encryption"
         );
         assert_eq!(
             message_line_parts(message_line(

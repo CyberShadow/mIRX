@@ -92,7 +92,8 @@ use matrix_sdk::{
             room::{
                 EncryptedFile, ImageInfo, MediaSource,
                 encrypted::{OriginalSyncRoomEncryptedEvent, Relation as EncryptedRelation},
-                encryption::RoomEncryptionEventContent,
+                encryption::{OriginalSyncRoomEncryptionEvent, RoomEncryptionEventContent},
+                join_rules::{JoinRule, OriginalSyncRoomJoinRulesEvent},
                 member::{MembershipChange, MembershipState, OriginalSyncRoomMemberEvent},
                 message::{
                     AudioInfo, FileInfo, FormattedBody, MessageFormat, MessageType,
@@ -101,6 +102,7 @@ use matrix_sdk::{
                     RoomMessageEventContent, RoomMessageEventContentWithoutRelation, VideoInfo,
                     sanitize::remove_plain_reply_fallback,
                 },
+                name::OriginalSyncRoomNameEvent,
                 power_levels::{
                     OriginalSyncRoomPowerLevelsEvent, PossiblyRedactedRoomPowerLevelsEventContent,
                     RoomPowerLevelsEventContent, UserPowerLevel,
@@ -148,7 +150,7 @@ use crate::api::{
     RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
     RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
     RoomEventFetch, RoomEventFetchResult, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
-    RoomHistoryBackfillEvent, RoomIdentityChanges, RoomImageActivity, RoomImageInfo,
+    RoomHistoryBackfillEvent, RoomIdentityChanges, RoomImageActivity, RoomImageInfo, RoomJoinRule,
     RoomKeysAtRisk, RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange,
     RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomPollActivity,
@@ -3538,9 +3540,9 @@ fn styled_text_from_formatted_body(formatted: &FormattedBody) -> Option<StyledTe
     (!text.body.is_empty()).then_some(text)
 }
 
-/// The timeline line for a state event in a sync timeline: a topic, member
-/// or power-level change. Every other timeline event has its own handler or
-/// no line.
+/// The timeline line for a state event in a sync timeline: a topic, name,
+/// join rule, encryption, member or power-level change. Every other
+/// timeline event has its own handler or no line.
 async fn room_activity_from_timeline_state_event(
     room: &Room,
     event: &AnySyncTimelineEvent,
@@ -3561,6 +3563,36 @@ async fn room_activity_from_timeline_state_event(
                 highlight,
             )))
         }
+        AnySyncStateEvent::RoomName(SyncStateEvent::Original(event)) => {
+            let highlight = activity_highlight(room.own_user_id(), &event.sender, actions);
+            let sender = lookups.profile(&event.sender).await?;
+            Ok(Some(room_activity_from_sync_name(
+                room.room_id().as_str(),
+                event,
+                sender,
+                highlight,
+            )))
+        }
+        AnySyncStateEvent::RoomJoinRules(SyncStateEvent::Original(event)) => {
+            let highlight = activity_highlight(room.own_user_id(), &event.sender, actions);
+            let sender = lookups.profile(&event.sender).await?;
+            Ok(Some(room_activity_from_sync_join_rules(
+                room.room_id().as_str(),
+                event,
+                sender,
+                highlight,
+            )))
+        }
+        AnySyncStateEvent::RoomEncryption(SyncStateEvent::Original(event)) => {
+            let highlight = activity_highlight(room.own_user_id(), &event.sender, actions);
+            let sender = lookups.profile(&event.sender).await?;
+            Ok(Some(room_activity_from_sync_encryption(
+                room.room_id().as_str(),
+                event,
+                sender,
+                highlight,
+            )))
+        }
         AnySyncStateEvent::RoomMember(SyncStateEvent::Original(event)) => {
             let highlight = activity_highlight(room.own_user_id(), &event.sender, actions);
             room_activity_from_member_event(room, event, &mut lookups, highlight).await
@@ -3573,25 +3605,111 @@ async fn room_activity_from_timeline_state_event(
     }
 }
 
+/// The line of a room state event with an empty state key.
+fn room_state_notice_activity(
+    room_id: &str,
+    event_id: &EventId,
+    origin_server_ts: MilliSecondsSinceUnixEpoch,
+    sender: RoomUserProfile,
+    highlight: bool,
+    content: RoomStateNoticeContent,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("state:{event_id}"),
+        timestamp_ms: origin_server_ts.get().into(),
+        highlight,
+        relation: None,
+        kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+            event_id: event_id.to_string(),
+            sender,
+            content,
+        }),
+    }
+}
+
 fn room_activity_from_sync_topic(
     room_id: &str,
     event: &OriginalSyncRoomTopicEvent,
     sender: RoomUserProfile,
     highlight: bool,
 ) -> RoomActivity {
-    RoomActivity {
-        room_id: room_id.to_owned(),
-        activity_id: format!("state:{}", event.event_id),
-        timestamp_ms: event.origin_server_ts.get().into(),
+    room_state_notice_activity(
+        room_id,
+        &event.event_id,
+        event.origin_server_ts,
+        sender,
         highlight,
-        relation: None,
-        kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
-            event_id: event.event_id.to_string(),
-            sender,
-            content: RoomStateNoticeContent::Topic {
-                topic: event.content.topic.to_string(),
-            },
-        }),
+        RoomStateNoticeContent::Topic {
+            topic: event.content.topic.to_string(),
+        },
+    )
+}
+
+/// An empty name is the spec's way to remove it.
+fn room_activity_from_sync_name(
+    room_id: &str,
+    event: &OriginalSyncRoomNameEvent,
+    sender: RoomUserProfile,
+    highlight: bool,
+) -> RoomActivity {
+    let name = &event.content.name;
+    room_state_notice_activity(
+        room_id,
+        &event.event_id,
+        event.origin_server_ts,
+        sender,
+        highlight,
+        RoomStateNoticeContent::Name {
+            name: (!name.is_empty()).then(|| name.clone()),
+        },
+    )
+}
+
+fn room_activity_from_sync_join_rules(
+    room_id: &str,
+    event: &OriginalSyncRoomJoinRulesEvent,
+    sender: RoomUserProfile,
+    highlight: bool,
+) -> RoomActivity {
+    room_state_notice_activity(
+        room_id,
+        &event.event_id,
+        event.origin_server_ts,
+        sender,
+        highlight,
+        RoomStateNoticeContent::JoinRule {
+            rule: room_join_rule(&event.content.join_rule),
+        },
+    )
+}
+
+fn room_activity_from_sync_encryption(
+    room_id: &str,
+    event: &OriginalSyncRoomEncryptionEvent,
+    sender: RoomUserProfile,
+    highlight: bool,
+) -> RoomActivity {
+    room_state_notice_activity(
+        room_id,
+        &event.event_id,
+        event.origin_server_ts,
+        sender,
+        highlight,
+        RoomStateNoticeContent::Encryption,
+    )
+}
+
+fn room_join_rule(rule: &JoinRule) -> RoomJoinRule {
+    match rule {
+        JoinRule::Public => RoomJoinRule::Public,
+        JoinRule::Invite => RoomJoinRule::Invite,
+        JoinRule::Knock => RoomJoinRule::Knock,
+        JoinRule::Restricted(_) => RoomJoinRule::Restricted,
+        JoinRule::KnockRestricted(_) => RoomJoinRule::KnockRestricted,
+        JoinRule::Private => RoomJoinRule::Private,
+        // ruma's custom rules, and the rules a later ruma names.
+        _ => RoomJoinRule::Other(rule.as_str().to_owned()),
     }
 }
 
@@ -6042,6 +6160,57 @@ async fn timeline_event_mapping(
         .collect());
     }
 
+    // Unchecked decoding ignores the type, and another state event with a
+    // `name`, `join_rule` or `algorithm` would decode as one of these:
+    // match the type first. A malformed one is no line, as live (the SDK
+    // calls no handler).
+    let state_line = match event.kind.event_type().as_deref() {
+        Some("m.room.name") => match raw.deserialize_as_unchecked::<OriginalSyncRoomNameEvent>() {
+            Ok(event) => {
+                let sender = lookups.profile(&event.sender).await?;
+                Some(room_activity_from_sync_name(
+                    room_id,
+                    &event,
+                    sender,
+                    highlight(&event.sender),
+                ))
+            }
+            Err(_) => None,
+        },
+        Some("m.room.join_rules") => {
+            match raw.deserialize_as_unchecked::<OriginalSyncRoomJoinRulesEvent>() {
+                Ok(event) => {
+                    let sender = lookups.profile(&event.sender).await?;
+                    Some(room_activity_from_sync_join_rules(
+                        room_id,
+                        &event,
+                        sender,
+                        highlight(&event.sender),
+                    ))
+                }
+                Err(_) => None,
+            }
+        }
+        Some("m.room.encryption") => {
+            match raw.deserialize_as_unchecked::<OriginalSyncRoomEncryptionEvent>() {
+                Ok(event) => {
+                    let sender = lookups.profile(&event.sender).await?;
+                    Some(room_activity_from_sync_encryption(
+                        room_id,
+                        &event,
+                        sender,
+                        highlight(&event.sender),
+                    ))
+                }
+                Err(_) => None,
+            }
+        }
+        _ => None,
+    };
+    if let Some(activity) = state_line {
+        return Ok(vec![RoomHistoryBackfillEvent::Activity(Box::new(activity))]);
+    }
+
     // Every power-level field has a default, so any state event would
     // deserialize as one: match the type first.
     if event.kind.event_type().as_deref() == Some("m.room.power_levels") {
@@ -8314,10 +8483,10 @@ mod tests {
         RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
         RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomEventFetch, RoomEventFetchResult,
         RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
-        RoomImageActivity, RoomImageInfo, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
-        RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMessageActivity,
-        RoomMessagePresentationKind, RoomMessageSendState, RoomPollActivity, RoomPollContent,
-        RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState,
+        RoomImageActivity, RoomImageInfo, RoomJoinRule, RoomMediaFormat, RoomMediaKind,
+        RoomMediaSource, RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers,
+        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomPollActivity,
+        RoomPollContent, RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState,
         RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
         RoomUnableToDecryptActivity, RoomUnableToDecryptCause, RoomUserProfile,
         RoomVerificationRequestActivity, RoomVideoActivity, RoomVideoInfo, SendMessageReplyTarget,
@@ -13829,6 +13998,239 @@ mod tests {
                     }),
                 }))]
             );
+        });
+    }
+
+    fn room_settings_state_event_json(
+        event_id: &str,
+        event_type: &str,
+        content: serde_json::Value,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "type": event_type,
+            "room_id": room_id().as_str(),
+            "content": content,
+            "event_id": event_id,
+            "sender": "@bob:localhost",
+            "state_key": "",
+            "origin_server_ts": 1700000000005u64
+        })
+    }
+
+    /// The settings events the room-settings line tests send, with the
+    /// content each must report.
+    fn room_settings_state_events() -> Vec<(serde_json::Value, RoomStateNoticeContent)> {
+        let join_rule = |event_id: &str, content: serde_json::Value, rule: RoomJoinRule| {
+            (
+                room_settings_state_event_json(event_id, "m.room.join_rules", content),
+                RoomStateNoticeContent::JoinRule { rule },
+            )
+        };
+        vec![
+            (
+                room_settings_state_event_json(
+                    "$name:localhost",
+                    "m.room.name",
+                    serde_json::json!({ "name": "Ops" }),
+                ),
+                RoomStateNoticeContent::Name {
+                    name: Some("Ops".to_owned()),
+                },
+            ),
+            (
+                room_settings_state_event_json(
+                    "$unname:localhost",
+                    "m.room.name",
+                    serde_json::json!({ "name": "" }),
+                ),
+                RoomStateNoticeContent::Name { name: None },
+            ),
+            join_rule(
+                "$public:localhost",
+                serde_json::json!({ "join_rule": "public" }),
+                RoomJoinRule::Public,
+            ),
+            join_rule(
+                "$invite:localhost",
+                serde_json::json!({ "join_rule": "invite" }),
+                RoomJoinRule::Invite,
+            ),
+            join_rule(
+                "$knock:localhost",
+                serde_json::json!({ "join_rule": "knock" }),
+                RoomJoinRule::Knock,
+            ),
+            join_rule(
+                "$restricted:localhost",
+                serde_json::json!({
+                    "join_rule": "restricted",
+                    "allow": [{ "type": "m.room_membership", "room_id": "!space:localhost" }]
+                }),
+                RoomJoinRule::Restricted,
+            ),
+            join_rule(
+                "$knock-restricted:localhost",
+                serde_json::json!({ "join_rule": "knock_restricted", "allow": [] }),
+                RoomJoinRule::KnockRestricted,
+            ),
+            join_rule(
+                "$private:localhost",
+                serde_json::json!({ "join_rule": "private" }),
+                RoomJoinRule::Private,
+            ),
+            join_rule(
+                "$custom:localhost",
+                serde_json::json!({ "join_rule": "org.example.vip" }),
+                RoomJoinRule::Other("org.example.vip".to_owned()),
+            ),
+            (
+                room_settings_state_event_json(
+                    "$encryption:localhost",
+                    "m.room.encryption",
+                    serde_json::json!({ "algorithm": "m.megolm.v1.aes-sha2" }),
+                ),
+                RoomStateNoticeContent::Encryption,
+            ),
+        ]
+    }
+
+    fn room_settings_notice(event_id: &str, content: RoomStateNoticeContent) -> RoomActivity {
+        RoomActivity {
+            room_id: room_id().to_string(),
+            activity_id: format!("state:{event_id}"),
+            timestamp_ms: 1700000000005,
+            highlight: false,
+            relation: None,
+            kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+                event_id: event_id.to_owned(),
+                sender: member_profile("@bob:localhost", "Bob", false),
+                content,
+            }),
+        }
+    }
+
+    #[test]
+    fn live_room_settings_changes_emit_state_notices() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let (events, event_rx) = mpsc::channel();
+            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
+            sync_and_refresh_members(
+                &mock_server,
+                &client,
+                JoinedRoomBuilder::new(room_id().as_ref())
+                    .add_state_bulk(raw_sync_state_events(&profile_test_state_events())),
+                &events,
+            )
+            .await;
+            drain_events(&event_rx);
+
+            let settings = room_settings_state_events();
+            let mut room = JoinedRoomBuilder::new(room_id().as_ref());
+            for (event, _) in &settings {
+                room = room.add_timeline_event(raw_sync_timeline_event(event.clone()));
+            }
+            sync_and_refresh_members(&mock_server, &client, room, &events).await;
+            let received = drain_events(&event_rx);
+
+            let notices = received
+                .iter()
+                .filter_map(|event| match event {
+                    Event::RoomActivity(activity) => Some(activity.as_ref().clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let expected = settings
+                .into_iter()
+                .map(|(event, content)| {
+                    room_settings_notice(event["event_id"].as_str().expect("event id"), content)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(notices, expected);
+        });
+    }
+
+    #[test]
+    fn backfill_decodes_room_settings_changes_by_type() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = session_client(&mock_server).await;
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&profile_test_state_events())),
+                )
+                .await;
+            let settings = room_settings_state_events();
+            // Another state event with a `name` is no room name.
+            let other_state = room_settings_state_event_json(
+                "$other:localhost",
+                "org.example.settings",
+                serde_json::json!({ "name": "Ops", "join_rule": "public", "algorithm": "m.megolm.v1.aes-sha2" }),
+            );
+            let visibility = room_settings_state_event_json(
+                "$visibility:localhost",
+                "m.room.history_visibility",
+                serde_json::json!({ "history_visibility": "shared" }),
+            );
+            // `/messages` is newest first.
+            let history = settings
+                .iter()
+                .map(|(event, _)| event.clone())
+                .chain([other_state, visibility])
+                .rev()
+                .map(|event| {
+                    Raw::<AnyTimelineEvent>::from_json_string(event.to_string())
+                        .expect("raw state event")
+                })
+                .collect();
+            mock_server
+                .mock_room_messages()
+                .ok(RoomMessagesResponseTemplate::default().events(history))
+                .mock_once()
+                .mount()
+                .await;
+
+            let backfill = backfill_room_history(
+                &client,
+                BackfillRoomHistoryRequest {
+                    room_id: room_id().to_string(),
+                    from: HistoryFrom::Latest,
+                    limit: 20,
+                },
+            )
+            .await
+            .expect("backfill room history");
+
+            let mut activities = backfill
+                .events
+                .into_iter()
+                .map(|event| match event {
+                    RoomHistoryBackfillEvent::Activity(activity) => *activity,
+                    event => panic!("unexpected backfill event {event:?}"),
+                })
+                .collect::<Vec<_>>();
+            activities.sort_by(|a, b| a.activity_id.cmp(&b.activity_id));
+            let mut expected = settings
+                .into_iter()
+                .map(|(event, content)| {
+                    room_settings_notice(event["event_id"].as_str().expect("event id"), content)
+                })
+                .collect::<Vec<_>>();
+            expected.sort_by(|a, b| a.activity_id.cmp(&b.activity_id));
+            assert_eq!(activities, expected);
         });
     }
 
