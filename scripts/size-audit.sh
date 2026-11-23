@@ -8,9 +8,11 @@
 # in a target dir of its own (never target/: the gates expect the stripped
 # exe there). Writes target/size-audit/report/<rev>[-dirty].tsv (bytes, then
 # the demangled .text symbol without its hash, equal names summed) and prints
-# the stripped size, the section sizes, the biggest symbols and a per-crate
-# sum. With --base it also builds <rev> in a detached worktree with its own
-# target dir and prints what grew and what shrank.
+# the stripped size (`strip` of this build: about 10 KiB under the shipped
+# exe, which the linker strips; cross-build.sh gives the shipped size), the
+# section sizes, the biggest symbols and a per-crate sum. With --base it
+# also builds <rev> in a detached worktree with its own target dir and
+# prints what grew and what shrank.
 #
 # A measuring tool, not a gate: it fails only when a build fails.
 set -euo pipefail
@@ -76,6 +78,8 @@ section_size() {
   "$objdump_bin" -h "$1" | gawk -v name="$2" '$2 == name { print strtonum("0x" $3) }'
 }
 
+# The size `strip` leaves. The shipped exe, stripped by the linker (`-s`),
+# is some 10 KiB bigger; compare like with like.
 stripped_size() {
   "$strip_bin" -o "$scratch/stripped.exe" "$1"
   stat -c %s "$scratch/stripped.exe"
