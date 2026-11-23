@@ -8003,6 +8003,69 @@ fn sessions_dialog_renames_and_signs_out_a_session() -> Result<(), Box<dyn std::
     Ok(())
 }
 
+/// An account that signs in through the browser signs a session out on
+/// its account page: Sign Out... asks nothing, and the dialog says where
+/// to finish.
+#[test]
+fn sessions_dialog_signs_out_a_browser_session_on_the_account_page()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let mut session = core_stored_session();
+    session.auth = CoreSessionAuth::OAuth {
+        client_id: "client".to_owned(),
+    };
+    let mut events = base_events();
+    events.insert(
+        1,
+        Event::LoggedIn {
+            session,
+            homeserver_url: "https://matrix.example/".to_owned(),
+        },
+    );
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.select_view(room_identity("!beta:example"))?;
+
+    let (dialog, _) = open_sessions_dialog(&app)?;
+    append_events(&app, vec![alice_sessions("Element Android", true)])?;
+    select_session(&app, dialog, 1)?;
+    post_dialog_command(dialog, SESSIONS_SIGN_OUT_ID);
+    app.wait_idle(Duration::from_secs(5))?;
+    let confirm_class = wide_null("mirxWin32SignOutSessionDialog");
+    assert!(
+        unsafe { FindWindowW(confirm_class.as_ptr(), std::ptr::null()) }.is_null(),
+        "no confirmation over the Sessions dialog"
+    );
+    assert_eq!(
+        app.dump_model()?.submitted_session_commands,
+        [SubmittedSessionCommand::SignOut {
+            device_id: "PH0NE".to_owned(),
+            password_redacted: false,
+        }]
+    );
+    append_events(
+        &app,
+        vec![Event::DeviceSignOutApproval {
+            device_id: "PH0NE".to_owned(),
+            url: "https://account.example/?action=org.matrix.session_end&device_id=PH0NE"
+                .to_owned(),
+        }],
+    )?;
+    assert_eq!(
+        sessions(&app)?.status,
+        "Sign out PH0NE on your account page, then Refresh"
+    );
+
+    close_dialog(&app, dialog)?;
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 /// Verify... closes the dialog and runs what `/verify` runs: another
 /// session is asked by its ID; this session asks your other ones.
 #[test]
