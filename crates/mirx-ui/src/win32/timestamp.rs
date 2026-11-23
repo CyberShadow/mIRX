@@ -320,6 +320,14 @@ impl<'a> TimestampStyle<'a> {
     }
 }
 
+/// A date in a dialog's list (Channel Central's Bans List, the Sessions
+/// dialog's Last seen): `dd/mm/yyyy HH:nn` in the local time.
+pub(super) fn list_date(local_time: LocalTimeFn, timestamp_ms: u64) -> String {
+    TimestampFormat::parse("dd/mm/yyyy HH:nn")
+        .expect("the list date format parses")
+        .format(local_time(timestamp_ms))
+}
+
 /// UTC as the "local" time: deterministic tests.
 #[cfg(test)]
 pub(super) fn utc_local_time(timestamp_ms: u64) -> LocalTime {
@@ -414,6 +422,15 @@ mod tests {
         assert_eq!(format("h tt", at_hour(11)), "11 am");
         assert_eq!(format("h TT", at_hour(12)), "12 PM");
         assert_eq!(format("hh tt", at_hour(13)), "01 pm");
+    }
+
+    #[test]
+    fn list_dates_are_day_month_year_and_minutes() {
+        // 2026-11-23 22:14:05 UTC.
+        assert_eq!(
+            list_date(utc_local_time, 1_795_472_045_000),
+            "23/11/2026 22:14"
+        );
     }
 
     #[test]

@@ -10,7 +10,7 @@
 use mirx_core::{RoomJoinRule, RoomSettings, RoomSettingsPermissions, UpdateRoomSettingsRequest};
 
 use super::ignore::user_name;
-use super::timestamp::{LocalTimeFn, TimestampFormat};
+use super::timestamp::{LocalTimeFn, list_date};
 
 /// What the dialog says while the core reads the settings.
 pub(super) const READING_TEXT: &str = "Reading the room's settings...";
@@ -69,7 +69,6 @@ impl ChannelCentralForm {
         nick_of: &impl Fn(&str) -> Option<String>,
         local_time: LocalTimeFn,
     ) -> Vec<[String; 4]> {
-        let date = TimestampFormat::parse("dd/mm/yyyy HH:nn").expect("the ban date format parses");
         self.shown_bans()
             .map(|ban| {
                 [
@@ -78,7 +77,7 @@ impl ChannelCentralForm {
                         None => ban.user_id.clone(),
                     },
                     user_name(&ban.banned_by, nick_of),
-                    date.format(local_time(ban.timestamp_ms)),
+                    list_date(local_time, ban.timestamp_ms),
                     ban.reason.clone().unwrap_or_default(),
                 ]
             })
