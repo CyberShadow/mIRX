@@ -1861,3 +1861,59 @@ fn sessions_dialog_renames_and_signs_out_another_session() -> Result<(), Box<dyn
     press_dialog_button(&app, dialog, IDCANCEL as usize, "Sessions")?;
     finish(app, &local_app_data)
 }
+
+/// mIRC's Perform on connect on a real server: the first connect joins
+/// the room (its message fails there, before the join lands, and says so
+/// in Status), and a reconnect, with the room known, sends the message.
+#[test]
+fn perform_joins_and_messages_on_connect() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let bob = homeserver.register("bob", "Bob");
+    let alice = homeserver.register("alice", "Alice");
+    let alias_localpart = unique_name("lobby");
+    let room_id = bob.create_public_room("Lobby", &alias_localpart);
+    let alias = format!("#{alias_localpart}:localhost");
+    let local_app_data = unique_local_app_data_path();
+    write_settings(
+        &local_app_data,
+        &format!(
+            "[perform]\r\nenabled=on\r\nn0=join {alias}\r\n\
+             n1=msg {alias} hello from perform\r\n"
+        ),
+    )?;
+    let app = launch_live_app(&local_app_data)?;
+    sign_in(&app, &homeserver, &alice)?;
+    bob.wait_for_member(&room_id, alice.user_id());
+    let room = room_identity(room_id.as_str());
+    wait_for_view_line(&app, &room, "* Now talking in ")?;
+    wait_for_status_line(&app, "* /msg: ", TIMEOUT)?;
+    let refused = status_texts(&app)?
+        .into_iter()
+        .filter(|line| line.starts_with("* /msg: "))
+        .collect::<Vec<_>>();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(refused[0].ends_with(" (in perform)"), "{refused:?}");
+
+    invoke_account_menu_command(&app, MENU_ID_FILE_DISCONNECT)?;
+    wait_for_status_line(&app, "* Disconnected", TIMEOUT)?;
+    outlast_the_abandoned_long_poll();
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+    assert_eq!(
+        bob.wait_for_text(&room_id, "hello from perform"),
+        alice.user_id()
+    );
+    let_background_tasks_settle(&app)?;
+    let ui_state = app.dump_ui_state()?;
+    let lines = &find_view(&ui_state, &room).lines;
+    assert!(
+        !lines.iter().any(|line| line.contains("(in perform)")),
+        "{lines:?}"
+    );
+    let refused = status_texts(&app)?
+        .into_iter()
+        .filter(|line| line.contains("(in perform)"))
+        .count();
+    assert_eq!(refused, 1);
+
+    finish(app, &local_app_data)
+}
