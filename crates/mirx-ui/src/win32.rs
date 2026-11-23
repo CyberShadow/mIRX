@@ -231,6 +231,7 @@ mod mdi;
 mod menus;
 mod mirc_format;
 mod navigation;
+mod nick_colors;
 mod nick_completion;
 mod nick_list;
 mod notifications;
@@ -314,9 +315,9 @@ use command_runner::{
 };
 use commands::{
     AliasCommand, BarCommand, CommandError, ComposeInput, ComposeSubmission, CreateRoomArgs,
-    E2eeSlashCommand, EchoCommand, EchoPlace, FontCommand, LogCommand, NotifyCommand,
-    RoomKeyTransfer, SlashCommand, TimestampCommand, VerificationAction, classify_input,
-    local_command_history_entry,
+    E2eeSlashCommand, EchoCommand, EchoPlace, FontCommand, LogCommand, NickColorCommand,
+    NickColorTarget, NotifyCommand, RoomKeyTransfer, SlashCommand, TimestampCommand,
+    VerificationAction, classify_input, local_command_history_entry,
 };
 #[cfg(test)]
 use compose::submit_compose_from_edit;
@@ -366,9 +367,10 @@ use fonts::{
 #[cfg(test)]
 use frame::window_class_is;
 use frame::{
-    apply_color_scheme, create_main_window, default_window_proc, frame_status_text,
-    frame_window_for, init_common_controls, layout_controls, message_loop, redraw_every_window,
-    refresh_status_bar, register_frame_class, set_switchbar_button_width,
+    apply_color_scheme, apply_nick_colors, create_main_window, default_window_proc,
+    frame_status_text, frame_window_for, init_common_controls, layout_controls, message_loop,
+    redraw_every_window, refresh_status_bar, register_frame_class, set_switchbar_button_width,
+    show_nick_colors,
 };
 #[cfg(test)]
 use frame_menus::active_message_action_state;

@@ -1,9 +1,12 @@
 //! Building a view's timeline rows from the model.
 
+use std::ops::Range;
+
 use mirx_core::RoomMemberChange;
 
 use super::colors::PaletteIndex;
 use super::hotlinks::RowUserLink;
+use super::nick_colors::{NickColorer, ResolvedNickColor};
 use super::timeline_text::MessageLine;
 use super::*;
 
@@ -102,6 +105,11 @@ pub(super) struct TimelineRow {
     /// Where `logical_text` links to users, sorted and apart: a message's
     /// sender nick and its pills. Every other row has none.
     pub(super) user_links: Vec<RowUserLink>,
+    /// The nick of the user who sent the line, on the lines that start
+    /// with their nick (messages, actions, media, ...), and the colour the
+    /// nick colour list gives it. Never in `styles`: it is drawn, not
+    /// logged or copied.
+    pub(super) sender: Option<RowSender>,
     pub(super) layout: TimelineRowLayout,
     pub(super) image_state: Option<TimelineImageState>,
     /// The line's place in its window's arrival order: a live activity's
@@ -131,6 +139,7 @@ impl TimelineRow {
             logical_text: text,
             styles: Vec::new(),
             user_links: Vec::new(),
+            sender: None,
             layout: TimelineRowLayout::FullWidth,
             image_state: None,
             arrival: None,
@@ -145,6 +154,7 @@ impl TimelineRow {
             logical_text: text,
             styles: Vec::new(),
             user_links: Vec::new(),
+            sender: None,
             layout: TimelineRowLayout::Log,
             image_state: None,
             arrival: None,
@@ -161,6 +171,7 @@ impl TimelineRow {
             logical_text: String::new(),
             styles: Vec::new(),
             user_links: Vec::new(),
+            sender: None,
             layout: TimelineRowLayout::Rule,
             image_state: None,
             arrival: None,
@@ -205,6 +216,38 @@ impl TimelineRow {
         }
         self.user_links = user_links;
         self
+    }
+
+    fn with_sender(mut self, sender: Option<RowUserLink>) -> Self {
+        self.sender = sender.map(|link| {
+            assert!(
+                link.range.start < link.range.end
+                    && self.logical_text.get(link.range.clone()).is_some(),
+                "a row's sender nick is in its text: {link:?}"
+            );
+            RowSender {
+                range: link.range,
+                user_id: link.user_id,
+                color: None,
+            }
+        });
+        self
+    }
+}
+
+/// Where a line shows its sender's nick, and its nick colour.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RowSender {
+    pub(super) range: Range<usize>,
+    pub(super) user_id: String,
+    /// `None` until `color_row_senders`, and for users no entry fits.
+    pub(super) color: Option<ResolvedNickColor>,
+}
+
+/// Gives every row's sender nick its colour from the nick colour list.
+pub(super) fn color_row_senders(rows: &mut [TimelineRow], colorer: &NickColorer) {
+    for sender in rows.iter_mut().filter_map(|row| row.sender.as_mut()) {
+        sender.color = colorer.color(&sender.user_id);
     }
 }
 
@@ -416,6 +459,7 @@ fn push_room_activity_row(
         text,
         styles,
         user_links,
+        sender,
         image_state,
     } = activity_line_text(
         room_view,
@@ -426,6 +470,7 @@ fn push_room_activity_row(
     let mut row = TimelineRow::log(kind, text)
         .with_styles(styles)
         .with_user_links(user_links)
+        .with_sender(sender)
         .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
         .with_event_id(room_activity_event_id(activity))
         .arrived(room_view.arrivals.of(&activity.activity_id));
@@ -525,7 +570,27 @@ struct ActivityLine {
     text: String,
     styles: Vec<TextStyleSpan>,
     user_links: Vec<RowUserLink>,
+    /// The sender's nick: the start of a message or action line.
+    sender: Option<RowUserLink>,
     image_state: Option<TimelineImageState>,
+}
+
+/// A line's text, its user links and its sender's nick.
+struct LineText {
+    text: String,
+    user_links: Vec<RowUserLink>,
+    sender: Option<RowUserLink>,
+}
+
+impl LineText {
+    /// A line that names no sender, as an event line does.
+    fn plain(text: String) -> Self {
+        Self {
+            text,
+            user_links: Vec::new(),
+            sender: None,
+        }
+    }
 }
 
 /// The link from a line's nick to its sender: a nick hotlink.
@@ -536,15 +601,15 @@ fn sender_link(line: &MessageLine, sender: &RoomUserProfile) -> RowUserLink {
     }
 }
 
-/// An action line (`* Nick sent image: ...`) and its nick hotlink.
-fn action_line_with_link(
-    timestamp: &str,
-    sender: &RoomUserProfile,
-    body: &str,
-) -> (String, Vec<RowUserLink>) {
+/// An action line (`* Nick sent image: ...`): its nick is a hotlink.
+fn action_line_with_link(timestamp: &str, sender: &RoomUserProfile, body: &str) -> LineText {
     let line = action_line(timestamp, sender, body);
     let link = sender_link(&line, sender);
-    (line.text, vec![link])
+    LineText {
+        text: line.text,
+        user_links: vec![link.clone()],
+        sender: Some(link),
+    }
 }
 
 /// What a poll line says after its sender's nick: a start lists its
@@ -647,7 +712,7 @@ fn activity_line_text(
     timestamp: &str,
     own_user_id: Option<&str>,
 ) -> ActivityLine {
-    let (kind, (text, user_links), image_state) = match &activity.kind {
+    let (kind, line_text, image_state) = match &activity.kind {
         RoomActivityKind::Message(message) => {
             let suffix = match &message.send_state {
                 RoomMessageSendState::Pending => " (sending)",
@@ -685,7 +750,8 @@ fn activity_line_text(
                     style: span.style,
                 })
                 .collect();
-            let user_links = std::iter::once(sender_link(&line, &message.sender))
+            let sender = sender_link(&line, &message.sender);
+            let user_links = std::iter::once(sender.clone())
                 .chain(message.user_links.iter().map(|link| RowUserLink {
                     range: body_offset + link.start..body_offset + link.end,
                     user_id: link.user_id.clone(),
@@ -702,6 +768,7 @@ fn activity_line_text(
                 text,
                 styles,
                 user_links,
+                sender: Some(sender),
                 image_state: None,
             };
         }
@@ -761,8 +828,9 @@ fn activity_line_text(
                 &format!("{WANTS}{}", request.to),
             );
             let to_start = line.body_offset + WANTS.len();
+            let sender = sender_link(&line, &request.sender);
             let user_links = vec![
-                sender_link(&line, &request.sender),
+                sender.clone(),
                 RowUserLink {
                     range: to_start..to_start + request.to.len(),
                     user_id: request.to.clone(),
@@ -772,7 +840,11 @@ fn activity_line_text(
                 TimelineRowKind::VerificationRequest {
                     highlight: activity.highlight,
                 },
-                (line.text, user_links),
+                LineText {
+                    text: line.text,
+                    user_links,
+                    sender: Some(sender),
+                },
                 None,
             )
         }
@@ -877,22 +949,23 @@ fn activity_line_text(
                     highlight: activity.highlight,
                     item,
                 },
-                (event_line(timestamp, &body), Vec::new()),
+                LineText::plain(event_line(timestamp, &body)),
                 None,
             )
         }
         // The redacted line no longer says what made it a highlight.
         RoomActivityKind::Redacted(_) => (
             TimelineRowKind::Redacted,
-            (event_line(timestamp, "message redacted"), Vec::new()),
+            LineText::plain(event_line(timestamp, "message redacted")),
             None,
         ),
     };
     ActivityLine {
         kind,
-        text,
+        text: line_text.text,
         styles: Vec::new(),
-        user_links,
+        user_links: line_text.user_links,
+        sender: line_text.sender,
         image_state,
     }
 }
@@ -4408,5 +4481,125 @@ mod tests {
         assert!(
             thread_lines.contains(&"[22:16] * /clear: nothing to clear in thread view".to_owned())
         );
+    }
+
+    #[test]
+    fn lines_that_start_with_their_senders_nick_carry_it_and_take_its_colour() {
+        use super::super::nick_colors::{NickColorEntry, NickColorer};
+        use super::super::settings::Settings;
+        use mirx_core::RoomMemberRank;
+        let room_id = "!ops:example";
+        let mut state = test_state();
+        state.model.rooms = vec![room(room_id, "Ops", false)];
+        let at = |second: u64| 1_700_000_000_000 + second * 1000;
+        let message = |event_id, presentation, body, second| {
+            sent_message_activity_with_presentation(
+                room_id,
+                event_id,
+                None,
+                presentation,
+                body,
+                at(second),
+            )
+        };
+        let bob = "@bob:example";
+        let mut reply = message("$reply", RoomMessagePresentationKind::Text, "yes", 9);
+        reply.relation = Some(reply_relation("$text"));
+        for activity in [
+            message("$text", RoomMessagePresentationKind::Text, "hello", 0),
+            message("$emote", RoomMessagePresentationKind::Emote, "waves", 1),
+            message("$notice", RoomMessagePresentationKind::Notice, "note", 2),
+            image_activity(room_id, "$image", bob, at(3), "diagram.png", None, None),
+            sticker_activity(room_id, "$sticker", bob, at(4), "a cat"),
+            file_activity(room_id, "$file", bob, at(5), "report.pdf", None, None),
+            poll_activity(room_id, "$poll", at(6), poll_start("Lunch?", &["Pizza"])),
+            verification_request_activity(room_id, "$verify", at(7), "@carol:example"),
+            unsupported_message_activity(room_id, "$where", bob, at(8), "m.location", "geo"),
+            reply,
+        ] {
+            apply_core_event(&mut state, Event::RoomActivity(Box::new(activity))).unwrap();
+        }
+        apply_core_event(
+            &mut state,
+            unable_to_decrypt_activity(room_id, "$utd", bob, at(10)),
+        )
+        .unwrap();
+        apply_core_event(&mut state, topic_state(room_id, "incident")).unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(room_id, "$text", "$thumbs", bob, "+1", at(11)),
+        )
+        .unwrap();
+        state.model.room_views.entry_or_default(room_id).members = vec![RoomMemberSummary {
+            rank: RoomMemberRank::Moderator,
+            ..member_summary("@alice:example", "Alice", false)
+        }];
+        let rows = build_room_timeline_rows(&state.model, room_id, utc_timestamps(), None);
+        let senders = rows
+            .iter()
+            .map(|row| {
+                row.sender.as_ref().map(|sender| {
+                    assert_eq!(sender.color, None);
+                    (
+                        &row.logical_text[sender.range.clone()],
+                        sender.user_id.as_str(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let alice = Some(("@alice:example", "@alice:example"));
+        let bob_nick = Some((bob, bob));
+        assert_eq!(
+            senders,
+            [
+                // Now talking, Topic is; the text and its reactions.
+                None, None, alice, None, // The emote, the notice, Bob's six.
+                alice, alice, bob_nick, bob_nick, bob_nick, bob_nick, bob_nick, bob_nick,
+                // The reply's quote, then the reply.
+                None, alice, // The undecryptable line, the topic change.
+                bob_nick, None,
+            ],
+            "{:#?}",
+            project_timeline_rows(&rows)
+        );
+
+        let mut settings = Settings::default();
+        for value in ["* 12 modes=@", "@bob:example 4"] {
+            settings
+                .nick_colors
+                .list
+                .push(NickColorEntry::parse_ini_value(value).unwrap());
+        }
+        let mut colored = rows.clone();
+        color_row_senders(
+            &mut colored,
+            &NickColorer::new(&settings, &state.model.room_views[room_id].members),
+        );
+        let palette = |index| {
+            Some(ResolvedNickColor::Palette(
+                PaletteIndex::new(index).unwrap(),
+            ))
+        };
+        for (row, colored) in rows.iter().zip(&colored) {
+            // Only the sender's colour changes: text, styles and links
+            // (what logs, copies and hotlinks read) stay.
+            assert_eq!(colored.logical_text, row.logical_text);
+            assert_eq!(colored.styles, row.styles);
+            assert_eq!(colored.user_links, row.user_links);
+            let expected = row
+                .sender
+                .as_ref()
+                .map(|sender| match sender.user_id.as_str() {
+                    "@alice:example" => palette(12),
+                    _ => palette(4),
+                });
+            assert_eq!(colored.sender.as_ref().map(|sender| sender.color), expected);
+        }
+        settings.nick_colors.active = false;
+        color_row_senders(
+            &mut colored,
+            &NickColorer::new(&settings, &state.model.room_views[room_id].members),
+        );
+        assert_eq!(colored, rows);
     }
 }

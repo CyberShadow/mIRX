@@ -278,6 +278,7 @@ pub(super) unsafe fn run_slash_command(
                 line
             };
             echo_in_active_view(hwnd, [line])?;
+            show_nick_colors(hwnd)?;
             // As mIRC asks the server at once: a user on now is news.
             announce_notify_changes(state_mut(hwnd))?;
             let view = echo_view(&state_ref(hwnd).active_view);
@@ -303,7 +304,76 @@ pub(super) unsafe fn run_slash_command(
                 line
             };
             echo_in_active_view(hwnd, [line])?;
+            show_nick_colors(hwnd)?;
             Ok(Some("notify list saved".to_owned()))
+        }
+        SlashCommand::NickColor(NickColorCommand::List) => {
+            let lines = {
+                let state = state_ref(hwnd);
+                nick_colors::list_lines(&state.settings.settings().nick_colors, |user_id| {
+                    known_nick(&state.model, user_id)
+                })
+            };
+            echo_in_active_view(hwnd, lines)?;
+            Ok(None)
+        }
+        SlashCommand::NickColor(NickColorCommand::Active(active)) => {
+            let mut setting = state_ref(hwnd).settings.settings().nick_colors.clone();
+            setting.active = active;
+            apply_nick_colors(hwnd, setting)?;
+            echo_in_active_view(hwnd, [nick_colors::state_line(active)])?;
+            Ok(Some("nick colors saved".to_owned()))
+        }
+        SlashCommand::NickColor(NickColorCommand::Add {
+            target,
+            color,
+            modes,
+            notify,
+            force,
+        }) => {
+            let (setting, line) = {
+                let state = state_ref(hwnd);
+                let entry = nick_colors::NickColorEntry {
+                    pattern: nick_color_pattern(&state.model, &target)?,
+                    color,
+                    modes,
+                    notify,
+                };
+                let mut setting = state.settings.settings().nick_colors.clone();
+                let line = nick_colors::added_line(
+                    setting.list.add(entry.clone(), force),
+                    &entry,
+                    |user_id| known_nick(&state.model, user_id),
+                );
+                (setting, line)
+            };
+            apply_nick_colors(hwnd, setting)?;
+            echo_in_active_view(hwnd, [line])?;
+            Ok(Some("nick colors saved".to_owned()))
+        }
+        SlashCommand::NickColor(NickColorCommand::Remove(target)) => {
+            let (setting, line) = {
+                let state = state_ref(hwnd);
+                let nick_of = |user_id: &str| known_nick(&state.model, user_id);
+                let mut setting = state.settings.settings().nick_colors.clone();
+                let index = match target {
+                    NickColorTarget::Number(number) => number
+                        .checked_sub(1)
+                        .filter(|&index| index < setting.list.entries().len())
+                        .ok_or_else(|| format!("no nick color entry {number}"))?,
+                    NickColorTarget::Entry(target) => {
+                        let pattern = nick_color_pattern(&state.model, &target)?;
+                        setting.list.find(&pattern).ok_or_else(|| {
+                            format!("{} is not on the nick color list", pattern.label(&nick_of))
+                        })?
+                    }
+                };
+                let line = nick_colors::removed_line(&setting.list.remove(index), nick_of);
+                (setting, line)
+            };
+            apply_nick_colors(hwnd, setting)?;
+            echo_in_active_view(hwnd, [line])?;
+            Ok(Some("nick colors saved".to_owned()))
         }
         SlashCommand::AddressBook { tab } => {
             // Modal: it says what it saved itself.
@@ -995,6 +1065,16 @@ pub(super) fn known_nick(model: &UiModel, user_id: &str) -> Option<String> {
 /// Ignored and listed users stay nameable by ID once they leave every room.
 fn user_target(model: &UiModel, target: &str) -> Result<String, String> {
     Ok(commands::resolve_user(all_room_members(model), target)?.user_id)
+}
+
+/// Whom `/cnick` names: a pattern with `*` or `?` as typed, else a user
+/// as `/notify` names one.
+fn nick_color_pattern(model: &UiModel, target: &str) -> Result<nick_colors::UserPattern, String> {
+    if target.contains(['*', '?']) {
+        nick_colors::UserPattern::new(target)
+    } else {
+        nick_colors::UserPattern::new(&user_target(model, target)?)
+    }
 }
 
 /// Where `/msg` sends: a room by ID, alias or display name, else the query
@@ -2031,6 +2111,86 @@ mod tests {
         stop_test_core(handle);
     }
 
+    /// `/cnick` edits the list, says what it did, and Alice's line in Ops
+    /// takes each change at once; a notify entry follows `/notify`.
+    #[test]
+    fn cnick_colours_a_senders_nick_as_the_list_changes() {
+        use super::super::colors::PaletteIndex;
+        use super::super::nick_colors::{NickColorEntry, NickColorList, ResolvedNickColor};
+        let (mut state, handle) = irc_command_state();
+        let hello = sent_message_activity("!ops:example", "$hello", None, "hello", 0);
+        apply_core_event(&mut state, Event::RoomActivity(Box::new(hello))).unwrap();
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                refresh_view_content(hwnd, &room_view_id("!ops:example")).unwrap();
+                let alice_color = || {
+                    let state = state_ref(hwnd);
+                    let content = state.views[&state.active_view].content;
+                    let rows = &timeline_state_ref(room_content_timeline(content)).source_rows;
+                    let row = rows
+                        .iter()
+                        .find(|row| row.logical_text.ends_with("> hello"))
+                        .expect("Alice's line is shown");
+                    row.sender
+                        .as_ref()
+                        .expect("the line names its sender")
+                        .color
+                };
+                let palette = |index| {
+                    Some(ResolvedNickColor::Palette(
+                        PaletteIndex::new(index).unwrap(),
+                    ))
+                };
+                assert_eq!(alice_color(), None);
+                for (input, color) in [
+                    ("/cnick", None),
+                    ("/cnick alice 4", palette(4)),
+                    ("/cnick off", None),
+                    ("/cnick on", palette(4)),
+                    ("/cnick -y *:example 9", palette(4)),
+                    ("/cnick -r 1", None),
+                    ("/notify alice", palette(9)),
+                    ("/cnick -r dave", palette(9)),
+                    ("/cnick -r 3", palette(9)),
+                    ("/cnick -a alice 12 ", palette(9)),
+                    ("/cnick", palette(9)),
+                    ("/notify -r alice", None),
+                ] {
+                    type_compose_line(hwnd, input);
+                    assert_eq!(alice_color(), color, "after {input}");
+                }
+                assert_eq!(state_ref(hwnd).recorded_commands, vec![]);
+                let entry = |line: &str| NickColorEntry::parse_ini_value(line).unwrap();
+                let mut list = NickColorList::default();
+                list.push(entry("*:example 9 notify"));
+                list.push(entry("@alice:example 12 any"));
+                assert_eq!(state_ref(hwnd).settings.settings().nick_colors.list, list);
+                let lines = render_room_lines(state_ref(hwnd), "!ops:example");
+                assert_eq!(
+                    &lines[lines.len() - 14..],
+                    [
+                        "[22:12] * Nick color list is empty (on)",
+                        "[22:12] * Added Alice (@alice:example) to nick color list",
+                        "[22:12] * Nick colors are off",
+                        "[22:12] * Nick colors are on",
+                        "[22:12] * Added *:example to nick color list",
+                        "[22:12] * Removed Alice (@alice:example) from nick color list",
+                        "[22:12] * Added Alice (@alice:example) to notify list",
+                        "[22:12] * /cnick: no such nick: dave",
+                        "[22:12] * /cnick: no nick color entry 3",
+                        "[22:12] * Added Alice (@alice:example) to nick color list",
+                        "[22:12] * Nick colors are on:",
+                        "[22:12] *   1. *:example 9, notify",
+                        "[22:12] *   2. Alice (@alice:example) 12, any mode",
+                        "[22:12] * Removed Alice (@alice:example) from notify list",
+                    ]
+                );
+            });
+        }
+        stop_test_core(handle);
+    }
+
     /// Connected, a user added while the server says they are on is
     /// announced at once, and the listing says who is on.
     #[test]
@@ -2348,7 +2508,7 @@ mod tests {
                 type_compose_line(hwnd, "/help nope");
                 let lines = render_room_lines(state_ref(hwnd), "!room:example");
                 let echo = &lines[lines.len() - 4..];
-                assert!(echo[0].starts_with("[22:12] * Commands: /accept /alias /ame /amsg /away /back /ban /clear /clearall /close "));
+                assert!(echo[0].starts_with("[22:12] * Commands: /accept /alias /ame /amsg /away /back /ban /clear /clearall /close /cnick "));
                 assert_eq!(echo[1], "[22:12] * /help <command> for usage");
                 assert_eq!(echo[2], "[22:12] * /clear - clear this window");
                 assert_eq!(echo[3], "[22:12] * /help: no such command: nope");

@@ -1,5 +1,7 @@
 //! The nick list: owner draw, the selected member and its menu.
 
+use super::colors::colorref_hex;
+use super::settings::Settings;
 use super::*;
 
 pub(super) fn room_member_nick(member: &RoomMemberSummary) -> String {
@@ -9,6 +11,7 @@ pub(super) fn room_member_nick(member: &RoomMemberSummary) -> String {
 pub(super) fn room_member_view_rows(
     members: &[RoomMemberSummary],
     presence: &PresenceBook,
+    settings: &Settings,
 ) -> Vec<RoomMemberView> {
     members
         .iter()
@@ -20,17 +23,33 @@ pub(super) fn room_member_view_rows(
             can_kick: member.can_kick,
             can_ban: member.can_ban,
             presence: presence.kind(&member.user_id),
+            color: colorref_hex(nick_list_color(member, presence, settings)),
         })
         .collect()
 }
 
-/// The colour item a member's nick is drawn in: away and offline members
-/// in grey, as HexChat shows them; online ones, and those the server shares
-/// no presence of, in the list's text colour.
-pub(super) fn nick_color_item(presence: Option<PresenceKind>) -> ColorItem {
-    match presence {
-        Some(PresenceKind::Unavailable | PresenceKind::Offline) => ColorItem::Gray,
-        Some(PresenceKind::Online) | None => ColorItem::ListboxText,
+/// The colour a member's nick is drawn in when not selected: away and
+/// offline members in grey, as HexChat shows them, whatever their nick
+/// colour (presence says something, a colour only decorates); the others
+/// in their nick colour, else the list's text colour.
+pub(super) fn nick_list_color(
+    member: &RoomMemberSummary,
+    presence: &PresenceBook,
+    settings: &Settings,
+) -> u32 {
+    let scheme = &settings.colors;
+    match presence.kind(&member.user_id) {
+        Some(PresenceKind::Unavailable | PresenceKind::Offline) => scheme.colorref(ColorItem::Gray),
+        Some(PresenceKind::Online) | None => settings
+            .nick_colors
+            .resolve(
+                &member.user_id,
+                Some(member.rank),
+                settings.notify.list.contains(&member.user_id),
+            )
+            .map_or(scheme.colorref(ColorItem::ListboxText), |color| {
+                color.index(scheme).colorref()
+            }),
     }
 }
 
@@ -87,13 +106,11 @@ pub(super) unsafe fn draw_nick_list_item(hwnd: HWND, item: &DRAWITEMSTRUCT) {
         let member = listed_member(frame_state, hwnd, item.itemID);
         (
             frame_state.scheme_brushes.listbox,
-            frame_state
-                .settings
-                .settings()
-                .colors
-                .colorref(nick_color_item(
-                    frame_state.model.presence.kind(&member.user_id),
-                )),
+            nick_list_color(
+                member,
+                &frame_state.model.presence,
+                frame_state.settings.settings(),
+            ),
         )
     };
     FillRect(hdc, &item.rcItem, background);
@@ -296,7 +313,11 @@ pub(super) fn active_view_members(state: &WindowState) -> &[RoomMemberSummary] {
 
 unsafe fn active_member_rows(hwnd: HWND) -> Vec<RoomMemberView> {
     let state = state_ref(hwnd);
-    room_member_view_rows(active_view_members(state), &state.model.presence)
+    room_member_view_rows(
+        active_view_members(state),
+        &state.model.presence,
+        state.settings.settings(),
+    )
 }
 
 unsafe fn active_member_list(hwnd: HWND) -> Option<HWND> {
@@ -402,6 +423,7 @@ mod tests {
                 member_summary("@ghost:example", "ghost", true),
             ],
             &PresenceBook::default(),
+            &Settings::default(),
         )
         .into_iter()
         .map(|member| member.label)
@@ -431,6 +453,7 @@ mod tests {
                 ranked("@amy:example", "Amy", RoomMemberRank::Voiced),
             ],
             &PresenceBook::default(),
+            &Settings::default(),
         );
 
         assert_eq!(
@@ -453,6 +476,7 @@ mod tests {
                 ..member_summary("@mod:example", "mod", false)
             }],
             &PresenceBook::default(),
+            &Settings::default(),
         );
         assert_eq!(
             rows.iter()
@@ -476,6 +500,7 @@ mod tests {
                 member_summary("@erin:example", "Erin", false),
             ],
             &presence,
+            &Settings::default(),
         );
         assert_eq!(
             rows.iter()
@@ -486,19 +511,48 @@ mod tests {
     }
 
     #[test]
-    fn away_and_offline_nicks_are_grey() {
-        assert_eq!(
-            nick_color_item(Some(PresenceKind::Unavailable)),
-            ColorItem::Gray
+    fn away_greys_a_nick_over_its_colour_and_a_colour_beats_the_list_text() {
+        use super::super::nick_colors::NickColorEntry;
+        let mut presence = PresenceBook::default();
+        presence.apply(
+            [
+                ("@away:example", PresenceKind::Unavailable),
+                ("@off:example", PresenceKind::Offline),
+                ("@on:example", PresenceKind::Online),
+            ]
+            .map(|(user_id, kind)| PresenceChange {
+                user_id: user_id.to_owned(),
+                kind,
+                status_msg: None,
+            })
+            .into(),
         );
-        assert_eq!(
-            nick_color_item(Some(PresenceKind::Offline)),
-            ColorItem::Gray
-        );
-        assert_eq!(
-            nick_color_item(Some(PresenceKind::Online)),
-            ColorItem::ListboxText
-        );
-        assert_eq!(nick_color_item(None), ColorItem::ListboxText);
+        let ranked = |user_id: &str, rank| RoomMemberSummary {
+            rank,
+            ..member_summary(user_id, "x", false)
+        };
+        let members = [
+            ranked("@away:example", RoomMemberRank::Moderator),
+            ranked("@off:example", RoomMemberRank::Moderator),
+            ranked("@on:example", RoomMemberRank::Moderator),
+            ranked("@unknown:example", RoomMemberRank::Moderator),
+            ranked("@member:example", RoomMemberRank::Member),
+        ];
+        let colors = |settings: &Settings| {
+            room_member_view_rows(&members, &presence, settings)
+                .into_iter()
+                .map(|row| row.color)
+                .collect::<Vec<_>>()
+        };
+        let (grey, black, red) = ("#7f7f7f", "#000000", "#ff0000");
+        let mut settings = Settings::default();
+        assert_eq!(colors(&settings), [grey, grey, black, black, black]);
+        settings
+            .nick_colors
+            .list
+            .push(NickColorEntry::parse_ini_value("* 4 any").unwrap());
+        assert_eq!(colors(&settings), [grey, grey, red, red, black]);
+        settings.nick_colors.active = false;
+        assert_eq!(colors(&settings), [grey, grey, black, black, black]);
     }
 }

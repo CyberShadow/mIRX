@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use super::colors::{ColorItem, ColorScheme, PaletteIndex};
 use super::commands::is_user_id;
+use super::nick_colors::{NickColorEntry, NickColorSetting};
 use super::notify::{NotifyList, NotifySetting};
 use super::timestamp::{TimestampFormat, TimestampSetting};
 
@@ -101,6 +102,8 @@ pub(super) struct Settings {
     pub(super) other: OtherSetting,
     /// mIRC's Tools > Colors.
     pub(super) colors: ColorScheme,
+    /// mIRC's nick colours (`/cnick`, the Address Book's Colors tab).
+    pub(super) nick_colors: NickColorSetting,
     /// mIRC's notify list (`/notify`, the Address Book) and its option.
     pub(super) notify: NotifySetting,
 }
@@ -551,6 +554,7 @@ enum Section {
     Typing,
     Other,
     Colors,
+    NickColors,
     Notify,
 }
 
@@ -583,6 +587,7 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                 "typing" => Section::Typing,
                 "other" => Section::Other,
                 "colors" => Section::Colors,
+                "nickcolors" => Section::NickColors,
                 "notify" => Section::Notify,
                 _ => return Err(error(format!("unknown section [{name}]"))),
             });
@@ -703,6 +708,12 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                     .colors
                     .set(item, parse_palette_index(value).map_err(error)?);
             }
+            (Section::NickColors, "active") => {
+                settings.nick_colors.active = parse_on_off(value, "active").map_err(error)?;
+            }
+            (Section::NickColors, key) => {
+                parse_nick_color_entry(&mut settings.nick_colors, key, value).map_err(error)?;
+            }
             (Section::Notify, "active") => {
                 settings.notify.active = parse_on_off(value, "active").map_err(error)?;
             }
@@ -773,6 +784,14 @@ pub(super) fn to_ini(settings: &Settings) -> String {
             }
         })
         .collect::<String>();
+    let nick_colors = settings
+        .nick_colors
+        .list
+        .entries()
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| format!("n{index}={}\r\n", entry.ini_value()))
+        .collect::<String>();
     format!(
         "[fonts]\r\ntext={},{}{bold}\r\n\
          [timestamp]\r\nshow={}\r\nformat={}\r\n\
@@ -789,6 +808,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
          [typing]\r\nsend={}\r\n\
          [other]\r\nbuffer={}\r\n\
          [colors]\r\n{colors}\
+         [nickcolors]\r\nactive={}\r\n{nick_colors}\
          [notify]\r\nactive={}\r\n{notify}",
         font.face,
         font.points,
@@ -822,6 +842,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         settings.marker.color.get(),
         on_off(settings.typing.send),
         settings.other.window_buffer,
+        on_off(settings.nick_colors.active),
         on_off(settings.notify.active),
     )
 }
@@ -851,6 +872,23 @@ fn parse_notify_entry(list: &mut NotifyList, key: &str, value: &str) -> Result<(
         (!note.is_empty()).then(|| note.to_owned()),
         whois,
     );
+    Ok(())
+}
+
+/// `[nickcolors]`'s `n<i>=<pattern> <color> [apply...]`: the keys count
+/// from `n0`, in list order, the first match first.
+fn parse_nick_color_entry(
+    setting: &mut NickColorSetting,
+    key: &str,
+    value: &str,
+) -> Result<(), String> {
+    let expected = format!("n{}", setting.list.entries().len());
+    if key != expected {
+        return Err(format!("expected {expected}"));
+    }
+    setting
+        .list
+        .push(NickColorEntry::parse_ini_value(value).map_err(|err| format!("{key}: {err}"))?);
     Ok(())
 }
 
@@ -944,6 +982,7 @@ mod tests {
         join=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\nnotice=5\r\nnotify=7\r\nother=6\r\nown=1\r\n\
         part=3\r\ntopic=3\r\neditbox=0\r\neditbox_text=1\r\nlistbox=0\r\nlistbox_text=1\r\n\
         gray=14\r\ntreebar=0\r\ntreebar_text=1\r\n\
+        [nickcolors]\r\nactive=on\r\n\
         [notify]\r\nactive=off\r\n";
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -1267,6 +1306,81 @@ mod tests {
     }
 
     #[test]
+    fn the_nick_color_list_round_trips_in_order() {
+        let mut nick_colors = NickColorSetting {
+            active: false,
+            ..NickColorSetting::default()
+        };
+        for value in [
+            "* auto modes=~&@",
+            "@bob:example.org 4 notify",
+            "@*:matrix.org 12 any notify",
+            "*bot* 3 none",
+        ] {
+            nick_colors
+                .list
+                .push(NickColorEntry::parse_ini_value(value).expect("valid entries"));
+        }
+        let settings = Settings {
+            nick_colors,
+            ..Settings::default()
+        };
+        let text = to_ini(&settings);
+        assert!(text.contains(
+            "treebar_text=1\r\n[nickcolors]\r\nactive=off\r\nn0=* auto modes=~&@\r\n\
+             n1=@bob:example.org 4 notify\r\nn2=@*:matrix.org 12 any notify\r\n\
+             n3=*bot* 3 none\r\n[notify]\r\n"
+        ));
+        assert_eq!(parse_ini(&text), Ok(settings.clone()));
+        // A file from before the section: on, and empty.
+        assert_eq!(
+            parse_ini("[notify]\nactive=on").map(|parsed| parsed.nick_colors),
+            Ok(NickColorSetting::default())
+        );
+        assert_eq!(
+            parse_ini("[NickColors]\nN0= *  auto \nACTIVE=Off").map(|parsed| parsed.nick_colors),
+            Ok({
+                let mut setting = NickColorSetting {
+                    active: false,
+                    ..NickColorSetting::default()
+                };
+                setting
+                    .list
+                    .push(NickColorEntry::parse_ini_value("* auto").unwrap());
+                setting
+            })
+        );
+        for (text, error) in [
+            ("[nickcolors]\nn1=* 4", "line 2: expected n0"),
+            ("[nickcolors]\nn0=* 4\nn0=* 5", "line 3: duplicate key n0"),
+            ("[nickcolors]\nn0=* 4\nn2=* 5", "line 3: expected n1"),
+            ("[nickcolors]\ncolor=4", "line 2: expected n0"),
+            (
+                "[nickcolors]\nn0=bob 4",
+                "line 2: n0: bob is not a user ID or a pattern with * or ?",
+            ),
+            (
+                "[nickcolors]\nn0=* 4 any none",
+                "line 2: n0: one of modes=, any and none at most",
+            ),
+            (
+                "[nickcolors]\nn0=*",
+                "line 2: n0: expected <pattern> <color> [modes=~&@+|any|none] [notify]",
+            ),
+            (
+                "[nickcolors]\nactive=yes",
+                "line 2: active must be on or off",
+            ),
+            (
+                "[nickcolors]\nactive=on\nactive=on",
+                "line 3: duplicate key active",
+            ),
+        ] {
+            assert_eq!(parse_ini(text), Err(error.to_owned()), "{text:?}");
+        }
+    }
+
+    #[test]
     fn colors_round_trip_and_files_without_them_keep_the_defaults() {
         let mut colors = ColorScheme::default();
         colors.set(ColorItem::Background, PaletteIndex::new(1).unwrap());
@@ -1277,7 +1391,7 @@ mod tests {
         };
         let text = to_ini(&settings);
         assert!(text.contains("[colors]\r\nbackground=1\r\naction=6\r\n"));
-        assert!(text.ends_with("treebar=0\r\ntreebar_text=15\r\n[notify]\r\nactive=off\r\n"));
+        assert!(text.ends_with("treebar=0\r\ntreebar_text=15\r\n[nickcolors]\r\nactive=on\r\n[notify]\r\nactive=off\r\n"));
         assert_eq!(parse_ini(&text), Ok(settings));
         // Only some items: the rest keep mIRC's.
         let mut join = ColorScheme::default();

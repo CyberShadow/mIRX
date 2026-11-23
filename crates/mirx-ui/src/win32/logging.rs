@@ -661,6 +661,26 @@ mod tests {
     }
 
     #[test]
+    fn a_nick_colour_is_never_written() {
+        use super::super::nick_colors::ResolvedNickColor;
+        use super::super::timeline_rows::RowSender;
+        let mut row = message_row(
+            "event:$hi",
+            TimelineMessageSendState::Sent,
+            "<bob> hi",
+            Vec::new(),
+        );
+        row.sender = Some(RowSender {
+            range: 1..4,
+            user_id: "@bob:example".to_owned(),
+            color: Some(ResolvedNickColor::Palette(
+                crate::win32::colors::PaletteIndex::new(4).unwrap(),
+            )),
+        });
+        assert_eq!(LogDiff::new(FROM).lines(&[row], false), ["<bob> hi"]);
+    }
+
+    #[test]
     fn a_line_that_decrypts_late_is_not_written_again() {
         let mut diff = LogDiff::new(FROM);
         let undecrypted = message_row(

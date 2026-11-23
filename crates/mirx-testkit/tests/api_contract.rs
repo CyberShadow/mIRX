@@ -42,10 +42,10 @@ use mirx_testkit::{
     SubmittedUserCommand, SwitchbarItem, SwitchbarState, TestkitError, UiActiveTimeline,
     UiActivityColors, UiColorItem, UiColors, UiComposeTarget, UiComposeTargetKind,
     UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState, UiFrameLayout,
-    UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRect,
-    UiRefreshCounters, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState,
-    UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
-    UiTipsOptions, UiToolbarButton, UiTray, UiTrayMenuItem, UiTrayOptions,
+    UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiNickColor, UiOptionsDialog, UiPoint,
+    UiRect, UiRefreshCounters, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState,
+    UiRoomState, UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink,
+    UiTimestamp, UiTipsOptions, UiToolbarButton, UiTray, UiTrayMenuItem, UiTrayOptions,
     UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionArgs,
     VerificationDecimals, VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
 };
@@ -816,6 +816,7 @@ fn data_models_round_trip_through_json() {
                         can_kick: true,
                         can_ban: false,
                         presence: Some(PresenceKind::Unavailable),
+                        color: "#7f7f7f".to_owned(),
                     }],
                     log: None,
                 },
@@ -1080,6 +1081,11 @@ fn data_models_round_trip_through_json() {
                         ..mirx_core::TextStyle::default()
                     },
                 }],
+                nick_color: Some(UiNickColor {
+                    start: 9,
+                    end: 14,
+                    color: "#00007f".to_owned(),
+                }),
                 event_id: Some("$hello".to_owned()),
                 click_point: UiPoint { x: 8, y: 9 },
                 text_left: 16,
@@ -1283,6 +1289,7 @@ fn data_models_round_trip_through_json() {
                                 "can_kick": true,
                                 "can_ban": false,
                                 "presence": "unavailable",
+                                "color": "#7f7f7f",
                             }
                         ],
                         "log": null,
@@ -1419,6 +1426,7 @@ fn data_models_round_trip_through_json() {
                             "background": null,
                         },
                     }],
+                    "nick_color": {"start": 9, "end": 14, "color": "#00007f"},
                     "event_id": "$hello",
                     "click_point": {"x": 8, "y": 9},
                     "text_left": 16,
@@ -6862,14 +6870,15 @@ fn data_models_reject_unknown_fields() {
     );
     assert_eq!(
         serde_json::from_str::<RoomMemberView>(
-            r#"{
+            r##"{
             "user_id":"@alice:example",
             "nick":"Alice",
             "label":"Alice",
             "rank":"creator",
+            "color":"#7f7f7f",
             "can_kick":true,
             "can_ban":false
-        }"#
+        }"##
         )
         .expect("complete room member view")
         .rank,

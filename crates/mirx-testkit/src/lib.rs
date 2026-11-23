@@ -1500,6 +1500,9 @@ pub struct UiTimelineLine {
     pub color: String,
     /// How `text` is formatted, at offsets in it: a message's own styles.
     pub styles: Vec<mirx_core::TextStyleSpan>,
+    /// The part of the sender's nick the line shows, drawn in its nick
+    /// colour; `None` for a nick without one, and lines without a nick.
+    pub nick_color: Option<UiNickColor>,
     /// The event the line belongs to; clicking it selects that event.
     pub event_id: Option<String>,
     pub click_point: UiPoint,
@@ -1508,6 +1511,16 @@ pub struct UiTimelineLine {
     /// The links of the line's row that the line shows, at offsets in
     /// `text`: a link that wraps is in each of its lines.
     pub links: Vec<UiTimelineLink>,
+}
+
+/// `text[start..end]` of a timeline line is a nick drawn in `color`,
+/// `#rrggbb`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiNickColor {
+    pub start: usize,
+    pub end: usize,
+    pub color: String,
 }
 
 /// A link in a timeline line: `text[start..end]` shows part or all of it.
@@ -2259,6 +2272,9 @@ pub struct RoomMemberView {
     /// The member's presence as the sync last reported it; `None` when the
     /// server shared none.
     pub presence: Option<PresenceKind>,
+    /// The colour the nick list draws the nick in when it is not selected,
+    /// `#rrggbb`: grey when away, else its nick colour or the list's text.
+    pub color: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

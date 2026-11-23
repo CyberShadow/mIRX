@@ -7,9 +7,9 @@ use mirx_core::MatrixLink;
 use super::colors::colorref_hex;
 use super::hotlinks::LinkKind;
 use super::settings::{ActivityColors, Settings};
-use super::timeline_layout::timeline_row_color;
+use super::timeline_layout::{line_nick_color, timeline_row_color};
 use super::*;
-use crate::automation::{UiActivityColors, UiColorItem, UiColors, UiRefreshCounters};
+use crate::automation::{UiActivityColors, UiColorItem, UiColors, UiNickColor, UiRefreshCounters};
 
 pub(super) unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenuState, String> {
     let menu = state_ref(hwnd).controls.member_menu;
@@ -209,6 +209,7 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                                     .map(|room_view| room_view.members.as_slice())
                                     .unwrap_or_default(),
                                 &state_ref(hwnd).model.presence,
+                                state_ref(hwnd).settings.settings(),
                             )
                         })
                         .unwrap_or_default(),
@@ -220,6 +221,7 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                             .map(|room_view| room_view.members.as_slice())
                             .unwrap_or_default(),
                         &state_ref(hwnd).model.presence,
+                        state_ref(hwnd).settings.settings(),
                     ),
                 },
                 log: view_log_path(state_ref(hwnd), &view_id),
@@ -441,27 +443,35 @@ unsafe fn dump_active_timeline(timeline: HWND, settings: &Settings) -> UiActiveT
         .skip(state.top_line)
         .take(visible_rows)
         .map(|(line_index, line)| {
-            let (text, styles, indent, links) = match &line.visual {
+            let (text, styles, nick_color, indent, links) = match &line.visual {
                 TimelinePaintLineVisual::Text {
                     text,
                     styles,
                     indent,
                     range,
-                } => (
-                    text.clone(),
-                    styles.clone(),
-                    *indent,
-                    line.source_row_index.map_or_else(Vec::new, |row| {
-                        dump_line_links(&state.source_rows[row], range)
-                    }),
-                ),
+                } => {
+                    let row = line.source_row_index.map(|row| &state.source_rows[row]);
+                    (
+                        text.clone(),
+                        styles.clone(),
+                        row.and_then(|row| line_nick_color(row, range))
+                            .map(|(nick, color)| UiNickColor {
+                                start: nick.start,
+                                end: nick.end,
+                                color: colorref_hex(color.index(scheme).colorref()),
+                            }),
+                        *indent,
+                        row.map_or_else(Vec::new, |row| dump_line_links(row, range)),
+                    )
+                }
                 TimelinePaintLineVisual::ImageSlot | TimelinePaintLineVisual::Rule => {
-                    (String::new(), Vec::new(), 0, Vec::new())
+                    (String::new(), Vec::new(), None, 0, Vec::new())
                 }
             };
             UiTimelineLine {
                 text,
                 styles,
+                nick_color,
                 kind: ui_timeline_line_kind(&line.kind),
                 color: colorref_hex(timeline_row_color(&line.kind, scheme, marker_color)),
                 // Text set as a whole (WM_SETTEXT) has no rows.

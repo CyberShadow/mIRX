@@ -15,6 +15,7 @@ use mirx_core::{
 use super::address_book::AddressBookTab;
 use super::aliases::Aliases;
 use super::colors::PaletteIndex;
+use super::nick_colors::{ModeCondition, NickColor};
 use super::settings::{Bar, FontSetting, parse_palette_index, parse_points};
 use super::timeline_text::{context_line, rank_prefix, topic_is_text};
 use super::timestamp::{LocalTimeFn, TimestampFormat};
@@ -47,6 +48,36 @@ pub(super) enum NotifyCommand {
     },
     /// `/notify -r <nick>`.
     Remove { target: String },
+}
+
+/// `/cnick`'s forms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum NickColorCommand {
+    /// `/cnick`: the list.
+    List,
+    /// `/cnick on|off`.
+    Active(bool),
+    /// `/cnick [-fany] <nick|@user:server|pattern> <color|*> [modes]`:
+    /// updates the first entry with the pattern, or appends one; `force`
+    /// (`-f`) always appends.
+    Add {
+        target: String,
+        color: NickColor,
+        modes: Option<ModeCondition>,
+        notify: bool,
+        force: bool,
+    },
+    /// `/cnick -r <nick|@user:server|pattern|N>`.
+    Remove(NickColorTarget),
+}
+
+/// The entry `/cnick -r` removes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum NickColorTarget {
+    /// The first with this nick's user ID, this ID or this pattern.
+    Entry(String),
+    /// The Nth, from 1, as `/cnick` numbers them.
+    Number(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +147,8 @@ pub(super) enum SlashCommand {
     },
     /// `/notify`: mIRC's notify list.
     Notify(NotifyCommand),
+    /// `/cnick`: mIRC's nick colour list.
+    NickColor(NickColorCommand),
     /// `/abook [-n|-c]`: the Address Book at its Notify or Control tab.
     AddressBook {
         tab: AddressBookTab,
@@ -386,6 +419,7 @@ impl SlashCommand {
             Self::Ignore { .. } => "ignore",
             Self::Unignore { .. } => "unignore",
             Self::Notify(_) => "notify",
+            Self::NickColor(_) => "cnick",
             Self::AddressBook { .. } => "abook",
             Self::Close => "close",
             Self::Exit => "exit",
@@ -517,6 +551,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "close",
         usage: "",
         summary: "close this window",
+    },
+    CommandSpec {
+        name: "cnick",
+        usage: "[-rfany] [on|off|nick color|* [modes]]",
+        summary: "colour nicks in the nick list and messages (-r: remove; no nick: list)",
     },
     CommandSpec {
         name: "create",
@@ -940,6 +979,7 @@ fn parse_named(name: &str, argument: &str) -> Result<SlashCommand, CommandError>
             target: single_word(&name, argument)?,
         }),
         "notify" => parse_notify(argument).map(SlashCommand::Notify),
+        "cnick" => parse_cnick(argument).map(SlashCommand::NickColor),
         "abook" => parse_abook(argument),
         "close" => no_parameters(SlashCommand::Close),
         "exit" => no_parameters(SlashCommand::Exit),
@@ -1333,6 +1373,78 @@ fn parse_notify(argument: &str) -> Result<NotifyCommand, CommandError> {
                 target: target.to_owned(),
                 note: (!rest.is_empty()).then(|| rest.to_owned()),
                 whois,
+            })
+        }
+    }
+}
+
+/// mIRC's `/cnick -rfanylNmNsN [on|off|nick] [color] [modes]`, with the
+/// switches that mean something on Matrix: `-r` removes (by nick, ID,
+/// pattern or number), `-f` adds a new entry rather than updating, `-a`
+/// is Any mode, `-n` No mode, `-y` the notify list. mIRC's `-iopv` lists,
+/// idle time, method and position are not mirx's. `*` as the nick is any
+/// user; a user named `on` or `off` is given by their ID.
+fn parse_cnick(argument: &str) -> Result<NickColorCommand, CommandError> {
+    let error = |reason: String| CommandError::new("cnick", reason);
+    let (first, rest) = split_word(argument);
+    let (switches, rest) = match first.strip_prefix('-') {
+        Some(switches) => (switches, rest),
+        None => ("", argument),
+    };
+    let (mut remove, mut force, mut any, mut none, mut notify) =
+        (false, false, false, false, false);
+    for switch in switches.chars() {
+        let flag = match switch.to_ascii_lowercase() {
+            'r' => &mut remove,
+            'f' => &mut force,
+            'a' => &mut any,
+            'n' => &mut none,
+            'y' => &mut notify,
+            _ => return Err(error(format!("unknown switch -{switch}"))),
+        };
+        *flag = true;
+    }
+    if first == "-" {
+        return Err(error("unknown switch -".to_owned()));
+    }
+    if remove && (force || any || none || notify) {
+        return Err(error("-r takes no other switches".to_owned()));
+    }
+    if remove {
+        let target = single_word("cnick", rest)?;
+        return Ok(NickColorCommand::Remove(match target.parse::<usize>() {
+            Ok(number) => NickColorTarget::Number(number),
+            Err(_) => NickColorTarget::Entry(target),
+        }));
+    }
+    let adding = !switches.is_empty();
+    match rest.split_ascii_whitespace().collect::<Vec<_>>().as_slice() {
+        [] if !adding => Ok(NickColorCommand::List),
+        [state] if !adding && state.eq_ignore_ascii_case("on") => {
+            Ok(NickColorCommand::Active(true))
+        }
+        [state] if !adding && state.eq_ignore_ascii_case("off") => {
+            Ok(NickColorCommand::Active(false))
+        }
+        [] | [_] => Err(CommandError::insufficient_parameters("cnick")),
+        [target, color, modes @ ..] => {
+            let modes = match (modes, any, none) {
+                ([], false, false) => None,
+                ([], true, false) => Some(ModeCondition::AnyMode),
+                ([], false, true) => Some(ModeCondition::NoMode),
+                ([], true, true) => return Err(error("-a and -n cannot be combined".to_owned())),
+                ([modes], false, false) => Some(ModeCondition::parse_glyphs(modes).map_err(error)?),
+                ([_], _, _) => {
+                    return Err(error("modes cannot be given with -a or -n".to_owned()));
+                }
+                _ => return Err(error("too many parameters".to_owned())),
+            };
+            Ok(NickColorCommand::Add {
+                target: (*target).to_owned(),
+                color: NickColor::parse(color).map_err(error)?,
+                modes,
+                notify,
+                force,
             })
         }
     }
@@ -2837,7 +2949,7 @@ mod tests {
         let lines = help_lines(None).unwrap();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with(
-            "* Commands: /accept /alias /ame /amsg /away /back /ban /clear /clearall /close /create /deop /describe /devices /devoice /e2ee"
+            "* Commands: /accept /alias /ame /amsg /away /back /ban /clear /clearall /close /cnick /create /deop /describe /devices /devoice /e2ee"
         ));
         assert!(lines[0].contains(" /help /identity /ignore "));
         assert!(lines[0].contains(" /reply /savebuf /say /sendfile "));
@@ -3107,6 +3219,104 @@ mod tests {
             help_lines(Some("notify")),
             Ok(vec![
                 "* /notify [-r] [nick [note]] - watch for a user on Matrix (-r: stop; no nick: list)"
+                    .to_owned()
+            ])
+        );
+    }
+
+    #[test]
+    fn cnick_lists_switches_adds_and_removes() {
+        let cnick = |command| Ok(SlashCommand::NickColor(command));
+        let add = |target: &str, color, modes, notify, force| {
+            cnick(NickColorCommand::Add {
+                target: target.to_owned(),
+                color,
+                modes,
+                notify,
+                force,
+            })
+        };
+        let red = NickColor::Palette(PaletteIndex::new(4).unwrap());
+        assert_eq!(parse("/cnick"), cnick(NickColorCommand::List));
+        assert_eq!(parse("/CNICK on"), cnick(NickColorCommand::Active(true)));
+        assert_eq!(parse("/cnick OFF "), cnick(NickColorCommand::Active(false)));
+        assert_eq!(parse("/cnick bob 4"), add("bob", red, None, false, false));
+        assert_eq!(
+            parse("/cnick -fy *:example *"),
+            add("*:example", NickColor::Auto, None, true, true)
+        );
+        assert_eq!(
+            parse("/cnick @bob:example 4 @+"),
+            add(
+                "@bob:example",
+                red,
+                Some(ModeCondition::Ranks(
+                    [RoomMemberRank::Moderator, RoomMemberRank::Voiced].into()
+                )),
+                false,
+                false
+            )
+        );
+        assert_eq!(
+            parse("/cnick -a * 4"),
+            add("*", red, Some(ModeCondition::AnyMode), false, false)
+        );
+        assert_eq!(
+            parse("/cnick -n * 4"),
+            add("*", red, Some(ModeCondition::NoMode), false, false)
+        );
+        // A user named on is given by ID once a switch is in the way.
+        assert_eq!(parse("/cnick -y on"), insufficient("cnick"));
+        assert_eq!(parse("/cnick bob"), insufficient("cnick"));
+        assert_eq!(parse("/cnick -f"), insufficient("cnick"));
+        assert_eq!(
+            parse("/cnick bob 16"),
+            error("cnick", "color must be 0-15 or *, not 16")
+        );
+        assert_eq!(
+            parse("/cnick bob 4 @x"),
+            error("cnick", "modes must be some of ~&@+, not @x")
+        );
+        assert_eq!(
+            parse("/cnick -an bob 4"),
+            error("cnick", "-a and -n cannot be combined")
+        );
+        assert_eq!(
+            parse("/cnick -a bob 4 @"),
+            error("cnick", "modes cannot be given with -a or -n")
+        );
+        assert_eq!(
+            parse("/cnick bob 4 @ +"),
+            error("cnick", "too many parameters")
+        );
+        assert_eq!(
+            parse("/cnick -i bob 4"),
+            error("cnick", "unknown switch -i")
+        );
+        assert_eq!(parse("/cnick - bob 4"), error("cnick", "unknown switch -"));
+        assert_eq!(
+            parse("/cnick -r bob"),
+            cnick(NickColorCommand::Remove(NickColorTarget::Entry(
+                "bob".to_owned()
+            )))
+        );
+        assert_eq!(
+            parse("/cnick -r 2"),
+            cnick(NickColorCommand::Remove(NickColorTarget::Number(2)))
+        );
+        assert_eq!(parse("/cnick -r"), insufficient("cnick"));
+        assert_eq!(
+            parse("/cnick -r bob carol"),
+            error("cnick", "too many parameters")
+        );
+        assert_eq!(
+            parse("/cnick -rf bob"),
+            error("cnick", "-r takes no other switches")
+        );
+        assert_eq!(
+            help_lines(Some("cnick")),
+            Ok(vec![
+                "* /cnick [-rfany] [on|off|nick color|* [modes]] - colour nicks in the nick list and messages (-r: remove; no nick: list)"
                     .to_owned()
             ])
         );

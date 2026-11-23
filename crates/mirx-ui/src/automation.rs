@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 84;
+pub(crate) const PROTOCOL_VERSION: u32 = 85;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1196,6 +1196,9 @@ pub(crate) struct UiTimelineLine {
     pub(crate) color: String,
     /// How `text` is formatted, at offsets in it: a message's own styles.
     pub(crate) styles: Vec<mirx_core::TextStyleSpan>,
+    /// The part of the sender's nick the line shows, drawn in its nick
+    /// colour; `None` for a nick without one, and lines without a nick.
+    pub(crate) nick_color: Option<UiNickColor>,
     /// The event the line belongs to; clicking it selects that event.
     pub(crate) event_id: Option<String>,
     pub(crate) click_point: UiPoint,
@@ -1204,6 +1207,16 @@ pub(crate) struct UiTimelineLine {
     /// The links of the line's row that the line shows, at offsets in
     /// `text`: a link that wraps is in each of its lines.
     pub(crate) links: Vec<UiTimelineLink>,
+}
+
+/// `text[start..end]` of a timeline line is a nick drawn in `color`,
+/// `#rrggbb`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiNickColor {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) color: String,
 }
 
 /// A link in a timeline line: `text[start..end]` shows part or all of it.
@@ -1827,6 +1840,9 @@ pub(crate) struct RoomMemberView {
     /// The member's presence as the sync last reported it; `None` when the
     /// server shared none.
     pub(crate) presence: Option<PresenceKind>,
+    /// The colour the nick list draws the nick in when it is not selected,
+    /// `#rrggbb`: grey when away, else its nick colour or the list's text.
+    pub(crate) color: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4098,8 +4114,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_84() {
-        assert_eq!(PROTOCOL_VERSION, 84);
+    fn protocol_version_is_85() {
+        assert_eq!(PROTOCOL_VERSION, 85);
     }
 
     #[test]
@@ -6138,7 +6154,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":84,
+                    "protocol_version":85,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6615,6 +6631,7 @@ mod tests {
                                     can_kick: true,
                                     can_ban: false,
                                     presence: Some(PresenceKind::Unavailable),
+                                    color: "#7f7f7f".to_owned(),
                                 }],
                                 log: None,
                             },
@@ -6910,6 +6927,11 @@ mod tests {
                             kind: super::UiTimelineLineKind::ReplyQuote,
                             color: "#7f7f7f".to_owned(),
                             styles: Vec::new(),
+                            nick_color: Some(super::UiNickColor {
+                                start: 7,
+                                end: 12,
+                                color: "#ff0000".to_owned(),
+                            }),
                             event_id: Some("$answer".to_owned()),
                             click_point: super::UiPoint { x: 8, y: 9 },
                             text_left: 8,
@@ -6982,7 +7004,8 @@ mod tests {
                                         "rank":"moderator",
                                         "can_kick":true,
                                         "can_ban":false,
-                                        "presence":"unavailable"
+                                        "presence":"unavailable",
+                                        "color":"#7f7f7f"
                                     }
                                 ],
                                 "log":null
@@ -7159,6 +7182,7 @@ mod tests {
                             "kind":"reply_quote",
                             "color":"#7f7f7f",
                             "styles":[],
+                            "nick_color":{"start":7,"end":12,"color":"#ff0000"},
                             "event_id":"$answer",
                             "click_point":{"x":8,"y":9},
                             "text_left":8,

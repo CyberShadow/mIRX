@@ -1,6 +1,7 @@
 //! Timeline layout and paint: rows become wrapped paint lines, and paint
 //! lines are drawn in the frame's text font.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
@@ -9,6 +10,7 @@ use mirx_core::{TextStyle, TextStyleSpan};
 use windows_sys::Win32::Graphics::Gdi::{HDC, InvertRect};
 
 use super::colors::{ColorScheme, ERROR_COLOR, PaletteIndex, colorref, rgb};
+use super::nick_colors::ResolvedNickColor;
 use super::settings::ActivityColors;
 use super::text_selection::line_selection;
 use super::*;
@@ -319,6 +321,53 @@ pub(super) fn clip_styles(styles: &[TextStyleSpan], segment: &Range<usize>) -> V
         .collect()
 }
 
+/// The part of `row`'s sender nick that its line showing `range` of the
+/// row's text shows, at its offsets in the line, with the nick's colour:
+/// a long nick can wrap. `None` for a nick without a colour.
+pub(super) fn line_nick_color(
+    row: &TimelineRow,
+    range: &Range<usize>,
+) -> Option<(Range<usize>, ResolvedNickColor)> {
+    let sender = row.sender.as_ref()?;
+    let color = sender.color?;
+    let start = sender.range.start.max(range.start);
+    let end = sender.range.end.min(range.end);
+    (start < end).then(|| (start - range.start..end - range.start, color))
+}
+
+/// The styles a line is drawn in: its message's own, and its sender's
+/// nick in the nick's colour. The nick comes before the message's text,
+/// so they never overlap.
+pub(super) fn painted_styles<'a>(
+    styles: &'a [TextStyleSpan],
+    nick: Option<(Range<usize>, ResolvedNickColor)>,
+    scheme: &ColorScheme,
+) -> Cow<'a, [TextStyleSpan]> {
+    let Some((range, color)) = nick else {
+        return Cow::Borrowed(styles);
+    };
+    assert!(
+        styles
+            .iter()
+            .all(|span| span.end <= range.start || range.end <= span.start),
+        "a sender's nick is apart from the message's styles"
+    );
+    let at = styles.partition_point(|span| span.end <= range.start);
+    let mut painted = styles.to_vec();
+    painted.insert(
+        at,
+        TextStyleSpan {
+            start: range.start,
+            end: range.end,
+            style: TextStyle {
+                foreground: Some(color.index(scheme).color()),
+                ..TextStyle::default()
+            },
+        },
+    );
+    Cow::Owned(painted)
+}
+
 /// The paint lines of `rows` in a client `client_width` wide, with log rows
 /// wrapped through `cache`, and how many log rows had to be wrapped.
 fn timeline_row_paint_lines_with_measure<Measure>(
@@ -526,13 +575,16 @@ pub(super) unsafe fn paint_timeline(hwnd: HWND) {
                     right: (client_rect.right - state.metrics.right_padding).max(left + 1),
                     bottom: line_y + state.line_height,
                 };
+                let nick = line
+                    .source_row_index
+                    .and_then(|index| line_nick_color(&state.source_rows[index], range));
                 paint_styled_text(
                     hdc,
                     glyphs,
                     left,
                     &rect,
                     text,
-                    styles,
+                    &painted_styles(styles, nick, scheme),
                     timeline_row_color(&line.kind, scheme, settings.marker.color),
                 );
                 // mIRC shows marked text in inverse video, which keeps
@@ -1221,6 +1273,63 @@ mod tests {
         assert_eq!(clip_styles(&styles, &(3..5)), Vec::new());
         assert_eq!(clip_styles(&styles, &(0..20)), styles.to_vec());
         assert_eq!(clip_styles(&styles, &(9..9)), Vec::new());
+    }
+
+    #[test]
+    fn a_coloured_nick_is_painted_beside_the_messages_styles_and_clipped_per_line() {
+        use super::super::nick_colors::ResolvedNickColor;
+        use super::super::timeline_rows::RowSender;
+        let red = ResolvedNickColor::Palette(PaletteIndex::new(4).unwrap());
+        let mut row = TimelineRow::log(
+            TimelineRowKind::Plain,
+            "[22:13] <Bartholomew> hi".to_owned(),
+        );
+        let nick = |row: &TimelineRow, range| line_nick_color(row, &range);
+        assert_eq!(nick(&row, 0..26), None);
+        row.sender = Some(RowSender {
+            range: 9..20,
+            user_id: "@bart:example".to_owned(),
+            color: None,
+        });
+        // A nick without a colour draws in the line's.
+        assert_eq!(nick(&row, 0..26), None);
+        row.sender.as_mut().unwrap().color = Some(red);
+        assert_eq!(nick(&row, 0..26), Some((9..20, red)));
+        // Wrapped: each line shows its part of the nick.
+        assert_eq!(nick(&row, 0..14), Some((9..14, red)));
+        assert_eq!(nick(&row, 14..26), Some((0..6, red)));
+        assert_eq!(nick(&row, 20..26), None);
+
+        let scheme = ColorScheme::default();
+        let message = [style_span(23, 25, bold())];
+        assert_eq!(
+            painted_styles(&message, None, &scheme).as_ref(),
+            message.as_slice()
+        );
+        let red_text = TextStyle {
+            foreground: Some(PaletteIndex::new(4).unwrap().color()),
+            ..TextStyle::default()
+        };
+        assert_eq!(
+            painted_styles(&message, Some((9..20, red)), &scheme).as_ref(),
+            [style_span(9, 20, red_text), style_span(23, 25, bold())]
+        );
+        assert_eq!(
+            painted_styles(&[style_span(0, 2, bold())], Some((3..5, red)), &scheme).as_ref(),
+            [style_span(0, 2, bold()), style_span(3, 5, red_text)]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "a sender's nick is apart from the message's styles")]
+    fn a_nick_overlapping_the_messages_styles_is_a_bug() {
+        let red =
+            super::super::nick_colors::ResolvedNickColor::Palette(PaletteIndex::new(4).unwrap());
+        painted_styles(
+            &[style_span(0, 5, bold())],
+            Some((3..8, red)),
+            &ColorScheme::default(),
+        );
     }
 
     #[test]

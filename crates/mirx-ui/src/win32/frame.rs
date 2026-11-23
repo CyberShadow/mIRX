@@ -7,6 +7,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_CAPTURECHANGED, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR,
 };
 
+use super::nick_colors::NickColorSetting;
 use super::settings::ButtonWidth;
 use super::*;
 
@@ -438,6 +439,29 @@ pub(super) unsafe fn apply_color_scheme(hwnd: HWND, scheme: ColorScheme) -> Resu
         .update(|settings| settings.colors = scheme.clone())?;
     drop(std::mem::replace(&mut state.scheme_brushes, brushes));
     set_treebar_colors(state.controls.tree, &scheme);
+    redraw_every_window(hwnd);
+    Ok(())
+}
+
+/// Makes `setting` the nick colours and saves it, then shows them.
+pub(super) unsafe fn apply_nick_colors(
+    hwnd: HWND,
+    setting: NickColorSetting,
+) -> Result<(), String> {
+    state_mut(hwnd)
+        .settings
+        .update(|settings| settings.nick_colors = setting)?;
+    show_nick_colors(hwnd)
+}
+
+/// After a change to what nick colours read (their list, or the notify
+/// list an entry may ask for): the windows' rows whose key moved are built
+/// again, and the nick lists, which colour as they draw, repaint.
+pub(super) unsafe fn show_nick_colors(hwnd: HWND) -> Result<(), String> {
+    let view_ids = state_ref(hwnd).views.keys().cloned().collect::<Vec<_>>();
+    for view_id in &view_ids {
+        sync_view_content(hwnd, view_id)?;
+    }
     redraw_every_window(hwnd);
     Ok(())
 }

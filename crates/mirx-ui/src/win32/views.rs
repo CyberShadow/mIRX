@@ -5,6 +5,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     EN_CHANGE, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_ERASEBKGND, WS_CLIPSIBLINGS,
 };
 
+use super::nick_colors::{NickColorSetting, NickColorer};
+use super::settings::Settings;
+use super::timeline_rows::color_row_senders;
 use super::*;
 
 const MDI_CHILD_CLASS_NAME: &str = "mirxWin32MdiChild";
@@ -1196,6 +1199,11 @@ pub(super) struct ViewRowsKey {
     /// marker is shown. Not the whole read state: its unread counts change
     /// with every receipt and draw nothing.
     line_marker: Option<String>,
+    /// A room or thread window's nick colours while some nick can take
+    /// one: the list, and the notify list while an entry asks for it. The
+    /// ranks they read are the room's members, in its revision. The scheme
+    /// is not here: auto colours pick from it as they are drawn.
+    nick_colors: Option<(NickColorSetting, Vec<String>)>,
 }
 
 /// The inputs of `view_id`'s rows now; the Rooms List has none.
@@ -1225,7 +1233,32 @@ pub(super) fn view_rows_key(state: &WindowState, view_id: &ViewId) -> ViewRowsKe
             ViewId::Status | ViewId::Thread { .. } => None,
             ViewId::RoomList => unreachable!("the Rooms List has no rows to gate"),
         },
+        nick_colors: view_nick_colors(state.settings.settings(), view_id),
     }
+}
+
+/// The nick colour inputs of `view_id`'s rows: none for Status, which
+/// shows no senders, and none while no nick takes a colour.
+fn view_nick_colors(
+    settings: &Settings,
+    view_id: &ViewId,
+) -> Option<(NickColorSetting, Vec<String>)> {
+    let nick_colors = &settings.nick_colors;
+    if view_id.room_id().is_none() || !nick_colors.colors_nicks() {
+        return None;
+    }
+    let notify = if nick_colors.list.entries().iter().any(|entry| entry.notify) {
+        settings
+            .notify
+            .list
+            .entries()
+            .iter()
+            .map(|entry| entry.user_id.clone())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Some((nick_colors.clone(), notify))
 }
 
 /// Brings a window up to date with the model: its caption, and its rows
@@ -1302,6 +1335,18 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
             }
             ViewId::RoomList => unreachable!("the Rooms List returned above"),
         };
+        if let Some(room_id) = view_id.room_id() {
+            let members = state
+                .model
+                .room_views
+                .get(room_id)
+                .map(|room_view| room_view.members.as_slice())
+                .unwrap_or_default();
+            color_row_senders(
+                &mut rows,
+                &NickColorer::new(state.settings.settings(), members),
+            );
+        }
         rows.extend(armed_compose_target_row(state, view_id));
         rows
     };
@@ -1323,7 +1368,7 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
                 .unwrap_or_default();
             // An invite's window lists nobody: its room is not joined yet.
             if is_sendable_room(room) {
-                room_member_view_rows(members, &state.model.presence)
+                room_member_view_rows(members, &state.model.presence, state.settings.settings())
             } else {
                 Vec::new()
             }
@@ -1561,7 +1606,7 @@ mod tests {
     fn view_rows_key_changes_with_each_input() {
         let ops = room_view_id("!ops:example");
         type Change = fn(&mut WindowState);
-        let changes: [(&str, Change, bool, bool); 12] = [
+        let changes: [(&str, Change, bool, bool); 15] = [
             // (what, change, moves the room's key, moves Status's key)
             (
                 "a rename",
@@ -1682,6 +1727,52 @@ mod tests {
                 false,
                 false,
             ),
+            (
+                "a nick colour entry",
+                |state| {
+                    state
+                        .settings
+                        .update(|settings| settings.nick_colors.list.push(nick_color_entry("* 4")))
+                        .unwrap()
+                },
+                true,
+                false,
+            ),
+            (
+                // No entry asks for the notify list.
+                "a notify list change",
+                |state| {
+                    state
+                        .settings
+                        .update(|settings| {
+                            settings
+                                .notify
+                                .list
+                                .add("@bob:example".to_owned(), None, false);
+                        })
+                        .unwrap()
+                },
+                false,
+                false,
+            ),
+            (
+                // Auto colours pick from it as they are drawn.
+                "the colour scheme",
+                |state| {
+                    state
+                        .settings
+                        .update(|settings| {
+                            settings.colors.set(
+                                ColorItem::Background,
+                                crate::win32::colors::PaletteIndex::new(1)
+                                    .expect("a palette index"),
+                            )
+                        })
+                        .unwrap()
+                },
+                false,
+                false,
+            ),
         ];
         for (what, change, moves_room, moves_status) in changes {
             let mut state = keyed_state();
@@ -1700,6 +1791,59 @@ mod tests {
                 "{what} (Status)"
             );
         }
+    }
+
+    fn nick_color_entry(value: &str) -> crate::win32::nick_colors::NickColorEntry {
+        crate::win32::nick_colors::NickColorEntry::parse_ini_value(value).expect("a valid entry")
+    }
+
+    /// The notify list is an input of the rows only while an entry asks
+    /// for it, and the nick colours only while some nick can take one.
+    #[test]
+    fn nick_colour_inputs_key_the_rows_only_while_they_colour() {
+        let ops = room_view_id("!ops:example");
+        let notify_moves = |entry: &str, active: bool| {
+            let mut state = keyed_state();
+            state
+                .settings
+                .update(|settings| {
+                    settings.nick_colors.list.push(nick_color_entry(entry));
+                    settings.nick_colors.active = active;
+                })
+                .unwrap();
+            let before = view_rows_key(&state, &ops);
+            state
+                .settings
+                .update(|settings| {
+                    settings
+                        .notify
+                        .list
+                        .add("@bob:example".to_owned(), None, false);
+                })
+                .unwrap();
+            view_rows_key(&state, &ops) != before
+        };
+        assert!(!notify_moves("* 4", true));
+        assert!(notify_moves("* 4 notify", true));
+        assert!(!notify_moves("* 4 notify", false));
+        // Turning colours off moves the key; while off, the list does not.
+        let mut state = keyed_state();
+        state
+            .settings
+            .update(|settings| settings.nick_colors.list.push(nick_color_entry("* 4")))
+            .unwrap();
+        let on = view_rows_key(&state, &ops);
+        state
+            .settings
+            .update(|settings| settings.nick_colors.active = false)
+            .unwrap();
+        let off = view_rows_key(&state, &ops);
+        assert_ne!(off, on);
+        state
+            .settings
+            .update(|settings| settings.nick_colors.list.push(nick_color_entry("* 5")))
+            .unwrap();
+        assert_eq!(view_rows_key(&state, &ops), off);
     }
 
     #[test]
