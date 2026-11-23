@@ -508,19 +508,19 @@ pub(super) const MEMBER_CONTROL_MENU: &[MenuEntry] = &[
     Separator,
     Item {
         id: MENU_ID_MEMBER_OP,
-        label: "Op",
+        label: "Make Moderator",
     },
     Item {
         id: MENU_ID_MEMBER_DEOP,
-        label: "Deop",
+        label: "Remove Moderator",
     },
     Item {
         id: MENU_ID_MEMBER_VOICE,
-        label: "Voice",
+        label: "Allow to Speak",
     },
     Item {
         id: MENU_ID_MEMBER_DEVOICE,
-        label: "Devoice",
+        label: "Revoke Speaking",
     },
     Separator,
     Item {

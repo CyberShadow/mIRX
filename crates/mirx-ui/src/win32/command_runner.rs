@@ -2510,9 +2510,9 @@ mod tests {
                         "[22:12] * /kick: insufficient parameters",
                         "[22:12] * /kick: no such nick: Nobody",
                         "[22:12] * /invite: Bob is already in this room",
-                        "[22:12] * /op: Bob is already an operator",
-                        "[22:12] * /devoice: Alice is not voiced",
-                        "[22:12] * /deop: you cannot deop yourself",
+                        "[22:12] * /op: Bob already has moderator power",
+                        "[22:12] * /devoice: Alice is not at the level to speak when the room is moderated",
+                        "[22:12] * /deop: you cannot remove your own moderator power",
                     ]
                 );
             });
@@ -2560,9 +2560,9 @@ mod tests {
                 assert_eq!(
                     &lines[lines.len() - 4..],
                     [
-                        "[22:12] * /op: Bob is already an operator",
+                        "[22:12] * /op: Bob already has moderator power",
                         "[22:12] * /op: Carol is named twice",
-                        "[22:12] * /deop: you cannot deop yourself",
+                        "[22:12] * /deop: you cannot remove your own moderator power",
                         "[22:12] * /voice: no such nick: Nobody",
                     ]
                 );

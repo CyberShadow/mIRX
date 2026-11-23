@@ -576,7 +576,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "deop",
         usage: "<nick> [nick ...]",
-        summary: "take members' operator status",
+        summary: "take members' moderator power (back to the room's default level)",
     },
     CommandSpec {
         name: "describe",
@@ -591,7 +591,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "devoice",
         usage: "<nick> [nick ...]",
-        summary: "take members' voice",
+        summary: "take back members' level to speak when the room is moderated",
     },
     CommandSpec {
         name: "e2ee",
@@ -696,7 +696,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "op",
         usage: "<nick> [nick ...]",
-        summary: "make members operators (moderators)",
+        summary: "give members moderator power (power level 50)",
     },
     CommandSpec {
         name: "part",
@@ -806,7 +806,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "voice",
         usage: "<nick> [nick ...]",
-        summary: "give members voice",
+        summary: "let members speak when the room is moderated",
     },
     CommandSpec {
         name: "whois",
@@ -1973,20 +1973,26 @@ pub(super) fn rank_change_role(
     let nick = &member.nick;
     let is_operator = member.rank <= RoomMemberRank::Moderator;
     match change {
-        RankChange::Op if is_operator => Err(format!("{nick} is already an operator")),
+        RankChange::Op if is_operator => Err(format!("{nick} already has moderator power")),
         RankChange::Op => Ok(MemberPowerRole::Moderator),
         RankChange::Deop if member.rank == RoomMemberRank::Creator => {
             Err(format!("{nick} is the room creator"))
         }
-        RankChange::Deop if !is_operator => Err(format!("{nick} is not an operator")),
-        RankChange::Deop if member.is_own_user => Err("you cannot deop yourself".to_owned()),
+        RankChange::Deop if !is_operator => Err(format!("{nick} has no moderator power")),
+        RankChange::Deop if member.is_own_user => {
+            Err("you cannot remove your own moderator power".to_owned())
+        }
         RankChange::Deop => Ok(MemberPowerRole::Default),
         RankChange::Voice if member.rank == RoomMemberRank::Member => Ok(MemberPowerRole::Voiced),
-        RankChange::Voice => Err(format!("{nick} already has voice")),
+        RankChange::Voice => Err(format!(
+            "{nick} can already speak when the room is moderated"
+        )),
         RankChange::Devoice if member.rank == RoomMemberRank::Voiced => {
             Ok(MemberPowerRole::Default)
         }
-        RankChange::Devoice => Err(format!("{nick} is not voiced")),
+        RankChange::Devoice => Err(format!(
+            "{nick} is not at the level to speak when the room is moderated"
+        )),
     }
 }
 
@@ -3925,12 +3931,12 @@ mod tests {
             (
                 RankChange::Op,
                 RoomMemberRank::Moderator,
-                Err("Bob is already an operator"),
+                Err("Bob already has moderator power"),
             ),
             (
                 RankChange::Op,
                 RoomMemberRank::Creator,
-                Err("Bob is already an operator"),
+                Err("Bob already has moderator power"),
             ),
             (
                 RankChange::Deop,
@@ -3950,7 +3956,7 @@ mod tests {
             (
                 RankChange::Deop,
                 RoomMemberRank::Voiced,
-                Err("Bob is not an operator"),
+                Err("Bob has no moderator power"),
             ),
             (
                 RankChange::Voice,
@@ -3960,12 +3966,12 @@ mod tests {
             (
                 RankChange::Voice,
                 RoomMemberRank::Voiced,
-                Err("Bob already has voice"),
+                Err("Bob can already speak when the room is moderated"),
             ),
             (
                 RankChange::Voice,
                 RoomMemberRank::Moderator,
-                Err("Bob already has voice"),
+                Err("Bob can already speak when the room is moderated"),
             ),
             (
                 RankChange::Devoice,
@@ -3975,7 +3981,7 @@ mod tests {
             (
                 RankChange::Devoice,
                 RoomMemberRank::Member,
-                Err("Bob is not voiced"),
+                Err("Bob is not at the level to speak when the room is moderated"),
             ),
         ];
         for (change, rank, expected) in cases {
@@ -3987,7 +3993,7 @@ mod tests {
         }
         assert_eq!(
             rank_change_role(RankChange::Deop, &own),
-            Err("you cannot deop yourself".to_owned())
+            Err("you cannot remove your own moderator power".to_owned())
         );
     }
 }

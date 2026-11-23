@@ -10499,7 +10499,7 @@ fn automation_driver_irc_moderation_commands_submit_core_commands()
         "/deop Bob",
         "/devoice Vic",
         "/op alice Vic",
-        // Bob is already an operator: nothing is sent for Alice either.
+        // Bob already has moderator power: nothing is sent for Alice either.
         "/op alice Bob",
         "/nick New Name",
     ] {
@@ -10576,7 +10576,7 @@ fn automation_driver_irc_moderation_commands_submit_core_commands()
     }
     assert!(!view_contains(status, "room member"), "{:?}", status.lines);
     assert!(
-        view_contains(beta, "* /op: Bob is already an operator"),
+        view_contains(beta, "* /op: Bob already has moderator power"),
         "{:?}",
         beta.lines
     );
