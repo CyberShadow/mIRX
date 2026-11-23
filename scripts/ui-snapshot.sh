@@ -25,7 +25,8 @@ dpi144_prefix=
 # --expect-dpi 144.
 dpi144_cases=(multi-room image-message-loaded room-list-listing compose-color-index
   dialog-options-display dialog-colors dialog-sign-out-session dialog-log-out
-  dialog-export-room-keys dialog-address-book-notify toolbar-connected line-marker)
+  dialog-export-room-keys dialog-address-book-notify dialog-address-book-colors toolbar-connected
+  line-marker)
 
 die() {
   echo "ui-snapshot: $*" >&2
@@ -369,6 +370,17 @@ configure_case_expectations() {
           # /abook -c: the Control tab, with the server's ignore list.
           ordered_actions=(
             'compose-text:/abook -c'
+            dialog:compose_return
+          )
+          expect_dialog_title='Address Book'
+          ;;
+        dialog-address-book-colors)
+          # /abook -l: the Colors tab, with Bob's entry in red for his
+          # modes, and anyone on the notify list in an auto colour.
+          ordered_actions=(
+            'input:/cnick bob 4 @&~'
+            'input:/cnick -y *:example *'
+            'compose-text:/abook -l'
             dialog:compose_return
           )
           expect_dialog_title='Address Book'
@@ -2564,6 +2576,46 @@ configure_case_expectations() {
       navigation_forbid_args=(
         --expect-no-navigation-text 'back in an hour'
       )
+      ;;
+    nick-colors)
+      # The away-nicks fixture with a line from Admin, then mIRC's nick
+      # colours: Any mode in red (the staff), then anyone in an auto colour.
+      # Away members stay grey in the nick list.
+      ordered_actions=(
+        'input:/cnick -a * 4'
+        'input:/cnick -f * *'
+      )
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      room_expect_args=(
+        --expect-room '!ops:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::* Now talking in Ops (!ops:example)'
+        --expect-room-view '!ops:example::[22:13] <Bob> back in an hour'
+        --expect-room-view '!ops:example::[22:14] <Dave> the deploy is green'
+        --expect-room-view '!ops:example::[22:15] <Alice> thanks, Dave'
+        --expect-room-view '!ops:example::[22:16] <Admin> colours for the ops'
+        --expect-room-view '!ops:example::[22:12] * Added * to nick color list'
+      )
+      room_member_expect_args=(
+        --expect-room-member '!ops:example::Admin'
+        --expect-room-member '!ops:example::Mod'
+        --expect-room-member '!ops:example::Alice'
+        --expect-room-member '!ops:example::Bob'
+        --expect-room-member '!ops:example::Carol'
+        --expect-room-member '!ops:example::Dave'
+        --expect-room-member '!ops:example::Erin'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!ops:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!ops:example'
       ;;
     member-ranks)
       expect_selected='!ranks:example'
