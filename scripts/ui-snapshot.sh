@@ -25,7 +25,7 @@ dpi144_prefix=
 # --expect-dpi 144.
 dpi144_cases=(multi-room image-message-loaded room-list-listing compose-color-index
   dialog-options-display dialog-colors dialog-sign-out-session dialog-log-out
-  dialog-export-room-keys toolbar-connected line-marker)
+  dialog-export-room-keys dialog-address-book-notify toolbar-connected line-marker)
 
 die() {
   echo "ui-snapshot: $*" >&2
@@ -354,6 +354,24 @@ configure_case_expectations() {
         dialog-aliases)
           ordered_actions=(dialog:aliases)
           expect_dialog_title='Aliases - aliases.ini'
+          ;;
+        dialog-address-book-notify)
+          # Tools > Address Book at its Notify tab: one entry performs
+          # /whois (+) and has a note, one names a stranger by ID.
+          ordered_actions=(
+            'input:/notify +bob lunch buddy'
+            'input:/notify @dave:example'
+            dialog:address_book
+          )
+          expect_dialog_title='Address Book'
+          ;;
+        dialog-address-book-control)
+          # /abook -c: the Control tab, with the server's ignore list.
+          ordered_actions=(
+            'compose-text:/abook -c'
+            dialog:compose_return
+          )
+          expect_dialog_title='Address Book'
           ;;
         dialog-select-server)
           ordered_actions=(dialog:select_server)
