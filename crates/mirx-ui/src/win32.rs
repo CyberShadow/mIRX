@@ -585,6 +585,10 @@ const WM_PERFORM: u32 = WM_APP + 7;
 /// what its last command sent (`script::resume_ready_run`). Posted after
 /// the answers are applied, for the same reason.
 const WM_SCRIPT_RESUME: u32 = WM_APP + 8;
+/// A channel window was double-clicked: Channel Central opens for it.
+/// `wparam` is the window's MDI child, which may have closed by the time
+/// this is handled.
+const WM_CHANNEL_CENTRAL_OF: u32 = WM_APP + 9;
 const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
 /// A connect retry is due (`reconnect`).

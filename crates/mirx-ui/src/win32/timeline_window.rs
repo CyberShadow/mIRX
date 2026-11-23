@@ -208,9 +208,11 @@ unsafe extern "system" fn timeline_window_proc(
             } else {
                 match double_click_action(state_ref(frame), &window) {
                     // Posted: the dialog's modal loop runs after the
-                    // click's handling, as from the Room menu.
+                    // click's handling. It names the window clicked, which
+                    // may no longer be in front when the frame handles it.
                     Some(DoubleClick::ChannelCentral) => {
-                        PostMessageW(frame, WM_COMMAND, MENU_ID_ROOM_CHANNEL_CENTRAL, 0);
+                        let child = state_ref(frame).views[&window].child;
+                        PostMessageW(frame, WM_CHANNEL_CENTRAL_OF, child as WPARAM, 0);
                     }
                     // As typed: it opens no modal loop.
                     Some(DoubleClick::Whois(nick)) => {

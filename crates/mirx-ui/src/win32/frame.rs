@@ -226,6 +226,22 @@ unsafe extern "system" fn window_proc(
             }
             0
         }
+        WM_CHANNEL_CENTRAL_OF => {
+            let child = wparam as HWND;
+            // The window closed between the click and now: nothing opens.
+            let window = state_ref(hwnd)
+                .views
+                .iter()
+                .find(|(_, view)| view.child == child)
+                .map(|(window, _)| window.clone());
+            if let Some(window) = window
+                && let Err(message) =
+                    run_local_command(hwnd, &window, SlashCommand::Channel { target: None })
+            {
+                show_error_message(hwnd, "Channel Central", &message);
+            }
+            0
+        }
         WM_SCRIPT_RESUME => {
             if let Err(message) = script::resume_ready_run(hwnd) {
                 show_error_message(hwnd, "Script", &message);

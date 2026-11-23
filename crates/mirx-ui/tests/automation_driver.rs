@@ -28692,6 +28692,75 @@ fn double_click_in_a_room_opens_channel_central() -> Result<(), Box<dyn std::err
     Ok(())
 }
 
+/// A channel double-click opens Channel Central for the window clicked,
+/// even if another one becomes active before the dialog opens: here an
+/// activation posted after the click, which the frame handles before the
+/// click's own posted message.
+#[test]
+fn a_channel_double_click_opens_channel_central_of_the_clicked_window()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let mut events = base_events();
+    events.insert(
+        1,
+        Event::LoggedIn {
+            session: core_stored_session(),
+            homeserver_url: "https://matrix.example/".to_owned(),
+        },
+    );
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let alpha = room_identity("!alpha:example");
+    let beta = room_identity("!beta:example");
+    app.select_view(alpha.clone())?;
+    let point = text_point(&app, "alpha first", 2)?;
+    let timeline = app.active_timeline_hwnd()? as HWND;
+    let beta_child = view_child_hwnd(&app, &beta)?;
+
+    // Posted, all of them: the queue keeps their order.
+    let lparam = mouse_lparam(&point);
+    for (message, buttons) in [
+        (WM_LBUTTONDOWN, MK_LBUTTON),
+        (WM_LBUTTONUP, 0),
+        (WM_LBUTTONDBLCLK, MK_LBUTTON),
+        (WM_LBUTTONUP, 0),
+    ] {
+        assert_ne!(
+            unsafe { PostMessageW(timeline, message, buttons as WPARAM, lparam) },
+            0
+        );
+    }
+    assert_ne!(
+        unsafe {
+            PostMessageW(
+                mdi_client_hwnd(&app),
+                WM_MDIACTIVATE,
+                beta_child as WPARAM,
+                0,
+            )
+        },
+        0
+    );
+    let (dialog, central) = wait_for_channel_central(&app)?;
+    assert_eq!(
+        (central.room_id.as_str(), central.caption.as_str()),
+        ("!alpha:example", "Channel Central - Alpha")
+    );
+    post_dialog_command(dialog, IDCANCEL as WPARAM);
+    wait_for_window_gone(dialog, "Channel Central")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.dump_ui_state()?.mdi.active, beta);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 /// A double-click in a query's text, off a link and a quote, runs `/whois`
 /// on its user, as mIRC's default does.
 #[test]
