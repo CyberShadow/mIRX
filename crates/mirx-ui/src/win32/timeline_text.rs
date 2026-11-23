@@ -199,17 +199,21 @@ pub(super) fn member_change_text(
     }
 }
 
-/// mIRC reports privilege changes as `* Op sets mode: +o Nick`. Matrix power
-/// levels are numbers rather than a few flags, so mode letters would lose
-/// information; the line states the levels instead:
-/// `Op sets power level: Bob 0 -> 50, Carol 50 -> 0; default 0 -> 10`, with
-/// `; room permissions changed` when the levels needed for actions changed
-/// too, or `Op changes room permissions` when only those did. mirx-core
-/// reports at least one change.
+/// mIRC reports privilege changes as `* Op sets mode: +o Nick`. Matrix
+/// power levels are numbers rather than a few flags: the two room modes
+/// that are flags take mIRC's letters (`+m` moderated, `+t` only operators
+/// set the topic; pluses first, `m` before `t`), and the levels are numbers:
+/// `Op sets mode: +t-m; power level: Bob 0 -> 50, Carol 50 -> 0; default 0
+/// -> 10`, with `; room permissions changed` when the levels needed for
+/// other actions changed too. Without a mode it is `Op sets power level:
+/// ...`, or `Op changes room permissions` when only those changed.
+/// mirx-core reports at least one change.
 pub(super) fn power_levels_change_text(
     sender: &RoomUserProfile,
     changes: &[RoomPowerLevelUserChange],
     users_default: Option<&RoomPowerLevelValueChange>,
+    topic_by_operators: Option<bool>,
+    moderated: Option<bool>,
     other_permissions_changed: bool,
 ) -> String {
     let op = profile_nick(sender);
@@ -229,15 +233,33 @@ pub(super) fn power_levels_change_text(
     });
     let default = users_default.map(|change| format!("default {} -> {}", change.old, change.new));
     let levels = users.into_iter().chain(default).collect::<Vec<_>>();
-    if levels.is_empty() {
-        return format!("{op} changes room permissions");
-    }
+    let modes = [('m', moderated), ('t', topic_by_operators)];
+    let signed = |sign: char, on: bool| {
+        let letters = modes
+            .iter()
+            .filter(|(_, mode)| *mode == Some(on))
+            .map(|(letter, _)| *letter)
+            .collect::<String>();
+        if letters.is_empty() {
+            letters
+        } else {
+            format!("{sign}{letters}")
+        }
+    };
+    let mode = format!("{}{}", signed('+', true), signed('-', false));
+    let levels = levels.join("; ");
+    let head = match (mode.is_empty(), levels.is_empty()) {
+        (true, true) => return format!("{op} changes room permissions"),
+        (true, false) => format!("{op} sets power level: {levels}"),
+        (false, true) => format!("{op} sets mode: {mode}"),
+        (false, false) => format!("{op} sets mode: {mode}; power level: {levels}"),
+    };
     let permissions = if other_permissions_changed {
         "; room permissions changed"
     } else {
         ""
     };
-    format!("{op} sets power level: {}{permissions}", levels.join("; "))
+    format!("{head}{permissions}")
 }
 
 #[cfg(test)]
@@ -505,39 +527,72 @@ mod tests {
             new,
         };
         let default = RoomPowerLevelValueChange { old: 0, new: 10 };
+        // Without modes.
+        let text = |changes: &[RoomPowerLevelUserChange],
+                    users_default: Option<&RoomPowerLevelValueChange>,
+                    other| {
+            power_levels_change_text(&op, changes, users_default, None, None, other)
+        };
 
         assert_eq!(
-            power_levels_change_text(&op, &[change(&bob, 0, 50)], None, false),
+            text(&[change(&bob, 0, 50)], None, false),
             "Op sets power level: Bob 0 -> 50"
+        );
+        assert_eq!(
+            text(&[change(&anon, 0, 100), change(&sam, 50, 0)], None, false),
+            "Op sets power level: @anon:example 0 -> 100, Sam (@sam:example) 50 -> 0"
+        );
+        assert_eq!(
+            text(&[], Some(&default), false),
+            "Op sets power level: default 0 -> 10"
+        );
+        assert_eq!(
+            text(&[change(&bob, 0, 50)], Some(&default), false),
+            "Op sets power level: Bob 0 -> 50; default 0 -> 10"
+        );
+        assert_eq!(text(&[], None, true), "Op changes room permissions");
+        assert_eq!(
+            text(&[change(&bob, 0, 50)], None, true),
+            "Op sets power level: Bob 0 -> 50; room permissions changed"
+        );
+        assert_eq!(
+            text(&[change(&bob, -1, 0)], Some(&default), true),
+            "Op sets power level: Bob -1 -> 0; default 0 -> 10; room permissions changed"
+        );
+
+        // With modes: pluses first, m before t.
+        for (topic_by_operators, moderated, mode) in [
+            (None, Some(true), "+m"),
+            (Some(false), None, "-t"),
+            (Some(true), Some(true), "+mt"),
+            (Some(true), Some(false), "+t-m"),
+            (Some(false), Some(true), "+m-t"),
+            (Some(false), Some(false), "-mt"),
+        ] {
+            assert_eq!(
+                power_levels_change_text(&op, &[], None, topic_by_operators, moderated, false),
+                format!("Op sets mode: {mode}")
+            );
+        }
+        assert_eq!(
+            power_levels_change_text(&op, &[change(&bob, 0, 1)], None, None, Some(true), false),
+            "Op sets mode: +m; power level: Bob 0 -> 1"
         );
         assert_eq!(
             power_levels_change_text(
                 &op,
-                &[change(&anon, 0, 100), change(&sam, 50, 0)],
-                None,
-                false
+                &[change(&bob, 1, 0)],
+                Some(&default),
+                Some(true),
+                Some(false),
+                true
             ),
-            "Op sets power level: @anon:example 0 -> 100, Sam (@sam:example) 50 -> 0"
+            "Op sets mode: +t-m; power level: Bob 1 -> 0; default 0 -> 10; \
+             room permissions changed"
         );
         assert_eq!(
-            power_levels_change_text(&op, &[], Some(&default), false),
-            "Op sets power level: default 0 -> 10"
-        );
-        assert_eq!(
-            power_levels_change_text(&op, &[change(&bob, 0, 50)], Some(&default), false),
-            "Op sets power level: Bob 0 -> 50; default 0 -> 10"
-        );
-        assert_eq!(
-            power_levels_change_text(&op, &[], None, true),
-            "Op changes room permissions"
-        );
-        assert_eq!(
-            power_levels_change_text(&op, &[change(&bob, 0, 50)], None, true),
-            "Op sets power level: Bob 0 -> 50; room permissions changed"
-        );
-        assert_eq!(
-            power_levels_change_text(&op, &[change(&bob, -1, 0)], Some(&default), true),
-            "Op sets power level: Bob -1 -> 0; default 0 -> 10; room permissions changed"
+            power_levels_change_text(&op, &[], None, Some(true), None, true),
+            "Op sets mode: +t; room permissions changed"
         );
     }
 }

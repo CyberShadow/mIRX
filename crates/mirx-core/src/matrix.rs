@@ -76,7 +76,7 @@ use matrix_sdk::{
         events::{
             AnyMessageLikeEventContent, AnySyncMessageLikeEvent, AnySyncStateEvent,
             AnySyncTimelineEvent, InitialStateEvent, Mentions, SyncMessageLikeEvent,
-            SyncStateEvent, ToDeviceEvent,
+            SyncStateEvent, TimelineEventType, ToDeviceEvent,
             direct::{DirectEvent, DirectEventContent},
             ignored_user_list::{IgnoredUser, IgnoredUserListEvent, IgnoredUserListEventContent},
             key::verification::{
@@ -3814,6 +3814,9 @@ struct PowerLevelsChange {
     /// `(user, old, new)` effective levels, ordered by user ID.
     users: Vec<(OwnedUserId, i64, i64)>,
     users_default: Option<RoomPowerLevelValueChange>,
+    /// `Some(new)` when the change turned the mode on or off.
+    topic_by_operators: Option<bool>,
+    moderated: Option<bool>,
     other_permissions_changed: bool,
 }
 
@@ -3821,6 +3824,11 @@ struct PowerLevelsChange {
 /// level is their explicit one or else the default for users, so changing
 /// the default also changes the level of every user without an explicit
 /// one; those users are not listed, the default change reports them.
+///
+/// A mode (`level_modes`) that flipped reports the levels it is made of
+/// (the topic's for `+t`; the two message types' and `events_default` for
+/// `+m`, which mirx's `+m` raises) as the mode, not as other permissions;
+/// the same levels changing without flipping it still count as those.
 /// `None` when nothing changed.
 fn power_levels_change(
     old: &PossiblyRedactedRoomPowerLevelsEventContent,
@@ -3843,22 +3851,59 @@ fn power_levels_change(
             old: old.users_default.into(),
             new: new.users_default.into(),
         });
+    let old_modes = room_settings::level_modes(
+        &old.events,
+        old.events_default,
+        old.state_default,
+        old.users_default,
+    );
+    let new_modes = room_settings::level_modes(
+        &new.events,
+        new.events_default,
+        new.state_default,
+        new.users_default,
+    );
+    let topic_by_operators = (old_modes.topic_by_operators != new_modes.topic_by_operators)
+        .then_some(new_modes.topic_by_operators);
+    let moderated = (old_modes.moderated != new_modes.moderated).then_some(new_modes.moderated);
+    let mut mode_events = Vec::new();
+    if topic_by_operators.is_some() {
+        mode_events.push(TimelineEventType::RoomTopic);
+    }
+    if moderated.is_some() {
+        mode_events.extend([
+            TimelineEventType::RoomMessage,
+            TimelineEventType::RoomEncrypted,
+        ]);
+    }
+    let other_events = |events: &BTreeMap<TimelineEventType, Int>| {
+        events
+            .iter()
+            .filter(|(event_type, _)| !mode_events.contains(event_type))
+            .map(|(event_type, level)| (event_type.clone(), *level))
+            .collect::<BTreeMap<_, _>>()
+    };
     let other_permissions_changed = old.ban != new.ban
         || old.kick != new.kick
         || old.redact != new.redact
         || old.invite != new.invite
-        || old.events != new.events
-        || old.events_default != new.events_default
+        || other_events(&old.events) != other_events(&new.events)
+        || (moderated.is_none() && old.events_default != new.events_default)
         || old.state_default != new.state_default
         || old.notifications.room != new.notifications.room;
 
-    (!users.is_empty() || users_default.is_some() || other_permissions_changed).then_some(
-        PowerLevelsChange {
+    (!users.is_empty()
+        || users_default.is_some()
+        || topic_by_operators.is_some()
+        || moderated.is_some()
+        || other_permissions_changed)
+        .then_some(PowerLevelsChange {
             users,
             users_default,
+            topic_by_operators,
+            moderated,
             other_permissions_changed,
-        },
-    )
+        })
 }
 
 /// The timeline notice for a power-level change. Without `prev_content`
@@ -3897,6 +3942,8 @@ async fn room_activity_from_power_levels_event(
             content: RoomStateNoticeContent::PowerLevels {
                 changes,
                 users_default: change.users_default,
+                topic_by_operators: change.topic_by_operators,
+                moderated: change.moderated,
                 other_permissions_changed: change.other_permissions_changed,
             },
         }),
@@ -13342,6 +13389,8 @@ mod tests {
                     user_level_change("@zed:example.org", 0, 50),
                 ],
                 users_default: None,
+                topic_by_operators: None,
+                moderated: None,
                 other_permissions_changed: false,
             })
         );
@@ -13357,6 +13406,8 @@ mod tests {
             Some(PowerLevelsChange {
                 users: Vec::new(),
                 users_default: Some(RoomPowerLevelValueChange { old: 0, new: 10 }),
+                topic_by_operators: None,
+                moderated: None,
                 other_permissions_changed: false,
             })
         );
@@ -13370,6 +13421,8 @@ mod tests {
             Some(PowerLevelsChange {
                 users: vec![user_level_change("@op:example.org", 0, 10)],
                 users_default: Some(RoomPowerLevelValueChange { old: 0, new: 10 }),
+                topic_by_operators: None,
+                moderated: None,
                 other_permissions_changed: false,
             })
         );
@@ -13383,8 +13436,9 @@ mod tests {
                 serde_json::json!({ "events": { "m.room.name": 100 } }),
             ),
             (
-                serde_json::json!({}),
-                serde_json::json!({ "events_default": 10 }),
+                // Not moderated: `m.room.encrypted` stays at the default.
+                serde_json::json!({ "events": { "m.room.encrypted": 0 } }),
+                serde_json::json!({ "events_default": 10, "events": { "m.room.encrypted": 0 } }),
             ),
             (
                 serde_json::json!({}),
@@ -13400,11 +13454,109 @@ mod tests {
                 Some(PowerLevelsChange {
                     users: Vec::new(),
                     users_default: None,
+                    topic_by_operators: None,
+                    moderated: None,
                     other_permissions_changed: true,
                 }),
                 "{new}"
             );
         }
+    }
+
+    /// A change of only modes and other permissions, in `power_levels_change`'s
+    /// terms.
+    fn mode_change(
+        topic_by_operators: Option<bool>,
+        moderated: Option<bool>,
+        other_permissions_changed: bool,
+    ) -> Option<PowerLevelsChange> {
+        Some(PowerLevelsChange {
+            users: Vec::new(),
+            users_default: None,
+            topic_by_operators,
+            moderated,
+            other_permissions_changed,
+        })
+    }
+
+    #[test]
+    fn power_levels_change_reports_moderated_made_of_events_default() {
+        // mirx's `+m`: `events_default` above the users' default.
+        assert_eq!(
+            power_levels_change_of(
+                serde_json::json!({}),
+                serde_json::json!({ "events_default": 1 })
+            ),
+            mode_change(None, Some(true), false)
+        );
+        // Another level with it is still another permission.
+        assert_eq!(
+            power_levels_change_of(
+                serde_json::json!({}),
+                serde_json::json!({ "events_default": 1, "events": { "m.reaction": 0 } })
+            ),
+            mode_change(None, Some(true), true)
+        );
+        // Only `m.room.message` raised: `m.room.encrypted` still at the
+        // default, so not moderated.
+        assert_eq!(
+            power_levels_change_of(
+                serde_json::json!({}),
+                serde_json::json!({ "events": { "m.room.message": 1 } })
+            ),
+            mode_change(None, None, true)
+        );
+        // Raising an already moderated room's levels flips nothing.
+        assert_eq!(
+            power_levels_change_of(
+                serde_json::json!({ "events_default": 1 }),
+                serde_json::json!({ "events_default": 5 })
+            ),
+            mode_change(None, None, true)
+        );
+    }
+
+    #[test]
+    fn power_levels_change_reports_the_topic_mode_only_when_it_flips() {
+        assert_eq!(
+            power_levels_change_of(
+                serde_json::json!({ "events": { "m.room.topic": 0 } }),
+                serde_json::json!({ "events": { "m.room.topic": 50 } })
+            ),
+            mode_change(Some(true), None, false)
+        );
+        assert_eq!(
+            power_levels_change_of(
+                serde_json::json!({ "events": { "m.room.topic": 50 } }),
+                serde_json::json!({ "events": { "m.room.topic": 75 } })
+            ),
+            mode_change(None, None, true)
+        );
+        // Both, one each way, with nothing else.
+        assert_eq!(
+            power_levels_change_of(
+                serde_json::json!({ "events_default": 1, "events": { "m.room.topic": 0 } }),
+                serde_json::json!({ "events": { "m.room.topic": 50 } })
+            ),
+            mode_change(Some(true), Some(false), false)
+        );
+    }
+
+    #[test]
+    fn power_levels_change_reports_unmoderating_with_a_member_change() {
+        assert_eq!(
+            power_levels_change_of(
+                serde_json::json!({ "events_default": 1, "users": { "@dave:example.org": 1 } }),
+                serde_json::json!({})
+            ),
+            Some(PowerLevelsChange {
+                users: vec![user_level_change("@dave:example.org", 1, 0)],
+                users_default: None,
+                topic_by_operators: None,
+                moderated: Some(false),
+                other_permissions_changed: false,
+            })
+        );
     }
 
     #[test]
@@ -13540,6 +13692,8 @@ mod tests {
                             new: 50,
                         }],
                         users_default: None,
+                        topic_by_operators: None,
+                        moderated: None,
                         other_permissions_changed: false,
                     },
                 })
@@ -13637,6 +13791,8 @@ mod tests {
                                 new: 50,
                             },],
                             users_default: Some(RoomPowerLevelValueChange { old: 0, new: 10 }),
+                            topic_by_operators: None,
+                            moderated: None,
                             other_permissions_changed: false,
                         },
                     }),

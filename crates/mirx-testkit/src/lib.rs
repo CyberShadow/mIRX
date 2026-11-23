@@ -1168,6 +1168,8 @@ pub enum RoomStateNoticeContent {
     PowerLevels {
         changes: Vec<RoomPowerLevelUserChange>,
         users_default: Option<RoomPowerLevelValueChange>,
+        topic_by_operators: Option<bool>,
+        moderated: Option<bool>,
         other_permissions_changed: bool,
     },
     Name {

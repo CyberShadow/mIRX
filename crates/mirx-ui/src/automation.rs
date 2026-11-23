@@ -2702,6 +2702,8 @@ pub(crate) enum DumpRoomStateNoticeContent {
     PowerLevels {
         changes: Vec<DumpRoomPowerLevelUserChange>,
         users_default: Option<RoomPowerLevelValueChange>,
+        topic_by_operators: Option<bool>,
+        moderated: Option<bool>,
         other_permissions_changed: bool,
     },
     Name {
@@ -3164,6 +3166,8 @@ pub(crate) fn dump_room_state_notice_content_from_core(
         RoomStateNoticeContent::PowerLevels {
             changes,
             users_default,
+            topic_by_operators,
+            moderated,
             other_permissions_changed,
         } => DumpRoomStateNoticeContent::PowerLevels {
             changes: changes
@@ -3175,6 +3179,8 @@ pub(crate) fn dump_room_state_notice_content_from_core(
                 })
                 .collect(),
             users_default: users_default.clone(),
+            topic_by_operators: *topic_by_operators,
+            moderated: *moderated,
             other_permissions_changed: *other_permissions_changed,
         },
         RoomStateNoticeContent::Name { name } => {

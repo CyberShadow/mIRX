@@ -1472,8 +1472,15 @@ pub enum RoomStateNoticeContent {
         /// Users whose effective level changed, ordered by user ID.
         changes: Vec<RoomPowerLevelUserChange>,
         users_default: Option<RoomPowerLevelValueChange>,
+        /// `Some(new)` when the change turned "only operators set the
+        /// topic" (`+t`) on or off.
+        topic_by_operators: Option<bool>,
+        /// `Some(new)` when the change turned moderated (`+m`: messages
+        /// need more than the default level) on or off.
+        moderated: Option<bool>,
         /// Whether any level required for an action changed: ban, kick,
-        /// redact, invite, sending events or state, or notifications.
+        /// redact, invite, sending events or state, or notifications;
+        /// beyond the levels a flipped mode is made of.
         other_permissions_changed: bool,
     },
     /// An `m.room.name` change; `None` when the name was removed (empty).

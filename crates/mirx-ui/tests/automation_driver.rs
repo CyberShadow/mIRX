@@ -10204,6 +10204,8 @@ fn power_levels_event(
     timestamp_ms: u64,
     changes: Vec<mirx_core::RoomPowerLevelUserChange>,
     users_default: Option<mirx_core::RoomPowerLevelValueChange>,
+    // `(topic_by_operators, moderated)`.
+    modes: (Option<bool>, Option<bool>),
     other_permissions_changed: bool,
 ) -> Event {
     Event::RoomActivity(Box::new(CoreRoomActivity {
@@ -10218,6 +10220,8 @@ fn power_levels_event(
             content: mirx_core::RoomStateNoticeContent::PowerLevels {
                 changes,
                 users_default,
+                topic_by_operators: modes.0,
+                moderated: modes.1,
                 other_permissions_changed,
             },
         }),
@@ -10250,6 +10254,7 @@ fn automation_driver_power_level_change_renders_mode_line() -> Result<(), Box<dy
                 },
             ],
             Some(mirx_core::RoomPowerLevelValueChange { old: 0, new: 10 }),
+            (None, None),
             false,
         ),
         power_levels_event(
@@ -10258,7 +10263,21 @@ fn automation_driver_power_level_change_renders_mode_line() -> Result<(), Box<dy
             1_700_000_060_000,
             Vec::new(),
             None,
+            (None, None),
             true,
+        ),
+        power_levels_event(
+            room_id,
+            "$power-3",
+            1_700_000_120_000,
+            vec![mirx_core::RoomPowerLevelUserChange {
+                target: named_profile("@bob:example", "Bob"),
+                old: 0,
+                new: 1,
+            }],
+            None,
+            (None, Some(true)),
+            false,
         ),
     ])?;
     let app = launch_app(
@@ -10286,6 +10305,14 @@ fn automation_driver_power_level_change_renders_mode_line() -> Result<(), Box<dy
         "{:?}",
         view.lines
     );
+    assert!(
+        view_contains(
+            view,
+            "[22:15] * Admin sets mode: +m; power level: Bob 0 -> 1"
+        ),
+        "{:?}",
+        view.lines
+    );
     let activity = app.room_activity(Some(room_id))?;
     assert_eq!(
         activity[0].kind,
@@ -10307,11 +10334,28 @@ fn automation_driver_power_level_change_renders_mode_line() -> Result<(), Box<dy
                     },
                 ],
                 users_default: Some(mirx_testkit::RoomPowerLevelValueChange { old: 0, new: 10 }),
+                topic_by_operators: None,
+                moderated: None,
                 other_permissions_changed: false,
             },
         })
     );
 
+    assert!(
+        matches!(
+            &activity[2].kind,
+            RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+                content: RoomStateNoticeContent::PowerLevels {
+                    topic_by_operators: None,
+                    moderated: Some(true),
+                    ..
+                },
+                ..
+            })
+        ),
+        "{:?}",
+        activity[2]
+    );
     let _ = fs::remove_file(&state_path);
     Ok(())
 }

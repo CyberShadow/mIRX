@@ -933,6 +933,8 @@ fn activity_line_text(
                 RoomStateNoticeContent::PowerLevels {
                     changes,
                     users_default,
+                    topic_by_operators,
+                    moderated,
                     other_permissions_changed,
                 } => (
                     EventItem::Mode,
@@ -940,6 +942,8 @@ fn activity_line_text(
                         &notice.sender,
                         changes,
                         users_default.as_ref(),
+                        *topic_by_operators,
+                        *moderated,
                         *other_permissions_changed,
                     ),
                 ),

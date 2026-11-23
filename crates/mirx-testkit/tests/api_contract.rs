@@ -2092,6 +2092,8 @@ fn room_activity_power_levels_state_notice_round_trips_through_json() {
                     new: 50,
                 }],
                 users_default: Some(RoomPowerLevelValueChange { old: 0, new: 10 }),
+                topic_by_operators: None,
+                moderated: Some(true),
                 other_permissions_changed: true,
             },
         }),
@@ -2112,6 +2114,8 @@ fn room_activity_power_levels_state_notice_round_trips_through_json() {
                 "type": "power_levels",
                 "changes": [{ "user_id": "@bob:example", "old": 0, "new": 50 }],
                 "users_default": { "old": 0, "new": 10 },
+                "topic_by_operators": null,
+                "moderated": true,
                 "other_permissions_changed": true
             }
         }
