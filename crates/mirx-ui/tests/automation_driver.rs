@@ -8954,6 +8954,73 @@ fn closing_a_room_window_confirms_then_parts() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Options > IRC's Auto-join channel on invite and Show in active:
+/// Invites: an invite arriving in a room list prints in the window in
+/// front and is accepted, and the window in front stays so.
+#[test]
+fn an_arriving_channel_invite_is_announced_and_auto_joined()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    write_settings(&local_app_data, "[irc]\r\nauto_join_invite=on\r\n")?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let alpha = room_identity("!alpha:example");
+    app.select_view(alpha.clone())?;
+    // The load's own list is the first: nothing is news.
+    assert!(app.dump_model()?.submitted_membership_commands.is_empty());
+
+    append_events(
+        &app,
+        vec![Event::SyncedRooms(vec![
+            room_summary("!beta:example", "Beta", true),
+            room_summary("!alpha:example", "Alpha", false),
+            invited_room_summary("!invite:example", "Lobby", false),
+        ])],
+    )?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(
+        view_lines_containing(find_view(&ui_state, &alpha), "invites you")
+            .into_iter()
+            .map(|line| line.split_once("] ").map_or(line, |(_, text)| text))
+            .collect::<Vec<_>>(),
+        ["* Bob (@bob:example) invites you to join Lobby"]
+    );
+    assert_eq!(
+        app.dump_model()?.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::AcceptInvite,
+            target: "!invite:example".to_owned(),
+        }]
+    );
+    // The invite's window opened behind.
+    assert_eq!(ui_state.mdi.active, alpha);
+    find_view(&ui_state, &room_identity("!invite:example"));
+
+    // The unauthenticated core refuses the accept, as a refused accept
+    // prints (Status, for an invite's window has no lines of its own yet);
+    // the window in front stays, and the invite stays an invite.
+    app.wait_for_ui_state("the refused accept", Duration::from_secs(10), |ui_state| {
+        ui_state.mdi.views.iter().any(|view| {
+            view.identity == ViewIdentity::Status
+                && view_contains(
+                    view,
+                    "accept room invitation requires an authenticated session",
+                )
+        })
+    })?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, alpha);
+    assert_eq!(
+        find_ui_room(&ui_state, "!invite:example").membership,
+        RoomMembership::Invite
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 #[test]
 fn closing_an_invite_window_confirms_then_rejects() -> Result<(), Box<dyn std::error::Error>> {
     let (app, local_app_data) = launch_close_lifecycle_app()?;

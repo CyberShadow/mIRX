@@ -1232,6 +1232,9 @@ fn log_line_row(
         StatusLineKind::Notify => TimelineRowKind::Event {
             item: EventItem::Notify,
         },
+        StatusLineKind::Invite => TimelineRowKind::Event {
+            item: EventItem::Invite,
+        },
         StatusLineKind::Echo { color, timestamp } => {
             let prefix = if timestamp {
                 timestamps.prefix(timestamp_ms)

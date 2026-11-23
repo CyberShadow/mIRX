@@ -532,6 +532,18 @@ pub(super) fn apply_core_event(
                 .model
                 .room_read_states
                 .retain(|room_id, _| sendable_room_by_id(&rooms, room_id).is_some());
+            let previous = state
+                .model
+                .rooms_listed
+                .then_some(state.model.rooms.as_slice());
+            let arrived = new_invites(previous, &rooms)
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            for invite in arrived {
+                announce_invite(state, &invite)?;
+            }
+            state.model.rooms_listed = true;
             for room in rooms
                 .iter()
                 .filter(|room| room.membership == RoomMembership::Join && !room.is_space)
@@ -736,7 +748,9 @@ pub(super) fn apply_core_event(
             state.model.status = "logged out".to_owned();
             state.model.lifecycle_state = LifecycleState::LoggedOut;
             state.model.rooms.clear();
+            state.model.rooms_listed = false;
             state.closed_queries.clear();
+            state.quiet_joins.clear();
             state.model.selected_room = None;
             state.model.room_views.clear();
             state.model.last_activity = None;
@@ -808,6 +822,14 @@ pub(super) fn apply_core_event(
             state.notify_watch.disconnected();
         }
         Event::Error(error) => {
+            // A refused accept leaves the invite; a later one is the user's.
+            if error.operation == Operation::AcceptRoomInvite {
+                let room_id = error
+                    .room_id
+                    .as_deref()
+                    .expect("an accept error names its room");
+                state.quiet_joins.remove(room_id);
+            }
             if error.operation == Operation::BackfillRoomHistory {
                 let room_id = error
                     .room_id
@@ -847,6 +869,48 @@ pub(super) fn apply_core_event(
         }
     }
     Ok(ActivityAttention::default())
+}
+
+/// The invites in `rooms` that `previous`, the session's last room list,
+/// did not have: none without one, as the first list's are no news.
+fn new_invites<'r>(
+    previous: Option<&[RoomSummary]>,
+    rooms: &'r [RoomSummary],
+) -> Vec<&'r RoomSummary> {
+    let Some(previous) = previous else {
+        return Vec::new();
+    };
+    rooms
+        .iter()
+        .filter(|room| {
+            room.membership == RoomMembership::Invite
+                && !previous.iter().any(|old| {
+                    old.room_id == room.room_id && old.membership == RoomMembership::Invite
+                })
+        })
+        .collect()
+}
+
+/// An invite arrived: its line prints where Show in active: Invites says
+/// (its window opens behind, at the next view sync). With Auto-join
+/// channel on invite, an invite to a group room is accepted at once, its
+/// window to open without becoming active.
+fn announce_invite(state: &mut WindowState, room: &RoomSummary) -> Result<(), String> {
+    let invite = room
+        .invite
+        .as_ref()
+        .expect("an invite's summary names its invite");
+    let text = invited_text(invite, &room.display_name);
+    let irc = state.settings.settings().irc;
+    match answer_view(&state.active_view, irc.active_invites) {
+        ViewId::Status => log_status(state, StatusLineKind::Invite, text),
+        view => push_lines_in_view(state, &view, StatusLineKind::Invite, [context_line(&text)]),
+    }
+    if irc.auto_join_invite && !invite.direct && !room.is_space {
+        submit_accept_room_invite(state, room.room_id.clone())?;
+        state.quiet_joins.insert(room.room_id.clone());
+    }
+    Ok(())
 }
 
 /// Where `/whois` answers print: Options > IRC's Show in active: Whois.
@@ -920,7 +984,10 @@ fn apply_room_joined_event(
         return Ok(());
     }
     state.closed_queries.remove(&room_id);
-    state.pending_activation = Some(ViewId::Room(room_id));
+    // An auto-join's window opens behind the active one.
+    if !state.quiet_joins.remove(&room_id) {
+        state.pending_activation = Some(ViewId::Room(room_id));
+    }
     Ok(())
 }
 
@@ -1093,6 +1160,7 @@ pub(super) unsafe fn apply_event_load(
         state.current_session_homeserver_url = None;
         state.room_activity.clear();
         state.closed_queries.clear();
+        state.quiet_joins.clear();
         state.sent_receipts.clear();
         state.find_states.clear();
         state.selected_timeline_event = None;
@@ -3495,6 +3563,200 @@ mod tests {
 
         with_local_app_data(|_| apply_core_event(&mut state, Event::LoggedOut).unwrap());
         assert_eq!(state.log_out_warning, None);
+    }
+
+    /// An invite from Bob, as the fixtures' `invited_room`, of `kind`.
+    fn invite_of(room_id: &str, name: &str, direct: bool, is_space: bool) -> RoomSummary {
+        let mut room = invited_room(room_id, name);
+        room.invite.as_mut().expect("an invite").direct = direct;
+        room.is_space = is_space;
+        room
+    }
+
+    fn invite_lines(lines: impl IntoIterator<Item = String>) -> Vec<String> {
+        lines
+            .into_iter()
+            .filter(|line| line.contains("invites you"))
+            .collect()
+    }
+
+    fn status_invite_lines(state: &WindowState) -> Vec<(StatusLineKind, String)> {
+        status_lines_with_kinds(state)
+            .into_iter()
+            .filter(|(_, text)| text.contains("invites you"))
+            .collect()
+    }
+
+    fn ops_invite_lines(state: &WindowState) -> Vec<(StatusLineKind, String)> {
+        state.model.room_views["!ops:example"]
+            .echo
+            .lines_for(None)
+            .filter(|line| line.text.contains("invites you"))
+            .map(|line| (line.kind, line.text.clone()))
+            .collect()
+    }
+
+    /// Show in active: Invites: an invite that a room list brings prints
+    /// in the active window, or Status; the session's first list's
+    /// invites are no news, and neither is one listed before.
+    #[test]
+    fn invites_are_announced_once_and_not_on_the_first_room_list() {
+        let (mut state, handle) = test_state_with_command_sender();
+        let ops = room("!ops:example", "Ops", false);
+        let listed = |state: &mut WindowState, rooms: Vec<RoomSummary>| {
+            apply_core_event(state, Event::SyncedRooms(rooms)).unwrap();
+        };
+        state.active_view = room_view_id("!ops:example");
+        state
+            .model
+            .room_views
+            .entry_or_default("!ops:example".to_owned());
+
+        let x = invited_room("!x:example", "Xray");
+        listed(&mut state, vec![ops.clone(), x.clone()]);
+        assert_eq!(ops_invite_lines(&state), []);
+        assert_eq!(status_invite_lines(&state), []);
+
+        let y = invited_room("!y:example", "Yankee");
+        for _ in 0..2 {
+            listed(&mut state, vec![ops.clone(), x.clone(), y.clone()]);
+        }
+        let line = "* Bob (@bob:example) invites you to join Yankee".to_owned();
+        assert_eq!(
+            ops_invite_lines(&state),
+            [(StatusLineKind::Invite, line.clone())]
+        );
+        assert_eq!(status_invite_lines(&state), []);
+        // Its own window shows the same line.
+        assert!(
+            invite_lines(render_room_lines(&state, "!y:example")).contains(&line),
+            "{:?}",
+            render_room_lines(&state, "!y:example")
+        );
+
+        state
+            .settings
+            .update(|settings| settings.irc.active_invites = false)
+            .unwrap();
+        let z = invite_of("!z:example", "Zulu", true, false);
+        listed(&mut state, vec![ops.clone(), x.clone(), y.clone(), z]);
+        assert_eq!(ops_invite_lines(&state).len(), 1);
+        assert_eq!(
+            status_invite_lines(&state),
+            [(
+                StatusLineKind::Invite,
+                "* Bob (@bob:example) invites you to a query".to_owned()
+            )]
+        );
+        // Nothing was accepted: auto-join is off.
+        assert_eq!(state.recorded_commands, []);
+
+        // A new session's first list is no news either.
+        with_local_app_data(|_| apply_core_event(&mut state, Event::LoggedOut).unwrap());
+        let before = status_invite_lines(&state).len();
+        listed(&mut state, vec![invited_room("!w:example", "Whiskey")]);
+        assert_eq!(status_invite_lines(&state).len(), before);
+        stop_test_core(handle);
+    }
+
+    /// Auto-join channel on invite: an arriving invite to a group room is
+    /// accepted, and its join opens the window behind the active one; a
+    /// query or a space invite is not; the user's own accept activates.
+    #[test]
+    fn auto_join_accepts_channel_invites_without_taking_the_focus() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state
+            .settings
+            .update(|settings| settings.irc.auto_join_invite = true)
+            .unwrap();
+        let ops = room("!ops:example", "Ops", false);
+        state.active_view = room_view_id("!ops:example");
+        apply_core_event(&mut state, Event::SyncedRooms(vec![ops.clone()])).unwrap();
+        assert_eq!(state.recorded_commands, []);
+
+        let y = invited_room("!y:example", "Yankee");
+        let z = invite_of("!z:example", "Zulu", true, false);
+        let space = invite_of("!s:example", "Space", false, true);
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![ops.clone(), y, z.clone(), space]),
+        )
+        .unwrap();
+        let accept = |room_id: &str| {
+            Command::AcceptRoomInvite(AcceptRoomInviteRequest {
+                room_id: room_id.to_owned(),
+            })
+        };
+        assert_eq!(state.recorded_commands, [accept("!y:example")]);
+        // The lines print first, all three.
+        assert_eq!(ops_invite_lines(&state).len(), 3);
+
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![
+                ops.clone(),
+                room("!y:example", "Yankee", false),
+                z.clone(),
+            ]),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            Event::RoomJoined(mirx_core::RoomJoined {
+                room_id: "!y:example".to_owned(),
+                alias: None,
+            }),
+        )
+        .unwrap();
+        assert_eq!(state.pending_activation, None);
+        assert!(state.quiet_joins.is_empty());
+
+        // The user's own accept of the query activates it on its join.
+        let window = room_view_id("!z:example");
+        submit_accept_slash_command(&mut state, &window, None).unwrap();
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![
+                ops.clone(),
+                room("!y:example", "Yankee", false),
+                query("!z:example", "Zulu", "@bob:example"),
+            ]),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            Event::RoomJoined(mirx_core::RoomJoined {
+                room_id: "!z:example".to_owned(),
+                alias: None,
+            }),
+        )
+        .unwrap();
+        assert_eq!(state.pending_activation, Some(window));
+
+        // A refused auto-join leaves the invite to the user.
+        let v = invited_room("!v:example", "Victor");
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![
+                ops.clone(),
+                room("!y:example", "Yankee", false),
+                query("!z:example", "Zulu", "@bob:example"),
+                v,
+            ]),
+        )
+        .unwrap();
+        assert!(state.quiet_joins.contains("!v:example"));
+        apply_core_event(
+            &mut state,
+            Event::Error(CoreErrorEvent {
+                operation: Operation::AcceptRoomInvite,
+                room_id: Some("!v:example".to_owned()),
+                message: "forbidden".to_owned(),
+            }),
+        )
+        .unwrap();
+        assert!(state.quiet_joins.is_empty());
+        stop_test_core(handle);
     }
 
     /// A Log Out under way says so, in Status and the status bar.

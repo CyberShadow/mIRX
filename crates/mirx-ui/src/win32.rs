@@ -321,9 +321,9 @@ use command_runner::{
     echo_lines_in_view, echo_view, enqueue_command, known_nick, open_room_link, own_server,
     push_lines_in_view, report_command_error, report_error_line, resolve_invite_command_room_id,
     resolve_joined_room_target, run_local_command, send_edit, send_reply, set_local_command_status,
-    submit_accept_slash_command, submit_join_room, submit_part_slash_command,
-    submit_query_slash_command, submit_redact_slash_command, submit_reject_slash_command,
-    submit_room_notification_mode, whois_lines,
+    submit_accept_room_invite, submit_accept_slash_command, submit_join_room,
+    submit_part_slash_command, submit_query_slash_command, submit_redact_slash_command,
+    submit_reject_slash_command, submit_room_notification_mode, whois_lines,
 };
 use commands::{
     AliasCommand, BarCommand, CommandError, ComposeInput, ComposeSubmission, CreateRoomArgs,
@@ -749,6 +749,10 @@ struct UiModel {
     /// (`RoomJoined.alias`), which the rooms answer to (`room_targets`)
     /// before their first sync brings their published aliases.
     joined_aliases: BTreeMap<String, String>,
+    /// Whether `rooms` is a list the core sent this session: before the
+    /// first, and after logout, it is not, so the first list's invites are
+    /// no news.
+    rooms_listed: bool,
 }
 
 /// Who is signed in, and how the session authenticates: a reset of the
@@ -839,6 +843,10 @@ struct WindowState {
     /// windows, they stay closed until a new message from the other side or
     /// an explicit activation. Holds only joined DM rooms in `model.rooms`.
     closed_queries: BTreeSet<String>,
+    /// Invites Auto-join channel on invite accepted, until their join
+    /// lands: their windows open without becoming active. The user's own
+    /// accept of one takes it out.
+    quiet_joins: BTreeSet<String>,
     /// The last Tab completion, for further Tabs to cycle.
     nick_completion: Option<ComposeNickCompletion>,
     edit_window_proc: WNDPROC,
@@ -1110,6 +1118,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         room_activity: BTreeMap::new(),
         sent_receipts: Default::default(),
         closed_queries: BTreeSet::new(),
+        quiet_joins: BTreeSet::new(),
         pending_activation: None,
         nick_completion: None,
         edit_window_proc: None,
@@ -1420,9 +1429,10 @@ fn log_status(state: &mut WindowState, kind: StatusLineKind, text: String) {
         .push(state.clock.now_ms(), kind, context_line(&text));
     if state.active_view != ViewId::Status {
         let level = match kind {
-            StatusLineKind::Info | StatusLineKind::Notify | StatusLineKind::Echo { .. } => {
-                ViewActivityLevel::Event
-            }
+            StatusLineKind::Info
+            | StatusLineKind::Notify
+            | StatusLineKind::Invite
+            | StatusLineKind::Echo { .. } => ViewActivityLevel::Event,
             StatusLineKind::Error => ViewActivityLevel::Message,
         };
         raise_view_activity(state, ViewId::Status, level);

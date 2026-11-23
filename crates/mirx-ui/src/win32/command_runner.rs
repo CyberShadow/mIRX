@@ -1468,6 +1468,18 @@ pub(super) fn submit_accept_slash_command(
     target: Option<&str>,
 ) -> Result<String, String> {
     let room_id = resolve_invite_command_room_id(state, window, "accept", target)?;
+    // The user's accept activates the window, even of an invite an
+    // auto-join accepted already.
+    state.quiet_joins.remove(&room_id);
+    submit_accept_room_invite(state, room_id)
+}
+
+/// Asks the core to accept the invite to `room_id`; the status that says
+/// so.
+pub(super) fn submit_accept_room_invite(
+    state: &mut WindowState,
+    room_id: String,
+) -> Result<String, String> {
     let command = Command::AcceptRoomInvite(AcceptRoomInviteRequest {
         room_id: room_id.clone(),
     });

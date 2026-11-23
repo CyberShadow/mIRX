@@ -25,6 +25,8 @@ pub(super) enum StatusLineKind {
     Error,
     /// A notify list user came or went: in the Notify colour.
     Notify,
+    /// An invite arrived: in the Invite colour.
+    Invite,
     /// `/echo`'s line: its text holds mIRC codes, it is in the Normal
     /// colour or `color`, and has a timestamp only with `-t`.
     Echo {
