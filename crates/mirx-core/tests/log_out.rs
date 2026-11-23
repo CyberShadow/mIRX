@@ -36,7 +36,9 @@ fn logging_out_without_recovery_asks_first() {
     harness.wait_for("SyncConnected", |event| *event == Event::SyncConnected);
 
     harness.send(log_out());
-    let events = harness.events_until("the logout's ack", |event| *event == Event::CommandHandled);
+    let events = harness.events_until("the logout's ack", |event| {
+        matches!(event, Event::CommandHandled(_))
+    });
 
     let answers: Vec<_> = events
         .iter()
@@ -99,7 +101,9 @@ fn a_logout_the_server_answers_with_errors_fails_in_seconds() {
     harness.wait_for("SyncConnected", |event| *event == Event::SyncConnected);
 
     harness.send(log_out_anyway());
-    let events = harness.events_until("the logout's ack", |event| *event == Event::CommandHandled);
+    let events = harness.events_until("the logout's ack", |event| {
+        matches!(event, Event::CommandHandled(_))
+    });
 
     let answers: Vec<_> = events
         .iter()

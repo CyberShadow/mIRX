@@ -951,7 +951,7 @@ pub(super) fn test_state() -> WindowState {
         scheme_brushes: unsafe { SchemeBrushes::create(&Default::default()) },
         exit_code: Arc::new(AtomicI32::new(0)),
         event_generation: 0,
-        core_commands_handled: 0,
+        core_answers: AnsweredCommands::default(),
         last_idle_probe_generation: None,
         synthetic_load_in_progress: false,
         current_session_homeserver_url: None,
@@ -1169,7 +1169,7 @@ pub(super) fn thread_view_id(room_id: &str, thread_root_event_id: &str) -> ViewI
 
 /// A sender whose commands wait in the returned receiver, for tests of
 /// what the UI submits: a real core would dial the test homeserver.
-pub(super) fn inert_command_sender() -> (CommandSender, UnboundedReceiver<Command>) {
+pub(super) fn inert_command_sender() -> (CommandSender, UnboundedReceiver<(CommandId, Command)>) {
     let (sender, receiver) = unbounded_channel();
     (CommandSender::new(sender), receiver)
 }

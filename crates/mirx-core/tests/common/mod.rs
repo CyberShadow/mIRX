@@ -16,7 +16,7 @@ use matrix_sdk::ruma::{owned_device_id, owned_user_id};
 use matrix_sdk::test_utils::mocks::MatrixMockServer;
 use matrix_sdk_test::{JoinedRoomBuilder, SyncResponseBuilder};
 use mirx_core::{
-    Command, CoreConfig, CoreHandle, E2eeRecoveryState, Event, LogoutRequest,
+    Command, CommandId, CoreConfig, CoreHandle, E2eeRecoveryState, Event, LogoutRequest,
     RestoreSessionRequest, SessionAuth, StoredSession, start,
 };
 use serde_json::json;
@@ -226,39 +226,41 @@ impl Harness {
     /// store has never synced, so the restore syncs once and reads the
     /// E2EE status before the ack.
     fn restore(&self) -> Vec<Event> {
-        self.send_restore(&self.server.uri());
+        let restore = self.send_restore(&self.server.uri());
         let mut events =
             self.events_until("RestoredSession", |event| *event == Event::RestoredSession);
         events.extend(self.events_until("the session's E2EE status", |event| {
             matches!(event, Event::E2eeStatus(_))
         }));
-        events.extend(
-            self.events_until("the restore's ack", |event| *event == Event::CommandHandled),
-        );
+        events.extend(self.events_until("the restore's ack", |event| {
+            *event == Event::CommandHandled(restore)
+        }));
         events
     }
 
     /// Every event of the restore of a profile whose store has synced, up
     /// to its ack.
     fn restore_stored(&self, homeserver_url: &str) -> Vec<Event> {
-        self.send_restore(homeserver_url);
-        self.events_until("the restore's ack", |event| *event == Event::CommandHandled)
+        let restore = self.send_restore(homeserver_url);
+        self.events_until("the restore's ack", |event| {
+            *event == Event::CommandHandled(restore)
+        })
     }
 
-    fn send_restore(&self, homeserver_url: &str) {
+    fn send_restore(&self, homeserver_url: &str) -> CommandId {
         self.wait_for("Started", |event| *event == Event::Started);
         self.send(Command::RestoreSession(RestoreSessionRequest {
             homeserver_url: homeserver_url.to_owned(),
             session: self.session.clone().expect("a restored harness's session"),
             start_sync: false,
-        }));
+        }))
     }
 
-    pub fn send(&self, command: Command) {
+    pub fn send(&self, command: Command) -> CommandId {
         self.core
             .command_sender()
             .send(command)
-            .expect("send command");
+            .expect("send command")
     }
 
     /// Every event up to and including the first that `matches`.
@@ -306,9 +308,10 @@ impl Harness {
     pub fn wait_for_recovery(&self, state: E2eeRecoveryState) {
         let deadline = Instant::now() + EVENT_TIMEOUT;
         loop {
-            self.send(Command::RefreshE2eeStatus);
-            let events =
-                self.events_until("the status's ack", |event| *event == Event::CommandHandled);
+            let refresh = self.send(Command::RefreshE2eeStatus);
+            let events = self.events_until("the status's ack", |event| {
+                *event == Event::CommandHandled(refresh)
+            });
             if events
                 .iter()
                 .any(|event| matches!(event, Event::E2eeStatus(status) if status.recovery == state))

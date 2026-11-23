@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use matrix_sdk::test_utils::mocks::MatrixMockServer;
 use mirx_core::{
-    Command, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginMethod, LoginRequest, Operation,
-    RestoreSessionRequest, SessionAuth, StoredSession, SyncStopReason, start,
+    Command, CommandId, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginMethod, LoginRequest,
+    Operation, RestoreSessionRequest, SessionAuth, StoredSession, SyncStopReason, start,
 };
 use tempfile::TempDir;
 use url::Url;
@@ -54,11 +54,11 @@ impl Harness {
         }
     }
 
-    fn send(&self, command: Command) {
+    fn send(&self, command: Command) -> CommandId {
         self.core
             .command_sender()
             .send(command)
-            .expect("send command");
+            .expect("send command")
     }
 
     /// Skips events until one `matches`, and returns it.
@@ -105,7 +105,10 @@ impl Harness {
         };
         // The login command is done once it gave the page; the redirect
         // that ends the sign-in is no command.
-        assert_eq!(next_event(self.core.events()), Event::CommandHandled);
+        assert!(matches!(
+            next_event(self.core.events()),
+            Event::CommandHandled(_)
+        ));
         Url::parse(&url).expect("the sign-in address is a URL")
     }
 
@@ -560,16 +563,22 @@ fn cancelling_a_browser_sign_in_closes_the_listener() {
     let sign_in = harness.sign_in_url();
     let port = oauth_redirect(&sign_in).port().expect("a port");
     // A command other than the cancel finds no session.
-    harness.send(Command::StartSync);
+    let start_sync = harness.send(Command::StartSync);
     let Event::Error(error) = next_event(harness.core.events()) else {
         panic!("expected the start sync error");
     };
     assert_eq!(error.operation, Operation::StartSync);
-    assert_eq!(next_event(harness.core.events()), Event::CommandHandled);
+    assert_eq!(
+        next_event(harness.core.events()),
+        Event::CommandHandled(start_sync)
+    );
 
-    harness.send(Command::CancelLogin);
+    let cancel = harness.send(Command::CancelLogin);
     assert_eq!(next_event(harness.core.events()), Event::LoginCancelled);
-    assert_eq!(next_event(harness.core.events()), Event::CommandHandled);
+    assert_eq!(
+        next_event(harness.core.events()),
+        Event::CommandHandled(cancel)
+    );
     assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
 
     harness.browser_login(None);
@@ -601,8 +610,11 @@ fn shutdown_stops_waiting_for_the_browser() {
     let port = oauth_redirect(&harness.sign_in_url())
         .port()
         .expect("a port");
-    harness.send(Command::Shutdown);
-    assert_eq!(next_event(harness.core.events()), Event::CommandHandled);
+    let shutdown = harness.send(Command::Shutdown);
+    assert_eq!(
+        next_event(harness.core.events()),
+        Event::CommandHandled(shutdown)
+    );
     assert_eq!(next_event(harness.core.events()), Event::Stopped);
     assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
     harness.core.join().expect("join core");

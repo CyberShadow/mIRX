@@ -194,18 +194,14 @@ fn pending_core_commands(state: &mut WindowState) -> u64 {
     // The inert core of a render-state run answers nothing: its commands
     // are handled once dropped.
     if let Some(receiver) = &mut state.inert_command_receiver {
-        while receiver.try_recv().is_ok() {
-            state.core_commands_handled += 1;
+        while let Ok((id, _)) = receiver.try_recv() {
+            state.core_answers.answer(id);
         }
     }
     let sent = state.command_sender.as_ref().map_or(0, CommandSender::sent);
-    sent.checked_sub(state.core_commands_handled)
-        .unwrap_or_else(|| {
-            panic!(
-                "the core acked {} commands, more than the {sent} sent",
-                state.core_commands_handled
-            )
-        })
+    let answered = state.core_answers.count();
+    sent.checked_sub(answered)
+        .unwrap_or_else(|| panic!("the core acked {answered} commands, more than the {sent} sent"))
 }
 
 unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, FailureEnvelope> {

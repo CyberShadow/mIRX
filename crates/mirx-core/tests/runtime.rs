@@ -32,7 +32,7 @@ use mirx_core::{
 use tempfile::TempDir;
 
 /// The next event that is not a command's ack. The core acks every
-/// command with `CommandHandled` after the command's own events (pinned by
+/// command with `CommandHandled(id)` after the command's own events (pinned by
 /// `every_command_is_acked_after_its_answers`); a test about the answers
 /// themselves skips the acks.
 fn next_answer(handle: &CoreHandle, what: &str) -> Event {
@@ -42,7 +42,7 @@ fn next_answer(handle: &CoreHandle, what: &str) -> Event {
             .recv_timeout(Duration::from_secs(2))
             .unwrap_or_else(|err| panic!("{what}: {err}"))
         {
-            Event::CommandHandled => {}
+            Event::CommandHandled(_) => {}
             event => return event,
         }
     }
@@ -292,7 +292,7 @@ fn every_command_is_acked_after_its_answers() {
         .iter()
         .map(|event| match event {
             Event::Started => "started".to_owned(),
-            Event::CommandHandled => "ack".to_owned(),
+            Event::CommandHandled(id) => format!("ack {}", id.get()),
             Event::Stopped => "stopped".to_owned(),
             other => format!(
                 "{:?}",
@@ -305,13 +305,13 @@ fn every_command_is_acked_after_its_answers() {
         [
             "started",
             "FetchUserProfile",
-            "ack",
+            "ack 1",
             "ListUserDevices",
-            "ack",
+            "ack 2",
             "StartSync",
-            "ack",
+            "ack 3",
             // Shutdown is acked too, before the worker stops.
-            "ack",
+            "ack 4",
             "stopped",
         ]
     );

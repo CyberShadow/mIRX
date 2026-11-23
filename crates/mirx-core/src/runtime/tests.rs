@@ -4,8 +4,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::core::Core;
-use super::{AccountLists, EventSender, RoomSnapshot, RoomSnapshots};
-use crate::api::CoreConfig;
+use super::{AccountLists, CommandSender, EventSender, RoomSnapshot, RoomSnapshots};
 use crate::api::{
     AcceptRoomInviteRequest, AwayChanged, BanRoomMemberRequest, Command, CreateDirectRoomRequest,
     CreateRoomRequest, CreateRoomVisibility, Event, ExportRoomKeysRequest, HighlightWord,
@@ -13,6 +12,7 @@ use crate::api::{
     PresenceKind, RestoreSessionRequest, RoomJoined, RoomMemberRank, RoomMemberSummary,
     RoomMembers, RoomMembership, RoomNotificationMode, RoomReadState, RoomSummary, SyncStopReason,
 };
+use crate::api::{CommandId, CoreConfig};
 use crate::api::{
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
     RoomMessagePresentationKind, SendMessageRequest, SetTypingRequest,
@@ -85,9 +85,14 @@ fn log_out_anyway() -> Command {
     })
 }
 
-/// Runs `command` on `core` until its ack.
+/// Runs `command` on `core` until its ack. One command at a time: its ID
+/// does not matter here (`every_ack_names_its_command` pins the IDs).
 async fn run(core: &mut Core, command: Command) {
-    assert!(core.run_until_idle(command).await.is_continue());
+    assert!(
+        core.run_until_idle(CommandId(1), command)
+            .await
+            .is_continue()
+    );
 }
 
 async fn assert_ready_moderation_success(command: Command, path: &str, mock_ban: bool) {
@@ -805,6 +810,154 @@ fn shutdown_state_drops_every_task_inside_the_runtime() {
     drop(local);
 }
 
+/// Runs `core` on its command channel, which `sender` feeds; `send` and
+/// `events` drive it.
+struct RunningCore {
+    sender: CommandSender,
+    events: mpsc::Receiver<Event>,
+    actor: tokio::task::JoinHandle<()>,
+}
+
+impl RunningCore {
+    fn start(core: impl FnOnce(EventSender) -> Core) -> Self {
+        let (command_tx, command_rx) = unbounded_channel();
+        let (event_tx, events) = mpsc::channel::<Event>();
+        let actor = tokio::task::spawn_local(core(event_tx).run(command_rx));
+        Self {
+            sender: CommandSender::new(command_tx),
+            events,
+            actor,
+        }
+    }
+
+    fn send(&self, command: Command) -> CommandId {
+        self.sender.send(command).expect("the core runs")
+    }
+
+    /// Every event up to and including the first that `matches`, letting
+    /// the core run.
+    async fn events_until(&self, matches: impl Fn(&Event) -> bool) -> Vec<Event> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut events = Vec::new();
+        loop {
+            match self.events.try_recv() {
+                Ok(event) => {
+                    let done = matches(&event);
+                    events.push(event);
+                    if done {
+                        return events;
+                    }
+                }
+                Err(TryRecvError::Empty) => {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "timed out after {events:?}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(TryRecvError::Disconnected) => panic!("event channel closed after {events:?}"),
+            }
+        }
+    }
+
+    async fn stopped(self) {
+        self.actor.await.expect("the actor ends");
+    }
+}
+
+/// A server that takes connections and never answers: a request to it is
+/// in flight until it is dropped.
+async fn silent_server() -> (tokio::net::TcpListener, String) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind a silent server");
+    let url = format!("http://{}", listener.local_addr().expect("its address"));
+    (listener, url)
+}
+
+fn fetch_profile_error(message: &str) -> Event {
+    Event::Error(crate::api::CoreErrorEvent {
+        operation: Operation::FetchUserProfile,
+        room_id: None,
+        message: message.to_owned(),
+    })
+}
+
+/// Each command's ack names it, comes once, and comes after the command's
+/// own events: a refusal without a session, a command deferred during a
+/// sign-in, the sign-in a `CancelLogin` drops (its ack, then the
+/// cancel's), a lane job, and a job a `Shutdown` drops (its ack, then the
+/// shutdown's).
+#[test]
+fn every_ack_names_its_command() {
+    run_local(async {
+        let (_silent, server) = silent_server().await;
+        let profile = tempfile::TempDir::new().expect("temporary profile directory");
+        let core = RunningCore::start(|events| Core::new(profile_config(&profile), events));
+        let refused = core.send(Command::FetchUserProfile("@bob:example.org".to_owned()));
+        let login = core.send(Command::Login(LoginRequest {
+            server: server.clone(),
+            method: LoginMethod::Password {
+                username: "example".to_owned(),
+                password: "wordpass".to_owned(),
+            },
+            device_display_name: "mirx".to_owned(),
+            start_sync: false,
+        }));
+        let deferred = core.send(Command::FetchUserProfile("@bob:example.org".to_owned()));
+        let cancel = core.send(Command::CancelLogin);
+        let shutdown = core.send(Command::Shutdown);
+        let refusal = fetch_profile_error("fetch user profile requires an authenticated session");
+        assert_eq!(
+            core.events_until(|event| *event == Event::Stopped).await,
+            [
+                Event::Started,
+                refusal.clone(),
+                Event::CommandHandled(refused),
+                Event::LoginCancelled,
+                Event::CommandHandled(login),
+                Event::CommandHandled(cancel),
+                // The deferred command runs once the sign-in is gone.
+                refusal,
+                Event::CommandHandled(deferred),
+                Event::CommandHandled(shutdown),
+                Event::Stopped,
+            ]
+        );
+        core.stopped().await;
+
+        let client = matrix_sdk::Client::builder()
+            .homeserver_url(&server)
+            .build()
+            .await
+            .expect("build matrix client");
+        let core = RunningCore::start(|events| Core::for_client(client, events));
+        let job = core.send(Command::FetchUserProfile("bob".to_owned()));
+        let in_flight = core.send(Command::FetchUserProfile("@bob:example.org".to_owned()));
+        assert_eq!(
+            core.events_until(|event| *event == Event::CommandHandled(job))
+                .await,
+            [
+                Event::Started,
+                fetch_profile_error(
+                    "invalid user ID \"bob\": leading sigil is incorrect or missing"
+                ),
+                Event::CommandHandled(job),
+            ]
+        );
+        let shutdown = core.send(Command::Shutdown);
+        assert_eq!(
+            core.events_until(|event| *event == Event::Stopped).await,
+            [
+                Event::CommandHandled(in_flight),
+                Event::CommandHandled(shutdown),
+                Event::Stopped,
+            ]
+        );
+        core.stopped().await;
+    });
+}
+
 #[test]
 fn worker_stops_when_command_channel_closes() {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -860,7 +1013,7 @@ async fn offline_client() -> matrix_sdk::Client {
 fn drain_events(event_rx: &mpsc::Receiver<Event>) -> Vec<Event> {
     event_rx
         .try_iter()
-        .filter(|event| *event != Event::CommandHandled)
+        .filter(|event| !matches!(event, Event::CommandHandled(_)))
         .collect()
 }
 
@@ -870,7 +1023,7 @@ async fn next_event(event_rx: &mpsc::Receiver<Event>) -> Event {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         match event_rx.try_recv() {
-            Ok(Event::CommandHandled) => {}
+            Ok(Event::CommandHandled(_)) => {}
             Ok(event) => return event,
             Err(TryRecvError::Empty) => {
                 assert!(

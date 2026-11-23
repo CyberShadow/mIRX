@@ -397,7 +397,7 @@ pub(super) fn apply_core_event(
         return Ok(ActivityAttention::default());
     }
     match event {
-        Event::CommandHandled => state.core_commands_handled += 1,
+        Event::CommandHandled(id) => state.core_answers.answer(id),
         Event::Started => {
             if matches!(
                 state.model.lifecycle_state,

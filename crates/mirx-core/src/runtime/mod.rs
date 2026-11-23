@@ -14,7 +14,7 @@ use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::task::LocalSet;
 
 use crate::api::{
-    Command, CoreConfig, CoreErrorEvent, Event, HighlightWord, Operation, RoomMembers,
+    Command, CommandId, CoreConfig, CoreErrorEvent, Event, HighlightWord, Operation, RoomMembers,
     RoomMembership, RoomReadState, RoomSummary,
 };
 use crate::matrix::{self, MatrixCoreError};
@@ -37,35 +37,44 @@ use self::snapshots::SnapshotStart;
 
 pub(crate) type EventSender = mpsc::Sender<Event>;
 
-/// Sends commands to the core and counts them; clones share the count.
-/// The core answers each command with `Event::CommandHandled` after the
-/// command's own events, so `sent()` minus the acks applied is the number
-/// of commands the core has not answered yet.
+/// Sends commands to the core and numbers them; clones share the count.
+/// The core answers each command with `Event::CommandHandled(id)` after
+/// the command's own events, so `sent()` minus the acks applied is the
+/// number of commands the core has not answered yet.
 #[derive(Debug, Clone)]
 pub struct CommandSender {
-    sender: UnboundedSender<Command>,
+    sender: UnboundedSender<(CommandId, Command)>,
     sent: Arc<AtomicU64>,
 }
 
 impl CommandSender {
-    pub fn new(sender: UnboundedSender<Command>) -> Self {
+    pub fn new(sender: UnboundedSender<(CommandId, Command)>) -> Self {
         Self {
             sender,
             sent: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    pub fn send(&self, command: Command) -> Result<(), SendCommandError> {
+    /// Sends `command` and returns the ID its ack will name.
+    pub fn send(&self, command: Command) -> Result<CommandId, SendCommandError> {
         // Counted before it is sent, so no reader ever sees the command's
         // ack before its count. A failed send means the core is gone: the
         // command stays unanswered, as it is.
-        self.sent.fetch_add(1, Ordering::Relaxed);
-        self.sender.send(command).map_err(|_| SendCommandError)
+        let id = CommandId(self.sent.fetch_add(1, Ordering::Relaxed) + 1);
+        self.sender
+            .send((id, command))
+            .map(|()| id)
+            .map_err(|_| SendCommandError)
     }
 
     /// How many commands were sent through this sender and its clones.
     pub fn sent(&self) -> u64 {
         self.sent.load(Ordering::Relaxed)
+    }
+
+    /// The ID the next `send` hands out, through this sender or a clone.
+    pub fn next_id(&self) -> CommandId {
+        CommandId(self.sent() + 1)
     }
 }
 

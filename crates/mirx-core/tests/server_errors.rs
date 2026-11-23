@@ -62,7 +62,9 @@ fn a_command_the_server_answers_with_errors_fails_in_seconds() {
     );
 
     harness.send(Command::FetchUserProfile("@bob:example.org".to_owned()));
-    let events = harness.events_until("the profile's ack", |event| *event == Event::CommandHandled);
+    let events = harness.events_until("the profile's ack", |event| {
+        matches!(event, Event::CommandHandled(_))
+    });
 
     assert!(
         events.iter().any(|event| matches!(

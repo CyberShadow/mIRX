@@ -16,7 +16,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mirx_core::{
-    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command,
+    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CommandId,
     CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
     CreateRoomRequest, CreateRoomVisibility, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeIdentityResetOutcome, E2eeRecoveryState, E2eeSessionState,
@@ -146,6 +146,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use self::app_icon::{IconSize, app_icon};
+use self::command_acks::AnsweredCommands;
 use self::dpi::Dpi;
 use self::glyph_fonts::GlyphFonts;
 use crate::{
@@ -207,6 +208,7 @@ mod color_drop_down;
 mod color_index;
 mod colors;
 mod colors_dialog;
+mod command_acks;
 mod command_runner;
 mod commands;
 mod compose;
@@ -769,7 +771,7 @@ struct WindowState {
     /// The inert core of a `--render-state` run: commands go here and are
     /// never answered. WAIT_IDLE drops them and counts them handled, as no
     /// core will ack them.
-    inert_command_receiver: Option<UnboundedReceiver<Command>>,
+    inert_command_receiver: Option<UnboundedReceiver<(CommandId, Command)>>,
     automation: Option<AutomationState>,
     render_state_mode: bool,
     clock: UiClock,
@@ -785,7 +787,7 @@ struct WindowState {
     event_generation: u64,
     /// The core's acks applied (`Event::CommandHandled`): the commands the
     /// core has answered, out of `command_sender`'s `sent()`.
-    core_commands_handled: u64,
+    core_answers: AnsweredCommands,
     last_idle_probe_generation: Option<u64>,
     synthetic_load_in_progress: bool,
     current_session_homeserver_url: Option<String>,
@@ -1074,7 +1076,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         scheme_brushes,
         exit_code: Arc::clone(&exit_code),
         event_generation: 0,
-        core_commands_handled: 0,
+        core_answers: AnsweredCommands::default(),
         last_idle_probe_generation: None,
         synthetic_load_in_progress: false,
         current_session_homeserver_url: None,

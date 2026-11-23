@@ -8,8 +8,8 @@
 //! The other commands that come during a transition wait in `deferred`
 //! and run, in order, when it ends.
 //!
-//! The actor answers every command with exactly one `CommandHandled`,
-//! after the command's own events: an immediate command after its
+//! The actor answers every command with exactly one `CommandHandled(id)`,
+//! naming it, after the command's own events: an immediate command after its
 //! handling, a lane command after its job's followup is applied, a
 //! transition's command at its end, and a command that a logout, a cancel
 //! or a shutdown drops when it drops it. A logout that ends the session
@@ -37,8 +37,8 @@ use super::{
     EventSender, RoomSnapshots, emit_error, emit_event, emit_invalid_state, emit_matrix_error,
 };
 use crate::api::{
-    Command, CoreConfig, Event, LoginRequest, LogoutRequest, Operation, RestoreSessionRequest,
-    RoomKeysAtRisk, SyncStopReason,
+    Command, CommandId, CoreConfig, Event, LoginRequest, LogoutRequest, Operation,
+    RestoreSessionRequest, RoomKeysAtRisk, SyncStopReason,
 };
 use crate::loopback::LoopbackRedirect;
 use crate::matrix::{self, BrowserFlow, MatrixCoreError};
@@ -50,7 +50,7 @@ pub(super) struct Core {
     jobs: Jobs<Session, Followup>,
     /// The commands that came during the transition under way, in order.
     /// Empty when none is.
-    deferred: VecDeque<Route>,
+    deferred: VecDeque<(CommandId, Route)>,
 }
 
 enum Lifecycle {
@@ -83,6 +83,8 @@ struct LoggingOut {
     transition: LocalBoxFuture<'static, Result<(), LogoutFailure>>,
     /// Sync ran before the logout stopped it.
     resume_sync: bool,
+    /// The `Logout`, owed its ack at the end.
+    logout: CommandId,
 }
 
 /// Why a logout under way did not log out.
@@ -105,7 +107,7 @@ struct PendingBrowserLogin {
 
 /// What the actor does next.
 enum Next {
-    Command(Option<Command>),
+    Command(Option<(CommandId, Command)>),
     Job(Finished<Followup>),
     SignInEnd(SignInEnd),
     Redirect(io::Result<LoopbackRedirect>),
@@ -167,7 +169,7 @@ impl Core {
         core
     }
 
-    pub(super) async fn run(mut self, mut commands: UnboundedReceiver<Command>) {
+    pub(super) async fn run(mut self, mut commands: UnboundedReceiver<(CommandId, Command)>) {
         emit_event(&self.events, Event::Started);
         loop {
             // Every branch is cancel-safe.
@@ -190,7 +192,7 @@ impl Core {
                 self.shut_down().await;
                 return ControlFlow::Break(());
             }
-            Next::Command(Some(command)) => self.dispatch(route(command)).await?,
+            Next::Command(Some((id, command))) => self.dispatch(id, route(command)).await?,
             Next::Job(finished) => self.finish_job(finished),
             Next::SignInEnd(end) => self.sign_in_ended(end),
             Next::Redirect(redirect) => self.finish_browser_login(redirect),
@@ -206,47 +208,49 @@ impl Core {
         }
         // A transition that ended lets the commands that came during it run.
         while !self.state.in_transition()
-            && let Some(route) = self.deferred.pop_front()
+            && let Some((id, route)) = self.deferred.pop_front()
         {
-            self.dispatch(route).await?;
+            self.dispatch(id, route).await?;
         }
         ControlFlow::Continue(())
     }
 
-    async fn dispatch(&mut self, route: Route) -> ControlFlow<()> {
+    async fn dispatch(&mut self, id: CommandId, route: Route) -> ControlFlow<()> {
         match (route, &self.state) {
             (Route::Shutdown, _) => {
                 self.shut_down().await;
-                ack(&self.events);
+                ack(&self.events, id);
                 return ControlFlow::Break(());
             }
-            (Route::CancelLogin, Lifecycle::SigningIn(_)) => self.cancel_sign_in(),
-            (Route::StopSync, Lifecycle::LoggingOut(_)) => self.cancel_log_out(),
+            (Route::CancelLogin, Lifecycle::SigningIn(_)) => self.cancel_sign_in(id),
+            (Route::StopSync, Lifecycle::LoggingOut(_)) => self.cancel_log_out(id),
             (route, Lifecycle::SigningIn(_) | Lifecycle::LoggingOut(_)) => {
-                self.deferred.push_back(route);
+                self.deferred.push_back((id, route));
             }
-            (Route::Login(request), _) => self.log_in(request),
-            (Route::RestoreSession(request), _) => self.restore(request),
-            (Route::CancelLogin, _) => self.cancel_login().await,
-            (Route::Logout(request), _) => self.log_out(request).await,
-            (Route::StartSync, _) => self.start_sync(),
-            (Route::StopSync, _) => self.stop_sync(),
-            (Route::Lane(command), _) => self.enqueue(command),
+            (Route::Login(request), _) => self.log_in(id, request),
+            (Route::RestoreSession(request), _) => self.restore(id, request),
+            (Route::CancelLogin, _) => self.cancel_login(id).await,
+            (Route::Logout(request), _) => self.log_out(id, request).await,
+            (Route::StartSync, _) => self.start_sync(id),
+            (Route::StopSync, _) => self.stop_sync(id),
+            (Route::Lane(command), _) => self.enqueue(id, command),
         }
         ControlFlow::Continue(())
     }
 
-    fn enqueue(&mut self, command: LaneCommand) {
+    fn enqueue(&mut self, id: CommandId, command: LaneCommand) {
         let LaneCommand {
             lane,
             refusal,
             start,
         } = command;
         match &mut self.state {
-            Lifecycle::Ready(session) => self.jobs.enqueue(lane, Work::command(start), session),
+            Lifecycle::Ready(session) => {
+                self.jobs.enqueue(lane, Work::command(id, start), session);
+            }
             Lifecycle::Idle | Lifecycle::AwaitingBrowser(_) => {
                 refusal.emit(&self.events);
-                ack(&self.events);
+                ack(&self.events, id);
             }
             Lifecycle::SigningIn(_) | Lifecycle::LoggingOut(_) => {
                 unreachable!("commands wait out a transition")
@@ -262,20 +266,20 @@ impl Core {
             Followup::Watch(flow, watcher) => session.watch(&flow, watcher),
             Followup::IdentityResetStarted(started) => session.begin_identity_reset(*started),
         }
-        if owes == Owes::Ack {
-            ack(&self.events);
+        if let Owes::Ack(id) = owes {
+            ack(&self.events, id);
         }
         self.jobs.release(&lane, session);
     }
 
-    fn log_in(&mut self, request: LoginRequest) {
+    fn log_in(&mut self, id: CommandId, request: LoginRequest) {
         if !matches!(self.state, Lifecycle::Idle) {
             emit_invalid_state(
                 &self.events,
                 Operation::Login,
                 "login requires an idle core; logout first",
             );
-            ack(&self.events);
+            ack(&self.events, id);
             return;
         }
         self.state = Lifecycle::SigningIn(SigningIn {
@@ -284,18 +288,18 @@ impl Core {
                 self.events.clone(),
                 request,
             )),
-            owes: Owes::Ack,
+            owes: Owes::Ack(id),
         });
     }
 
-    fn restore(&mut self, request: RestoreSessionRequest) {
+    fn restore(&mut self, id: CommandId, request: RestoreSessionRequest) {
         if !matches!(self.state, Lifecycle::Idle) {
             emit_invalid_state(
                 &self.events,
                 Operation::RestoreSession,
                 "session restore requires an idle core; logout first",
             );
-            ack(&self.events);
+            ack(&self.events, id);
             return;
         }
         self.state = Lifecycle::SigningIn(SigningIn {
@@ -304,7 +308,7 @@ impl Core {
                 self.events.clone(),
                 request,
             )),
-            owes: Owes::Ack,
+            owes: Owes::Ack(id),
         });
     }
 
@@ -336,8 +340,8 @@ impl Core {
                 emit_error(&self.events, operation, None, message);
             }
         }
-        if owes == Owes::Ack {
-            ack(&self.events);
+        if let Owes::Ack(id) = owes {
+            ack(&self.events, id);
         }
     }
 
@@ -381,7 +385,8 @@ impl Core {
 
     /// Drops the sign-in or restore under way, and the client it built,
     /// here on the runtime.
-    fn cancel_sign_in(&mut self) {
+    /// `id` is the `CancelLogin`'s.
+    fn cancel_sign_in(&mut self, id: CommandId) {
         let Lifecycle::SigningIn(SigningIn { transition, owes }) =
             std::mem::replace(&mut self.state, Lifecycle::Idle)
         else {
@@ -389,63 +394,63 @@ impl Core {
         };
         drop(transition);
         emit_event(&self.events, Event::LoginCancelled);
-        if owes == Owes::Ack {
-            ack(&self.events);
+        if let Owes::Ack(sign_in) = owes {
+            ack(&self.events, sign_in);
         }
-        ack(&self.events);
+        ack(&self.events, id);
     }
 
-    async fn cancel_login(&mut self) {
+    async fn cancel_login(&mut self, id: CommandId) {
         let Lifecycle::AwaitingBrowser(pending) =
             std::mem::replace(&mut self.state, Lifecycle::Idle)
         else {
             emit_invalid_state(&self.events, Operation::Login, "no sign-in to cancel");
-            ack(&self.events);
+            ack(&self.events, id);
             return;
         };
         // Closes the listener's port; the half-signed-in client drops here,
         // on the runtime.
         abort_and_join(pending.redirect).await;
         emit_event(&self.events, Event::LoginCancelled);
-        ack(&self.events);
+        ack(&self.events, id);
     }
 
-    fn start_sync(&mut self) {
+    fn start_sync(&mut self, id: CommandId) {
         let Lifecycle::Ready(session) = &mut self.state else {
             emit_invalid_state(
                 &self.events,
                 Operation::StartSync,
                 "start sync requires an authenticated session",
             );
-            ack(&self.events);
+            ack(&self.events, id);
             return;
         };
         if let Err(refusal) = session.start_sync() {
             emit_invalid_state(&self.events, Operation::StartSync, refusal);
         }
-        ack(&self.events);
+        ack(&self.events, id);
     }
 
     /// Stops continuous sync and keeps the session: mIRC's Disconnect, not
     /// a logout.
-    fn stop_sync(&mut self) {
+    fn stop_sync(&mut self, id: CommandId) {
         let Lifecycle::Ready(session) = &mut self.state else {
             emit_invalid_state(
                 &self.events,
                 Operation::StopSync,
                 "stop sync requires an authenticated session",
             );
-            ack(&self.events);
+            ack(&self.events, id);
             return;
         };
         match session.stop_sync() {
             Ok(()) => emit_event(&self.events, Event::SyncStopped(SyncStopReason::Requested)),
             Err(refusal) => emit_invalid_state(&self.events, Operation::StopSync, refusal),
         }
-        ack(&self.events);
+        ack(&self.events, id);
     }
 
-    async fn log_out(&mut self, request: LogoutRequest) {
+    async fn log_out(&mut self, id: CommandId, request: LogoutRequest) {
         let LogoutRequest { discard_room_keys } = request;
         let mut session = match std::mem::replace(&mut self.state, Lifecycle::Idle) {
             Lifecycle::Ready(session) => session,
@@ -456,7 +461,7 @@ impl Core {
                     Operation::Logout,
                     "logout requires an authenticated session",
                 );
-                ack(&self.events);
+                ack(&self.events, id);
                 return;
             }
         };
@@ -465,7 +470,7 @@ impl Core {
         if !discard_room_keys && let Some(risk) = matrix::recovery_risk(session.client()) {
             self.state = Lifecycle::Ready(session);
             emit_event(&self.events, Event::LogoutWouldLoseRoomKeys(risk));
-            ack(&self.events);
+            ack(&self.events, id);
             return;
         }
         // Before the backup upload, so that no new room keys come; and
@@ -486,6 +491,7 @@ impl Core {
             session,
             transition,
             resume_sync,
+            logout: id,
         });
     }
 
@@ -493,11 +499,13 @@ impl Core {
     /// under way and keeps the session, with sync stopped even if it ran
     /// before. If the server's answer was on its way, the server may have
     /// ended the session already; the next sync then says so.
-    fn cancel_log_out(&mut self) {
+    /// `id` is the `StopSync`'s.
+    fn cancel_log_out(&mut self, id: CommandId) {
         let Lifecycle::LoggingOut(LoggingOut {
             session,
             transition,
             resume_sync: _,
+            logout,
         }) = std::mem::replace(&mut self.state, Lifecycle::Idle)
         else {
             unreachable!("only a logout is stopped");
@@ -506,8 +514,8 @@ impl Core {
         self.state = Lifecycle::Ready(session);
         emit_event(&self.events, Event::LogoutCancelled);
         // The `Logout`'s, then the `StopSync`'s.
-        ack(&self.events);
-        ack(&self.events);
+        ack(&self.events, logout);
+        ack(&self.events, id);
     }
 
     /// The logout under way ended.
@@ -516,6 +524,7 @@ impl Core {
             mut session,
             transition: _,
             resume_sync,
+            logout,
         }) = std::mem::replace(&mut self.state, Lifecycle::Idle)
         else {
             unreachable!("only a logout ends a logout");
@@ -523,7 +532,8 @@ impl Core {
         match result {
             // The session's client is gone with it: its store can go too.
             Ok(()) => {
-                let dropped = self.jobs.abort_all().await + self.drop_session_commands();
+                let mut dropped = self.jobs.abort_all().await;
+                dropped.extend(self.drop_session_commands());
                 session.shut_down().await;
                 acks(&self.events, dropped);
                 let removed = matrix::remove_store(&self.config).await;
@@ -554,32 +564,32 @@ impl Core {
                 self.state = Lifecycle::Ready(session);
             }
         }
-        ack(&self.events);
+        ack(&self.events, logout);
     }
 
     /// Drops the commands that came for the session during its logout, as
     /// its jobs are dropped; the others run once the logout ends. Returns
-    /// how many it dropped.
-    fn drop_session_commands(&mut self) -> usize {
-        let waiting = self.deferred.len();
-        self.deferred.retain(|route| !route.is_for_the_session());
-        waiting - self.deferred.len()
+    /// the ones it dropped.
+    fn drop_session_commands(&mut self) -> Vec<CommandId> {
+        let (dropped, kept): (VecDeque<_>, _) = std::mem::take(&mut self.deferred)
+            .into_iter()
+            .partition(|(_, route)| route.is_for_the_session());
+        self.deferred = kept;
+        dropped.into_iter().map(|(id, _)| id).collect()
     }
 
     /// Stops every job, the transition under way and the session's tasks,
     /// and waits until each is gone, inside the runtime (see
     /// `Session::shut_down`); then acks the commands dropped.
     async fn shut_down(&mut self) {
-        let mut dropped = self.jobs.abort_all().await + self.deferred.len();
-        self.deferred.clear();
+        let mut dropped = self.jobs.abort_all().await;
+        dropped.extend(self.deferred.drain(..).map(|(id, _)| id));
         match std::mem::replace(&mut self.state, Lifecycle::Idle) {
             Lifecycle::Idle => {}
             // The client it built drops here, on the runtime.
             Lifecycle::SigningIn(SigningIn { transition, owes }) => {
                 drop(transition);
-                if owes == Owes::Ack {
-                    dropped += 1;
-                }
+                dropped.extend(owes.command());
             }
             // The listener's task does not own the client, which drops here,
             // on the runtime.
@@ -590,10 +600,11 @@ impl Core {
                 session,
                 transition,
                 resume_sync: _,
+                logout,
             }) => {
                 drop(transition);
                 session.shut_down().await;
-                dropped += 1;
+                dropped.push(logout);
             }
         }
         acks(&self.events, dropped);
@@ -603,8 +614,12 @@ impl Core {
     /// runs, for the tests of what commands do: one command at a time,
     /// that is until its ack. Returns whether the core stopped.
     #[cfg(test)]
-    pub(super) async fn run_until_idle(&mut self, command: Command) -> ControlFlow<()> {
-        self.handle(Next::Command(Some(command))).await?;
+    pub(super) async fn run_until_idle(
+        &mut self,
+        id: CommandId,
+        command: Command,
+    ) -> ControlFlow<()> {
+        self.handle(Next::Command(Some((id, command)))).await?;
         loop {
             let next = if self.state.in_transition() {
                 tokio::select! {
@@ -636,15 +651,15 @@ impl Core {
     }
 }
 
-/// A command's answer: every event it emitted is ahead of this one.
-fn ack(events: &EventSender) {
-    emit_event(events, Event::CommandHandled);
+/// The command `id`'s answer: every event it emitted is ahead of this one.
+fn ack(events: &EventSender, id: CommandId) {
+    emit_event(events, Event::CommandHandled(id));
 }
 
-/// The answers of `count` commands that were dropped.
-fn acks(events: &EventSender, count: usize) {
-    for _ in 0..count {
-        ack(events);
+/// The answers of the commands that were dropped.
+fn acks(events: &EventSender, ids: Vec<CommandId>) {
+    for id in ids {
+        ack(events, id);
     }
 }
 

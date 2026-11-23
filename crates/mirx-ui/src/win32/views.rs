@@ -1939,8 +1939,11 @@ mod tests {
                 let before = counters(hwnd);
                 let generation = state_ref(hwnd).event_generation;
 
-                apply_events_and_refresh(hwnd, vec![Event::CommandHandled]).unwrap();
-                assert_eq!(state_ref(hwnd).core_commands_handled, 1);
+                let (sender, _receiver) = inert_command_sender();
+                let id = sender.send(Command::StartSync).unwrap();
+                apply_events_and_refresh(hwnd, vec![Event::CommandHandled(id)]).unwrap();
+                assert!(state_ref(hwnd).core_answers.is_answered(id));
+                assert_eq!(state_ref(hwnd).core_answers.count(), 1);
                 assert_eq!(state_ref(hwnd).event_generation, generation + 1);
                 assert_eq!(counters(hwnd), before);
             });

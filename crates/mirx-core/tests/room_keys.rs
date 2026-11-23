@@ -9,8 +9,8 @@ use common::Harness;
 use std::fs;
 
 use mirx_core::{
-    Command, CoreErrorEvent, Event, ExportRoomKeysRequest, ImportRoomKeysRequest, Operation,
-    RetryDecryptionRequest,
+    Command, CommandId, CoreErrorEvent, Event, ExportRoomKeysRequest, ImportRoomKeysRequest,
+    Operation, RetryDecryptionRequest,
 };
 use tempfile::TempDir;
 
@@ -23,12 +23,12 @@ fn retrying_decryption_answers_and_refuses_a_bad_room() {
         *event == Event::DecryptionRetryWanted
     });
 
-    harness.send(Command::RetryDecryption(RetryDecryptionRequest {
+    let retry = harness.send(Command::RetryDecryption(RetryDecryptionRequest {
         room_id: "!room:example.org".to_owned(),
         event_ids: vec!["$secret".to_owned()],
     }));
     // The event cache does not have the event: nothing to report.
-    let answer = harness.events_until("the retry's ack", |event| *event == Event::CommandHandled);
+    let answer = harness.answer(retry, "the retry's ack");
     assert!(
         !answer
             .iter()
@@ -36,12 +36,12 @@ fn retrying_decryption_answers_and_refuses_a_bad_room() {
         "{answer:#?}"
     );
 
-    harness.send(Command::RetryDecryption(RetryDecryptionRequest {
+    let retry = harness.send(Command::RetryDecryption(RetryDecryptionRequest {
         room_id: "room".to_owned(),
         event_ids: vec!["$secret".to_owned()],
     }));
-    let answer = harness.events_until("the retry's ack", |event| *event == Event::CommandHandled);
-    let [.., Event::Error(error), Event::CommandHandled] = &answer[..] else {
+    let answer = harness.answer(retry, "the retry's ack");
+    let [.., Event::Error(error)] = &answer[..] else {
         panic!("not an error: {answer:#?}");
     };
     assert_eq!(error.operation, Operation::RetryDecryption);
@@ -58,21 +58,17 @@ fn retrying_decryption_answers_and_refuses_a_bad_room() {
 fn retrying_decryption_needs_a_session() {
     let harness = Harness::idle();
 
-    harness.send(Command::RetryDecryption(RetryDecryptionRequest {
+    let retry = harness.send(Command::RetryDecryption(RetryDecryptionRequest {
         room_id: "!room:example.org".to_owned(),
         event_ids: vec!["$secret".to_owned()],
     }));
-    let answer = harness.events_until("the retry's ack", |event| *event == Event::CommandHandled);
     assert_eq!(
-        answer,
-        [
-            Event::Error(CoreErrorEvent {
-                operation: Operation::RetryDecryption,
-                room_id: Some("!room:example.org".to_owned()),
-                message: "retrying decryption requires an authenticated session".to_owned(),
-            }),
-            Event::CommandHandled,
-        ]
+        harness.answer(retry, "the retry's ack"),
+        [Event::Error(CoreErrorEvent {
+            operation: Operation::RetryDecryption,
+            room_id: Some("!room:example.org".to_owned()),
+            message: "retrying decryption requires an authenticated session".to_owned(),
+        })]
     );
 
     harness.shut_down();
@@ -80,25 +76,27 @@ fn retrying_decryption_needs_a_session() {
 
 impl Harness {
     fn export(&self, path: &str, passphrase: &str) -> Vec<Event> {
-        self.send(Command::ExportRoomKeys(ExportRoomKeysRequest {
+        let export = self.send(Command::ExportRoomKeys(ExportRoomKeysRequest {
             path: path.to_owned(),
             passphrase: passphrase.to_owned(),
         }));
-        self.answer("the export's ack")
+        self.answer(export, "the export's ack")
     }
 
     fn import(&self, path: &str, passphrase: &str) -> Vec<Event> {
-        self.send(Command::ImportRoomKeys(ImportRoomKeysRequest {
+        let import = self.send(Command::ImportRoomKeys(ImportRoomKeysRequest {
             path: path.to_owned(),
             passphrase: passphrase.to_owned(),
         }));
-        self.answer("the import's ack")
+        self.answer(import, "the import's ack")
     }
 
-    /// A command's events, without what the session's tasks report
-    /// meanwhile (E2EE status, retries).
-    fn answer(&self, what: &str) -> Vec<Event> {
-        self.events_until(what, |event| *event == Event::CommandHandled)
+    /// The command `id`'s events up to its ack (not included), without what
+    /// the session's tasks report meanwhile (E2EE status, retries).
+    fn answer(&self, id: CommandId, what: &str) -> Vec<Event> {
+        let mut events = self.events_until(what, |event| *event == Event::CommandHandled(id));
+        events.pop();
+        events
             .into_iter()
             .filter(|event| !matches!(event, Event::E2eeStatus(_) | Event::DecryptionRetryWanted))
             .collect()
@@ -122,12 +120,9 @@ fn exported_room_keys_are_a_key_file_that_imports_back() {
 
     assert_eq!(
         harness.export(path, "correct horse"),
-        [
-            Event::RoomKeysExported {
-                path: path.to_owned()
-            },
-            Event::CommandHandled
-        ]
+        [Event::RoomKeysExported {
+            path: path.to_owned()
+        }]
     );
     let file = fs::read_to_string(path).expect("the key file");
     assert!(
@@ -142,14 +137,11 @@ fn exported_room_keys_are_a_key_file_that_imports_back() {
     // The session holds no room keys yet: none are new.
     assert_eq!(
         harness.import(path, "correct horse"),
-        [
-            Event::RoomKeysImported {
-                path: path.to_owned(),
-                imported: 0,
-                total: 0,
-            },
-            Event::CommandHandled
-        ]
+        [Event::RoomKeysImported {
+            path: path.to_owned(),
+            imported: 0,
+            total: 0,
+        }]
     );
 
     harness.shut_down();
@@ -170,17 +162,14 @@ fn a_room_key_import_names_what_is_wrong_with_the_file() {
 
     assert_eq!(
         harness.import(keys, "wrong horse"),
-        [
-            import_error("wrong passphrase, or the file is damaged"),
-            Event::CommandHandled
-        ]
+        [import_error("wrong passphrase, or the file is damaged")]
     );
     assert_eq!(
         harness.import(notes, "correct horse"),
-        [import_error("not a room key file"), Event::CommandHandled]
+        [import_error("not a room key file")]
     );
     let answer = harness.import(missing, "correct horse");
-    let [Event::Error(error), Event::CommandHandled] = &answer[..] else {
+    let [Event::Error(error)] = &answer[..] else {
         panic!("not an error: {answer:#?}");
     };
     assert_eq!(error.operation, Operation::ImportRoomKeys);
@@ -192,21 +181,15 @@ fn a_room_key_import_names_what_is_wrong_with_the_file() {
     );
     assert_eq!(
         harness.import(keys, ""),
-        [
-            import_error("a room key file needs a passphrase"),
-            Event::CommandHandled
-        ]
+        [import_error("a room key file needs a passphrase")]
     );
     assert_eq!(
         harness.export(keys, ""),
-        [
-            Event::Error(CoreErrorEvent {
-                operation: Operation::ExportRoomKeys,
-                room_id: None,
-                message: "a room key file needs a passphrase".to_owned(),
-            }),
-            Event::CommandHandled
-        ]
+        [Event::Error(CoreErrorEvent {
+            operation: Operation::ExportRoomKeys,
+            room_id: None,
+            message: "a room key file needs a passphrase".to_owned(),
+        })]
     );
 
     harness.shut_down();
@@ -234,17 +217,14 @@ fn room_key_files_need_a_session() {
             "importing room keys requires an authenticated session",
         ),
     ] {
-        harness.send(command);
+        let id = harness.send(command);
         assert_eq!(
-            harness.events_until("the ack", |event| *event == Event::CommandHandled),
-            [
-                Event::Error(CoreErrorEvent {
-                    operation,
-                    room_id: None,
-                    message: message.to_owned(),
-                }),
-                Event::CommandHandled,
-            ]
+            harness.answer(id, "the ack"),
+            [Event::Error(CoreErrorEvent {
+                operation,
+                room_id: None,
+                message: message.to_owned(),
+            })]
         );
     }
 

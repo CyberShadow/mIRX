@@ -229,8 +229,9 @@ fn a_restarted_session_reads_its_e2ee_status_once_connected() {
         .count();
     harness.wait_for_requests("GET", "/sync", syncs + 1);
     harness.send(Command::RefreshE2eeStatus);
-    events
-        .extend(harness.events_until("the status's ack", |event| *event == Event::CommandHandled));
+    events.extend(harness.events_until("the status's ack", |event| {
+        matches!(event, Event::CommandHandled(_))
+    }));
 
     let started = events
         .iter()

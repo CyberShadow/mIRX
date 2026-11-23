@@ -51,14 +51,14 @@ impl<'a> Seen<'a> {
     /// Reads events until `count` acks were seen in all.
     fn until_acks(&mut self, count: usize) {
         while self.acks() < count {
-            self.until("an ack", |event| *event == Event::CommandHandled);
+            self.until("an ack", |event| matches!(event, Event::CommandHandled(_)));
         }
     }
 
     fn acks(&self) -> usize {
         self.events
             .iter()
-            .filter(|event| **event == Event::CommandHandled)
+            .filter(|event| matches!(event, Event::CommandHandled(_)))
             .count()
     }
 
@@ -100,7 +100,7 @@ fn is_backfill_answer(event: &Event) -> bool {
 fn acks(events: &[Event]) -> usize {
     events
         .iter()
-        .filter(|event| **event == Event::CommandHandled)
+        .filter(|event| matches!(event, Event::CommandHandled(_)))
         .count()
 }
 
@@ -845,23 +845,23 @@ fn logout_cancels_hung_work_and_acks_it() {
     });
     let mut seen = Seen::new(&harness);
 
-    harness.send(backfill(ROOM));
+    let backfill = harness.send(backfill(ROOM));
     harness.wait_for_requests("GET", "/messages", 1);
-    harness.send(common::log_out_anyway());
+    let logout = harness.send(common::log_out_anyway());
     seen.until("LoggedOut", |event| *event == Event::LoggedOut);
     seen.until_acks(2);
     let shape: Vec<_> = seen
         .events
         .iter()
-        .filter(|event| matches!(event, Event::CommandHandled | Event::LoggedOut))
+        .filter(|event| matches!(event, Event::CommandHandled(_) | Event::LoggedOut))
         .collect();
     // The backfill's ack, then the logout and its ack.
     assert_eq!(
         shape,
         [
-            &Event::CommandHandled,
+            &Event::CommandHandled(backfill),
             &Event::LoggedOut,
-            &Event::CommandHandled
+            &Event::CommandHandled(logout)
         ]
     );
     assert!(
@@ -1070,12 +1070,12 @@ fn disconnecting_stops_a_logout_under_way() {
     seen.until("SyncConnected", |event| *event == Event::SyncConnected);
     seen.until_acks(1);
 
-    harness.send(common::log_out_anyway());
+    let logout = harness.send(common::log_out_anyway());
     seen.until("LoggingOut", |event| *event == Event::LoggingOut);
     harness.wait_for_requests("POST", "/logout", 1);
     // Waits for the logout's end.
-    harness.send(Command::FetchUserProfile("@bob:example.org".to_owned()));
-    harness.send(Command::StopSync);
+    let profile = harness.send(Command::FetchUserProfile("@bob:example.org".to_owned()));
+    let stop = harness.send(Command::StopSync);
     let from = seen.events.len();
     seen.until("LogoutCancelled", |event| *event == Event::LogoutCancelled);
     // The logout's ack, the stop's, then the profile's after its answer.
@@ -1088,7 +1088,7 @@ fn disconnecting_stops_a_logout_under_way() {
         .filter(|event| {
             matches!(
                 event,
-                Event::LogoutCancelled | Event::CommandHandled | Event::UserProfile(_)
+                Event::LogoutCancelled | Event::CommandHandled(_) | Event::UserProfile(_)
             )
         })
         .collect();
@@ -1097,11 +1097,11 @@ fn disconnecting_stops_a_logout_under_way() {
             answers[..],
             [
                 Event::LogoutCancelled,
-                Event::CommandHandled,
-                Event::CommandHandled,
+                Event::CommandHandled(first),
+                Event::CommandHandled(second),
                 Event::UserProfile(_),
-                Event::CommandHandled,
-            ]
+                Event::CommandHandled(third),
+            ] if (*first, *second, *third) == (logout, stop, profile)
         ),
         "{answers:#?}"
     );

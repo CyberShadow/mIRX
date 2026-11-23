@@ -13,6 +13,8 @@ use std::collections::{HashMap, VecDeque};
 use futures_util::future::LocalBoxFuture;
 use tokio::task::{self, JoinSet};
 
+use crate::api::CommandId;
+
 /// Where a job runs, by what it must stay in order with.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) enum Lane {
@@ -56,8 +58,18 @@ impl Lane {
 /// Whether a piece of work answers a command, which is acked when it ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Owes {
-    Ack,
+    Ack(CommandId),
     Nothing,
+}
+
+impl Owes {
+    /// The command owed its ack, if any.
+    pub(super) fn command(self) -> Option<CommandId> {
+        match self {
+            Self::Ack(id) => Some(id),
+            Self::Nothing => None,
+        }
+    }
 }
 
 /// Builds a job from the actor's state when the work starts.
@@ -70,10 +82,10 @@ pub(super) struct Work<S, F> {
 }
 
 impl<S, F> Work<S, F> {
-    /// A command's work: acked when it ends, or when it is dropped.
-    pub(super) fn command(start: Start<S, F>) -> Self {
+    /// The command `id`'s work: acked when it ends, or when it is dropped.
+    pub(super) fn command(id: CommandId, start: Start<S, F>) -> Self {
         Self {
-            owes: Owes::Ack,
+            owes: Owes::Ack(id),
             start,
         }
     }
@@ -173,11 +185,11 @@ impl<S, F: 'static> Jobs<S, F> {
     }
 
     /// Aborts every job and waits until each is gone, and drops the queued
-    /// work: the session they belong to ends. Returns how many acks the
-    /// commands among them are owed, finished or not.
-    pub(super) async fn abort_all(&mut self) -> usize {
+    /// work: the session they belong to ends. Returns the commands among
+    /// them, finished or not, which are owed their acks.
+    pub(super) async fn abort_all(&mut self) -> Vec<CommandId> {
         self.running.abort_all();
-        let mut owed = 0;
+        let mut owed = Vec::new();
         while let Some(joined) = self.running.join_next_with_id().await {
             let id = match joined {
                 Ok((id, _)) => id,
@@ -185,14 +197,14 @@ impl<S, F: 'static> Jobs<S, F> {
                 Err(err) => std::panic::resume_unwind(err.into_panic()),
             };
             let (_, owes) = self.meta.remove(&id).expect("every job has its meta");
-            owed += usize::from(owes == Owes::Ack);
+            owed.extend(owes.command());
         }
-        owed += self
-            .lanes
-            .drain()
-            .flat_map(|(_, queue)| queue.queued)
-            .filter(|work| work.owes == Owes::Ack)
-            .count();
+        owed.extend(
+            self.lanes
+                .drain()
+                .flat_map(|(_, queue)| queue.queued)
+                .filter_map(|work| work.owes.command()),
+        );
         owed
     }
 }
@@ -217,20 +229,25 @@ mod tests {
     use tokio::task::LocalSet;
 
     use super::{Finished, Jobs, Lane, Owes, Work};
+    use crate::api::CommandId;
 
     /// The test's actor state: the names of the work started, in order.
     type Started = Vec<&'static str>;
 
-    /// Work that records its start and ends when its gate opens.
+    /// Work that records its start and ends when its gate opens. The
+    /// command's ID is irrelevant here: every gated job owes ID 1.
     fn gated(name: &'static str) -> (Work<Started, &'static str>, oneshot::Sender<()>) {
         let (open, gate) = oneshot::channel::<()>();
-        let work = Work::command(Box::new(move |started: &mut Started| {
-            started.push(name);
-            Box::pin(async move {
-                let _ = gate.await;
-                name
-            })
-        }));
+        let work = Work::command(
+            CommandId(1),
+            Box::new(move |started: &mut Started| {
+                started.push(name);
+                Box::pin(async move {
+                    let _ = gate.await;
+                    name
+                })
+            }),
+        );
         (work, open)
     }
 
@@ -262,7 +279,10 @@ mod tests {
 
             open_first.send(()).expect("first runs");
             let finished = next(&mut jobs).await;
-            assert_eq!((finished.output, finished.owes), ("first", Owes::Ack));
+            assert_eq!(
+                (finished.output, finished.owes),
+                ("first", Owes::Ack(CommandId(1)))
+            );
             // Not before the release: the actor applies the output first.
             assert_eq!(started, ["first"]);
             jobs.release(&finished.lane, &mut started);
@@ -301,7 +321,7 @@ mod tests {
                 jobs.enqueue(lane, work, &mut started);
             }
             assert_eq!(started, ["!a", "!b", "receipts !a", "account", "unordered"]);
-            assert_eq!(jobs.abort_all().await, 5);
+            assert_eq!(jobs.abort_all().await.len(), 5);
         });
     }
 
@@ -321,7 +341,7 @@ mod tests {
             let finished = next(&mut jobs).await;
             jobs.release(&finished.lane, &mut started);
             assert_eq!(started, ["1", "2", "3", "4", "5"]);
-            assert_eq!(jobs.abort_all().await, 4);
+            assert_eq!(jobs.abort_all().await.len(), 4);
         });
     }
 
@@ -337,7 +357,7 @@ mod tests {
                 jobs.enqueue(Lane::Unordered, work, &mut started);
             }
             assert_eq!(started.len(), 100);
-            assert_eq!(jobs.abort_all().await, 100);
+            assert_eq!(jobs.abort_all().await.len(), 100);
         });
     }
 
@@ -361,13 +381,16 @@ mod tests {
             let guard = DropGuard(Rc::clone(&dropped));
             jobs.enqueue(
                 Lane::Account,
-                Work::command(Box::new(move |_: &mut Started| {
-                    Box::pin(async move {
-                        let _guard = guard;
-                        std::future::pending::<()>().await;
-                        "guarded"
-                    })
-                })),
+                Work::command(
+                    CommandId(2),
+                    Box::new(move |_: &mut Started| {
+                        Box::pin(async move {
+                            let _guard = guard;
+                            std::future::pending::<()>().await;
+                            "guarded"
+                        })
+                    }),
+                ),
                 &mut started,
             );
             for lane in [Lane::Room("!a".to_owned()), Lane::Account, Lane::Account] {
@@ -380,7 +403,7 @@ mod tests {
                 &mut started,
             );
             // Two running commands, three queued ones, and the internal job.
-            assert_eq!(jobs.abort_all().await, 5);
+            assert_eq!(jobs.abort_all().await.len(), 5);
             assert!(
                 *dropped.borrow(),
                 "the guard drops before abort_all returns"

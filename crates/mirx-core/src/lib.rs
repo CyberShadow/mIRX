@@ -11,7 +11,7 @@ pub const FOUNDATION_PHASE: &str = "bootstrap";
 
 pub use api::{
     AcceptRoomInviteRequest, AwayChanged, BackfillRoomHistoryRequest, BanRoomMemberRequest,
-    Command, CoreConfig, CoreErrorEvent, CreateDirectRoomRequest, CreateRoomRequest,
+    Command, CommandId, CoreConfig, CoreErrorEvent, CreateDirectRoomRequest, CreateRoomRequest,
     CreateRoomVisibility, DeviceSummary, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeIdentityResetOutcome, E2eeRecoveryOperation, E2eeRecoverySetupSucceeded, E2eeRecoveryState,
     E2eeRecoverySucceeded, E2eeSessionState, E2eeStatus, EditMessageRequest, Event,

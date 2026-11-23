@@ -2364,17 +2364,28 @@ pub enum RoomKeysAtRisk {
     BackupFailed(String),
 }
 
+/// A command's number, from 1, in the order the UI sent it
+/// (`CommandSender::send`); the core's ack names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CommandId(pub(crate) u64);
+
+impl CommandId {
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Event {
     Started,
-    /// The core finished one command: every event it emitted for it is
-    /// ahead of this one, so the UI knows the core has answered everything
-    /// it was sent (`CommandSender::sent`). Work the command left running
-    /// (sync, the send queue, an identity reset waiting for approval)
-    /// answers later, on its own. Never in a fixture or a replayed load:
-    /// only the core acks its own commands.
+    /// The core finished the command `id`: every event it emitted for it
+    /// is ahead of this one. Each command gets exactly one, but not in the
+    /// order they were sent (lanes). Work the command left running (sync,
+    /// the send queue, an identity reset waiting for approval) answers
+    /// later, on its own. Never in a fixture or a replayed load: only the
+    /// core acks its own commands.
     #[serde(skip)]
-    CommandHandled,
+    CommandHandled(CommandId),
     /// A browser sign-in waits for the user to sign in on this page, which
     /// sends the browser back to mirx; `LoggedIn` or a `Login` error
     /// follows, or `LoginCancelled`.

@@ -392,6 +392,7 @@ pub(super) fn submit_start_sync(state: &mut WindowState) -> Result<(), String> {
     sender
         .send(Command::StartSync)
         .map_err(|err| format!("failed to enqueue start sync command: {err}"))
+        .map(|_| ())
 }
 
 /// `discard_room_keys`: the user said to log out even if room keys are
@@ -407,6 +408,7 @@ pub(super) fn submit_logout(
     sender
         .send(Command::Logout(LogoutRequest { discard_room_keys }))
         .map_err(|err| format!("failed to enqueue logout command: {err}"))
+        .map(|_| ())
 }
 
 pub(super) fn submit_recover_e2ee(
@@ -605,6 +607,7 @@ fn send_unrecorded_command(state: &mut WindowState, command: Command) -> Result<
         .ok_or_else(|| "core command sender is not available".to_owned())?
         .send(command)
         .map_err(|err| format!("failed to enqueue command: {err}"))
+        .map(|_| ())
 }
 
 #[cfg(test)]
@@ -1055,7 +1058,7 @@ mod tests {
             Some("[22:12] * Connecting to https://matrix.example as @alice:example")
         );
         assert_eq!(
-            commands.try_recv(),
+            commands.try_recv().map(|(_, command)| command),
             Ok(Command::Login(LoginRequest {
                 server: "https://matrix.example".to_owned(),
                 method: LoginMethod::Password {
@@ -1093,7 +1096,7 @@ mod tests {
         assert_eq!(state.model.connection, ConnectionState::SigningIn);
         assert_eq!(state.model.own_user_id(), Some("@alice:example"));
         assert_eq!(
-            commands.try_recv(),
+            commands.try_recv().map(|(_, command)| command),
             Ok(Command::RestoreSession(RestoreSessionRequest {
                 homeserver_url: "https://matrix.example".to_owned(),
                 session: stored_session(),
@@ -1180,7 +1183,7 @@ mod tests {
             Some("[22:12] * Connecting to example.org to sign in with your browser")
         );
         assert_eq!(
-            commands.try_recv(),
+            commands.try_recv().map(|(_, command)| command),
             Ok(Command::Login(LoginRequest {
                 server: "example.org".to_owned(),
                 method: LoginMethod::Browser {
@@ -1222,22 +1225,25 @@ mod tests {
             submit_logout(&mut state, false).unwrap();
             submit_logout(&mut state, true).unwrap();
             assert_eq!(
-                commands.try_recv(),
+                commands.try_recv().map(|(_, command)| command),
                 Ok(Command::RestoreSession(RestoreSessionRequest {
                     homeserver_url: "https://matrix.example".to_owned(),
                     session: stored_session(),
                     start_sync: false,
                 }))
             );
-            assert_eq!(commands.try_recv(), Ok(Command::StartSync));
             assert_eq!(
-                commands.try_recv(),
+                commands.try_recv().map(|(_, command)| command),
+                Ok(Command::StartSync)
+            );
+            assert_eq!(
+                commands.try_recv().map(|(_, command)| command),
                 Ok(Command::Logout(LogoutRequest {
                     discard_room_keys: false
                 }))
             );
             assert_eq!(
-                commands.try_recv(),
+                commands.try_recv().map(|(_, command)| command),
                 Ok(Command::Logout(LogoutRequest {
                     discard_room_keys: true
                 }))
