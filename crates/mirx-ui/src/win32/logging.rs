@@ -18,7 +18,7 @@ use super::*;
 
 const LOGS_SUBDIR: &str = "logs";
 
-/// Where the logs go, as Options > IRC > Logging shows it: the same in
+/// Where the logs go, as Options > Chat > Logging shows it: the same in
 /// every profile.
 pub(super) fn logs_folder_label() -> String {
     format!("%LOCALAPPDATA%\\{PROFILE_SUBDIR}\\{LOGS_SUBDIR}")
@@ -280,7 +280,7 @@ fn log_rows(state: &WindowState, view_id: &ViewId) -> Vec<TimelineRow> {
             room_id,
             timestamps,
             None,
-            state.settings.settings().irc.mode_prefix,
+            state.settings.settings().chat.rank_prefix,
         ),
         ViewId::Thread { .. } | ViewId::RoomList => {
             unreachable!("only Status and room windows log")
@@ -379,8 +379,8 @@ pub(super) fn decide_auto_log(state: &mut WindowState, view_id: &ViewId) {
     let logging = &state.settings.settings().logging;
     let on = match room_window_kind(room) {
         RoomWindowKind::Invite => return,
-        RoomWindowKind::Channel => logging.channels,
-        RoomWindowKind::Query => logging.queries,
+        RoomWindowKind::Channel => logging.rooms,
+        RoomWindowKind::Query => logging.direct,
     };
     let view = state
         .views

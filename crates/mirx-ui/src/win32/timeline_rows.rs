@@ -1006,14 +1006,14 @@ fn activity_line_text(
 }
 
 /// A room window's rows. `line_marker`: the event the line marker follows,
-/// `None` for no marker (see `room_line_marker`). `mode_prefix`: Options >
+/// `None` for no marker (see `room_line_marker`). `rank_prefix`: Options >
 /// IRC's Show mode prefix, which a channel's lines follow.
 pub(super) fn build_room_timeline_rows(
     model: &UiModel,
     room_id: &str,
     timestamps: TimestampStyle,
     line_marker: Option<&str>,
-    mode_prefix: bool,
+    rank_prefix: bool,
 ) -> Vec<TimelineRow> {
     let room = room_by_id(&model.rooms, room_id).expect("room view must target an existing room");
     let room_view = model.room_views.get(room_id);
@@ -1042,7 +1042,7 @@ pub(super) fn build_room_timeline_rows(
             timestamps,
             LineSenders {
                 own_user_id: model.own_user_id(),
-                rank_glyphs: shows_rank_glyphs(room, mode_prefix),
+                rank_glyphs: shows_rank_glyphs(room, rank_prefix),
             },
             line_marker,
         );
@@ -1101,8 +1101,8 @@ struct LineSenders<'a> {
 
 /// Whether `room`'s lines show their senders' rank glyphs: mIRC's Show
 /// mode prefix is for channel messages, so never in a query.
-fn shows_rank_glyphs(room: &RoomSummary, mode_prefix: bool) -> bool {
-    mode_prefix && room_window_kind(room) == RoomWindowKind::Channel
+fn shows_rank_glyphs(room: &RoomSummary, rank_prefix: bool) -> bool {
+    rank_prefix && room_window_kind(room) == RoomWindowKind::Channel
 }
 
 fn echo_row(line: &EchoLine, timestamps: TimestampStyle) -> TimelineRow {
@@ -1118,7 +1118,7 @@ pub(super) fn build_thread_timeline_rows(
     room_id: &str,
     thread_root_event_id: &str,
     timestamps: TimestampStyle,
-    mode_prefix: bool,
+    rank_prefix: bool,
 ) -> Vec<TimelineRow> {
     let room = room_by_id(&model.rooms, room_id).expect("thread view must target an existing room");
     let room_view = model
@@ -1138,7 +1138,7 @@ pub(super) fn build_thread_timeline_rows(
         timestamps,
         LineSenders {
             own_user_id: model.own_user_id(),
-            rank_glyphs: shows_rank_glyphs(room, mode_prefix),
+            rank_glyphs: shows_rank_glyphs(room, rank_prefix),
         },
         // Matrix keeps one read marker per room, for its room window.
         None,
@@ -4763,11 +4763,11 @@ mod tests {
         );
     }
 
-    /// Options > IRC's Show mode prefix: a channel's message, action and
+    /// Options > Chat's Show rank prefix: a channel's message, action and
     /// notice lines put the sender's rank glyph before the nick, outside
     /// the nick's range; queries never do, and off, nothing does.
     #[test]
-    fn show_mode_prefix_puts_the_senders_rank_before_the_nick_in_channels() {
+    fn show_rank_prefix_puts_the_senders_rank_before_the_nick_in_rooms() {
         use mirx_core::RoomMemberRank;
         let mut state = test_state();
         state.model.rooms = vec![
@@ -4823,8 +4823,8 @@ mod tests {
         for room_id in ["!ops:example", "!dm:example"] {
             state.model.room_views.entry_or_default(room_id).members = members.clone();
         }
-        let lines = |state: &WindowState, room_id: &str, mode_prefix: bool| {
-            build_room_timeline_rows(&state.model, room_id, utc_timestamps(), None, mode_prefix)
+        let lines = |state: &WindowState, room_id: &str, rank_prefix: bool| {
+            build_room_timeline_rows(&state.model, room_id, utc_timestamps(), None, rank_prefix)
                 .into_iter()
                 .filter_map(|row| {
                     let sender = row.sender?;
@@ -4950,7 +4950,7 @@ mod tests {
         assert_eq!(senders, expected, "{:#?}", project_timeline_rows(&rows));
 
         let mut settings = Settings::default();
-        for value in ["* 12 modes=@", "@bob:example 4"] {
+        for value in ["* 12 ranks=@", "@bob:example 4"] {
             settings
                 .nick_colors
                 .list

@@ -625,7 +625,7 @@ pub(super) fn away_notice(state: &mut WindowState, room_id: &str) -> Option<Stri
 /// typed. Off, or with the query's window closed (none is reopened for
 /// it), it prints in Status.
 pub(super) fn away_view(state: &WindowState, room_id: &str) -> ViewId {
-    if state.settings.settings().irc.active_away && !state.closed_queries.contains(room_id) {
+    if state.settings.settings().chat.active_away && !state.closed_queries.contains(room_id) {
         ViewId::Room(room_id.to_owned())
     } else {
         ViewId::Status
@@ -1920,7 +1920,7 @@ mod tests {
         state.closed_queries.clear();
         state
             .settings
-            .update(|settings| settings.irc.active_away = false)
+            .update(|settings| settings.chat.active_away = false)
             .unwrap();
         assert_eq!(away_view(&state, "!bob:example"), ViewId::Status);
     }

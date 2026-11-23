@@ -335,7 +335,7 @@ pub(super) unsafe fn run_slash_command(
         SlashCommand::NickColor(NickColorCommand::Add {
             target,
             color,
-            modes,
+            ranks,
             notify,
             force,
         }) => {
@@ -344,7 +344,7 @@ pub(super) unsafe fn run_slash_command(
                 let entry = nick_colors::NickColorEntry {
                     pattern: nick_color_pattern(&state.model, &target)?,
                     color,
-                    modes,
+                    ranks,
                     notify,
                 };
                 let mut setting = state.settings.settings().nick_colors.clone();
@@ -2346,7 +2346,7 @@ mod tests {
                         "[22:12] * Added Alice (@alice:example) to nick color list",
                         "[22:12] * Nick colors are on:",
                         "[22:12] *   1. *:example 9, notify",
-                        "[22:12] *   2. Alice (@alice:example) 12, any mode",
+                        "[22:12] *   2. Alice (@alice:example) 12, any rank",
                         "[22:12] * Removed Alice (@alice:example) from notify list",
                     ]
                 );

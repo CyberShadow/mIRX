@@ -374,7 +374,7 @@ fn tip_line(state: &WindowState, candidate: &TipCandidate) -> Option<String> {
             room_id,
             timestamps,
             None,
-            state.settings.settings().irc.mode_prefix,
+            state.settings.settings().chat.rank_prefix,
         ),
         ViewId::Thread {
             room_id,
@@ -384,7 +384,7 @@ fn tip_line(state: &WindowState, candidate: &TipCandidate) -> Option<String> {
             room_id,
             thread_root_event_id,
             timestamps,
-            state.settings.settings().irc.mode_prefix,
+            state.settings.settings().chat.rank_prefix,
         ),
         ViewId::Status | ViewId::RoomList => unreachable!("a room's line is in its window"),
     };

@@ -100,7 +100,7 @@ pub(super) struct Settings {
     pub(super) tips: TipsSetting,
     pub(super) marker: MarkerSetting,
     pub(super) typing: TypingSetting,
-    pub(super) irc: IrcSetting,
+    pub(super) chat: ChatSetting,
     pub(super) other: OtherSetting,
     /// mIRC's Tools > Colors.
     pub(super) colors: ColorScheme,
@@ -403,14 +403,14 @@ fn parse_treebar_width(text: &str) -> Result<TreebarWidth, String> {
         .and_then(TreebarWidth::new)
 }
 
-/// mIRC's Options > IRC > Logging.
+/// mIRC's Options > IRC > Logging, here Options > Chat > Logging.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct LoggingSetting {
-    /// Automatically log channels: every channel window logs from when it
-    /// opens. Off by default, as in mIRC.
-    pub(super) channels: bool,
-    /// ... and queries.
-    pub(super) queries: bool,
+    /// Automatically log rooms: every room window logs from when it opens.
+    /// Off by default, as in mIRC.
+    pub(super) rooms: bool,
+    /// ... and direct messages.
+    pub(super) direct: bool,
     /// Logs the plain text, without bold, colour and other control codes.
     pub(super) strip_codes: bool,
     /// Stamps each logged line with the window's timestamp format.
@@ -420,8 +420,8 @@ pub(super) struct LoggingSetting {
 impl Default for LoggingSetting {
     fn default() -> Self {
         Self {
-            channels: false,
-            queries: false,
+            rooms: false,
+            direct: false,
             strip_codes: false,
             timestamp: true,
         }
@@ -443,21 +443,21 @@ pub(super) struct TraySetting {
 
 /// mIRC's Options > Display > Tips: which lines show a desktop
 /// notification while mirx is not the active application. The defaults
-/// are what flashes the taskbar: highlights and query messages.
+/// are what flashes the taskbar: highlights and direct messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct TipsSetting {
     pub(super) highlights: bool,
-    pub(super) queries: bool,
-    /// Every channel message, as far as the room's notification mode lets.
-    pub(super) channels: bool,
+    pub(super) direct: bool,
+    /// Every room message, as far as the room's notification mode lets.
+    pub(super) rooms: bool,
 }
 
 impl Default for TipsSetting {
     fn default() -> Self {
         Self {
             highlights: true,
-            queries: true,
-            channels: false,
+            direct: true,
+            rooms: false,
         }
     }
 }
@@ -481,7 +481,7 @@ impl Default for MarkerSetting {
     }
 }
 
-/// Options > IRC > Messages: whether a room is told you are typing.
+/// Options > Chat > Messages: whether a room is told you are typing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct TypingSetting {
     pub(super) send: bool,
@@ -493,15 +493,16 @@ impl Default for TypingSetting {
     }
 }
 
-/// mIRC's Options > IRC: the options of its page that Matrix has.
+/// mIRC's Options > IRC page, here Options > Chat: the options of it that
+/// Matrix has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct IrcSetting {
-    /// Show mode prefix: a channel line's sender has their rank's glyph
+pub(super) struct ChatSetting {
+    /// Show rank prefix: a room line's sender has their rank's glyph
     /// (`<@Mod> hi`).
-    pub(super) mode_prefix: bool,
-    /// Auto-join channel on invite: an arriving invite to a group room is
+    pub(super) rank_prefix: bool,
+    /// Join rooms when invited: an arriving invite to a group room is
     /// accepted at once, its window opening behind the active one.
-    pub(super) auto_join_invite: bool,
+    pub(super) join_on_invite: bool,
     /// Show in active: Away. A user's away line prints in their query
     /// window; off, in Status.
     pub(super) active_away: bool,
@@ -513,11 +514,11 @@ pub(super) struct IrcSetting {
     pub(super) active_whois: bool,
 }
 
-impl Default for IrcSetting {
+impl Default for ChatSetting {
     fn default() -> Self {
         Self {
-            mode_prefix: false,
-            auto_join_invite: false,
+            rank_prefix: false,
+            join_on_invite: false,
             active_away: true,
             active_invites: true,
             active_whois: true,
@@ -588,7 +589,7 @@ enum Section {
     Tips,
     Marker,
     Typing,
-    Irc,
+    Chat,
     Other,
     Colors,
     NickColors,
@@ -623,7 +624,7 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                 "tips" => Section::Tips,
                 "marker" => Section::Marker,
                 "typing" => Section::Typing,
-                "irc" => Section::Irc,
+                "chat" => Section::Chat,
                 "other" => Section::Other,
                 "colors" => Section::Colors,
                 "nickcolors" => Section::NickColors,
@@ -697,11 +698,11 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Treebar, "width") => {
                 settings.treebar.width = parse_treebar_width(value.trim_end()).map_err(error)?;
             }
-            (Section::Logging, "channels") => {
-                settings.logging.channels = parse_on_off(value, "channels").map_err(error)?;
+            (Section::Logging, "rooms") => {
+                settings.logging.rooms = parse_on_off(value, "rooms").map_err(error)?;
             }
-            (Section::Logging, "queries") => {
-                settings.logging.queries = parse_on_off(value, "queries").map_err(error)?;
+            (Section::Logging, "direct") => {
+                settings.logging.direct = parse_on_off(value, "direct").map_err(error)?;
             }
             (Section::Logging, "strip") => {
                 settings.logging.strip_codes = parse_on_off(value, "strip").map_err(error)?;
@@ -724,11 +725,11 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Tips, "highlights") => {
                 settings.tips.highlights = parse_on_off(value, "highlights").map_err(error)?;
             }
-            (Section::Tips, "queries") => {
-                settings.tips.queries = parse_on_off(value, "queries").map_err(error)?;
+            (Section::Tips, "direct") => {
+                settings.tips.direct = parse_on_off(value, "direct").map_err(error)?;
             }
-            (Section::Tips, "channels") => {
-                settings.tips.channels = parse_on_off(value, "channels").map_err(error)?;
+            (Section::Tips, "rooms") => {
+                settings.tips.rooms = parse_on_off(value, "rooms").map_err(error)?;
             }
             (Section::Marker, "show") => {
                 settings.marker.show = parse_on_off(value, "show").map_err(error)?;
@@ -739,22 +740,22 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Typing, "send") => {
                 settings.typing.send = parse_on_off(value, "send").map_err(error)?;
             }
-            (Section::Irc, "mode_prefix") => {
-                settings.irc.mode_prefix = parse_on_off(value, "mode_prefix").map_err(error)?;
+            (Section::Chat, "rank_prefix") => {
+                settings.chat.rank_prefix = parse_on_off(value, "rank_prefix").map_err(error)?;
             }
-            (Section::Irc, "auto_join_invite") => {
-                settings.irc.auto_join_invite =
-                    parse_on_off(value, "auto_join_invite").map_err(error)?;
+            (Section::Chat, "join_on_invite") => {
+                settings.chat.join_on_invite =
+                    parse_on_off(value, "join_on_invite").map_err(error)?;
             }
-            (Section::Irc, "active_away") => {
-                settings.irc.active_away = parse_on_off(value, "active_away").map_err(error)?;
+            (Section::Chat, "active_away") => {
+                settings.chat.active_away = parse_on_off(value, "active_away").map_err(error)?;
             }
-            (Section::Irc, "active_invites") => {
-                settings.irc.active_invites =
+            (Section::Chat, "active_invites") => {
+                settings.chat.active_invites =
                     parse_on_off(value, "active_invites").map_err(error)?;
             }
-            (Section::Irc, "active_whois") => {
-                settings.irc.active_whois = parse_on_off(value, "active_whois").map_err(error)?;
+            (Section::Chat, "active_whois") => {
+                settings.chat.active_whois = parse_on_off(value, "active_whois").map_err(error)?;
             }
             (Section::Other, "buffer") => {
                 settings.other.window_buffer =
@@ -829,7 +830,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
     let logging = &settings.logging;
     let tray = &settings.tray;
     let tips = &settings.tips;
-    let irc = &settings.irc;
+    let chat = &settings.chat;
     let colors = ColorItem::ALL
         .into_iter()
         .map(|item| format!("{}={}\r\n", item.ini_key(), settings.colors.get(item).get()))
@@ -872,12 +873,12 @@ pub(super) fn to_ini(settings: &Settings) -> String {
          [switchbar]\r\nshow={}\r\nbuttons={}\r\n\
          event={}\r\nmessage={}\r\nhighlight={}\r\n\
          [treebar]\r\nshow={}\r\nwidth={}\r\n\
-         [logging]\r\nchannels={}\r\nqueries={}\r\nstrip={}\r\ntimestamp={}\r\n\
+         [logging]\r\nrooms={}\r\ndirect={}\r\nstrip={}\r\ntimestamp={}\r\n\
          [tray]\r\nalways={}\r\nstartup={}\r\nminimize={}\r\nsingle_click={}\r\n\
-         [tips]\r\nhighlights={}\r\nqueries={}\r\nchannels={}\r\n\
+         [tips]\r\nhighlights={}\r\ndirect={}\r\nrooms={}\r\n\
          [marker]\r\nshow={}\r\ncolor={}\r\n\
          [typing]\r\nsend={}\r\n\
-         [irc]\r\nmode_prefix={}\r\nauto_join_invite={}\r\n\
+         [chat]\r\nrank_prefix={}\r\njoin_on_invite={}\r\n\
          active_away={}\r\nactive_invites={}\r\nactive_whois={}\r\n\
          [other]\r\nbuffer={}\r\n\
          [colors]\r\n{colors}\
@@ -901,8 +902,8 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         activity.highlight.get(),
         on_off(settings.treebar.show),
         settings.treebar.width,
-        on_off(logging.channels),
-        on_off(logging.queries),
+        on_off(logging.rooms),
+        on_off(logging.direct),
         on_off(logging.strip_codes),
         on_off(logging.timestamp),
         on_off(tray.always),
@@ -910,16 +911,16 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         on_off(tray.minimize),
         on_off(tray.single_click),
         on_off(tips.highlights),
-        on_off(tips.queries),
-        on_off(tips.channels),
+        on_off(tips.direct),
+        on_off(tips.rooms),
         on_off(settings.marker.show),
         settings.marker.color.get(),
         on_off(settings.typing.send),
-        on_off(irc.mode_prefix),
-        on_off(irc.auto_join_invite),
-        on_off(irc.active_away),
-        on_off(irc.active_invites),
-        on_off(irc.active_whois),
+        on_off(chat.rank_prefix),
+        on_off(chat.join_on_invite),
+        on_off(chat.active_away),
+        on_off(chat.active_invites),
+        on_off(chat.active_whois),
         settings.other.window_buffer,
         on_off(settings.nick_colors.active),
         on_off(settings.notify.active),
@@ -1062,12 +1063,12 @@ mod tests {
         [toolbar]\r\nshow=on\r\n\
         [switchbar]\r\nshow=on\r\nbuttons=120\r\nevent=5\r\nmessage=4\r\nhighlight=12\r\n\
         [treebar]\r\nshow=on\r\nwidth=240\r\n\
-        [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
+        [logging]\r\nrooms=off\r\ndirect=off\r\nstrip=off\r\ntimestamp=on\r\n\
         [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
-        [tips]\r\nhighlights=on\r\nqueries=on\r\nchannels=off\r\n\
+        [tips]\r\nhighlights=on\r\ndirect=on\r\nrooms=off\r\n\
         [marker]\r\nshow=on\r\ncolor=4\r\n\
         [typing]\r\nsend=on\r\n\
-        [irc]\r\nmode_prefix=off\r\nauto_join_invite=off\r\n\
+        [chat]\r\nrank_prefix=off\r\njoin_on_invite=off\r\n\
         active_away=on\r\nactive_invites=on\r\nactive_whois=on\r\n\
         [other]\r\nbuffer=5000\r\n\
         [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\ninvite=3\r\n\
@@ -1178,7 +1179,7 @@ mod tests {
             ..Settings::default()
         };
         let text = to_ini(&settings);
-        assert!(text.contains("[typing]\r\nsend=off\r\n[irc]"));
+        assert!(text.contains("[typing]\r\nsend=off\r\n[chat]"));
         assert_eq!(parse_ini(&text), Ok(settings));
         assert_eq!(
             parse_ini("[typing]\r\n").map(|settings| settings.typing),
@@ -1191,11 +1192,11 @@ mod tests {
     }
 
     #[test]
-    fn the_irc_settings_round_trip() {
+    fn the_chat_settings_round_trip() {
         let settings = Settings {
-            irc: IrcSetting {
-                mode_prefix: true,
-                auto_join_invite: true,
+            chat: ChatSetting {
+                rank_prefix: true,
+                join_on_invite: true,
                 active_away: false,
                 active_invites: false,
                 active_whois: false,
@@ -1204,50 +1205,57 @@ mod tests {
         };
         let text = to_ini(&settings);
         assert!(text.contains(
-            "[irc]\r\nmode_prefix=on\r\nauto_join_invite=on\r\n\
+            "[chat]\r\nrank_prefix=on\r\njoin_on_invite=on\r\n\
              active_away=off\r\nactive_invites=off\r\nactive_whois=off\r\n[other]"
         ));
         assert_eq!(parse_ini(&text), Ok(settings));
         assert_eq!(
-            parse_ini("[IRC]\nMode_Prefix=On\nactive_whois=off").map(|settings| settings.irc),
-            Ok(IrcSetting {
-                mode_prefix: true,
+            parse_ini("[Chat]\nRank_Prefix=On\nactive_whois=off").map(|settings| settings.chat),
+            Ok(ChatSetting {
+                rank_prefix: true,
                 active_whois: false,
-                ..IrcSetting::default()
+                ..ChatSetting::default()
             })
         );
         assert_eq!(
-            parse_ini("[irc]\r\n").map(|settings| settings.irc),
-            Ok(IrcSetting::default())
+            parse_ini("[chat]\r\n").map(|settings| settings.chat),
+            Ok(ChatSetting::default())
         );
         for (text, error) in [
             (
-                "[irc]\nmode_prefix=yes",
-                "line 2: mode_prefix must be on or off",
+                "[chat]\nrank_prefix=yes",
+                "line 2: rank_prefix must be on or off",
             ),
             (
-                "[irc]\nauto_join_invite=",
-                "line 2: auto_join_invite must be on or off",
+                "[chat]\njoin_on_invite=",
+                "line 2: join_on_invite must be on or off",
             ),
             (
-                "[irc]\nactive_away=1",
+                "[chat]\nactive_away=1",
                 "line 2: active_away must be on or off",
             ),
             (
-                "[irc]\nactive_invites=no",
+                "[chat]\nactive_invites=no",
                 "line 2: active_invites must be on or off",
             ),
             (
-                "[irc]\nactive_whois=true",
+                "[chat]\nactive_whois=true",
                 "line 2: active_whois must be on or off",
             ),
             (
-                "[irc]\nactive_whois=on\nactive_whois=off",
+                "[chat]\nactive_whois=on\nactive_whois=off",
                 "line 3: duplicate key active_whois",
             ),
             (
-                "[irc]\nactive_queries=on",
+                "[chat]\nactive_queries=on",
                 "line 2: unknown key active_queries",
+            ),
+            // The section and keys' old names.
+            ("[irc]\nactive_away=on", "line 1: unknown section [irc]"),
+            ("[chat]\nmode_prefix=on", "line 2: unknown key mode_prefix"),
+            (
+                "[chat]\nauto_join_invite=on",
+                "line 2: unknown key auto_join_invite",
             ),
         ] {
             assert_eq!(parse_ini(text), Err(error.to_owned()), "{text}");
@@ -1258,8 +1266,8 @@ mod tests {
     fn logging_settings_round_trip() {
         let settings = Settings {
             logging: LoggingSetting {
-                channels: true,
-                queries: false,
+                rooms: true,
+                direct: false,
                 strip_codes: true,
                 timestamp: false,
             },
@@ -1268,22 +1276,19 @@ mod tests {
         let text = to_ini(&settings);
         assert!(text.contains(
             "[treebar]\r\nshow=on\r\nwidth=240\r\n\
-             [logging]\r\nchannels=on\r\nqueries=off\r\nstrip=on\r\ntimestamp=off\r\n[tray]"
+             [logging]\r\nrooms=on\r\ndirect=off\r\nstrip=on\r\ntimestamp=off\r\n[tray]"
         ));
         assert_eq!(parse_ini(&text), Ok(settings));
         assert_eq!(
-            parse_ini("[logging]\nQueries=ON\nchannels=off").map(|settings| settings.logging),
+            parse_ini("[logging]\nDirect=ON\nrooms=off").map(|settings| settings.logging),
             Ok(LoggingSetting {
-                queries: true,
+                direct: true,
                 ..LoggingSetting::default()
             })
         );
         for (text, error) in [
-            (
-                "[logging]\nchannels=yes",
-                "line 2: channels must be on or off",
-            ),
-            ("[logging]\nqueries=1", "line 2: queries must be on or off"),
+            ("[logging]\nrooms=yes", "line 2: rooms must be on or off"),
+            ("[logging]\ndirect=1", "line 2: direct must be on or off"),
             ("[logging]\nstrip=", "line 2: strip must be on or off"),
             (
                 "[logging]\ntimestamp=no",
@@ -1294,6 +1299,8 @@ mod tests {
                 "line 3: duplicate key strip",
             ),
             ("[logging]\nfolder=logs", "line 2: unknown key folder"),
+            ("[logging]\nchannels=on", "line 2: unknown key channels"),
+            ("[logging]\nqueries=on", "line 2: unknown key queries"),
         ] {
             assert_eq!(parse_ini(text), Err(error.to_owned()), "{text}");
         }
@@ -1339,24 +1346,26 @@ mod tests {
         let settings = Settings {
             tips: TipsSetting {
                 highlights: false,
-                queries: true,
-                channels: true,
+                direct: true,
+                rooms: true,
             },
             ..Settings::default()
         };
         let text = to_ini(&settings);
-        assert!(text.contains("[tips]\r\nhighlights=off\r\nqueries=on\r\nchannels=on\r\n[marker]"));
+        assert!(text.contains("[tips]\r\nhighlights=off\r\ndirect=on\r\nrooms=on\r\n[marker]"));
         assert_eq!(parse_ini(&text), Ok(settings));
         assert_eq!(
-            parse_ini("[tips]\nqueries=off").map(|settings| settings.tips),
+            parse_ini("[tips]\ndirect=off").map(|settings| settings.tips),
             Ok(TipsSetting {
-                queries: false,
+                direct: false,
                 ..TipsSetting::default()
             })
         );
         for (text, error) in [
-            ("[tips]\nchannels=1", "line 2: channels must be on or off"),
+            ("[tips]\nrooms=1", "line 2: rooms must be on or off"),
             ("[tips]\nqueue=5", "line 2: unknown key queue"),
+            ("[tips]\nchannels=on", "line 2: unknown key channels"),
+            ("[tips]\nqueries=on", "line 2: unknown key queries"),
         ] {
             assert_eq!(parse_ini(text), Err(error.to_owned()), "{text}");
         }
@@ -1526,7 +1535,7 @@ mod tests {
             ..NickColorSetting::default()
         };
         for value in [
-            "* auto modes=~&@",
+            "* auto ranks=~&@",
             "@bob:example.org 4 notify",
             "@*:matrix.org 12 any notify",
             "*bot* 3 none",
@@ -1541,7 +1550,7 @@ mod tests {
         };
         let text = to_ini(&settings);
         assert!(text.contains(
-            "treebar_text=1\r\n[nickcolors]\r\nactive=off\r\nn0=* auto modes=~&@\r\n\
+            "treebar_text=1\r\n[nickcolors]\r\nactive=off\r\nn0=* auto ranks=~&@\r\n\
              n1=@bob:example.org 4 notify\r\nn2=@*:matrix.org 12 any notify\r\n\
              n3=*bot* 3 none\r\n[notify]\r\n"
         ));
@@ -1575,11 +1584,15 @@ mod tests {
             ),
             (
                 "[nickcolors]\nn0=* 4 any none",
-                "line 2: n0: one of modes=, any and none at most",
+                "line 2: n0: one of ranks=, any and none at most",
+            ),
+            (
+                "[nickcolors]\nn0=* 4 modes=@",
+                "line 2: n0: unexpected modes=@",
             ),
             (
                 "[nickcolors]\nn0=*",
-                "line 2: n0: expected <pattern> <color> [modes=~&@+|any|none] [notify]",
+                "line 2: n0: expected <pattern> <color> [ranks=~&@+|any|none] [notify]",
             ),
             (
                 "[nickcolors]\nactive=yes",

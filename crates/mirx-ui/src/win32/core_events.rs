@@ -901,23 +901,23 @@ fn announce_invite(state: &mut WindowState, room: &RoomSummary) -> Result<(), St
         .as_ref()
         .expect("an invite's summary names its invite");
     let text = invited_text(invite, &room.display_name);
-    let irc = state.settings.settings().irc;
-    match answer_view(&state.active_view, irc.active_invites) {
+    let chat = state.settings.settings().chat;
+    match answer_view(&state.active_view, chat.active_invites) {
         ViewId::Status => log_status(state, StatusLineKind::Invite, text),
         view => push_lines_in_view(state, &view, StatusLineKind::Invite, [context_line(&text)]),
     }
-    if irc.auto_join_invite && !invite.direct && !room.is_space {
+    if chat.join_on_invite && !invite.direct && !room.is_space {
         submit_accept_room_invite(state, room.room_id.clone())?;
         state.quiet_joins.insert(room.room_id.clone());
     }
     Ok(())
 }
 
-/// Where `/whois` answers print: Options > IRC's Show in active: Whois.
+/// Where `/whois` answers print: Options > Chat's Show in active: Whois.
 fn whois_view(state: &WindowState) -> ViewId {
     answer_view(
         &state.active_view,
-        state.settings.settings().irc.active_whois,
+        state.settings.settings().chat.active_whois,
     )
 }
 
@@ -1476,7 +1476,7 @@ mod tests {
             .collect()
     }
 
-    /// Options > IRC's Show in active: Whois decides where `/whois` answers
+    /// Options > Chat's Show in active: Whois decides where `/whois` answers
     /// and their errors print: the room or thread window in front, or
     /// Status; with Status in front, Status either way.
     #[test]
@@ -1525,7 +1525,7 @@ mod tests {
             state.model.rooms = vec![room("!ops:example", "Ops", false)];
             state
                 .settings
-                .update(|settings| settings.irc.active_whois = active_whois)
+                .update(|settings| settings.chat.active_whois = active_whois)
                 .unwrap();
             state.active_view = active.clone();
             answer_and_error(&mut state);
@@ -3636,7 +3636,7 @@ mod tests {
 
         state
             .settings
-            .update(|settings| settings.irc.active_invites = false)
+            .update(|settings| settings.chat.active_invites = false)
             .unwrap();
         let z = invite_of("!z:example", "Zulu", true, false);
         listed(&mut state, vec![ops.clone(), x.clone(), y.clone(), z]);
@@ -3667,7 +3667,7 @@ mod tests {
         let (mut state, handle) = test_state_with_command_sender();
         state
             .settings
-            .update(|settings| settings.irc.auto_join_invite = true)
+            .update(|settings| settings.chat.join_on_invite = true)
             .unwrap();
         let ops = room("!ops:example", "Ops", false);
         state.active_view = room_view_id("!ops:example");

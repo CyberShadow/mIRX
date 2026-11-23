@@ -11,7 +11,7 @@ pub(super) enum ErrorDestination<'e> {
     Room(&'e str),
     /// The window the user typed the command in, as `* /{command}: ...`.
     ActiveWindow { command: &'static str },
-    /// As `ActiveWindow` for `/whois`, when Options > IRC's Show in active:
+    /// As `ActiveWindow` for `/whois`, when Options > Chat's Show in active:
     /// Whois is on; in Status when it is off.
     Whois,
     /// The Status window.

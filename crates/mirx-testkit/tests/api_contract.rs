@@ -40,13 +40,13 @@ use mirx_testkit::{
     SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
     SubmittedReplyThreadTarget, SubmittedRoomSettingsCommand, SubmittedRoomTopicCommand,
     SubmittedSetupRecoveryCommand, SubmittedUserCommand, SwitchbarItem, SwitchbarState,
-    TestkitError, UiActiveTimeline, UiActivityColors, UiColorItem, UiColors, UiComposeTarget,
-    UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState,
-    UiFrameLayout, UiIrcOptions, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem,
-    UiNickColor, UiOptionsDialog, UiPoint, UiRect, UiRefreshCounters, UiRoomHistoryBackfillState,
-    UiRoomList, UiRoomReadState, UiRoomState, UiState, UiTextFont, UiTimelineLine,
-    UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiTipsOptions, UiToolbarButton, UiTray,
-    UiTrayMenuItem, UiTrayOptions, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
+    TestkitError, UiActiveTimeline, UiActivityColors, UiChatOptions, UiColorItem, UiColors,
+    UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
+    UiFindState, UiFrameLayout, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiNickColor,
+    UiOptionsDialog, UiPoint, UiRect, UiRefreshCounters, UiRoomHistoryBackfillState, UiRoomList,
+    UiRoomReadState, UiRoomState, UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind,
+    UiTimelineLink, UiTimestamp, UiTipsOptions, UiToolbarButton, UiTray, UiTrayMenuItem,
+    UiTrayOptions, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
     VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
     ViewActivityLevel, ViewIdentity,
 };
@@ -1051,8 +1051,8 @@ fn data_models_round_trip_through_json() {
                 color: 14,
             },
             logging: UiLoggingOptions {
-                channels: false,
-                queries: true,
+                rooms: false,
+                direct: true,
                 strip_codes: true,
                 timestamp: false,
             },
@@ -1063,17 +1063,17 @@ fn data_models_round_trip_through_json() {
                 single_click: true,
             },
             send_typing: false,
-            irc: UiIrcOptions {
-                mode_prefix: true,
-                auto_join_invite: true,
+            chat: UiChatOptions {
+                rank_prefix: true,
+                join_on_invite: true,
                 active_away: false,
                 active_invites: true,
                 active_whois: false,
             },
             tips: UiTipsOptions {
                 highlights: false,
-                queries: true,
-                channels: false,
+                direct: true,
+                rooms: false,
             },
         }),
         active_timeline: Some(UiActiveTimeline {
@@ -1416,11 +1416,11 @@ fn data_models_round_trip_through_json() {
                 "highlight_delete_enabled": true,
                 "activity_colors": {"event": 5, "message": 9, "highlight": 12},
                 "send_typing": false,
-                "irc": {"mode_prefix": true, "auto_join_invite": true, "active_away": false, "active_invites": true, "active_whois": false},
+                "chat": {"rank_prefix": true, "join_on_invite": true, "active_away": false, "active_invites": true, "active_whois": false},
                 "marker": {"show": false, "color": 14},
-                "logging": {"channels": false, "queries": true, "strip_codes": true, "timestamp": false},
+                "logging": {"rooms": false, "direct": true, "strip_codes": true, "timestamp": false},
                 "tray": {"always": false, "startup": true, "minimize": false, "single_click": true},
-                "tips": {"highlights": false, "queries": true, "channels": false},
+                "tips": {"highlights": false, "direct": true, "rooms": false},
             },
             "colors_dialog": null,
             "address_book": null,
@@ -8003,7 +8003,7 @@ fn non_windows_new_methods_report_unsupported_driver() {
     );
 
     let error = app
-        .select_options_page("IRC/Messages")
+        .select_options_page("Chat/Messages")
         .expect_err("select_options_page must fail off Windows");
     assert_eq!(
         error.to_string(),

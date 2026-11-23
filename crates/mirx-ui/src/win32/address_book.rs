@@ -12,7 +12,7 @@ use mirx_core::RoomMemberSummary;
 use super::commands::resolve_user;
 use super::ignore::{check_ignore, user_label, user_name};
 use super::nick_colors::{
-    ModeCondition, NickColor, NickColorEntry, NickColorSetting, UserPattern, glyphs,
+    NickColor, NickColorEntry, NickColorSetting, RankCondition, UserPattern, glyphs,
 };
 use super::notify::{NotifyEntry, NotifySetting};
 
@@ -166,9 +166,9 @@ pub(super) struct AddressBookForm {
 pub(super) struct ColorEntryFields {
     pub(super) pattern: String,
     pub(super) color: NickColor,
-    pub(super) modes: String,
-    pub(super) any_mode: bool,
-    pub(super) no_mode: bool,
+    pub(super) ranks: String,
+    pub(super) any_rank: bool,
+    pub(super) no_rank: bool,
     pub(super) notify: bool,
 }
 
@@ -178,9 +178,9 @@ impl Default for ColorEntryFields {
         Self {
             pattern: String::new(),
             color: NickColor::Auto,
-            modes: String::new(),
-            any_mode: false,
-            no_mode: false,
+            ranks: String::new(),
+            any_rank: false,
+            no_rank: false,
             notify: false,
         }
     }
@@ -282,7 +282,7 @@ impl AddressBookForm {
         Ok(NickColorEntry {
             pattern: self.people.resolve_pattern(&fields.pattern)?,
             color: fields.color,
-            modes: ModeCondition::from_parts(fields.modes.trim(), fields.any_mode, fields.no_mode)?,
+            ranks: RankCondition::from_parts(fields.ranks.trim(), fields.any_rank, fields.no_rank)?,
             notify: fields.notify,
         })
     }
@@ -291,18 +291,18 @@ impl AddressBookForm {
     /// it is kept.
     pub(super) fn color_fields(&self, index: usize) -> ColorEntryFields {
         let entry = &self.nick_colors.list.entries()[index];
-        let (modes, any_mode, no_mode) = match &entry.modes {
+        let (ranks, any_rank, no_rank) = match &entry.ranks {
             None => (String::new(), false, false),
-            Some(ModeCondition::AnyMode) => (String::new(), true, false),
-            Some(ModeCondition::NoMode) => (String::new(), false, true),
-            Some(ModeCondition::Ranks(ranks)) => (glyphs(ranks), false, false),
+            Some(RankCondition::AnyRank) => (String::new(), true, false),
+            Some(RankCondition::NoRank) => (String::new(), false, true),
+            Some(RankCondition::Ranks(ranks)) => (glyphs(ranks), false, false),
         };
         ColorEntryFields {
             pattern: entry.pattern.as_str().to_owned(),
             color: entry.color,
-            modes,
-            any_mode,
-            no_mode,
+            ranks,
+            any_rank,
+            no_rank,
             notify: entry.notify,
         }
     }
@@ -395,12 +395,12 @@ mod tests {
         }
     }
 
-    fn color_fields(pattern: &str, modes: &str, any_mode: bool, no_mode: bool) -> ColorEntryFields {
+    fn color_fields(pattern: &str, ranks: &str, any_rank: bool, no_rank: bool) -> ColorEntryFields {
         ColorEntryFields {
             pattern: pattern.to_owned(),
-            modes: modes.to_owned(),
-            any_mode,
-            no_mode,
+            ranks: ranks.to_owned(),
+            any_rank,
+            no_rank,
             ..ColorEntryFields::default()
         }
     }
@@ -440,20 +440,20 @@ mod tests {
         );
         assert_eq!(
             check(color_fields("carol", "@x", false, false)),
-            Err("modes must be some of ~&@+, not @x".to_owned())
+            Err("ranks must be some of ~&@+, not @x".to_owned())
         );
         assert_eq!(
             check(color_fields("carol", "", true, true)),
-            Err("any mode and no mode cannot be combined".to_owned())
+            Err("any rank and no rank cannot be combined".to_owned())
         );
         assert_eq!(
             check(color_fields("carol", "@", true, false)),
-            Err("modes cannot be given with any mode or no mode".to_owned())
+            Err("ranks cannot be given with any rank or no rank".to_owned())
         );
         // A nick is its user's ID; a pattern stays as typed, trimmed.
         assert_eq!(
             check(color_fields(" Carol ", " @+ ", false, false)),
-            Ok(NickColorEntry::parse_ini_value("@carol:example auto modes=@+").unwrap())
+            Ok(NickColorEntry::parse_ini_value("@carol:example auto ranks=@+").unwrap())
         );
         assert_eq!(
             check(color_fields(" *bot* ", "", false, true)),
@@ -465,7 +465,7 @@ mod tests {
     fn color_entries_list_edit_move_and_remove_in_order() {
         let mut form = form(None);
         for value in [
-            "@carol:example 4 modes=~@",
+            "@carol:example 4 ranks=~@",
             "*bot* auto any notify",
             "@dave:remote 12 none",
         ] {
@@ -475,8 +475,8 @@ mod tests {
             form.color_rows(),
             [
                 ["Carol (@carol:example)", "4", "~@"],
-                ["*bot*", "auto", "any mode, notify"],
-                ["@dave:remote", "12", "no mode"],
+                ["*bot*", "auto", "any rank, notify"],
+                ["@dave:remote", "12", "no rank"],
             ]
             .map(|row| row.map(str::to_owned))
         );
@@ -494,7 +494,7 @@ mod tests {
                 ..color_fields("*bot*", "", true, false)
             }
         );
-        assert!(form.color_fields(2).no_mode);
+        assert!(form.color_fields(2).no_rank);
         assert_eq!(form.move_color(2, true), 1);
         assert_eq!(form.move_color(0, false), 1);
         let edited = NickColorEntry::parse_ini_value("@erin:remote 3").unwrap();

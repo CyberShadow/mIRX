@@ -51,9 +51,9 @@ use mirx_testkit::{
     SubmittedSessionCommand, SubmittedSetupRecoveryCommand, SubmittedTypingCommand,
     SubmittedUserCommand, SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem,
     TestkitError, UiActiveTimeline, UiActivityColors, UiAddressBook, UiChannelCentral,
-    UiCheckState, UiColorCodePart, UiColorItem, UiColorsDialog, UiComposeTarget,
+    UiChatOptions, UiCheckState, UiColorCodePart, UiColorItem, UiColorsDialog, UiComposeTarget,
     UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState,
-    UiIrcOptions, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
+    UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
     UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiSessions, UiState,
     UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiTipsOptions, UiTrayOptions,
     UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionKind,
@@ -3595,7 +3595,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 91);
+    assert_eq!(version.protocol_version, 92);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -5448,7 +5448,7 @@ fn typing_in_a_room_window_tells_the_room() -> Result<(), Box<dyn std::error::Er
         })
     );
 
-    // Options > IRC > Messages > Send typing notifications, off.
+    // Options > Chat > Messages > Send typing notifications, off.
     let menu_thread = open_options_from_menu(&app);
     let dialog = wait_for_options_dialog(&app)?;
     unsafe { set_options_check(dialog, OPTIONS_SEND_TYPING_ID, false) };
@@ -8952,14 +8952,14 @@ fn closing_a_room_window_confirms_then_parts() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-/// Options > IRC's Auto-join channel on invite and Show in active:
+/// Options > Chat's Join rooms when invited and Show in active:
 /// Invites: an invite arriving in a room list prints in the window in
 /// front and is accepted, and the window in front stays so.
 #[test]
 fn an_arriving_channel_invite_is_announced_and_auto_joined()
 -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    write_settings(&local_app_data, "[irc]\r\nauto_join_invite=on\r\n")?;
+    write_settings(&local_app_data, "[chat]\r\njoin_on_invite=on\r\n")?;
     let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -9398,12 +9398,12 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
          [switchbar]\r\nshow=on\r\nbuttons=120\r\n\
          event=5\r\nmessage=4\r\nhighlight=12\r\n\
          [treebar]\r\nshow=on\r\nwidth=240\r\n\
-         [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
+         [logging]\r\nrooms=off\r\ndirect=off\r\nstrip=off\r\ntimestamp=on\r\n\
          [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
-         [tips]\r\nhighlights=on\r\nqueries=on\r\nchannels=off\r\n\
+         [tips]\r\nhighlights=on\r\ndirect=on\r\nrooms=off\r\n\
          [marker]\r\nshow=on\r\ncolor=4\r\n\
          [typing]\r\nsend=on\r\n\
-         [irc]\r\nmode_prefix=off\r\nauto_join_invite=off\r\n\
+         [chat]\r\nrank_prefix=off\r\njoin_on_invite=off\r\n\
          active_away=on\r\nactive_invites=on\r\nactive_whois=on\r\n\
          [other]\r\nbuffer=5000\r\n\
          [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\n\
@@ -9673,10 +9673,7 @@ fn untimed_or_session(line: &str) -> &str {
 fn rooms_log_automatically_as_the_options_say_and_exit_closes_the_logs()
 -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    write_settings(
-        &local_app_data,
-        "[logging]\r\nchannels=on\r\nqueries=off\r\n",
-    )?;
+    write_settings(&local_app_data, "[logging]\r\nrooms=on\r\ndirect=off\r\n")?;
     let (app, local_app_data) = launch_close_lifecycle_app_in(local_app_data)?;
     let beta = room_identity("!beta:example");
     let alpha = room_identity("!alpha:example");
@@ -9748,10 +9745,7 @@ fn rooms_log_automatically_as_the_options_say_and_exit_closes_the_logs()
     assert!(!log_file_path(&local_app_data, "@alice.example").exists());
 
     // Queries only, the next time.
-    write_settings(
-        &local_app_data,
-        "[logging]\r\nchannels=off\r\nqueries=on\r\n",
-    )?;
+    write_settings(&local_app_data, "[logging]\r\nrooms=off\r\ndirect=on\r\n")?;
     let (app, local_app_data) = launch_close_lifecycle_app_in(local_app_data)?;
     assert_eq!(view_log(&app, &beta)?, None);
     assert!(view_log(&app, &alpha)?.is_some());
@@ -9763,7 +9757,7 @@ fn rooms_log_automatically_as_the_options_say_and_exit_closes_the_logs()
 #[test]
 fn a_closed_query_reopened_by_a_message_logs_it() -> Result<(), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
-    write_settings(&local_app_data, "[logging]\r\nqueries=on\r\n")?;
+    write_settings(&local_app_data, "[logging]\r\ndirect=on\r\n")?;
     let (app, local_app_data) = launch_close_lifecycle_app_in(local_app_data)?;
     let alpha = room_identity("!alpha:example");
     assert!(view_log(&app, &alpha)?.is_some());
@@ -10324,7 +10318,7 @@ fn tips_follow_the_options_and_the_rooms_mode() -> Result<(), Box<dyn std::error
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
 
-    let (app, local_app_data) = launch_hidden_in_tray("channels=on\r\nqueries=off\r\n")?;
+    let (app, local_app_data) = launch_hidden_in_tray("rooms=on\r\ndirect=off\r\n")?;
     append_events(
         &app,
         vec![
@@ -19473,8 +19467,8 @@ const OPTIONS_HIGHLIGHT_WORD_ID: i32 = 6402;
 const OPTIONS_HIGHLIGHT_ADD_ID: i32 = 6403;
 const OPTIONS_HIGHLIGHT_DELETE_ID: i32 = 6404;
 const OPTIONS_HIGHLIGHT_NOTE_ID: i32 = 6405;
-const OPTIONS_LOG_CHANNELS_ID: i32 = 6501;
-const OPTIONS_LOG_QUERIES_ID: i32 = 6502;
+const OPTIONS_LOG_ROOMS_ID: i32 = 6501;
+const OPTIONS_LOG_DIRECT_ID: i32 = 6502;
 const OPTIONS_LOG_STRIP_CODES_ID: i32 = 6503;
 const OPTIONS_LOG_TIMESTAMP_ID: i32 = 6504;
 const OPTIONS_LOG_FOLDER_ID: i32 = 6505;
@@ -19483,15 +19477,15 @@ const OPTIONS_TRAY_STARTUP_ID: i32 = 6602;
 const OPTIONS_TRAY_MINIMIZE_ID: i32 = 6603;
 const OPTIONS_TRAY_SINGLE_CLICK_ID: i32 = 6604;
 const OPTIONS_TIPS_HIGHLIGHTS_ID: i32 = 6701;
-const OPTIONS_TIPS_QUERIES_ID: i32 = 6702;
-const OPTIONS_TIPS_CHANNELS_ID: i32 = 6703;
+const OPTIONS_TIPS_DIRECT_ID: i32 = 6702;
+const OPTIONS_TIPS_ROOMS_ID: i32 = 6703;
 const OPTIONS_TIPS_NOTE_ID: i32 = 6704;
 const OPTIONS_WINDOW_BUFFER_ID: i32 = 6801;
-const OPTIONS_IRC_MODE_PREFIX_ID: i32 = 6901;
-const OPTIONS_IRC_AUTO_JOIN_INVITE_ID: i32 = 6902;
-const OPTIONS_IRC_ACTIVE_AWAY_ID: i32 = 6903;
-const OPTIONS_IRC_ACTIVE_INVITES_ID: i32 = 6904;
-const OPTIONS_IRC_ACTIVE_WHOIS_ID: i32 = 6905;
+const OPTIONS_CHAT_RANK_PREFIX_ID: i32 = 6901;
+const OPTIONS_CHAT_JOIN_ON_INVITE_ID: i32 = 6902;
+const OPTIONS_CHAT_ACTIVE_AWAY_ID: i32 = 6903;
+const OPTIONS_CHAT_ACTIVE_INVITES_ID: i32 = 6904;
+const OPTIONS_CHAT_ACTIVE_WHOIS_ID: i32 = 6905;
 
 /// Waits for the Options dialog to be open and shown, and returns it.
 fn wait_for_options_dialog(app: &MirxApp) -> Result<HWND, Box<dyn std::error::Error>> {
@@ -19550,10 +19544,10 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
         [
             "Connect",
             "Connect/Options",
-            "IRC",
-            "IRC/Messages",
-            "IRC/Highlight",
-            "IRC/Logging",
+            "Chat",
+            "Chat/Messages",
+            "Chat/Highlight",
+            "Chat/Logging",
             "Display",
             "Display/Tray",
             "Display/Tips",
@@ -19573,11 +19567,11 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
         ]
     );
 
-    // Down from Connect/Options is the IRC category, which has a page of
-    // its own; Down again is IRC > Messages.
+    // Down from Connect/Options is the Chat category, which has a page of
+    // its own; Down again is Chat > Messages.
     let tree = unsafe { GetDlgItem(dialog, 6001) };
     let mut ui_state = None;
-    for page in ["IRC", "IRC/Messages"] {
+    for page in ["Chat", "Chat/Messages"] {
         assert_ne!(
             unsafe { PostMessageW(tree, WM_KEYDOWN, VK_DOWN as WPARAM, 0) },
             0
@@ -19683,7 +19677,7 @@ fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn 
     let (app, local_app_data) = launch_close_lifecycle_app()?;
     app.open_dialog(AutomationDialog::Options)?;
     let dialog = wait_for_options_dialog(&app)?;
-    app.select_options_page("IRC/Logging")?;
+    app.select_options_page("Chat/Logging")?;
     let options = app
         .dump_ui_state()?
         .options_dialog
@@ -19691,8 +19685,8 @@ fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn 
     assert_eq!(
         options.visible_controls,
         [
-            OPTIONS_LOG_CHANNELS_ID as u16,
-            OPTIONS_LOG_QUERIES_ID as u16,
+            OPTIONS_LOG_ROOMS_ID as u16,
+            OPTIONS_LOG_DIRECT_ID as u16,
             OPTIONS_LOG_STRIP_CODES_ID as u16,
             OPTIONS_LOG_TIMESTAMP_ID as u16,
             OPTIONS_LOG_FOLDER_ID as u16,
@@ -19701,8 +19695,8 @@ fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn 
     assert_eq!(
         options.logging,
         UiLoggingOptions {
-            channels: false,
-            queries: false,
+            rooms: false,
+            direct: false,
             strip_codes: false,
             timestamp: true,
         }
@@ -19712,7 +19706,7 @@ fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn 
         r"Folder: %LOCALAPPDATA%\mirx\ui-shell\logs"
     );
     unsafe {
-        set_options_check(dialog, OPTIONS_LOG_QUERIES_ID, true);
+        set_options_check(dialog, OPTIONS_LOG_DIRECT_ID, true);
         set_options_check(dialog, OPTIONS_LOG_STRIP_CODES_ID, true);
         set_options_check(dialog, OPTIONS_LOG_TIMESTAMP_ID, false);
     }
@@ -19722,8 +19716,8 @@ fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn 
             .expect("the dialog is open")
             .logging,
         UiLoggingOptions {
-            channels: false,
-            queries: true,
+            rooms: false,
+            direct: true,
             strip_codes: true,
             timestamp: false,
         }
@@ -19733,7 +19727,7 @@ fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn 
     app.wait_idle(Duration::from_secs(5))?;
     assert!(
         fs::read_to_string(settings_file_path(&local_app_data))?
-            .contains("[logging]\r\nchannels=off\r\nqueries=on\r\nstrip=on\r\ntimestamp=off\r\n")
+            .contains("[logging]\r\nrooms=off\r\ndirect=on\r\nstrip=on\r\ntimestamp=off\r\n")
     );
     // Windows already open have decided; a query that opens now logs.
     assert_eq!(view_log(&app, &room_identity("!alpha:example"))?, None);
@@ -19762,9 +19756,9 @@ fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn 
 }
 
 #[test]
-fn options_irc_page_saves_its_options() -> Result<(), Box<dyn std::error::Error>> {
+fn options_chat_page_saves_its_options() -> Result<(), Box<dyn std::error::Error>> {
     let (app, local_app_data) = launch_close_lifecycle_app()?;
-    let irc_options = |app: &MirxApp| -> Result<UiOptionsDialog, Box<dyn std::error::Error>> {
+    let chat_options = |app: &MirxApp| -> Result<UiOptionsDialog, Box<dyn std::error::Error>> {
         Ok(app
             .dump_ui_state()?
             .options_dialog
@@ -19772,57 +19766,57 @@ fn options_irc_page_saves_its_options() -> Result<(), Box<dyn std::error::Error>
     };
     app.open_dialog(AutomationDialog::Options)?;
     let dialog = wait_for_options_dialog(&app)?;
-    app.select_options_page("IRC")?;
-    let options = irc_options(&app)?;
-    assert_eq!(options.selected, "IRC");
+    app.select_options_page("Chat")?;
+    let options = chat_options(&app)?;
+    assert_eq!(options.selected, "Chat");
     assert_eq!(
         options.visible_controls,
         [
-            OPTIONS_IRC_MODE_PREFIX_ID as u16,
-            OPTIONS_IRC_AUTO_JOIN_INVITE_ID as u16,
-            OPTIONS_IRC_ACTIVE_AWAY_ID as u16,
-            OPTIONS_IRC_ACTIVE_INVITES_ID as u16,
-            OPTIONS_IRC_ACTIVE_WHOIS_ID as u16,
+            OPTIONS_CHAT_RANK_PREFIX_ID as u16,
+            OPTIONS_CHAT_JOIN_ON_INVITE_ID as u16,
+            OPTIONS_CHAT_ACTIVE_AWAY_ID as u16,
+            OPTIONS_CHAT_ACTIVE_INVITES_ID as u16,
+            OPTIONS_CHAT_ACTIVE_WHOIS_ID as u16,
         ]
     );
     assert_eq!(
-        options.irc,
-        UiIrcOptions {
-            mode_prefix: false,
-            auto_join_invite: false,
+        options.chat,
+        UiChatOptions {
+            rank_prefix: false,
+            join_on_invite: false,
             active_away: true,
             active_invites: true,
             active_whois: true,
         }
     );
-    let toggled = UiIrcOptions {
-        mode_prefix: true,
-        auto_join_invite: true,
+    let toggled = UiChatOptions {
+        rank_prefix: true,
+        join_on_invite: true,
         active_away: false,
         active_invites: false,
         active_whois: false,
     };
     unsafe {
-        set_options_check(dialog, OPTIONS_IRC_MODE_PREFIX_ID, true);
-        set_options_check(dialog, OPTIONS_IRC_AUTO_JOIN_INVITE_ID, true);
-        set_options_check(dialog, OPTIONS_IRC_ACTIVE_AWAY_ID, false);
-        set_options_check(dialog, OPTIONS_IRC_ACTIVE_INVITES_ID, false);
-        set_options_check(dialog, OPTIONS_IRC_ACTIVE_WHOIS_ID, false);
+        set_options_check(dialog, OPTIONS_CHAT_RANK_PREFIX_ID, true);
+        set_options_check(dialog, OPTIONS_CHAT_JOIN_ON_INVITE_ID, true);
+        set_options_check(dialog, OPTIONS_CHAT_ACTIVE_AWAY_ID, false);
+        set_options_check(dialog, OPTIONS_CHAT_ACTIVE_INVITES_ID, false);
+        set_options_check(dialog, OPTIONS_CHAT_ACTIVE_WHOIS_ID, false);
     }
-    assert_eq!(irc_options(&app)?.irc, toggled);
+    assert_eq!(chat_options(&app)?.chat, toggled);
     post_options_command(dialog, IDOK)?;
     wait_for_window_gone(dialog, "Options dialog")?;
     app.wait_idle(Duration::from_secs(5))?;
     assert!(
         fs::read_to_string(settings_file_path(&local_app_data))?.contains(
-            "[irc]\r\nmode_prefix=on\r\nauto_join_invite=on\r\n\
+            "[chat]\r\nrank_prefix=on\r\njoin_on_invite=on\r\n\
              active_away=off\r\nactive_invites=off\r\nactive_whois=off\r\n"
         )
     );
 
     app.open_dialog(AutomationDialog::Options)?;
     let dialog = wait_for_options_dialog(&app)?;
-    assert_eq!(irc_options(&app)?.irc, toggled);
+    assert_eq!(chat_options(&app)?.chat, toggled);
     close_dialog(&app, dialog)?;
 
     drop(app);
@@ -19874,8 +19868,8 @@ fn options_tray_and_tips_pages_save_and_apply() -> Result<(), Box<dyn std::error
         tips.visible_controls,
         [
             OPTIONS_TIPS_HIGHLIGHTS_ID as u16,
-            OPTIONS_TIPS_QUERIES_ID as u16,
-            OPTIONS_TIPS_CHANNELS_ID as u16,
+            OPTIONS_TIPS_DIRECT_ID as u16,
+            OPTIONS_TIPS_ROOMS_ID as u16,
             OPTIONS_TIPS_NOTE_ID as u16,
         ]
     );
@@ -19883,13 +19877,13 @@ fn options_tray_and_tips_pages_save_and_apply() -> Result<(), Box<dyn std::error
         tips.tips,
         UiTipsOptions {
             highlights: true,
-            queries: true,
-            channels: false,
+            direct: true,
+            rooms: false,
         }
     );
     unsafe {
-        set_options_check(dialog, OPTIONS_TIPS_QUERIES_ID, false);
-        set_options_check(dialog, OPTIONS_TIPS_CHANNELS_ID, true);
+        set_options_check(dialog, OPTIONS_TIPS_DIRECT_ID, false);
+        set_options_check(dialog, OPTIONS_TIPS_ROOMS_ID, true);
     }
     let edited = options(&app)?;
     assert_eq!(
@@ -19903,8 +19897,8 @@ fn options_tray_and_tips_pages_save_and_apply() -> Result<(), Box<dyn std::error
             },
             UiTipsOptions {
                 highlights: true,
-                queries: false,
-                channels: true,
+                direct: false,
+                rooms: true,
             }
         )
     );
@@ -19919,7 +19913,7 @@ fn options_tray_and_tips_pages_save_and_apply() -> Result<(), Box<dyn std::error
     assert!(
         fs::read_to_string(settings_file_path(&local_app_data))?.contains(
             "[tray]\r\nalways=on\r\nstartup=off\r\nminimize=off\r\nsingle_click=on\r\n\
-             [tips]\r\nhighlights=on\r\nqueries=off\r\nchannels=on\r\n"
+             [tips]\r\nhighlights=on\r\ndirect=off\r\nrooms=on\r\n"
         )
     );
 
@@ -20111,7 +20105,7 @@ fn options_connect_page_saves_reconnect_and_retry() -> Result<(), Box<dyn std::e
         set_options_text(dialog, OPTIONS_RETRY_TIMES_ID, "5");
         set_options_text(dialog, OPTIONS_RETRY_DELAY_ID, "0");
     }
-    app.select_options_page("IRC/Messages")?;
+    app.select_options_page("Chat/Messages")?;
     post_options_command(dialog, IDOK)?;
     let (message_box, text) = wait_for_owned_message_box(dialog);
     assert_eq!(text, "Connect retry_delay must be 1-3600");
@@ -20769,9 +20763,9 @@ const ADDRESS_BOOK_COLORS_DELETE_ID: WPARAM = 7405;
 const ADDRESS_BOOK_COLORS_UP_ID: WPARAM = 7406;
 const COLOR_ENTRY_PATTERN_ID: i32 = 7501;
 const COLOR_ENTRY_COLOR_ID: i32 = 7502;
-const COLOR_ENTRY_MODES_ID: i32 = 7503;
-const COLOR_ENTRY_ANY_MODE_ID: i32 = 7504;
-const COLOR_ENTRY_NO_MODE_ID: i32 = 7505;
+const COLOR_ENTRY_RANKS_ID: i32 = 7503;
+const COLOR_ENTRY_ANY_RANK_ID: i32 = 7504;
+const COLOR_ENTRY_NO_RANK_ID: i32 = 7505;
 const COLOR_ENTRY_OK_ID: WPARAM = 7507;
 
 /// A text message from `user_id`, whom the line names `nick`.
@@ -20897,9 +20891,9 @@ fn cnick_colours_nicks_in_messages_and_the_nick_list() -> Result<(), Box<dyn std
 
     // Any mode: Bob, an operator, in red; Carol has no mode.
     let red = "#ff0000".to_owned();
-    let any_mode = cnick("/cnick -a * 4")?;
+    let any_rank = cnick("/cnick -a * 4")?;
     assert_eq!(
-        any_mode,
+        any_rank,
         BetaNickColors {
             bob_line: Some(red.clone()),
             carol_line: None,
@@ -20987,14 +20981,14 @@ fn address_book_colors_tab_edits_the_nick_color_list() -> Result<(), Box<dyn std
     assert_ne!(unsafe { IsWindowEnabled(ok) }, 0);
     refused_address_entry(&app, entry, COLOR_ENTRY_OK_ID, "no such nick: dave")?;
     set_dialog_text(entry, COLOR_ENTRY_PATTERN_ID, "bob");
-    set_dialog_text(entry, COLOR_ENTRY_MODES_ID, "@x");
+    set_dialog_text(entry, COLOR_ENTRY_RANKS_ID, "@x");
     refused_address_entry(
         &app,
         entry,
         COLOR_ENTRY_OK_ID,
-        "modes must be some of ~&@+, not @x",
+        "ranks must be some of ~&@+, not @x",
     )?;
-    set_dialog_text(entry, COLOR_ENTRY_MODES_ID, "@");
+    set_dialog_text(entry, COLOR_ENTRY_RANKS_ID, "@");
     // Auto is first: palette colour 4 is the fifth after it.
     unsafe { SendMessageW(GetDlgItem(entry, COLOR_ENTRY_COLOR_ID), CB_SETCURSEL, 5, 0) };
     accept_address_entry(&app, entry, COLOR_ENTRY_OK_ID)?;
@@ -21005,16 +20999,16 @@ fn address_book_colors_tab_edits_the_nick_color_list() -> Result<(), Box<dyn std
         "Add Nick Color",
     )?;
     set_dialog_text(entry, COLOR_ENTRY_PATTERN_ID, "*:example");
-    for id in [COLOR_ENTRY_ANY_MODE_ID, COLOR_ENTRY_NO_MODE_ID] {
+    for id in [COLOR_ENTRY_ANY_RANK_ID, COLOR_ENTRY_NO_RANK_ID] {
         unsafe { SendMessageW(GetDlgItem(entry, id), BM_SETCHECK, 1, 0) };
     }
     refused_address_entry(
         &app,
         entry,
         COLOR_ENTRY_OK_ID,
-        "any mode and no mode cannot be combined",
+        "any rank and no rank cannot be combined",
     )?;
-    unsafe { SendMessageW(GetDlgItem(entry, COLOR_ENTRY_NO_MODE_ID), BM_SETCHECK, 0, 0) };
+    unsafe { SendMessageW(GetDlgItem(entry, COLOR_ENTRY_NO_RANK_ID), BM_SETCHECK, 0, 0) };
     accept_address_entry(&app, entry, COLOR_ENTRY_OK_ID)?;
     let row = |cells: [&str; 3]| cells.map(str::to_owned).to_vec();
     let book = address_book(&app)?;
@@ -21022,7 +21016,7 @@ fn address_book_colors_tab_edits_the_nick_color_list() -> Result<(), Box<dyn std
         book.color_rows,
         [
             row(["Bob (@bob:example)", "4", "@"]),
-            row(["*:example", "auto", "any mode"])
+            row(["*:example", "auto", "any rank"])
         ]
     );
 
@@ -21037,7 +21031,7 @@ fn address_book_colors_tab_edits_the_nick_color_list() -> Result<(), Box<dyn std
     assert_eq!(
         book.color_rows,
         [
-            row(["*:example", "auto", "any mode"]),
+            row(["*:example", "auto", "any rank"]),
             row(["Bob (@bob:example)", "4", "@"])
         ]
     );
@@ -21052,14 +21046,14 @@ fn address_book_colors_tab_edits_the_nick_color_list() -> Result<(), Box<dyn std
     )?;
     let field = |id| unsafe { read_window_text(GetDlgItem(entry, id)) };
     assert_eq!(field(COLOR_ENTRY_PATTERN_ID), "*:example");
-    assert_eq!(field(COLOR_ENTRY_MODES_ID), "");
+    assert_eq!(field(COLOR_ENTRY_RANKS_ID), "");
     // Palette colour 12.
     unsafe { SendMessageW(GetDlgItem(entry, COLOR_ENTRY_COLOR_ID), CB_SETCURSEL, 13, 0) };
     accept_address_entry(&app, entry, COLOR_ENTRY_OK_ID)?;
     assert_eq!(
         address_book(&app)?.color_rows,
         [
-            row(["*:example", "12", "any mode"]),
+            row(["*:example", "12", "any rank"]),
             row(["Bob (@bob:example)", "4", "@"])
         ]
     );
@@ -21070,7 +21064,7 @@ fn address_book_colors_tab_edits_the_nick_color_list() -> Result<(), Box<dyn std
     wait_for_window_gone(dialog, "Address Book")?;
     app.wait_idle(Duration::from_secs(5))?;
     let saved =
-        "[nickcolors]\r\nactive=on\r\nn0=*:example 12 any\r\nn1=@bob:example 4 modes=@\r\n[notify]";
+        "[nickcolors]\r\nactive=on\r\nn0=*:example 12 any\r\nn1=@bob:example 4 ranks=@\r\n[notify]";
     let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
     assert!(ini.contains(saved), "{ini}");
     assert_eq!(app.dump_ui_state()?.status_bar.text, "address book saved");
@@ -21378,7 +21372,7 @@ fn show_options_highlight_page(
     dialog: HWND,
 ) -> Result<mirx_testkit::UiOptionsDialog, Box<dyn std::error::Error>> {
     let tree = unsafe { GetDlgItem(dialog, 6001) };
-    for page in ["IRC", "IRC/Messages", "IRC/Highlight"] {
+    for page in ["Chat", "Chat/Messages", "Chat/Highlight"] {
         assert_ne!(
             unsafe { PostMessageW(tree, WM_KEYDOWN, VK_DOWN as WPARAM, 0) },
             0
@@ -21394,7 +21388,7 @@ fn show_options_highlight_page(
         .dump_ui_state()?
         .options_dialog
         .expect("the dialog is open");
-    assert_eq!(options.selected, "IRC/Highlight");
+    assert_eq!(options.selected, "Chat/Highlight");
     assert_eq!(
         options.visible_controls,
         [
@@ -21857,11 +21851,11 @@ fn select_options_page_selects_each_page() -> Result<(), Box<dyn std::error::Err
     app.open_dialog(AutomationDialog::Options)?;
     let dialog = app.wait_for_modal_dialog(Duration::from_secs(5))?;
     for (path, selected) in [
-        ("IRC/Messages", "IRC/Messages"),
-        ("IRC/Highlight", "IRC/Highlight"),
-        ("IRC/Logging", "IRC/Logging"),
+        ("Chat/Messages", "Chat/Messages"),
+        ("Chat/Highlight", "Chat/Highlight"),
+        ("Chat/Logging", "Chat/Logging"),
         ("Display", "Display"),
-        ("IRC", "IRC"),
+        ("Chat", "Chat"),
         // A category without a page of its own shows its first page.
         ("Connect", "Connect/Options"),
     ] {
@@ -21872,7 +21866,7 @@ fn select_options_page_selects_each_page() -> Result<(), Box<dyn std::error::Err
             .expect("the dialog is open");
         assert_eq!(options.selected, selected, "{path}");
     }
-    for path in ["IRC/Sounds", "irc/messages", ""] {
+    for path in ["Chat/Sounds", "chat/messages", "IRC/Messages", ""] {
         assert_protocol_error(app.select_options_page(path), "unknown_options_page");
     }
     let options = app

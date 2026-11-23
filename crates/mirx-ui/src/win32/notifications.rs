@@ -54,9 +54,9 @@ pub(super) fn activity_wants_tip(
         (_, ViewActivityLevel::Highlight) => tips.highlights,
         (RoomNotificationMode::AllMessages, ViewActivityLevel::Message) => {
             if room_is_direct {
-                tips.queries
+                tips.direct
             } else {
-                tips.channels
+                tips.rooms
             }
         }
         (RoomNotificationMode::MentionsAndKeywordsOnly, ViewActivityLevel::Message) => false,
@@ -124,13 +124,13 @@ mod tests {
     fn tips_follow_the_options_capped_by_the_rooms_mode() {
         let all = TipsSetting {
             highlights: true,
-            queries: true,
-            channels: true,
+            direct: true,
+            rooms: true,
         };
         let none = TipsSetting {
             highlights: false,
-            queries: false,
-            channels: false,
+            direct: false,
+            rooms: false,
         };
         for (level, room_is_direct, mode, tips, expected) in [
             (Highlight, false, AllMessages, all, true),

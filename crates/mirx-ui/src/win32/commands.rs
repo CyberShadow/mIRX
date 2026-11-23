@@ -15,7 +15,7 @@ use mirx_core::{
 use super::address_book::AddressBookTab;
 use super::aliases::Aliases;
 use super::colors::PaletteIndex;
-use super::nick_colors::{ModeCondition, NickColor};
+use super::nick_colors::{NickColor, RankCondition};
 use super::settings::{Bar, FontSetting, parse_palette_index, parse_points};
 use super::timeline_text::{context_line, rank_prefix, topic_is_text};
 use super::timestamp::{LocalTimeFn, TimestampFormat};
@@ -57,13 +57,13 @@ pub(super) enum NickColorCommand {
     List,
     /// `/cnick on|off`.
     Active(bool),
-    /// `/cnick [-fany] <nick|@user:server|pattern> <color|*> [modes]`:
+    /// `/cnick [-fany] <nick|@user:server|pattern> <color|*> [ranks]`:
     /// updates the first entry with the pattern, or appends one; `force`
     /// (`-f`) always appends.
     Add {
         target: String,
         color: NickColor,
-        modes: Option<ModeCondition>,
+        ranks: Option<RankCondition>,
         notify: bool,
         force: bool,
     },
@@ -565,7 +565,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "cnick",
-        usage: "[-rfany] [on|off|nick color|* [modes]]",
+        usage: "[-rfany] [on|off|nick color|* [ranks]]",
         summary: "colour nicks in the nick list and messages (-r: remove; no nick: list)",
     },
     CommandSpec {
@@ -1392,10 +1392,11 @@ fn parse_notify(argument: &str) -> Result<NotifyCommand, CommandError> {
     }
 }
 
-/// mIRC's `/cnick -rfanylNmNsN [on|off|nick] [color] [modes]`, with the
-/// switches that mean something on Matrix: `-r` removes (by nick, ID,
+/// mIRC's `/cnick -rfanylNmNsN [on|off|nick] [color] [modes]`, with rank
+/// glyphs for its modes and the switches that mean something on Matrix:
+/// `-r` removes (by nick, ID,
 /// pattern or number), `-f` adds a new entry rather than updating, `-a`
-/// is Any mode, `-n` No mode, `-y` the notify list. mIRC's `-iopv` lists,
+/// is any rank, `-n` no rank, `-y` the notify list. mIRC's `-iopv` lists,
 /// idle time, method and position are not mirx's. `*` as the nick is any
 /// user; a user named `on` or `off` is given by their ID.
 fn parse_cnick(argument: &str) -> Result<NickColorCommand, CommandError> {
@@ -1441,17 +1442,17 @@ fn parse_cnick(argument: &str) -> Result<NickColorCommand, CommandError> {
             Ok(NickColorCommand::Active(false))
         }
         [] | [_] => Err(CommandError::insufficient_parameters("cnick")),
-        [target, color, modes @ ..] => {
-            let modes = match modes {
+        [target, color, ranks @ ..] => {
+            let ranks = match ranks {
                 [] => "",
-                [modes] => modes,
+                [ranks] => ranks,
                 _ => return Err(error("too many parameters".to_owned())),
             };
-            let modes = ModeCondition::from_parts(modes, any, none).map_err(error)?;
+            let ranks = RankCondition::from_parts(ranks, any, none).map_err(error)?;
             Ok(NickColorCommand::Add {
                 target: (*target).to_owned(),
                 color: NickColor::parse(color).map_err(error)?,
-                modes,
+                ranks,
                 notify,
                 force,
             })
@@ -3271,11 +3272,11 @@ mod tests {
     #[test]
     fn cnick_lists_switches_adds_and_removes() {
         let cnick = |command| Ok(SlashCommand::NickColor(command));
-        let add = |target: &str, color, modes, notify, force| {
+        let add = |target: &str, color, ranks, notify, force| {
             cnick(NickColorCommand::Add {
                 target: target.to_owned(),
                 color,
-                modes,
+                ranks,
                 notify,
                 force,
             })
@@ -3294,7 +3295,7 @@ mod tests {
             add(
                 "@bob:example",
                 red,
-                Some(ModeCondition::Ranks(
+                Some(RankCondition::Ranks(
                     [RoomMemberRank::Moderator, RoomMemberRank::Voiced].into()
                 )),
                 false,
@@ -3303,11 +3304,11 @@ mod tests {
         );
         assert_eq!(
             parse("/cnick -a * 4"),
-            add("*", red, Some(ModeCondition::AnyMode), false, false)
+            add("*", red, Some(RankCondition::AnyRank), false, false)
         );
         assert_eq!(
             parse("/cnick -n * 4"),
-            add("*", red, Some(ModeCondition::NoMode), false, false)
+            add("*", red, Some(RankCondition::NoRank), false, false)
         );
         // A user named on is given by ID once a switch is in the way.
         assert_eq!(parse("/cnick -y on"), insufficient("cnick"));
@@ -3319,15 +3320,15 @@ mod tests {
         );
         assert_eq!(
             parse("/cnick bob 4 @x"),
-            error("cnick", "modes must be some of ~&@+, not @x")
+            error("cnick", "ranks must be some of ~&@+, not @x")
         );
         assert_eq!(
             parse("/cnick -an bob 4"),
-            error("cnick", "any mode and no mode cannot be combined")
+            error("cnick", "any rank and no rank cannot be combined")
         );
         assert_eq!(
             parse("/cnick -a bob 4 @"),
-            error("cnick", "modes cannot be given with any mode or no mode")
+            error("cnick", "ranks cannot be given with any rank or no rank")
         );
         assert_eq!(
             parse("/cnick bob 4 @ +"),
@@ -3360,7 +3361,7 @@ mod tests {
         assert_eq!(
             help_lines(Some("cnick")),
             Ok(vec![
-                "* /cnick [-rfany] [on|off|nick color|* [modes]] - colour nicks in the nick list and messages (-r: remove; no nick: list)"
+                "* /cnick [-rfany] [on|off|nick color|* [ranks]] - colour nicks in the nick list and messages (-r: remove; no nick: list)"
                     .to_owned()
             ])
         );

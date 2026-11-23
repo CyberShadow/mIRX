@@ -8,7 +8,7 @@ use mirx_core::{HighlightWord, validate_highlight_word};
 
 use super::perform::PerformSetting;
 use super::settings::{
-    ActivityColors, IrcSetting, LoggingSetting, MarkerSetting, Settings, TipsSetting, TraySetting,
+    ActivityColors, ChatSetting, LoggingSetting, MarkerSetting, Settings, TipsSetting, TraySetting,
     parse_button_width, parse_retry_delay, parse_retry_times, parse_window_buffer,
 };
 use super::timestamp::TimestampFormat;
@@ -16,10 +16,10 @@ use super::timestamp::TimestampFormat;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OptionsPage {
     ConnectOptions,
-    Irc,
-    IrcMessages,
-    IrcHighlight,
-    IrcLogging,
+    Chat,
+    ChatMessages,
+    ChatHighlight,
+    ChatLogging,
     Display,
     DisplayTray,
     DisplayTips,
@@ -27,8 +27,8 @@ pub(super) enum OptionsPage {
 }
 
 use OptionsPage::{
-    ConnectOptions, Display, DisplayTips, DisplayTray, Irc, IrcHighlight, IrcLogging, IrcMessages,
-    Other,
+    Chat, ChatHighlight, ChatLogging, ChatMessages, ConnectOptions, Display, DisplayTips,
+    DisplayTray, Other,
 };
 
 /// The tree, in order: (label, depth, page). A category without a page of
@@ -36,10 +36,10 @@ use OptionsPage::{
 pub(super) const OPTIONS_TREE: &[(&str, u8, OptionsPage)] = &[
     ("Connect", 0, ConnectOptions),
     ("Options", 1, ConnectOptions),
-    ("IRC", 0, Irc),
-    ("Messages", 1, IrcMessages),
-    ("Highlight", 1, IrcHighlight),
-    ("Logging", 1, IrcLogging),
+    ("Chat", 0, Chat),
+    ("Messages", 1, ChatMessages),
+    ("Highlight", 1, ChatHighlight),
+    ("Logging", 1, ChatLogging),
     ("Display", 0, Display),
     ("Tray", 1, DisplayTray),
     ("Tips", 1, DisplayTips),
@@ -74,7 +74,7 @@ pub(super) fn tree_paths() -> Vec<String> {
         .collect()
 }
 
-/// The tree item whose path (`IRC/Messages`) is `path`.
+/// The tree item whose path (`Chat/Messages`) is `path`.
 pub(super) fn tree_index(path: &str) -> Option<usize> {
     tree_paths().iter().position(|item_path| item_path == path)
 }
@@ -93,7 +93,7 @@ impl OptionsField {
     pub(super) fn page(self) -> OptionsPage {
         match self {
             Self::RetryTimes | Self::RetryDelay => ConnectOptions,
-            Self::TimestampFormat => IrcMessages,
+            Self::TimestampFormat => ChatMessages,
             Self::SwitchbarButtons => Display,
             Self::WindowBuffer => Other,
         }
@@ -118,7 +118,7 @@ pub(super) struct OptionsForm {
     pub(super) timestamp_format: String,
     pub(super) send_typing: bool,
     /// Checkboxes, so never wrong.
-    pub(super) irc: IrcSetting,
+    pub(super) chat: ChatSetting,
     pub(super) switchbar_buttons: String,
     /// Picked from the palette, so never wrong.
     pub(super) activity_colors: ActivityColors,
@@ -147,7 +147,7 @@ impl OptionsForm {
             timestamp_show: settings.timestamp.show,
             timestamp_format: settings.timestamp.format.to_string(),
             send_typing: settings.typing.send,
-            irc: settings.irc,
+            chat: settings.chat,
             switchbar_buttons: settings.switchbar.buttons.to_string(),
             activity_colors: settings.switchbar.activity,
             marker: settings.marker,
@@ -192,7 +192,7 @@ impl OptionsForm {
         settings.timestamp.show = self.timestamp_show;
         settings.timestamp.format = format;
         settings.typing.send = self.send_typing;
-        settings.irc = self.irc;
+        settings.chat = self.chat;
         settings.switchbar.buttons = buttons;
         settings.switchbar.activity = self.activity_colors;
         settings.marker = self.marker;
@@ -331,10 +331,10 @@ mod tests {
             [
                 "Connect",
                 "Connect/Options",
-                "IRC",
-                "IRC/Messages",
-                "IRC/Highlight",
-                "IRC/Logging",
+                "Chat",
+                "Chat/Messages",
+                "Chat/Highlight",
+                "Chat/Logging",
                 "Display",
                 "Display/Tray",
                 "Display/Tips",
@@ -342,24 +342,32 @@ mod tests {
             ]
         );
         assert_eq!(page_tree_index(ConnectOptions), 1);
-        // IRC has a page of its own, above its children's.
-        assert_eq!(page_tree_index(Irc), 2);
-        assert_eq!(page_tree_index(IrcMessages), 3);
-        assert_eq!(page_tree_index(IrcHighlight), 4);
-        assert_eq!(page_tree_index(IrcLogging), 5);
+        // Chat has a page of its own, above its children's.
+        assert_eq!(page_tree_index(Chat), 2);
+        assert_eq!(page_tree_index(ChatMessages), 3);
+        assert_eq!(page_tree_index(ChatHighlight), 4);
+        assert_eq!(page_tree_index(ChatLogging), 5);
         // Display has a page of its own, above its children's.
         assert_eq!(page_tree_index(Display), 6);
         assert_eq!(page_tree_index(DisplayTray), 7);
         assert_eq!(page_tree_index(DisplayTips), 8);
         assert_eq!(page_tree_index(Other), 9);
         assert_eq!(tree_index("Connect"), Some(0));
-        assert_eq!(tree_index("IRC/Messages"), Some(3));
-        assert_eq!(tree_index("IRC/Logging"), Some(5));
+        assert_eq!(tree_index("Chat/Messages"), Some(3));
+        assert_eq!(tree_index("Chat/Logging"), Some(5));
         assert_eq!(tree_index("Display"), Some(6));
         assert_eq!(tree_index("Display/Tray"), Some(7));
         assert_eq!(tree_index("Display/Tips"), Some(8));
         assert_eq!(tree_index("Other"), Some(9));
-        for path in ["", "IRC/", "Messages", "irc/messages", "IRC > Messages"] {
+        for path in [
+            "",
+            "Chat/",
+            "Messages",
+            "chat/messages",
+            "Chat > Messages",
+            "IRC",
+            "IRC/Messages",
+        ] {
             assert_eq!(tree_index(path), None, "{path:?}");
         }
         assert_eq!(FIRST_PAGE, ConnectOptions);
@@ -468,8 +476,8 @@ mod tests {
         );
 
         for change in [
-            |form: &mut OptionsForm| form.logging.channels = true,
-            |form: &mut OptionsForm| form.logging.queries = true,
+            |form: &mut OptionsForm| form.logging.rooms = true,
+            |form: &mut OptionsForm| form.logging.direct = true,
             |form: &mut OptionsForm| form.logging.strip_codes = true,
             |form: &mut OptionsForm| form.logging.timestamp = false,
             |form: &mut OptionsForm| form.tray.always = true,
@@ -477,18 +485,18 @@ mod tests {
             |form: &mut OptionsForm| form.tray.minimize = true,
             |form: &mut OptionsForm| form.tray.single_click = true,
             |form: &mut OptionsForm| form.tips.highlights = false,
-            |form: &mut OptionsForm| form.tips.queries = false,
-            |form: &mut OptionsForm| form.tips.channels = true,
-            |form: &mut OptionsForm| form.irc.mode_prefix = true,
-            |form: &mut OptionsForm| form.irc.auto_join_invite = true,
-            |form: &mut OptionsForm| form.irc.active_away = false,
-            |form: &mut OptionsForm| form.irc.active_invites = false,
-            |form: &mut OptionsForm| form.irc.active_whois = false,
+            |form: &mut OptionsForm| form.tips.direct = false,
+            |form: &mut OptionsForm| form.tips.rooms = true,
+            |form: &mut OptionsForm| form.chat.rank_prefix = true,
+            |form: &mut OptionsForm| form.chat.join_on_invite = true,
+            |form: &mut OptionsForm| form.chat.active_away = false,
+            |form: &mut OptionsForm| form.chat.active_invites = false,
+            |form: &mut OptionsForm| form.chat.active_whois = false,
         ] {
             let mut changed = form.clone();
             change(&mut changed);
             let mut expected = current.clone();
-            expected.irc = changed.irc;
+            expected.chat = changed.chat;
             expected.logging = changed.logging;
             expected.tray = changed.tray;
             expected.tips = changed.tips;

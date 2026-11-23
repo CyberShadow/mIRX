@@ -4,7 +4,7 @@
 //! colour, in the nick list and in the lines they send.
 //!
 //! mIRC matches `nick!user@host`; mirx matches the Matrix user ID, which a
-//! user cannot change or copy as a display name can. An entry's modes are
+//! user cannot change or copy as a display name can. An entry's ranks are
 //! the member's rank in the window's room (`~ & @ +`), and `notify` asks
 //! for a user on the notify list. Auto colour picks a stable colour per
 //! user among the palette colours that read on the window's background.
@@ -91,22 +91,22 @@ impl UserPattern {
     }
 }
 
-/// An entry's mode condition: the member's rank in the window's room.
+/// An entry's rank condition: the member's rank in the window's room.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ModeCondition {
-    /// mIRC's Any mode: ranked above Member.
-    AnyMode,
-    /// mIRC's No mode: an ordinary member.
-    NoMode,
+pub(super) enum RankCondition {
+    /// Any rank (mIRC's Any mode): ranked above Member.
+    AnyRank,
+    /// No rank (mIRC's No mode): an ordinary member.
+    NoRank,
     /// One of these ranks (a Matrix member has one), never Member, never
     /// none: `@&~` is the room's staff.
     Ranks(BTreeSet<RoomMemberRank>),
 }
 
-impl ModeCondition {
+impl RankCondition {
     /// Rank glyphs as typed: `@`, `~&@`, ...
     pub(super) fn parse_glyphs(text: &str) -> Result<Self, String> {
-        let invalid = || format!("modes must be some of ~&@+, not {text}");
+        let invalid = || format!("ranks must be some of ~&@+, not {text}");
         let ranks = text
             .chars()
             .map(|glyph| {
@@ -122,24 +122,24 @@ impl ModeCondition {
         Ok(Self::Ranks(ranks))
     }
 
-    /// The condition `/cnick` and the Address Book's entry take: mode
-    /// glyphs (empty for none), Any mode (`-a`) or No mode (`-n`), one at
+    /// The condition `/cnick` and the Address Book's entry take: rank
+    /// glyphs (empty for none), Any rank (`-a`) or No rank (`-n`), one at
     /// most; none of them is no condition.
     pub(super) fn from_parts(glyphs: &str, any: bool, none: bool) -> Result<Option<Self>, String> {
         match (glyphs.is_empty(), any, none) {
             (true, false, false) => Ok(None),
-            (true, true, false) => Ok(Some(Self::AnyMode)),
-            (true, false, true) => Ok(Some(Self::NoMode)),
-            (_, true, true) => Err("any mode and no mode cannot be combined".to_owned()),
+            (true, true, false) => Ok(Some(Self::AnyRank)),
+            (true, false, true) => Ok(Some(Self::NoRank)),
+            (_, true, true) => Err("any rank and no rank cannot be combined".to_owned()),
             (false, false, false) => Self::parse_glyphs(glyphs).map(Some),
-            (false, _, _) => Err("modes cannot be given with any mode or no mode".to_owned()),
+            (false, _, _) => Err("ranks cannot be given with any rank or no rank".to_owned()),
         }
     }
 
     fn matches(&self, rank: RoomMemberRank) -> bool {
         match self {
-            Self::AnyMode => rank != RoomMemberRank::Member,
-            Self::NoMode => rank == RoomMemberRank::Member,
+            Self::AnyRank => rank != RoomMemberRank::Member,
+            Self::NoRank => rank == RoomMemberRank::Member,
             Self::Ranks(ranks) => ranks.contains(&rank),
         }
     }
@@ -192,21 +192,21 @@ impl NickColor {
 pub(super) struct NickColorEntry {
     pub(super) pattern: UserPattern,
     pub(super) color: NickColor,
-    pub(super) modes: Option<ModeCondition>,
+    pub(super) ranks: Option<RankCondition>,
     /// Only for users on the notify list.
     pub(super) notify: bool,
 }
 
 impl NickColorEntry {
-    /// mIRC's Apply items are cumulative: the pattern, the modes and the
+    /// mIRC's Apply items are cumulative: the pattern, the ranks and the
     /// notify list must all fit. A user who is not a member of the
-    /// window's room (`rank` `None`) has no mode.
+    /// window's room (`rank` `None`) has no rank.
     fn matches(&self, user_id: &str, rank: Option<RoomMemberRank>, on_notify: bool) -> bool {
         self.pattern.matches(user_id)
             && self
-                .modes
+                .ranks
                 .as_ref()
-                .is_none_or(|modes| rank.is_some_and(|rank| modes.matches(rank)))
+                .is_none_or(|ranks| rank.is_some_and(|rank| ranks.matches(rank)))
             && (!self.notify || on_notify)
     }
 
@@ -215,33 +215,33 @@ impl NickColorEntry {
     }
 
     /// Its Apply items besides the pattern, as the Address Book's Apply
-    /// column shows them: `@&~`, `any mode`, `no mode`, `notify`.
+    /// column shows them: `@&~`, `any rank`, `no rank`, `notify`.
     pub(super) fn apply_text(&self) -> String {
         self.apply_items(false).join(", ")
     }
 
-    fn apply_items(&self, modes_word: bool) -> Vec<String> {
-        let modes = self.modes.as_ref().map(|modes| match modes {
-            ModeCondition::AnyMode => "any mode".to_owned(),
-            ModeCondition::NoMode => "no mode".to_owned(),
-            ModeCondition::Ranks(ranks) if modes_word => format!("modes {}", glyphs(ranks)),
-            ModeCondition::Ranks(ranks) => glyphs(ranks),
+    fn apply_items(&self, ranks_word: bool) -> Vec<String> {
+        let ranks = self.ranks.as_ref().map(|ranks| match ranks {
+            RankCondition::AnyRank => "any rank".to_owned(),
+            RankCondition::NoRank => "no rank".to_owned(),
+            RankCondition::Ranks(ranks) if ranks_word => format!("ranks {}", glyphs(ranks)),
+            RankCondition::Ranks(ranks) => glyphs(ranks),
         });
-        modes
+        ranks
             .into_iter()
             .chain(self.notify.then(|| "notify".to_owned()))
             .collect()
     }
 
-    /// `mirx.ini`'s value: `<pattern> <color> [modes=<glyphs>|any|none]
+    /// `mirx.ini`'s value: `<pattern> <color> [ranks=<glyphs>|any|none]
     /// [notify]`.
     pub(super) fn ini_value(&self) -> String {
         let mut value = format!("{} {}", self.pattern.as_str(), self.color.text());
-        match &self.modes {
-            Some(ModeCondition::AnyMode) => value.push_str(" any"),
-            Some(ModeCondition::NoMode) => value.push_str(" none"),
-            Some(ModeCondition::Ranks(ranks)) => {
-                value.push_str(&format!(" modes={}", glyphs(ranks)))
+        match &self.ranks {
+            Some(RankCondition::AnyRank) => value.push_str(" any"),
+            Some(RankCondition::NoRank) => value.push_str(" none"),
+            Some(RankCondition::Ranks(ranks)) => {
+                value.push_str(&format!(" ranks={}", glyphs(ranks)))
             }
             None => {}
         }
@@ -254,29 +254,29 @@ impl NickColorEntry {
     pub(super) fn parse_ini_value(value: &str) -> Result<Self, String> {
         let mut words = value.split_whitespace();
         let (Some(pattern), Some(color)) = (words.next(), words.next()) else {
-            return Err("expected <pattern> <color> [modes=~&@+|any|none] [notify]".to_owned());
+            return Err("expected <pattern> <color> [ranks=~&@+|any|none] [notify]".to_owned());
         };
         let mut entry = Self {
             pattern: UserPattern::new(pattern)?,
             color: NickColor::parse(color)?,
-            modes: None,
+            ranks: None,
             notify: false,
         };
         for word in words {
-            let modes = match word {
+            let ranks = match word {
                 "notify" if !entry.notify => {
                     entry.notify = true;
                     continue;
                 }
-                "any" => ModeCondition::AnyMode,
-                "none" => ModeCondition::NoMode,
-                _ => match word.strip_prefix("modes=") {
-                    Some(glyphs) => ModeCondition::parse_glyphs(glyphs)?,
+                "any" => RankCondition::AnyRank,
+                "none" => RankCondition::NoRank,
+                _ => match word.strip_prefix("ranks=") {
+                    Some(glyphs) => RankCondition::parse_glyphs(glyphs)?,
                     None => return Err(format!("unexpected {word}")),
                 },
             };
-            if entry.modes.replace(modes).is_some() {
-                return Err("one of modes=, any and none at most".to_owned());
+            if entry.ranks.replace(ranks).is_some() {
+                return Err("one of ranks=, any and none at most".to_owned());
             }
         }
         Ok(entry)
@@ -567,7 +567,7 @@ mod tests {
         NickColorEntry {
             pattern: pattern(text),
             color,
-            modes: None,
+            ranks: None,
             notify: false,
         }
     }
@@ -617,9 +617,9 @@ mod tests {
     }
 
     #[test]
-    fn modes_are_rank_glyphs() {
-        let ranks = |glyphs: &str| match ModeCondition::parse_glyphs(glyphs) {
-            Ok(ModeCondition::Ranks(ranks)) => ranks.into_iter().collect::<Vec<_>>(),
+    fn ranks_are_rank_glyphs() {
+        let ranks = |glyphs: &str| match RankCondition::parse_glyphs(glyphs) {
+            Ok(RankCondition::Ranks(ranks)) => ranks.into_iter().collect::<Vec<_>>(),
             other => panic!("{other:?}"),
         };
         assert_eq!(
@@ -633,8 +633,8 @@ mod tests {
         assert_eq!(ranks("++"), [RoomMemberRank::Voiced]);
         for bad in ["", "%", "@x"] {
             assert_eq!(
-                ModeCondition::parse_glyphs(bad),
-                Err(format!("modes must be some of ~&@+, not {bad}"))
+                RankCondition::parse_glyphs(bad),
+                Err(format!("ranks must be some of ~&@+, not {bad}"))
             );
         }
     }
@@ -645,15 +645,15 @@ mod tests {
         assert!(!setting.colors_nicks());
         assert_eq!(setting.resolve("@bob:example", None, false), None);
         let mut ops = entry("*", palette(4));
-        ops.modes = Some(ModeCondition::parse_glyphs("@&~").unwrap());
+        ops.ranks = Some(RankCondition::parse_glyphs("@&~").unwrap());
         let mut voiced_bots = entry("*bot*", palette(12));
-        voiced_bots.modes = Some(ModeCondition::parse_glyphs("+").unwrap());
+        voiced_bots.ranks = Some(RankCondition::parse_glyphs("+").unwrap());
         let mut buddies = entry("*", palette(3));
         buddies.notify = true;
         let mut members = entry("*", palette(6));
-        members.modes = Some(ModeCondition::NoMode);
+        members.ranks = Some(RankCondition::NoRank);
         let mut ranked = entry("*", palette(10));
-        ranked.modes = Some(ModeCondition::AnyMode);
+        ranked.ranks = Some(RankCondition::AnyRank);
         for entry in [ops, voiced_bots, buddies, members, ranked] {
             setting.list.push(entry);
         }
@@ -671,7 +671,7 @@ mod tests {
         assert_eq!(color("@bob:example", Some(Voiced), false), Some(10));
         assert_eq!(color("@bot:example", Some(Member), true), Some(3));
         assert_eq!(color("@bot:example", Some(Member), false), Some(6));
-        // A non-member has no mode: only entries without one fit.
+        // A non-member has no rank: only entries without one fit.
         assert_eq!(color("@gone:example", None, true), Some(3));
         assert_eq!(color("@gone:example", None, false), None);
         setting.active = false;
@@ -772,14 +772,14 @@ mod tests {
     #[test]
     fn ini_values_round_trip() {
         let mut every = entry("@*:matrix.org", palette(12));
-        every.modes = Some(ModeCondition::parse_glyphs("+@~").unwrap());
+        every.ranks = Some(RankCondition::parse_glyphs("+@~").unwrap());
         every.notify = true;
         let mut any = entry("*", NickColor::Auto);
-        any.modes = Some(ModeCondition::AnyMode);
+        any.ranks = Some(RankCondition::AnyRank);
         let mut none = entry("@bob:example", palette(0));
-        none.modes = Some(ModeCondition::NoMode);
+        none.ranks = Some(RankCondition::NoRank);
         for (entry, value) in [
-            (every, "@*:matrix.org 12 modes=~@+ notify"),
+            (every, "@*:matrix.org 12 ranks=~@+ notify"),
             (any, "* auto any"),
             (none, "@bob:example 0 none"),
             (entry("*bot*", palette(15)), "*bot* 15"),
@@ -791,7 +791,7 @@ mod tests {
             NickColorEntry::parse_ini_value("*  auto   notify  any"),
             Ok({
                 let mut entry = entry("*", NickColor::Auto);
-                entry.modes = Some(ModeCondition::AnyMode);
+                entry.ranks = Some(RankCondition::AnyRank);
                 entry.notify = true;
                 entry
             })
@@ -799,18 +799,18 @@ mod tests {
         for (value, error) in [
             (
                 "",
-                "expected <pattern> <color> [modes=~&@+|any|none] [notify]",
+                "expected <pattern> <color> [ranks=~&@+|any|none] [notify]",
             ),
             (
                 "*",
-                "expected <pattern> <color> [modes=~&@+|any|none] [notify]",
+                "expected <pattern> <color> [ranks=~&@+|any|none] [notify]",
             ),
             ("bob 4", "bob is not a user ID or a pattern with * or ?"),
             ("* 16", "color must be 0-15 or *, not 16"),
             ("* red", "color must be 0-15 or *, not red"),
-            ("* 4 any none", "one of modes=, any and none at most"),
-            ("* 4 modes=@ any", "one of modes=, any and none at most"),
-            ("* 4 modes=%", "modes must be some of ~&@+, not %"),
+            ("* 4 any none", "one of ranks=, any and none at most"),
+            ("* 4 ranks=@ any", "one of ranks=, any and none at most"),
+            ("* 4 ranks=%", "ranks must be some of ~&@+, not %"),
             ("* 4 notify notify", "unexpected notify"),
             ("* 4 op", "unexpected op"),
         ] {
@@ -837,25 +837,25 @@ mod tests {
         setting.active = true;
         setting.list.push(entry("@bob:example", palette(4)));
         let mut staff = entry("*", NickColor::Auto);
-        staff.modes = Some(ModeCondition::parse_glyphs("@&~").unwrap());
+        staff.ranks = Some(RankCondition::parse_glyphs("@&~").unwrap());
         assert_eq!(staff.apply_text(), "~&@");
         setting.list.push(staff);
         let mut buddies = entry("@*:matrix.org", palette(12));
         buddies.notify = true;
-        buddies.modes = Some(ModeCondition::AnyMode);
-        assert_eq!(buddies.apply_text(), "any mode, notify");
+        buddies.ranks = Some(RankCondition::AnyRank);
+        assert_eq!(buddies.apply_text(), "any rank, notify");
         setting.list.push(buddies);
         let mut members = entry("@carol:example", palette(3));
-        members.modes = Some(ModeCondition::NoMode);
+        members.ranks = Some(RankCondition::NoRank);
         setting.list.push(members);
         assert_eq!(
             list_lines(&setting, nick_of),
             [
                 "* Nick colors are on:",
                 "*   1. Bob (@bob:example) 4",
-                "*   2. * auto, modes ~&@",
-                "*   3. @*:matrix.org 12, any mode, notify",
-                "*   4. @carol:example 3, no mode",
+                "*   2. * auto, ranks ~&@",
+                "*   3. @*:matrix.org 12, any rank, notify",
+                "*   4. @carol:example 3, no rank",
             ]
         );
         assert_eq!(state_line(true), "* Nick colors are on");

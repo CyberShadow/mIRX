@@ -99,9 +99,9 @@ pub(super) const ADDRESS_BOOK_COLORS_UP_ID: u16 = 7406;
 pub(super) const ADDRESS_BOOK_COLORS_DOWN_ID: u16 = 7407;
 pub(super) const COLOR_ENTRY_PATTERN_ID: u16 = 7501;
 pub(super) const COLOR_ENTRY_COLOR_ID: u16 = 7502;
-pub(super) const COLOR_ENTRY_MODES_ID: u16 = 7503;
-pub(super) const COLOR_ENTRY_ANY_MODE_ID: u16 = 7504;
-pub(super) const COLOR_ENTRY_NO_MODE_ID: u16 = 7505;
+pub(super) const COLOR_ENTRY_RANKS_ID: u16 = 7503;
+pub(super) const COLOR_ENTRY_ANY_RANK_ID: u16 = 7504;
+pub(super) const COLOR_ENTRY_NO_RANK_ID: u16 = 7505;
 pub(super) const COLOR_ENTRY_NOTIFY_ID: u16 = 7506;
 pub(super) const COLOR_ENTRY_OK_ID: usize = 7507;
 pub(super) const COLOR_ENTRY_CANCEL_ID: usize = 7508;
@@ -1256,11 +1256,11 @@ unsafe fn run_color_entry_dialog(
                     NickColor::Auto => None,
                 },
             );
-            column.label("Modes (some of ~&@+; empty for any):", 0, 0)?;
-            column.edit(COLOR_ENTRY_MODES_ID, &fields.modes, 0)?;
+            column.label("Ranks (some of ~&@+; empty for any):", 0, 0)?;
+            column.edit(COLOR_ENTRY_RANKS_ID, &fields.ranks, 0)?;
             for (id, text, checked) in [
-                (COLOR_ENTRY_ANY_MODE_ID, "Any mode", fields.any_mode),
-                (COLOR_ENTRY_NO_MODE_ID, "No mode", fields.no_mode),
+                (COLOR_ENTRY_ANY_RANK_ID, "Any rank", fields.any_rank),
+                (COLOR_ENTRY_NO_RANK_ID, "No rank", fields.no_rank),
                 (COLOR_ENTRY_NOTIFY_ID, "On notify list", fields.notify),
             ] {
                 set_check(column.checkbox(id, text)?, checked);
@@ -1292,9 +1292,9 @@ unsafe fn color_entry_accept(dialog: HWND) {
         pattern: read_window_text(item(COLOR_ENTRY_PATTERN_ID)),
         color: selected_color(item(COLOR_ENTRY_COLOR_ID))
             .map_or(NickColor::Auto, NickColor::Palette),
-        modes: read_window_text(item(COLOR_ENTRY_MODES_ID)),
-        any_mode: is_checked(item(COLOR_ENTRY_ANY_MODE_ID)),
-        no_mode: is_checked(item(COLOR_ENTRY_NO_MODE_ID)),
+        ranks: read_window_text(item(COLOR_ENTRY_RANKS_ID)),
+        any_rank: is_checked(item(COLOR_ENTRY_ANY_RANK_ID)),
+        no_rank: is_checked(item(COLOR_ENTRY_NO_RANK_ID)),
         notify: is_checked(item(COLOR_ENTRY_NOTIFY_ID)),
     };
     accept_or_refuse(dialog, accept(&fields));

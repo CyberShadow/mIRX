@@ -2003,7 +2003,7 @@ fn an_invite_names_its_inviter_and_auto_join_takes_channels_only() -> Result<(),
     let bob = homeserver.register("bob", "Bob");
     let alice = homeserver.register("alice", "Alice");
     let local_app_data = unique_local_app_data_path();
-    write_settings(&local_app_data, "[irc]\r\nauto_join_invite=on\r\n")?;
+    write_settings(&local_app_data, "[chat]\r\njoin_on_invite=on\r\n")?;
     let app = launch_live_app(&local_app_data)?;
     sign_in(&app, &homeserver, &alice)?;
     app.select_status_view()?;

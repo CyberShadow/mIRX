@@ -1622,10 +1622,10 @@ pub struct UiOptionsDialog {
     pub highlight_delete_enabled: bool,
     /// The Display page's switchbar Event, Message and Highlight colours.
     pub activity_colors: UiActivityColors,
-    /// The IRC > Messages page's Send typing notifications checkbox.
+    /// The Chat > Messages page's Send typing notifications checkbox.
     pub send_typing: bool,
-    /// The IRC page's checkboxes.
-    pub irc: UiIrcOptions,
+    /// The Chat page's checkboxes.
+    pub chat: UiChatOptions,
     /// The Display page's line marker checkbox and colour.
     pub marker: UiMarkerOptions,
     /// The Logging page's checkboxes.
@@ -1653,13 +1653,13 @@ pub struct UiConnectOptions {
     pub perform_lines: Vec<String>,
 }
 
-/// Options > IRC's checkboxes: Show mode prefix, Auto-join channel on
-/// invite, and Show in active: Away, Invites, Whois.
+/// Options > Chat's checkboxes: Show rank prefix, Join rooms when
+/// invited, and Show in active: Away, Invites, Whois.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct UiIrcOptions {
-    pub mode_prefix: bool,
-    pub auto_join_invite: bool,
+pub struct UiChatOptions {
+    pub rank_prefix: bool,
+    pub join_on_invite: bool,
     pub active_away: bool,
     pub active_invites: bool,
     pub active_whois: bool,
@@ -1688,18 +1688,18 @@ pub struct UiTrayOptions {
 #[serde(deny_unknown_fields)]
 pub struct UiTipsOptions {
     pub highlights: bool,
-    pub queries: bool,
-    pub channels: bool,
+    pub direct: bool,
+    pub rooms: bool,
 }
 
-/// Options > IRC > Logging's checkboxes.
+/// Options > Chat > Logging's checkboxes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UiLoggingOptions {
-    /// Automatically log channels.
-    pub channels: bool,
-    /// Automatically log queries.
-    pub queries: bool,
+    /// Automatically log rooms.
+    pub rooms: bool,
+    /// Automatically log direct messages.
+    pub direct: bool,
     pub strip_codes: bool,
     pub timestamp: bool,
 }
@@ -2778,7 +2778,7 @@ impl MirxApp {
     }
 
     /// Selects the open Options dialog's tree item at `path`
-    /// (`IRC/Messages`), as a click on it does.
+    /// (`Chat/Messages`), as a click on it does.
     pub fn select_options_page(&self, path: &str) -> Result<(), TestkitError> {
         self.inner.select_options_page(path)
     }

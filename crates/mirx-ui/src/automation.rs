@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 91;
+pub(crate) const PROTOCOL_VERSION: u32 = 92;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -743,7 +743,7 @@ pub(crate) struct CrashArgs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SelectOptionsPageArgs {
-    /// The tree item's path, `IRC/Messages`.
+    /// The tree item's path, `Chat/Messages`.
     pub(crate) path: String,
 }
 
@@ -1288,10 +1288,10 @@ pub(crate) struct UiOptionsDialog {
     pub(crate) highlight_delete_enabled: bool,
     /// The Display page's switchbar Event, Message and Highlight colours.
     pub(crate) activity_colors: UiActivityColors,
-    /// The IRC > Messages page's Send typing notifications checkbox.
+    /// The Chat > Messages page's Send typing notifications checkbox.
     pub(crate) send_typing: bool,
-    /// The IRC page's checkboxes.
-    pub(crate) irc: UiIrcOptions,
+    /// The Chat page's checkboxes.
+    pub(crate) chat: UiChatOptions,
     /// The Display page's line marker checkbox and colour.
     pub(crate) marker: UiMarkerOptions,
     /// The Logging page's checkboxes.
@@ -1319,13 +1319,13 @@ pub(crate) struct UiConnectOptions {
     pub(crate) perform_lines: Vec<String>,
 }
 
-/// Options > IRC's checkboxes: Show mode prefix, Auto-join channel on
-/// invite, and Show in active: Away, Invites, Whois.
+/// Options > Chat's checkboxes: Show rank prefix, Join rooms when
+/// invited, and Show in active: Away, Invites, Whois.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct UiIrcOptions {
-    pub(crate) mode_prefix: bool,
-    pub(crate) auto_join_invite: bool,
+pub(crate) struct UiChatOptions {
+    pub(crate) rank_prefix: bool,
+    pub(crate) join_on_invite: bool,
     pub(crate) active_away: bool,
     pub(crate) active_invites: bool,
     pub(crate) active_whois: bool,
@@ -1354,18 +1354,18 @@ pub(crate) struct UiTrayOptions {
 #[serde(deny_unknown_fields)]
 pub(crate) struct UiTipsOptions {
     pub(crate) highlights: bool,
-    pub(crate) queries: bool,
-    pub(crate) channels: bool,
+    pub(crate) direct: bool,
+    pub(crate) rooms: bool,
 }
 
-/// Options > IRC > Logging's checkboxes.
+/// Options > Chat > Logging's checkboxes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UiLoggingOptions {
-    /// Automatically log channels.
-    pub(crate) channels: bool,
-    /// Automatically log queries.
-    pub(crate) queries: bool,
+    /// Automatically log rooms.
+    pub(crate) rooms: bool,
+    /// Automatically log direct messages.
+    pub(crate) direct: bool,
     pub(crate) strip_codes: bool,
     pub(crate) timestamp: bool,
 }
@@ -4273,8 +4273,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_91() {
-        assert_eq!(PROTOCOL_VERSION, 91);
+    fn protocol_version_is_92() {
+        assert_eq!(PROTOCOL_VERSION, 92);
     }
 
     #[test]
@@ -5705,20 +5705,20 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_SELECT_OPTIONS_PAGE,
-                br#"{"id":"page","args":{"path":"IRC/Messages"}}"#,
+                br#"{"id":"page","args":{"path":"Chat/Messages"}}"#,
             )
             .unwrap(),
             ParsedCommand::SelectOptionsPage {
                 id: "page".to_owned(),
                 args: SelectOptionsPageArgs {
-                    path: "IRC/Messages".to_owned(),
+                    path: "Chat/Messages".to_owned(),
                 },
             }
         );
         for request in [
             br#"{"id":"page","args":{}}"#.as_slice(),
             br#"{"id":"page"}"#.as_slice(),
-            br#"{"id":"page","args":{"path":["IRC","Messages"]}}"#.as_slice(),
+            br#"{"id":"page","args":{"path":["Chat","Messages"]}}"#.as_slice(),
             br#"{"id":"page","args":{"path":"Display","unexpected":true}}"#.as_slice(),
         ] {
             let error = parse_command_request(COMMAND_ID_SELECT_OPTIONS_PAGE, request).unwrap_err();
@@ -6317,7 +6317,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":91,
+                    "protocol_version":92,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -7012,9 +7012,9 @@ mod tests {
                             highlight: 12,
                         },
                         send_typing: true,
-                        irc: super::UiIrcOptions {
-                            mode_prefix: true,
-                            auto_join_invite: false,
+                        chat: super::UiChatOptions {
+                            rank_prefix: true,
+                            join_on_invite: false,
                             active_away: true,
                             active_invites: false,
                             active_whois: true,
@@ -7024,8 +7024,8 @@ mod tests {
                             color: 4,
                         },
                         logging: super::UiLoggingOptions {
-                            channels: true,
-                            queries: false,
+                            rooms: true,
+                            direct: false,
                             strip_codes: false,
                             timestamp: true,
                         },
@@ -7037,8 +7037,8 @@ mod tests {
                         },
                         tips: super::UiTipsOptions {
                             highlights: true,
-                            queries: false,
-                            channels: true,
+                            direct: false,
+                            rooms: true,
                         },
                     }),
                     colors_dialog: Some(super::UiColorsDialog {
@@ -7080,7 +7080,7 @@ mod tests {
                         color_rows: vec![vec![
                             "*bot*".to_owned(),
                             "auto".to_owned(),
-                            "any mode".to_owned()
+                            "any rank".to_owned()
                         ]],
                         color_row_click_points: vec![super::UiPoint { x: 40, y: 30 }],
                         color_edit_enabled: true,
@@ -7380,11 +7380,11 @@ mod tests {
                         "highlight_delete_enabled":false,
                         "activity_colors":{"event":5,"message":4,"highlight":12},
                         "send_typing":true,
-                        "irc":{"mode_prefix":true,"auto_join_invite":false,"active_away":true,"active_invites":false,"active_whois":true},
+                        "chat":{"rank_prefix":true,"join_on_invite":false,"active_away":true,"active_invites":false,"active_whois":true},
                         "marker":{"show":true,"color":4},
-                        "logging":{"channels":true,"queries":false,"strip_codes":false,"timestamp":true},
+                        "logging":{"rooms":true,"direct":false,"strip_codes":false,"timestamp":true},
                         "tray":{"always":true,"startup":false,"minimize":true,"single_click":false},
-                        "tips":{"highlights":true,"queries":false,"channels":true}
+                        "tips":{"highlights":true,"direct":false,"rooms":true}
                     },
                     "colors_dialog":{
                         "selected":"normal",
@@ -7407,7 +7407,7 @@ mod tests {
                         "control_delete_enabled":false,
                         "control_note":"Connect to edit the ignore list.",
                         "colors_active":true,
-                        "color_rows":[["*bot*","auto","any mode"]],
+                        "color_rows":[["*bot*","auto","any rank"]],
                         "color_row_click_points":[{"x":40,"y":30}],
                         "color_edit_enabled":true,
                         "color_delete_enabled":true,
