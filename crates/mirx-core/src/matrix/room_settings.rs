@@ -4,29 +4,45 @@
 
 use matrix_sdk::ruma::api::client::room::Visibility;
 use matrix_sdk::ruma::api::client::state::get_state_events;
-use matrix_sdk::ruma::events::room::join_rules::JoinRule;
-use matrix_sdk::ruma::events::room::member::MembershipState;
+use matrix_sdk::ruma::events::room::join_rules::{JoinRule, OriginalSyncRoomJoinRulesEvent};
+use matrix_sdk::ruma::events::room::member::{MembershipState, OriginalSyncRoomMemberEvent};
 use matrix_sdk::ruma::events::room::power_levels::{
     RoomPowerLevels, RoomPowerLevelsEventContent, RoomPowerLevelsSource,
 };
 use matrix_sdk::ruma::events::{
     AnyStateEvent, MessageLikeEventType, StateEventType, TimelineEventType,
 };
+use matrix_sdk::ruma::serde::Raw;
 use matrix_sdk::ruma::{Int, RoomId, UserId};
 use matrix_sdk::{Client, Room};
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde_json::value::RawValue;
 
 use super::{MatrixCoreError, fetch_power_levels, joined_room_by_id, room_join_rule};
 use crate::api::{RoomBan, RoomSettings, RoomSettingsPermissions, UpdateRoomSettingsRequest};
 
-/// The state event types the settings are read from; the room's other
-/// state is not decoded.
-const SETTINGS_STATE_TYPES: [&str; 5] = [
-    "m.room.name",
-    "m.room.topic",
-    "m.room.join_rules",
-    "m.room.power_levels",
-    "m.room.member",
-];
+/// An `m.room.name` content, original or redacted: a redaction keeps no
+/// key of it, and ruma's `RoomNameEventContent` requires the name.
+#[derive(Deserialize)]
+struct NameContent {
+    name: Option<String>,
+}
+
+/// An `m.room.topic` content, original or redacted (see `NameContent`).
+#[derive(Deserialize)]
+struct TopicContent {
+    topic: Option<String>,
+}
+
+/// A state event's `content`, which every event has (a redacted one too).
+fn state_content<T: DeserializeOwned>(raw: &Raw<AnyStateEvent>) -> Result<T, String> {
+    let content = raw
+        .get_field::<&RawValue>("content")
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "no content".to_owned())?;
+    serde_json::from_str(content.get()).map_err(|err| err.to_string())
+}
 
 /// The room's settings from the server's current state (`GET
 /// /rooms/{id}/state`) and directory listing. The room's creators and
@@ -57,44 +73,51 @@ pub(crate) async fn fetch_room_settings(
             .get_field::<String>("type")
             .map_err(|err| load_error(err.to_string()))?
             .ok_or_else(|| load_error("a state event without a type".to_owned()))?;
-        if !SETTINGS_STATE_TYPES.contains(&event_type.as_str()) {
-            continue;
-        }
-        let event = raw
-            .deserialize()
-            .map_err(|err| load_error(format!("{event_type}: {err}")))?;
-        match event {
-            AnyStateEvent::RoomName(event) => {
-                name = event
-                    .as_original()
-                    .map(|event| event.content.name.clone())
-                    .filter(|name| !name.is_empty());
+        let decode_error = |err: String| load_error(format!("{event_type}: {err}"));
+        // Each type is decoded on its own, never as `AnyStateEvent`: its
+        // deserializer, for every state event type ruma knows, is 166 KiB
+        // of the exe. The room's other state is not decoded.
+        match event_type.as_str() {
+            "m.room.name" => {
+                let content: NameContent = state_content(&raw).map_err(decode_error)?;
+                name = content.name.filter(|name| !name.is_empty());
             }
-            AnyStateEvent::RoomTopic(event) => {
-                topic = event.as_original().map(|event| event.content.topic.clone());
+            "m.room.topic" => {
+                let content: TopicContent = state_content(&raw).map_err(decode_error)?;
+                topic = content.topic;
             }
-            AnyStateEvent::RoomJoinRules(event) => {
-                join_rule = event.join_rule().clone();
+            "m.room.join_rules" => {
+                // A redaction keeps the join rule.
+                join_rule = raw
+                    .deserialize_as_unchecked::<OriginalSyncRoomJoinRulesEvent>()
+                    .map_err(|err| decode_error(err.to_string()))?
+                    .content
+                    .join_rule;
             }
-            AnyStateEvent::RoomPowerLevels(event) => {
-                power_levels = match event {
-                    matrix_sdk::ruma::events::StateEvent::Original(event) => {
-                        RoomPowerLevelsSource::Original(event.content)
-                    }
-                    matrix_sdk::ruma::events::StateEvent::Redacted(event) => {
-                        RoomPowerLevelsSource::Redacted(event.content)
-                    }
-                };
+            "m.room.power_levels" => {
+                // A redaction keeps every level the dialog reads (ban, events,
+                // events_default, kick, redact, state_default, users,
+                // users_default; invite from v11), and every field of the
+                // content has a default: a redacted event's content reads
+                // as the original's levels.
+                power_levels =
+                    RoomPowerLevelsSource::Original(state_content(&raw).map_err(decode_error)?);
             }
-            AnyStateEvent::RoomMember(event) if *event.membership() == MembershipState::Ban => {
-                let content = event.as_original().map(|event| &event.content);
-                bans.push(RoomBan {
-                    user_id: event.state_key().to_string(),
-                    display_name: content.and_then(|content| content.displayname.clone()),
-                    banned_by: event.sender().to_string(),
-                    reason: content.and_then(|content| content.reason.clone()),
-                    timestamp_ms: event.origin_server_ts().get().into(),
-                });
+            "m.room.member" => {
+                // A redaction keeps the membership; the other fields are
+                // optional, so a redacted ban lists without name and reason.
+                let event = raw
+                    .deserialize_as_unchecked::<OriginalSyncRoomMemberEvent>()
+                    .map_err(|err| decode_error(err.to_string()))?;
+                if event.content.membership == MembershipState::Ban {
+                    bans.push(RoomBan {
+                        user_id: event.state_key.to_string(),
+                        display_name: event.content.displayname,
+                        banned_by: event.sender.to_string(),
+                        reason: event.content.reason,
+                        timestamp_ms: event.origin_server_ts.get().into(),
+                    });
+                }
             }
             _ => {}
         }
