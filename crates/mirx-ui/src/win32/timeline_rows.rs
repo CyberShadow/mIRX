@@ -678,7 +678,7 @@ fn member_change_item(change: &RoomMemberChange) -> EventItem {
         | RoomMemberChange::KnockRetracted => EventItem::Part,
         RoomMemberChange::Kicked | RoomMemberChange::KickedAndBanned => EventItem::Kick,
         // IRC's +b and -b.
-        RoomMemberChange::Banned | RoomMemberChange::Unbanned => EventItem::Mode,
+        RoomMemberChange::Banned | RoomMemberChange::Unbanned => EventItem::Settings,
         RoomMemberChange::Invited
         | RoomMemberChange::InvitationRevoked
         | RoomMemberChange::Knocked
@@ -957,7 +957,7 @@ fn activity_line_text(
                     moderated,
                     other_permissions_changed,
                 } => (
-                    EventItem::Mode,
+                    EventItem::Settings,
                     power_levels_change_text(
                         &notice.sender,
                         changes,
@@ -971,11 +971,12 @@ fn activity_line_text(
                     EventItem::Topic,
                     name_change_text(&notice.sender, name.as_deref()),
                 ),
-                RoomStateNoticeContent::JoinRule { rule } => {
-                    (EventItem::Mode, join_rule_change_text(&notice.sender, rule))
-                }
+                RoomStateNoticeContent::JoinRule { rule } => (
+                    EventItem::Settings,
+                    join_rule_change_text(&notice.sender, rule),
+                ),
                 RoomStateNoticeContent::Encryption => {
-                    (EventItem::Mode, encryption_change_text(&notice.sender))
+                    (EventItem::Settings, encryption_change_text(&notice.sender))
                 }
             };
             (
@@ -4142,12 +4143,12 @@ mod tests {
                 RoomStateNoticeContent::JoinRule {
                     rule: mirx_core::RoomJoinRule::Invite,
                 },
-                EventItem::Mode,
+                EventItem::Settings,
                 "* Bob makes the room invite only",
             ),
             (
                 RoomStateNoticeContent::Encryption,
-                EventItem::Mode,
+                EventItem::Settings,
                 "* Bob turns on end-to-end encryption",
             ),
         ] {
@@ -4183,8 +4184,8 @@ mod tests {
             (KnockRetracted, EventItem::Part),
             (Kicked, EventItem::Kick),
             (KickedAndBanned, EventItem::Kick),
-            (Banned, EventItem::Mode),
-            (Unbanned, EventItem::Mode),
+            (Banned, EventItem::Settings),
+            (Unbanned, EventItem::Settings),
             (Invited, EventItem::Invite),
             (InvitationRevoked, EventItem::Invite),
             (Knocked, EventItem::Invite),

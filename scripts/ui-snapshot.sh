@@ -511,7 +511,7 @@ configure_case_expectations() {
     ;;
 
     # The lines a room's name, join rule and encryption changes print, in
-    # the Topic and Mode colours.
+    # the Topic and Settings colours.
     room-settings-lines)
       expect_selected='!topic:example'
       expect_active_view='room:!topic:example'
@@ -2731,9 +2731,10 @@ configure_case_expectations() {
         --expect-no-navigation-text 'ranks sort above names'
       )
       ;;
-    mode-lines)
-      # Power-level lines naming the room modes they change (+m, +t-m, -t
-      # with other permissions), beside a levels-only line.
+    settings-lines)
+      # Power-level lines saying which settings they change (moderation
+      # on; the topic to moderators only and moderation off; the topic to
+      # everyone with other permissions), beside a levels-only line.
       expect_selected='!modes:example'
       expect_active_view='room:!modes:example'
       room_expect_args=(
@@ -2741,9 +2742,9 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!modes:example::* Now talking in Modes (!modes:example)'
-        --expect-room-view '!modes:example::[22:13] * Admin sets mode: +m; power level: Voice 0 -> 1'
-        --expect-room-view '!modes:example::[22:14] * Admin sets mode: +t-m'
-        --expect-room-view '!modes:example::[22:15] * Admin sets mode: -t; room permissions changed'
+        --expect-room-view '!modes:example::[22:13] * Admin turns moderation on; power level: Voice 0 -> 1'
+        --expect-room-view '!modes:example::[22:14] * Admin turns moderation off and lets only moderators set the topic'
+        --expect-room-view '!modes:example::[22:15] * Admin lets everyone set the topic; room permissions changed'
         --expect-room-view '!modes:example::[22:16] * Admin sets power level: Mod 0 -> 50'
       )
       room_member_expect_args=(
@@ -3083,7 +3084,7 @@ configure_case_expectations() {
     membership-changes|colors-dark)
       if [[ "$case_name" == colors-dark ]]; then
         ordered_actions=(
-          'colors:background=1,normal=0,editbox=1,editbox_text=0,listbox=1,listbox_text=0,treebar=1,treebar_text=0,join=9,part=11,kick=4,mode=8,nick=13,topic=10,invite=7'
+          'colors:background=1,normal=0,editbox=1,editbox_text=0,listbox=1,listbox_text=0,treebar=1,treebar_text=0,join=9,part=11,kick=4,settings=8,nick=13,topic=10,invite=7'
         )
       fi
       expect_selected='!membership:example'

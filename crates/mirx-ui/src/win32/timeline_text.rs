@@ -221,15 +221,15 @@ pub(super) fn member_change_text(
     }
 }
 
-/// mIRC reports privilege changes as `* Op sets mode: +o Nick`. Matrix
-/// power levels are numbers rather than a few flags: the two room modes
-/// that are flags take mIRC's letters (`+m` moderated, `+t` only operators
-/// set the topic; pluses first, `m` before `t`), and the levels are numbers:
-/// `Op sets mode: +t-m; power level: Bob 0 -> 50, Carol 50 -> 0; default 0
-/// -> 10`, with `; room permissions changed` when the levels needed for
-/// other actions changed too. Without a mode it is `Op sets power level:
-/// ...`, or `Op changes room permissions` when only those changed.
-/// mirx-core reports at least one change.
+/// A power-levels change in words: the two settings that are thresholds
+/// (moderation, who may set the topic) as what they now do, moderation
+/// first, then the members' and the default level as numbers: `Op turns
+/// moderation off and lets only moderators set the topic; power level: Bob
+/// 0 -> 50, Carol 50 -> 0; default 0 -> 10`, with `; room permissions
+/// changed` when the levels needed for other actions changed too. Without
+/// a setting it is `Op sets power level: ...`, or `Op changes room
+/// permissions` when only those changed. mirx-core reports at least one
+/// change.
 pub(super) fn power_levels_change_text(
     sender: &RoomUserProfile,
     changes: &[RoomPowerLevelUserChange],
@@ -255,26 +255,28 @@ pub(super) fn power_levels_change_text(
     });
     let default = users_default.map(|change| format!("default {} -> {}", change.old, change.new));
     let levels = users.into_iter().chain(default).collect::<Vec<_>>();
-    let modes = [('m', moderated), ('t', topic_by_operators)];
-    let signed = |sign: char, on: bool| {
-        let letters = modes
-            .iter()
-            .filter(|(_, mode)| *mode == Some(on))
-            .map(|(letter, _)| *letter)
-            .collect::<String>();
-        if letters.is_empty() {
-            letters
+    let moderation = moderated.map(|on| {
+        if on {
+            "turns moderation on"
         } else {
-            format!("{sign}{letters}")
+            "turns moderation off"
         }
-    };
-    let mode = format!("{}{}", signed('+', true), signed('-', false));
+    });
+    let topic = topic_by_operators.map(|on| {
+        if on {
+            "lets only moderators set the topic"
+        } else {
+            "lets everyone set the topic"
+        }
+    });
+    let settings = moderation.into_iter().chain(topic).collect::<Vec<_>>();
+    let settings = settings.join(" and ");
     let levels = levels.join("; ");
-    let head = match (mode.is_empty(), levels.is_empty()) {
+    let head = match (settings.is_empty(), levels.is_empty()) {
         (true, true) => return format!("{op} changes room permissions"),
         (true, false) => format!("{op} sets power level: {levels}"),
-        (false, true) => format!("{op} sets mode: {mode}"),
-        (false, false) => format!("{op} sets mode: {mode}; power level: {levels}"),
+        (false, true) => format!("{op} {settings}"),
+        (false, false) => format!("{op} {settings}; power level: {levels}"),
     };
     let permissions = if other_permissions_changed {
         "; room permissions changed"
@@ -602,7 +604,7 @@ mod tests {
             new,
         };
         let default = RoomPowerLevelValueChange { old: 0, new: 10 };
-        // Without modes.
+        // Without settings.
         let text = |changes: &[RoomPowerLevelUserChange],
                     users_default: Option<&RoomPowerLevelValueChange>,
                     other| {
@@ -635,23 +637,41 @@ mod tests {
             "Op sets power level: Bob -1 -> 0; default 0 -> 10; room permissions changed"
         );
 
-        // With modes: pluses first, m before t.
-        for (topic_by_operators, moderated, mode) in [
-            (None, Some(true), "+m"),
-            (Some(false), None, "-t"),
-            (Some(true), Some(true), "+mt"),
-            (Some(true), Some(false), "+t-m"),
-            (Some(false), Some(true), "+m-t"),
-            (Some(false), Some(false), "-mt"),
+        // With settings: moderation first.
+        for (topic_by_operators, moderated, head) in [
+            (None, Some(true), "turns moderation on"),
+            (None, Some(false), "turns moderation off"),
+            (Some(true), None, "lets only moderators set the topic"),
+            (Some(false), None, "lets everyone set the topic"),
+            (
+                Some(true),
+                Some(true),
+                "turns moderation on and lets only moderators set the topic",
+            ),
+            (
+                Some(true),
+                Some(false),
+                "turns moderation off and lets only moderators set the topic",
+            ),
+            (
+                Some(false),
+                Some(true),
+                "turns moderation on and lets everyone set the topic",
+            ),
+            (
+                Some(false),
+                Some(false),
+                "turns moderation off and lets everyone set the topic",
+            ),
         ] {
             assert_eq!(
                 power_levels_change_text(&op, &[], None, topic_by_operators, moderated, false),
-                format!("Op sets mode: {mode}")
+                format!("Op {head}")
             );
         }
         assert_eq!(
             power_levels_change_text(&op, &[change(&bob, 0, 1)], None, None, Some(true), false),
-            "Op sets mode: +m; power level: Bob 0 -> 1"
+            "Op turns moderation on; power level: Bob 0 -> 1"
         );
         assert_eq!(
             power_levels_change_text(
@@ -662,12 +682,12 @@ mod tests {
                 Some(false),
                 true
             ),
-            "Op sets mode: +t-m; power level: Bob 1 -> 0; default 0 -> 10; \
-             room permissions changed"
+            "Op turns moderation off and lets only moderators set the topic; \
+             power level: Bob 1 -> 0; default 0 -> 10; room permissions changed"
         );
         assert_eq!(
             power_levels_change_text(&op, &[], None, Some(true), None, true),
-            "Op sets mode: +t; room permissions changed"
+            "Op lets only moderators set the topic; room permissions changed"
         );
     }
 }

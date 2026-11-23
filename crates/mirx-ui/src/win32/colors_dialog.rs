@@ -60,11 +60,11 @@ const ITEM_COMBO_DROPPED_HEIGHT: i32 = 320;
 const SAMPLE_LINES: [(&str, ColorItem); 16] = [
     ("* Joins: Carol", ColorItem::Join),
     ("* Parts: Dave", ColorItem::Part),
-    ("* Op sets mode: +b", ColorItem::Mode),
-    ("* Eve was kicked by Op", ColorItem::Kick),
+    ("* Mod turns moderation on", ColorItem::Settings),
+    ("* Eve was kicked by Mod", ColorItem::Kick),
     ("* Carol is now known as Caz", ColorItem::Nick),
     ("* Topic is 'hello'", ColorItem::Topic),
-    ("* Op invites Heidi", ColorItem::Invite),
+    ("* Mod invites Heidi", ColorItem::Invite),
     ("<Bob> Normal text", ColorItem::Normal),
     ("<you> Own text", ColorItem::Own),
     ("-Bob- Notice text", ColorItem::Notice),
@@ -76,7 +76,7 @@ const SAMPLE_LINES: [(&str, ColorItem); 16] = [
     ("Bob is typing", ColorItem::Gray),
 ];
 const TREEBAR_LINES: [&str; 2] = ["Status", "#room"];
-const LISTBOX_LINES: [&str; 2] = ["@Op", "Bob"];
+const LISTBOX_LINES: [&str; 2] = ["@Mod", "Bob"];
 const EDITBOX_TEXT: &str = "Editbox text";
 /// Around the text in each part, at 96 dpi.
 const PREVIEW_PADDING: i32 = 4;
@@ -745,7 +745,7 @@ mod tests {
         assert_eq!(
             size,
             (
-                (8 + 60) + (8 + widest_sample) + (8 + 30),
+                (8 + 60) + (8 + widest_sample) + (8 + mono("@Mod")),
                 (8 + 16 * 15) + (8 + 15)
             )
         );

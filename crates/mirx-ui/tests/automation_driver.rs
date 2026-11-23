@@ -9411,7 +9411,7 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
          active_away=on\r\nactive_invites=on\r\nactive_whois=on\r\n\
          [other]\r\nbuffer=5000\r\n\
          [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\n\
-         invite=3\r\njoin=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\n\
+         invite=3\r\njoin=3\r\nkick=3\r\nsettings=3\r\nnick=3\r\nnormal=1\r\n\
          notice=5\r\nnotify=7\r\nother=6\r\nown=1\r\npart=3\r\ntopic=3\r\neditbox=0\r\n\
          editbox_text=1\r\nlistbox=0\r\nlistbox_text=1\r\ngray=14\r\n\
          treebar=0\r\ntreebar_text=1\r\n[nickcolors]\r\nactive=on\r\n\
@@ -10757,7 +10757,7 @@ fn power_levels_event(
 }
 
 #[test]
-fn automation_driver_power_level_change_renders_mode_line() -> Result<(), Box<dyn std::error::Error>>
+fn automation_driver_power_level_change_renders_settings_line() -> Result<(), Box<dyn std::error::Error>>
 {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
@@ -10836,7 +10836,7 @@ fn automation_driver_power_level_change_renders_mode_line() -> Result<(), Box<dy
     assert!(
         view_contains(
             view,
-            "[22:15] * Admin sets mode: +m; power level: Bob 0 -> 1"
+            "[22:15] * Admin turns moderation on; power level: Bob 0 -> 1"
         ),
         "{:?}",
         view.lines

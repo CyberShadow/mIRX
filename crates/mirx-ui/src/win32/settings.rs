@@ -1071,7 +1071,7 @@ mod tests {
         active_away=on\r\nactive_invites=on\r\nactive_whois=on\r\n\
         [other]\r\nbuffer=5000\r\n\
         [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\ninvite=3\r\n\
-        join=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\nnotice=5\r\nnotify=7\r\nother=6\r\nown=1\r\n\
+        join=3\r\nkick=3\r\nsettings=3\r\nnick=3\r\nnormal=1\r\nnotice=5\r\nnotify=7\r\nother=6\r\nown=1\r\n\
         part=3\r\ntopic=3\r\neditbox=0\r\neditbox_text=1\r\nlistbox=0\r\nlistbox_text=1\r\n\
         gray=14\r\ntreebar=0\r\ntreebar_text=1\r\n\
         [nickcolors]\r\nactive=on\r\n\
@@ -1724,6 +1724,7 @@ mod tests {
             ("[colors]\njoin=-1", "line 2: colors must be 0-15"),
             ("[colors]\njoin=red", "line 2: colors must be 0-15"),
             ("[colors]\nctcp=4", "line 2: unknown key ctcp"),
+            ("[colors]\nmode=4", "line 2: unknown key mode"),
             ("[colors]\njoin=3\njoin=4", "line 3: duplicate key join"),
             ("[switchbar]\nmessage=99", "line 2: colors must be 0-15"),
             ("[treebar]\nevent=5", "line 2: unknown key event"),

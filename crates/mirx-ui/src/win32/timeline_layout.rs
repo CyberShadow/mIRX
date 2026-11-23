@@ -1772,7 +1772,7 @@ mod tests {
             (event(EventItem::Invite), Some(ColorItem::Invite)),
             (notice(EventItem::Part), Some(ColorItem::Part)),
             (notice(EventItem::Kick), Some(ColorItem::Kick)),
-            (notice(EventItem::Mode), Some(ColorItem::Mode)),
+            (notice(EventItem::Settings), Some(ColorItem::Settings)),
             (notice(EventItem::Nick), Some(ColorItem::Nick)),
             (TimelineRowKind::Info, Some(ColorItem::Info)),
             (TimelineRowKind::Error, None),

@@ -83,7 +83,7 @@ pub(super) enum ColorItem {
     Invite,
     Join,
     Kick,
-    Mode,
+    Settings,
     Nick,
     Normal,
     Notice,
@@ -113,7 +113,7 @@ impl ColorItem {
         Self::Invite,
         Self::Join,
         Self::Kick,
-        Self::Mode,
+        Self::Settings,
         Self::Nick,
         Self::Normal,
         Self::Notice,
@@ -141,7 +141,7 @@ impl ColorItem {
             Self::Invite => "Invite text",
             Self::Join => "Join text",
             Self::Kick => "Kick text",
-            Self::Mode => "Mode text",
+            Self::Settings => "Settings text",
             Self::Nick => "Nick text",
             Self::Normal => "Normal text",
             Self::Notice => "Notice text",
@@ -170,7 +170,7 @@ impl ColorItem {
             Self::Invite => "invite",
             Self::Join => "join",
             Self::Kick => "kick",
-            Self::Mode => "mode",
+            Self::Settings => "settings",
             Self::Nick => "nick",
             Self::Normal => "normal",
             Self::Notice => "notice",
@@ -205,7 +205,7 @@ impl ColorItem {
             Self::Invite => 3,
             Self::Join => 3,
             Self::Kick => 3,
-            Self::Mode => 3,
+            Self::Settings => 3,
             Self::Nick => 3,
             Self::Normal => 1,
             Self::Notice => 5,
@@ -225,14 +225,14 @@ impl ColorItem {
     }
 }
 
-/// The item an event line takes: a membership, mode or topic change, or a
+/// The item an event line takes: a membership, settings or topic change, or a
 /// notify list user coming or going.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum EventItem {
     Join,
     Part,
     Kick,
-    Mode,
+    Settings,
     Nick,
     Topic,
     Invite,
@@ -245,7 +245,7 @@ impl EventItem {
             Self::Join => ColorItem::Join,
             Self::Part => ColorItem::Part,
             Self::Kick => ColorItem::Kick,
-            Self::Mode => ColorItem::Mode,
+            Self::Settings => ColorItem::Settings,
             Self::Nick => ColorItem::Nick,
             Self::Topic => ColorItem::Topic,
             Self::Invite => ColorItem::Invite,
@@ -523,6 +523,7 @@ mod tests {
         keys.dedup();
         assert_eq!(keys.len(), COLOR_ITEMS);
         assert_eq!(ColorItem::from_ini_key("ctcp"), None);
+        assert_eq!(ColorItem::from_ini_key("mode"), None);
     }
 
     #[test]
