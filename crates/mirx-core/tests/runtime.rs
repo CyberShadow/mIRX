@@ -25,9 +25,9 @@ use mirx_core::{
     SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
     SetTypingRequest, SetupE2eeRecoveryRequest, SignOutDeviceRequest, SpaceChildSummary,
     StoredSession, SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity,
-    UserDevices, UserIdentityState, UserPresence, UserProfile, VerificationDecimals,
-    VerificationDirection, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, start, validate_highlight_word,
+    UpdateRoomSettingsRequest, UserDevices, UserIdentityState, UserPresence, UserProfile,
+    VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start, validate_highlight_word,
 };
 use tempfile::TempDir;
 
@@ -134,6 +134,8 @@ fn error_room_id(command: &Command) -> Option<&str> {
         Command::SetRoomMemberPowerLevel(request) => Some(&request.room_id),
         Command::RejectRoomInvite(request) => Some(&request.room_id),
         Command::SetRoomTopic(request) => Some(&request.room_id),
+        Command::FetchRoomSettings(room_id) => Some(room_id),
+        Command::UpdateRoomSettings(request) => Some(&request.room_id),
         Command::SetRoomNotificationMode(request) => Some(&request.room_id),
         Command::SendMessage(request) => Some(&request.room_id),
         Command::SendFile(request) => Some(&request.room_id),
@@ -853,6 +855,29 @@ fn set_room_topic_before_login_emits_set_room_topic_error() {
         }),
         Operation::SetRoomTopic,
         "set room topic requires an authenticated session",
+    );
+}
+
+#[test]
+fn room_settings_before_login_emit_their_errors() {
+    assert_invalid_authenticated_command(
+        Command::FetchRoomSettings("!ops:example.org".to_owned()),
+        Operation::FetchRoomSettings,
+        "fetch room settings requires an authenticated session",
+    );
+    assert_invalid_authenticated_command(
+        Command::UpdateRoomSettings(UpdateRoomSettingsRequest {
+            room_id: "!ops:example.org".to_owned(),
+            topic_by_operators: None,
+            moderated: Some(true),
+            invite_only: None,
+            name: None,
+            topic: None,
+            listed_in_directory: None,
+            unban: Vec::new(),
+        }),
+        Operation::UpdateRoomSettings,
+        "update room settings requires an authenticated session",
     );
 }
 

@@ -175,10 +175,12 @@ use crate::rich_text::{StyledText, html_from_styled_text, styled_text_from_html}
 use crate::runtime::{E2eeStatusWatch, EventSender, FirstContact, RoomSnapshots, emit_event};
 
 mod room_keys;
+mod room_settings;
 
 pub(crate) use room_keys::{
     export_room_keys, import_room_keys, retry_decryption, room_decryption_task,
 };
+pub(crate) use room_settings::{fetch_room_settings, update_room_settings};
 
 #[derive(Debug)]
 pub(crate) struct MatrixCoreError {

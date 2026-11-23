@@ -35,6 +35,15 @@ pub enum Command {
     SetDisplayName(SetDisplayNameRequest),
     RejectRoomInvite(RejectRoomInviteRequest),
     SetRoomTopic(SetRoomTopicRequest),
+    /// Reads a joined room's settings from the server (not the store, which
+    /// lags a write until its echo). Answered by `RoomSettings`, or a
+    /// `FetchRoomSettings` error.
+    FetchRoomSettings(String),
+    /// Changes a joined room's settings, part by part in the request's
+    /// field order; it stops at the first refused part (the parts before
+    /// it stay), and the error names it. The server's echo brings the
+    /// lines; nothing else answers.
+    UpdateRoomSettings(UpdateRoomSettingsRequest),
     /// Writes the room's push rule; the next sync's `SyncedRooms` reports
     /// the new mode.
     SetRoomNotificationMode(SetRoomNotificationModeRequest),
@@ -450,6 +459,78 @@ pub struct RejectRoomInviteRequest {
 pub struct SetRoomTopicRequest {
     pub room_id: String,
     pub topic: String,
+}
+
+/// A room's settings as Channel Central shows them, read from the server.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomSettings {
+    pub room_id: String,
+    /// `m.room.name`; `None` when absent or empty.
+    pub name: Option<String>,
+    /// `m.room.topic`; `None` when absent.
+    pub topic: Option<String>,
+    /// `m.room.join_rules`; the spec's `invite` when absent.
+    pub join_rule: RoomJoinRule,
+    /// Changing the topic needs more than the default user level.
+    pub topic_by_operators: bool,
+    /// Sending messages (`m.room.message` and `m.room.encrypted`) needs
+    /// more than the default user level: only voiced members speak.
+    pub moderated: bool,
+    /// Published in the server's room directory (the Rooms List).
+    pub listed_in_directory: bool,
+    /// Newest first.
+    pub bans: Vec<RoomBan>,
+    /// What the signed-in user may change.
+    pub allowed: RoomSettingsPermissions,
+}
+
+/// A banned user: their `m.room.member` ban event.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomBan {
+    pub user_id: String,
+    /// The ban event's `displayname`, if it kept one.
+    pub display_name: Option<String>,
+    /// Who banned them: the event's sender.
+    pub banned_by: String,
+    pub reason: Option<String>,
+    pub timestamp_ms: u64,
+}
+
+/// Which of a `RoomSettings`' parts the signed-in user's power level lets
+/// them change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomSettingsPermissions {
+    pub name: bool,
+    pub topic: bool,
+    pub join_rule: bool,
+    /// `topic_by_operators` and `moderated`: the power levels.
+    pub power_levels: bool,
+    /// `listed_in_directory`.
+    pub directory: bool,
+    pub unban: bool,
+}
+
+/// The settings to change; `None` (and no unbans) leaves a part as it is.
+/// The parts are written in field order.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateRoomSettingsRequest {
+    pub room_id: String,
+    /// `topic_by_operators` and `moderated` go in one power-levels write.
+    pub topic_by_operators: Option<bool>,
+    pub moderated: Option<bool>,
+    /// `true`: join rule `invite`; `false`: `public`.
+    pub invite_only: Option<bool>,
+    /// `Some("")` removes the name.
+    pub name: Option<String>,
+    /// `Some("")` clears the topic.
+    pub topic: Option<String>,
+    pub listed_in_directory: Option<bool>,
+    /// User IDs to unban, in order.
+    pub unban: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2203,6 +2284,8 @@ pub enum Operation {
     SetPresence,
     RejectRoomInvite,
     SetRoomTopic,
+    FetchRoomSettings,
+    UpdateRoomSettings,
     SetRoomNotificationMode,
     HighlightWords,
     AddHighlightWord,
@@ -2342,6 +2425,8 @@ pub enum Event {
     IgnoredUsers(Vec<String>),
     /// The answer to `FetchUserProfile`.
     UserProfile(UserProfile),
+    /// The answer to `FetchRoomSettings`.
+    RoomSettings(RoomSettings),
     AwayChanged(AwayChanged),
     /// Users' presence: from each sync that carries some, and with the
     /// session's first room snapshot for every joined room's members the

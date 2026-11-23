@@ -27,7 +27,7 @@ use crate::api::{
     SendReactionRequest, SetDisplayNameRequest, SetReadMarkerRequest,
     SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
     SetTypingRequest, SetupE2eeRecoveryRequest, SignOutDeviceRequest, UnbanRoomMemberRequest,
-    VerificationFlowId,
+    UpdateRoomSettingsRequest, VerificationFlowId,
 };
 use crate::matrix::{self, AwayFlag, BackupServerStatusMode};
 
@@ -173,6 +173,21 @@ pub(super) fn route(command: Command) -> Route {
             request.room_id.clone(),
             "set room topic requires an authenticated session",
             |ctx| set_room_topic(ctx, request),
+        ),
+        // After the room's queued writes: the dialog reads what they wrote.
+        Command::FetchRoomSettings(room_id) => in_room(
+            Op::FetchRoomSettings,
+            room_id.clone(),
+            "fetch room settings requires an authenticated session",
+            |ctx| fetch_room_settings(ctx, room_id),
+        ),
+        // Read-modify-write of `m.room.power_levels`, like
+        // `SetRoomMemberPowerLevel`.
+        Command::UpdateRoomSettings(request) => in_room(
+            Op::UpdateRoomSettings,
+            request.room_id.clone(),
+            "update room settings requires an authenticated session",
+            |ctx| update_room_settings(ctx, request),
         ),
         Command::SetRoomNotificationMode(request) => in_room(
             Op::SetRoomNotificationMode,
@@ -803,6 +818,25 @@ async fn set_room_topic(ctx: JobCtx, request: SetRoomTopicRequest) -> Followup {
     let room_id = request.room_id.clone();
     if let Err(err) = matrix::set_room_topic(client, request).await {
         emit_room_matrix_error(events, Operation::SetRoomTopic, &room_id, err);
+    }
+
+    Followup::Done
+}
+
+async fn fetch_room_settings(ctx: JobCtx, room_id: String) -> Followup {
+    let JobCtx { client, events, .. } = &ctx;
+    match matrix::fetch_room_settings(client, &room_id).await {
+        Ok(settings) => emit_event(events, Event::RoomSettings(settings)),
+        Err(err) => emit_room_matrix_error(events, Operation::FetchRoomSettings, &room_id, err),
+    }
+
+    Followup::Done
+}
+
+async fn update_room_settings(ctx: JobCtx, request: UpdateRoomSettingsRequest) -> Followup {
+    let JobCtx { client, events, .. } = &ctx;
+    if let Err(err) = matrix::update_room_settings(client, &request).await {
+        emit_room_matrix_error(events, Operation::UpdateRoomSettings, &request.room_id, err);
     }
 
     Followup::Done

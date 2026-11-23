@@ -13,6 +13,9 @@ pub(super) enum ErrorDestination<'e> {
     ActiveWindow { command: &'static str },
     /// The Status window.
     Status,
+    /// Only the dialog that asked, which shows it: Channel Central's read
+    /// of the room's settings. With the dialog closed, nothing awaits it.
+    AskingDialog,
 }
 
 /// Where mIRC would print the error. Actions the user took in or on a room
@@ -31,6 +34,7 @@ pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> 
         | Operation::InviteRoomMember
         | Operation::SetRoomMemberPowerLevel
         | Operation::SetRoomTopic
+        | Operation::UpdateRoomSettings
         | Operation::SetRoomNotificationMode
         | Operation::SendMessage
         | Operation::SendFile
@@ -58,6 +62,7 @@ pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> 
             command: "identity",
         },
         Operation::RequestVerification => ErrorDestination::ActiveWindow { command: "verify" },
+        Operation::FetchRoomSettings => ErrorDestination::AskingDialog,
         Operation::Login
         | Operation::RestoreSession
         | Operation::SessionUpdate
@@ -107,7 +112,7 @@ mod tests {
         }
     }
 
-    const ROOM_OPERATIONS: [Operation; 16] = [
+    const ROOM_OPERATIONS: [Operation; 17] = [
         Operation::AcceptRoomInvite,
         Operation::RejectRoomInvite,
         Operation::LeaveRoom,
@@ -117,6 +122,7 @@ mod tests {
         Operation::InviteRoomMember,
         Operation::SetRoomMemberPowerLevel,
         Operation::SetRoomTopic,
+        Operation::UpdateRoomSettings,
         Operation::SetRoomNotificationMode,
         Operation::SendMessage,
         Operation::SendFile,
@@ -210,6 +216,14 @@ mod tests {
                 "{operation:?}"
             );
         }
+    }
+
+    #[test]
+    fn channel_centrals_read_answers_only_the_dialog() {
+        assert_eq!(
+            error_destination(&error(Operation::FetchRoomSettings, Some("!ops:example"))),
+            ErrorDestination::AskingDialog
+        );
     }
 
     #[test]

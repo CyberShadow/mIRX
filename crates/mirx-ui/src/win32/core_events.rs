@@ -567,6 +567,9 @@ pub(super) fn apply_core_event(
             }
             state.model.ignored_users = Some(ignored_users);
         }
+        // Channel Central shows it (`apply_events_and_refresh`); with no
+        // dialog open for the room, nothing awaits it.
+        Event::RoomSettings(_) => {}
         Event::UserProfile(profile) => {
             let lines = whois_lines(&state.model, &profile);
             echo_lines_in_active_view(state, lines);
@@ -805,6 +808,9 @@ pub(super) fn apply_core_event(
             let line = status_log::error(operation_name(error.operation), &error.message);
             let now = state.clock.now_ms();
             match error_destination(&error) {
+                // Channel Central shows it (`apply_events_and_refresh`):
+                // the status bar and the windows say nothing.
+                ErrorDestination::AskingDialog => return Ok(ActivityAttention::default()),
                 ErrorDestination::ActiveWindow { command } => {
                     let error = CommandError::new(command, error.message.clone());
                     echo_lines_in_active_view(state, [error.to_string()]);
@@ -1190,6 +1196,8 @@ pub(super) fn operation_name(operation: Operation) -> &'static str {
         Operation::SetDisplayName => "set display name",
         Operation::SetPresence => "set presence",
         Operation::SetRoomTopic => "set room topic",
+        Operation::FetchRoomSettings => "fetch room settings",
+        Operation::UpdateRoomSettings => "change room settings",
         Operation::SetRoomNotificationMode => "set room notifications",
         Operation::HighlightWords => "highlight words",
         Operation::AddHighlightWord => "add highlight word",

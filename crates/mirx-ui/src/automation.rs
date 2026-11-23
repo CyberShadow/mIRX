@@ -2698,6 +2698,8 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::SetPresence => "set_presence",
         Operation::SetTyping => "set_typing",
         Operation::SetRoomTopic => "set_room_topic",
+        Operation::FetchRoomSettings => "fetch_room_settings",
+        Operation::UpdateRoomSettings => "update_room_settings",
         Operation::SetRoomNotificationMode => "set_room_notification_mode",
         Operation::HighlightWords => "highlight_words",
         Operation::AddHighlightWord => "add_highlight_word",
