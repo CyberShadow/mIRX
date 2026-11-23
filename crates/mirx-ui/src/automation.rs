@@ -5423,7 +5423,7 @@ mod tests {
             serde_json::to_value(&events).unwrap(),
             json!([
                 "Started",
-                {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]},
+                {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[],"invite":null}]},
                 {"VerificationRequest":{"flow_id":"flow-1","user_id":"@alice:example","direction":{"type":"incoming","from_device":"ALICEDEVICE"}}},
                 {"RoomReadState":{"room_id":"!ops:example","latest_active_event_id":"$latest:example","fully_read_event_id":"$fully-read:example","fully_read_timestamp_ms":null,"marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}},
                 {"Error":{"operation":"SendMessage","room_id":"!room:example","message":"send failed"}}
@@ -5472,7 +5472,7 @@ mod tests {
                 "ok":false,
                 "err":{
                     "code":"invalid_args",
-                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `display_name`, `topic`, `membership`, `encrypted`, `is_space`, `is_direct`, `direct_user_ids`, `tags`, `space_children`, `notification_mode`, `canonical_alias`, `alt_aliases`"
+                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `display_name`, `topic`, `membership`, `encrypted`, `is_space`, `is_direct`, `direct_user_ids`, `tags`, `space_children`, `notification_mode`, `canonical_alias`, `alt_aliases`, `invite`"
                 }
             })
         );
