@@ -23864,9 +23864,9 @@ fn away_members_are_grey_and_a_query_says_away_once() -> Result<(), Box<dyn std:
     assert_eq!(lines(&ui_state, &dm, "is away"), ["* Alice is away: lunch"]);
     assert_eq!(lines(&ui_state, &beta, "is away"), Vec::<String>::new());
 
-    // Back, then away with another message: said again, by `/msg` in the
-    // window it was typed in, after its echo, as the server's answer would
-    // be; then the query has heard it.
+    // Back, then away with another message: said again, by `/msg` typed in
+    // a channel, in the query (mIRC's Show in active: Away); then the
+    // query has heard it.
     app.append_synthetic_events(&serde_json::to_string(&vec![
         Event::PresenceChanged(vec![presence(
             "@alice:example",
@@ -23885,11 +23885,11 @@ fn away_members_are_grey_and_a_query_says_away_once() -> Result<(), Box<dyn std:
     type_commands(&app, &["and now?"])?;
     assert_eq!(app.dump_model()?.submitted_message_commands.len(), 5);
     let ui_state = app.dump_ui_state()?;
+    assert_eq!(lines(&ui_state, &beta, "Alice"), ["-> *Alice* ping"]);
     assert_eq!(
-        lines(&ui_state, &beta, "Alice"),
-        ["-> *Alice* ping", "* Alice is away: meeting"]
+        lines(&ui_state, &dm, "is away"),
+        ["* Alice is away: lunch", "* Alice is away: meeting"]
     );
-    assert_eq!(lines(&ui_state, &dm, "is away"), ["* Alice is away: lunch"]);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

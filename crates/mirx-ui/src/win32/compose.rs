@@ -557,7 +557,8 @@ pub(super) fn submit_compose(
         state.room_activity.remove(window);
     }
     let notice = away_notice(state, &destination.room_id);
-    echo_lines_in_view(state, &echo_view(window), notice);
+    let view = away_view(state, &destination.room_id);
+    echo_lines_in_view(state, &view, notice);
 
     Ok(destination.room_id)
 }
@@ -605,8 +606,8 @@ pub(super) fn enqueue_send_message(
 
 /// After a message to `room_id`: if it is a query whose user is away, the
 /// line that says so (IRC's `RPL_AWAY`), once per away status
-/// (`PresenceBook::away_notice`). It prints in the window the message was
-/// given in, after any echo of the message.
+/// (`PresenceBook::away_notice`). It prints in [`away_view`], after any
+/// echo of the message.
 pub(super) fn away_notice(state: &mut WindowState, room_id: &str) -> Option<String> {
     let room = room_by_id(&state.model.rooms, room_id).expect("a message goes to a known room");
     let (RoomWindowKind::Query, [user_id]) =
@@ -617,6 +618,18 @@ pub(super) fn away_notice(state: &mut WindowState, room_id: &str) -> Option<Stri
     let user_id = user_id.clone();
     let nick = known_nick(&state.model, &user_id).unwrap_or_else(|| user_id.clone());
     state.model.presence.away_notice(room_id, &user_id, &nick)
+}
+
+/// Where the away line of the query `room_id` prints: mIRC's Show in
+/// active: Away puts it in the query window, wherever the message was
+/// typed. Off, or with the query's window closed (none is reopened for
+/// it), it prints in Status.
+pub(super) fn away_view(state: &WindowState, room_id: &str) -> ViewId {
+    if state.settings.settings().irc.active_away && !state.closed_queries.contains(room_id) {
+        ViewId::Room(room_id.to_owned())
+    } else {
+        ViewId::Status
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1893,6 +1906,23 @@ mod tests {
         assert_eq!(state.recorded_commands.len(), 3);
 
         stop_test_core(handle);
+    }
+
+    /// mIRC's Show in active: Away: the query window, unless it is off or
+    /// the query's window is closed.
+    #[test]
+    fn the_away_line_prints_in_the_query_window() {
+        let mut state = test_state();
+        let query = ViewId::Room("!bob:example".to_owned());
+        assert_eq!(away_view(&state, "!bob:example"), query);
+        state.closed_queries.insert("!bob:example".to_owned());
+        assert_eq!(away_view(&state, "!bob:example"), ViewId::Status);
+        state.closed_queries.clear();
+        state
+            .settings
+            .update(|settings| settings.irc.active_away = false)
+            .unwrap();
+        assert_eq!(away_view(&state, "!bob:example"), ViewId::Status);
     }
 
     #[test]

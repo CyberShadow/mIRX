@@ -11,6 +11,9 @@ pub(super) enum ErrorDestination<'e> {
     Room(&'e str),
     /// The window the user typed the command in, as `* /{command}: ...`.
     ActiveWindow { command: &'static str },
+    /// As `ActiveWindow` for `/whois`, when Options > IRC's Show in active:
+    /// Whois is on; in Status when it is off.
+    Whois,
     /// The Status window.
     Status,
     /// Only the dialog that asked, which shows it: Channel Central's read
@@ -51,7 +54,7 @@ pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> 
         Operation::UnignoreUser => ErrorDestination::ActiveWindow {
             command: "unignore",
         },
-        Operation::FetchUserProfile => ErrorDestination::ActiveWindow { command: "whois" },
+        Operation::FetchUserProfile => ErrorDestination::Whois,
         // `/back` too: one command, as Commands > Set Back.
         Operation::SetPresence => ErrorDestination::ActiveWindow { command: "away" },
         Operation::ListUserDevices | Operation::SignOutDevice | Operation::RenameDevice => {
@@ -200,7 +203,6 @@ mod tests {
         for (operation, command) in [
             (Operation::IgnoreUser, "ignore"),
             (Operation::UnignoreUser, "unignore"),
-            (Operation::FetchUserProfile, "whois"),
             (Operation::SetPresence, "away"),
             (Operation::ListUserDevices, "devices"),
             (Operation::SignOutDevice, "devices"),
@@ -214,6 +216,14 @@ mod tests {
                 "{operation:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_whois_error_prints_where_whois_answers_do() {
+        assert_eq!(
+            error_destination(&error(Operation::FetchUserProfile, None)),
+            ErrorDestination::Whois
+        );
     }
 
     #[test]

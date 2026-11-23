@@ -580,7 +580,8 @@ pub(super) fn apply_core_event(
         Event::RoomSettings(_) => {}
         Event::UserProfile(profile) => {
             let lines = whois_lines(&state.model, &profile);
-            echo_lines_in_front_window(state, lines);
+            let view = whois_view(state);
+            echo_lines_in_view(state, &view, lines);
         }
         Event::AwayChanged(changed) => {
             echo_lines_in_front_window(state, commands::away_lines(&changed));
@@ -824,6 +825,11 @@ pub(super) fn apply_core_event(
                     let error = CommandError::new(command, error.message.clone());
                     echo_lines_in_front_window(state, [error.to_string()]);
                 }
+                ErrorDestination::Whois => {
+                    let error = CommandError::new("whois", error.message.clone());
+                    let view = whois_view(state);
+                    echo_lines_in_view(state, &view, [error.to_string()]);
+                }
                 ErrorDestination::Room(room_id) => match state.model.room_views.get_mut(room_id) {
                     Some(room_view) => {
                         room_view.push_echo(now, None, StatusLineKind::Info, context_line(&line))
@@ -841,6 +847,14 @@ pub(super) fn apply_core_event(
         }
     }
     Ok(ActivityAttention::default())
+}
+
+/// Where `/whois` answers print: Options > IRC's Show in active: Whois.
+fn whois_view(state: &WindowState) -> ViewId {
+    answer_view(
+        &state.active_view,
+        state.settings.settings().irc.active_whois,
+    )
 }
 
 /// The server the signed-in session is on, as connection lines name it.
@@ -1392,6 +1406,74 @@ mod tests {
             .iter()
             .map(|line| (line.kind, line.text.clone()))
             .collect()
+    }
+
+    /// Options > IRC's Show in active: Whois decides where `/whois` answers
+    /// and their errors print: the room or thread window in front, or
+    /// Status; with Status in front, Status either way.
+    #[test]
+    fn whois_prints_in_status_when_show_in_active_whois_is_off() {
+        let whois_texts = |state: &WindowState| -> (Vec<String>, Vec<String>) {
+            let in_room = render_room_lines(state, "!ops:example")
+                .into_iter()
+                .filter(|line| line.contains("bob"))
+                .collect();
+            let in_status = state
+                .model
+                .status_log
+                .lines()
+                .iter()
+                .map(|line| line.text.clone())
+                .filter(|text| text.contains("bob"))
+                .collect();
+            (in_room, in_status)
+        };
+        let answer_and_error = |state: &mut WindowState| {
+            apply_core_event(
+                state,
+                Event::UserProfile(UserProfile {
+                    user_id: "@bob:example".to_owned(),
+                    display_name: None,
+                    presence: None,
+                }),
+            )
+            .unwrap();
+            apply_core_event(
+                state,
+                Event::Error(CoreErrorEvent {
+                    operation: Operation::FetchUserProfile,
+                    room_id: None,
+                    message: "no profile for @bob:example".to_owned(),
+                }),
+            )
+            .unwrap();
+        };
+        for (active_whois, active, in_room) in [
+            (true, ViewId::Room("!ops:example".to_owned()), true),
+            (false, ViewId::Room("!ops:example".to_owned()), false),
+            (true, ViewId::Status, false),
+        ] {
+            let mut state = test_state();
+            state.model.rooms = vec![room("!ops:example", "Ops", false)];
+            state
+                .settings
+                .update(|settings| settings.irc.active_whois = active_whois)
+                .unwrap();
+            state.active_view = active.clone();
+            answer_and_error(&mut state);
+            let (room_lines, status_lines) = whois_texts(&state);
+            let (expected_room, expected_status) = if in_room { (4, 0) } else { (0, 4) };
+            assert_eq!(
+                (room_lines.len(), status_lines.len()),
+                (expected_room, expected_status),
+                "{active_whois} {active:?}: {room_lines:?} {status_lines:?}"
+            );
+            let lines = if in_room { room_lines } else { status_lines };
+            assert!(
+                lines[3].ends_with("* /whois: no profile for @bob:example"),
+                "{lines:?}"
+            );
+        }
     }
 
     #[test]

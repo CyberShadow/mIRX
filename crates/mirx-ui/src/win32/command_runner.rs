@@ -117,8 +117,10 @@ pub(super) unsafe fn run_slash_command(
                             RoomMessagePresentationKind::Text,
                             &input,
                         )?;
-                        let notice = away_notice(state_mut(hwnd), &room_id);
-                        echo_in_window(hwnd, &ViewId::Room(room_id), notice)?;
+                        if let Some(notice) = away_notice(state_mut(hwnd), &room_id) {
+                            let view = away_view(state_ref(hwnd), &room_id);
+                            echo_in_window(hwnd, &view, [notice])?;
+                        }
                     }
                     Ok(Some(format!("query opened: {user_id}")))
                 }
@@ -148,8 +150,11 @@ pub(super) unsafe fn run_slash_command(
             let room_id = msg_target_room_id(&state_ref(hwnd).model, &target)?;
             let sent = send_room_message(state_mut(hwnd), room_id.clone(), presentation, &body)?;
             let echo = commands::msg_echo(presentation, &target, &sent);
-            let notice = away_notice(state_mut(hwnd), &room_id);
-            echo_in_window(hwnd, window, std::iter::once(echo).chain(notice))?;
+            echo_in_window(hwnd, window, [echo])?;
+            if let Some(notice) = away_notice(state_mut(hwnd), &room_id) {
+                let view = away_view(state_ref(hwnd), &room_id);
+                echo_in_window(hwnd, &view, [notice])?;
+            }
             Ok(None)
         }
         SlashCommand::Names { target } => {
@@ -983,6 +988,17 @@ pub(super) fn echo_view(window: &ViewId) -> ViewId {
     match window {
         ViewId::RoomList => ViewId::Status,
         view => view.clone(),
+    }
+}
+
+/// Where a core answer of a mIRC "Show in active" kind prints: the window
+/// in front when the option is on and it is a room or thread window, else
+/// Status.
+pub(super) fn answer_view(active: &ViewId, show_in_active: bool) -> ViewId {
+    if show_in_active {
+        echo_view(active)
+    } else {
+        ViewId::Status
     }
 }
 

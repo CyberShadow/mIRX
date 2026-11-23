@@ -317,7 +317,7 @@ use command_runner::clear_window;
 #[cfg(test)]
 use command_runner::run_slash_command;
 use command_runner::{
-    channel_central_room, devices_lines, echo_in_window, echo_lines_in_front_window,
+    answer_view, channel_central_room, devices_lines, echo_in_window, echo_lines_in_front_window,
     echo_lines_in_view, echo_view, enqueue_command, known_nick, open_room_link, own_server,
     push_lines_in_view, report_command_error, report_error_line, resolve_invite_command_room_id,
     resolve_joined_room_target, run_local_command, send_edit, send_reply, set_local_command_status,
@@ -335,8 +335,8 @@ use commands::{
 use compose::submit_compose_from_edit;
 use compose::{
     ComposeHistory, ComposeNickCompletion, active_compose_history, arm_compose_target,
-    arm_compose_target_on_selected_message, armed_compose_target_row, away_notice, compose_edit,
-    disarm_vanished_compose_target, dump_compose_text, enqueue_send_message,
+    arm_compose_target_on_selected_message, armed_compose_target_row, away_notice, away_view,
+    compose_edit, disarm_vanished_compose_target, dump_compose_text, enqueue_send_message,
     message_text_from_input, prefill_react_to_selected_message, replace_edit_selection,
     resolve_compose_destination, run_send_file_dialog, send_compose_key, send_file_room_id,
     send_room_message, set_compose_text, subclass_compose_edit, submit_compose_from_control,
