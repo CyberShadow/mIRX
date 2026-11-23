@@ -12,6 +12,7 @@ use super::colors::{ColorItem, ColorScheme, PaletteIndex};
 use super::commands::is_user_id;
 use super::nick_colors::{NickColorEntry, NickColorSetting};
 use super::notify::{NotifyList, NotifySetting};
+use super::perform::{PerformLine, PerformSetting};
 use super::timestamp::{TimestampFormat, TimestampSetting};
 
 pub(super) const SETTINGS_FILE_NAME: &str = "mirx.ini";
@@ -106,6 +107,8 @@ pub(super) struct Settings {
     pub(super) nick_colors: NickColorSetting,
     /// mIRC's notify list (`/notify`, the Address Book) and its option.
     pub(super) notify: NotifySetting,
+    /// mIRC's Perform on connect (Options > Connect > Options).
+    pub(super) perform: PerformSetting,
 }
 
 /// mIRC's Options > Connect > Options.
@@ -556,6 +559,7 @@ enum Section {
     Colors,
     NickColors,
     Notify,
+    Perform,
 }
 
 /// Parses `mirx.ini`. Missing keys keep their defaults.
@@ -589,6 +593,7 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                 "colors" => Section::Colors,
                 "nickcolors" => Section::NickColors,
                 "notify" => Section::Notify,
+                "perform" => Section::Perform,
                 _ => return Err(error(format!("unknown section [{name}]"))),
             });
             continue;
@@ -720,6 +725,12 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Notify, key) => {
                 parse_notify_entry(&mut settings.notify.list, key, value).map_err(error)?;
             }
+            (Section::Perform, "enabled") => {
+                settings.perform.enabled = parse_on_off(value, "enabled").map_err(error)?;
+            }
+            (Section::Perform, key) => {
+                parse_perform_line(&mut settings.perform, key, value).map_err(error)?;
+            }
             _ => return Err(error(format!("unknown key {key}"))),
         }
         seen.push((section, key));
@@ -784,6 +795,13 @@ pub(super) fn to_ini(settings: &Settings) -> String {
             }
         })
         .collect::<String>();
+    let perform = settings
+        .perform
+        .lines()
+        .iter()
+        .enumerate()
+        .map(|(index, line)| format!("n{index}={}\r\n", line.text()))
+        .collect::<String>();
     let nick_colors = settings
         .nick_colors
         .list
@@ -809,7 +827,8 @@ pub(super) fn to_ini(settings: &Settings) -> String {
          [other]\r\nbuffer={}\r\n\
          [colors]\r\n{colors}\
          [nickcolors]\r\nactive={}\r\n{nick_colors}\
-         [notify]\r\nactive={}\r\n{notify}",
+         [notify]\r\nactive={}\r\n{notify}\
+         [perform]\r\nenabled={}\r\n{perform}",
         font.face,
         font.points,
         on_off(settings.timestamp.show),
@@ -844,7 +863,18 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         settings.other.window_buffer,
         on_off(settings.nick_colors.active),
         on_off(settings.notify.active),
+        on_off(settings.perform.enabled),
     )
+}
+
+/// `[perform]`'s `n<i>=<line>`: the keys count from `n0`, in order.
+fn parse_perform_line(perform: &mut PerformSetting, key: &str, value: &str) -> Result<(), String> {
+    let expected = format!("n{}", perform.lines().len());
+    if key != expected {
+        return Err(format!("expected {expected}"));
+    }
+    perform.push(PerformLine::parse(value).map_err(|reason| format!("{key}: {reason}"))?);
+    Ok(())
 }
 
 /// `[notify]`'s `n<i>=[+]<user ID> [note]` (`+`: perform `/whois`): the
@@ -983,7 +1013,8 @@ mod tests {
         part=3\r\ntopic=3\r\neditbox=0\r\neditbox_text=1\r\nlistbox=0\r\nlistbox_text=1\r\n\
         gray=14\r\ntreebar=0\r\ntreebar_text=1\r\n\
         [nickcolors]\r\nactive=on\r\n\
-        [notify]\r\nactive=off\r\n";
+        [notify]\r\nactive=off\r\n\
+        [perform]\r\nenabled=off\r\n";
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -1247,7 +1278,7 @@ mod tests {
             ..Settings::default()
         };
         let text = to_ini(&settings);
-        assert!(text.ends_with(
+        assert!(text.contains(
             "[notify]\r\nactive=on\r\nn0=+@bob:example.org lunch buddy\r\n\
              n1=@carol:example.org\r\n"
         ));
@@ -1299,6 +1330,63 @@ mod tests {
             (
                 "[notify]\nn0=@bob:example.org\nn0=@carol:example.org",
                 "line 3: duplicate key n0",
+            ),
+        ] {
+            assert_eq!(parse_ini(text), Err(error.to_owned()), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn the_perform_section_round_trips_and_refuses_like_notify() {
+        assert_eq!(Settings::default().perform, PerformSetting::default());
+        assert!(!Settings::default().perform.enabled);
+        let lines = PerformSetting::parse_lines(
+            [
+                "/notify +@bob:example.org",
+                "msg @helpbot:example.org hello | echo -s done",
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let settings = Settings {
+            perform: PerformSetting::new(true, lines),
+            ..Settings::default()
+        };
+        let text = to_ini(&settings);
+        assert!(text.ends_with(
+            "[perform]\r\nenabled=on\r\nn0=/notify +@bob:example.org\r\n\
+             n1=msg @helpbot:example.org hello | echo -s done\r\n"
+        ));
+        assert_eq!(parse_ini(&text), Ok(settings.clone()));
+        assert_eq!(
+            parse_ini(
+                "[Perform]\nN0=  /notify +@bob:example.org \n\
+                 n1=msg @helpbot:example.org hello | echo -s done\nEnabled=ON"
+            )
+            .map(|parsed| parsed.perform),
+            Ok(settings.perform)
+        );
+        for (text, error) in [
+            ("[perform]\nn1=join #a", "line 2: expected n0"),
+            ("[perform]\nn0=join #a\nn2=join #b", "line 3: expected n1"),
+            ("[perform]\nline=join #a", "line 2: expected n0"),
+            (
+                "[perform]\nenabled=yes",
+                "line 2: enabled must be on or off",
+            ),
+            (
+                "[perform]\nenabled=on\nenabled=off",
+                "line 3: duplicate key enabled",
+            ),
+            (
+                "[perform]\nn0=join #a\nn0=join #b",
+                "line 3: duplicate key n0",
+            ),
+            ("[perform]\nn0=join #a\nn1=|", "line 3: n1: has no commands"),
+            ("[perform]\nn0=", "line 2: n0: has no commands"),
+            (
+                "[perform]\nn0=say {",
+                &format!("line 2: n0: {}", super::super::aliases::NESTED_BLOCK),
             ),
         ] {
             assert_eq!(parse_ini(text), Err(error.to_owned()), "{text:?}");
@@ -1391,7 +1479,7 @@ mod tests {
         };
         let text = to_ini(&settings);
         assert!(text.contains("[colors]\r\nbackground=1\r\naction=6\r\n"));
-        assert!(text.ends_with("treebar=0\r\ntreebar_text=15\r\n[nickcolors]\r\nactive=on\r\n[notify]\r\nactive=off\r\n"));
+        assert!(text.ends_with("treebar=0\r\ntreebar_text=15\r\n[nickcolors]\r\nactive=on\r\n[notify]\r\nactive=off\r\n[perform]\r\nenabled=off\r\n"));
         assert_eq!(parse_ini(&text), Ok(settings));
         // Only some items: the rest keep mIRC's.
         let mut join = ColorScheme::default();

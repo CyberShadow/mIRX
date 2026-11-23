@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 89;
+pub(crate) const PROTOCOL_VERSION: u32 = 90;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1301,7 +1301,8 @@ pub(crate) struct UiOptionsDialog {
 }
 
 /// Options > Connect > Options: its checkboxes, the Retry and Delay
-/// fields as typed, and whether those are enabled (retry on).
+/// fields as typed, whether those are enabled (retry on), and Perform on
+/// connect as its dialog left it, which OK saves.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UiConnectOptions {
@@ -1311,6 +1312,9 @@ pub(crate) struct UiConnectOptions {
     pub(crate) retry_times: String,
     pub(crate) retry_delay: String,
     pub(crate) retry_fields_enabled: bool,
+    pub(crate) perform_enabled: bool,
+    /// One command line each, as typed.
+    pub(crate) perform_lines: Vec<String>,
 }
 
 /// Options > Display's line marker: shown, and its palette index.
@@ -4255,8 +4259,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_89() {
-        assert_eq!(PROTOCOL_VERSION, 89);
+    fn protocol_version_is_90() {
+        assert_eq!(PROTOCOL_VERSION, 90);
     }
 
     #[test]
@@ -6297,7 +6301,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":89,
+                    "protocol_version":90,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6979,6 +6983,8 @@ mod tests {
                             retry_times: "99".to_owned(),
                             retry_delay: "".to_owned(),
                             retry_fields_enabled: true,
+                            perform_enabled: true,
+                            perform_lines: vec!["join #a:example".to_owned()],
                         },
                         visible_controls: vec![6101],
                         highlight_items: vec!["deploy".to_owned()],
@@ -7341,7 +7347,9 @@ mod tests {
                             "retry":true,
                             "retry_times":"99",
                             "retry_delay":"",
-                            "retry_fields_enabled":true
+                            "retry_fields_enabled":true,
+                            "perform_enabled":true,
+                            "perform_lines":["join #a:example"]
                         },
                         "visible_controls":[6101],
                         "highlight_items":["deploy"],

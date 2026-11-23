@@ -5,18 +5,19 @@
 //! wrong line, which it selects.
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows_sys::Win32::UI::Controls::{EM_LINEINDEX, EM_LINELENGTH, EM_SCROLLCARET, EM_SETSEL};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
+use windows_sys::Win32::UI::Controls::EM_SETSEL;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DM_GETDEFID, DefWindowProcW, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_WANTRETURN,
-    GetDlgItem, GetNextDlgTabItem, IDCANCEL, MB_ICONWARNING, MB_OK, MessageBoxW, SendMessageW,
-    WM_CLOSE, WM_COMMAND, WM_NCCREATE, WM_NCDESTROY, WM_NEXTDLGCTL, WM_SETFONT, WNDPROC,
-    WS_HSCROLL, WS_TABSTOP, WS_VSCROLL,
+    GetDlgItem, IDCANCEL, MB_ICONWARNING, MB_OK, MessageBoxW, SendMessageW, WM_CLOSE, WM_COMMAND,
+    WM_NCCREATE, WM_NCDESTROY, WM_NEXTDLGCTL, WM_SETFONT, WNDPROC, WS_HSCROLL, WS_TABSTOP,
+    WS_VSCROLL,
 };
 
 use super::aliases::{Aliases, SourceError};
 use super::dialogs::{
     DIALOG_EDIT_EX_STYLE, DialogColumn, create_modal_dialog, default_button, end_modal_dialog,
+    next_dialog_control, select_edit_line,
 };
 use super::dpi::Dpi;
 use super::window_data::{self, WindowData};
@@ -122,18 +123,9 @@ unsafe fn accept(dialog: HWND) {
                 title.as_ptr(),
                 MB_OK | MB_ICONWARNING,
             );
-            select_line(edit, line);
+            select_edit_line(edit, line);
         }
     }
-}
-
-/// Selects the 0-based `line` of the editbox, scrolled into view.
-unsafe fn select_line(edit: HWND, line: usize) {
-    let start = SendMessageW(edit, EM_LINEINDEX, line, 0);
-    let length = SendMessageW(edit, EM_LINELENGTH, start as WPARAM, 0);
-    SetFocus(edit);
-    SendMessageW(edit, EM_SETSEL, start as WPARAM, start + length);
-    SendMessageW(edit, EM_SCROLLCARET, 0, 0);
 }
 
 unsafe extern "system" fn window_proc(
@@ -160,16 +152,8 @@ unsafe extern "system" fn window_proc(
         },
         DM_GETDEFID => default_button(ALIASES_DIALOG_OK_ID),
         // The multi-line editbox takes every key and passes Tab on as a
-        // dialog manager's WM_NEXTDLGCTL: to the control in `wparam`, or
-        // to the previous (`wparam` set) or next tab stop.
-        WM_NEXTDLGCTL => {
-            let next = match lparam {
-                0 => GetNextDlgTabItem(hwnd, GetFocus(), (wparam != 0).into()),
-                _ => wparam as HWND,
-            };
-            SetFocus(next);
-            0
-        }
+        // dialog manager's WM_NEXTDLGCTL.
+        WM_NEXTDLGCTL => next_dialog_control(hwnd, wparam, lparam),
         // Esc in the editbox, and the close box: Cancel.
         WM_CLOSE => {
             end_modal_dialog(hwnd);

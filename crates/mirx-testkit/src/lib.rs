@@ -1635,7 +1635,8 @@ pub struct UiOptionsDialog {
 }
 
 /// Options > Connect > Options: its checkboxes, the Retry and Delay
-/// fields as typed, and whether those are enabled (retry on).
+/// fields as typed, whether those are enabled (retry on), and Perform on
+/// connect as its dialog left it, which OK saves.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UiConnectOptions {
@@ -1645,6 +1646,9 @@ pub struct UiConnectOptions {
     pub retry_times: String,
     pub retry_delay: String,
     pub retry_fields_enabled: bool,
+    pub perform_enabled: bool,
+    /// One command line each, as typed.
+    pub perform_lines: Vec<String>,
 }
 
 /// Options > Display's line marker: shown, and its palette index.

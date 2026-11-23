@@ -1034,6 +1034,8 @@ fn data_models_round_trip_through_json() {
                 retry_times: "3".to_owned(),
                 retry_delay: "30".to_owned(),
                 retry_fields_enabled: false,
+                perform_enabled: false,
+                perform_lines: Vec::new(),
             },
             visible_controls: vec![6301],
             highlight_items: vec!["build (notify only)".to_owned()],
@@ -1397,7 +1399,9 @@ fn data_models_round_trip_through_json() {
                     "retry": false,
                     "retry_times": "3",
                     "retry_delay": "30",
-                    "retry_fields_enabled": false
+                    "retry_fields_enabled": false,
+                    "perform_enabled": false,
+                    "perform_lines": []
                 },
                 "visible_controls": [6301],
                 "highlight_items": ["build (notify only)"],

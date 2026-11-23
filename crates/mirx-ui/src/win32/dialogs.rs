@@ -9,11 +9,14 @@ use windows_sys::Win32::Graphics::Gdi::{
     COLOR_BTNFACE, DEFAULT_GUI_FONT, DT_CALCRECT, DT_WORDBREAK, DrawTextW, GetStockObject,
 };
 use windows_sys::Win32::System::SystemServices::{SS_CENTER, SS_NOPREFIX, SS_PATHELLIPSIS};
+use windows_sys::Win32::UI::Controls::{
+    BST_CHECKED, BST_UNCHECKED, EM_LINEINDEX, EM_LINELENGTH, EM_SCROLLCARET,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, DC_HASDEFID, DM_GETDEFID, EN_CHANGE, EnumChildWindows, GW_OWNER,
-    GetNextDlgTabItem, GetWindow, IDCANCEL, IsDialogMessageW, SWP_NOACTIVATE, SWP_NOZORDER,
-    SetWindowPos, WINDOW_STYLE, WM_NEXTDLGCTL, WNDPROC, WS_EX_DLGMODALFRAME,
+    AdjustWindowRectEx, BM_SETCHECK, DC_HASDEFID, DM_GETDEFID, EN_CHANGE, EnumChildWindows,
+    GW_OWNER, GetNextDlgTabItem, GetWindow, IDCANCEL, IsDialogMessageW, SWP_NOACTIVATE,
+    SWP_NOZORDER, SetWindowPos, WINDOW_STYLE, WM_NEXTDLGCTL, WNDPROC, WS_EX_DLGMODALFRAME,
 };
 use windows_sys::core::BOOL;
 
@@ -71,6 +74,39 @@ const ESC_CANCEL_ID: usize = IDCANCEL as usize;
 /// `IsDialogMessageW` presses for Enter.
 pub(super) const fn default_button(id: usize) -> LRESULT {
     ((DC_HASDEFID as LRESULT) << 16) | id as LRESULT
+}
+
+/// A dialog's `WM_NEXTDLGCTL`, which a multi-line edit sends for Tab as
+/// the dialog manager would: moves the focus to the control in `wparam`,
+/// or with `lparam` 0 to the previous (`wparam` set) or next tab stop.
+pub(super) unsafe fn next_dialog_control(dialog: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let next = match lparam {
+        0 => GetNextDlgTabItem(dialog, GetFocus(), (wparam != 0).into()),
+        _ => wparam as HWND,
+    };
+    SetFocus(next);
+    0
+}
+
+/// Checks or clears a checkbox.
+pub(super) unsafe fn set_check(checkbox: HWND, checked: bool) {
+    let check = if checked { BST_CHECKED } else { BST_UNCHECKED };
+    SendMessageW(checkbox, BM_SETCHECK, check as WPARAM, 0);
+}
+
+/// Whether a checkbox is checked.
+pub(super) unsafe fn is_checked(checkbox: HWND) -> bool {
+    SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED as LRESULT
+}
+
+/// Selects the 0-based `line` of a multi-line edit, scrolled into view:
+/// the line an editor dialog's OK refused.
+pub(super) unsafe fn select_edit_line(edit: HWND, line: usize) {
+    let start = SendMessageW(edit, EM_LINEINDEX, line, 0);
+    let length = SendMessageW(edit, EM_LINELENGTH, start as WPARAM, 0);
+    SetFocus(edit);
+    SendMessageW(edit, EM_SETSEL, start as WPARAM, start + length);
+    SendMessageW(edit, EM_SCROLLCARET, 0, 0);
 }
 
 /// The dialogs' content widths at 96 dpi: what their labels and fields
@@ -238,7 +274,7 @@ pub(super) struct SingleFieldDialogState {
 }
 
 /// Every mirx dialog's class and window procedure.
-const DIALOG_CLASSES: [(&str, WNDPROC); 18] = [
+const DIALOG_CLASSES: [(&str, WNDPROC); 19] = [
     (LOGIN_DIALOG_CLASS_NAME, Some(login_dialog_window_proc)),
     (
         RECOVER_E2EE_DIALOG_CLASS_NAME,
@@ -281,6 +317,7 @@ const DIALOG_CLASSES: [(&str, WNDPROC); 18] = [
     address_book_dialog::DIALOG_CLASSES[2],
     channel_central_dialog::DIALOG_CLASS,
     sessions_dialog::DIALOG_CLASS,
+    perform_dialog::DIALOG_CLASS,
 ];
 
 /// Registers every dialog class on the button face, the colour labels and
@@ -934,16 +971,8 @@ unsafe extern "system" fn recovery_key_handoff_dialog_window_proc(
         DM_GETDEFID => default_button(RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID),
         // The key's multi-line edit takes every key and passes Tab, and
         // Enter's move to the default button, on as a dialog manager's
-        // WM_NEXTDLGCTL: to the control in `wparam`, or to the previous
-        // (`wparam` set) or next tab stop.
-        WM_NEXTDLGCTL => {
-            let next = match lparam {
-                0 => GetNextDlgTabItem(hwnd, GetFocus(), (wparam != 0).into()),
-                _ => wparam as HWND,
-            };
-            SetFocus(next);
-            0
-        }
+        // WM_NEXTDLGCTL.
+        WM_NEXTDLGCTL => next_dialog_control(hwnd, wparam, lparam),
         WM_CLOSE => {
             clear_recovery_key_handoff_dialog_key(hwnd);
             end_modal_dialog(hwnd);

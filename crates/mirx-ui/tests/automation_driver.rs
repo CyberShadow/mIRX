@@ -3578,7 +3578,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 89);
+    assert_eq!(version.protocol_version, 90);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -4133,7 +4133,9 @@ fn notify_says_when_a_listed_user_comes_and_goes() -> Result<(), Box<dyn std::er
     );
     let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
     assert!(
-        ini.ends_with("[notify]\r\nactive=off\r\nn0=@carol:example friend\r\n"),
+        ini.ends_with(
+            "[notify]\r\nactive=off\r\nn0=@carol:example friend\r\n[perform]\r\nenabled=off\r\n"
+        ),
         "{ini}"
     );
 
@@ -9326,7 +9328,8 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
          notice=5\r\nnotify=7\r\nother=6\r\nown=1\r\npart=3\r\ntopic=3\r\neditbox=0\r\n\
          editbox_text=1\r\nlistbox=0\r\nlistbox_text=1\r\ngray=14\r\n\
          treebar=0\r\ntreebar_text=1\r\n[nickcolors]\r\nactive=on\r\n\
-         [notify]\r\nactive=off\r\n"
+         [notify]\r\nactive=off\r\n\
+         [perform]\r\nenabled=off\r\n"
     );
     drop(app);
 
@@ -19320,6 +19323,7 @@ const OPTIONS_RECONNECT_ID: i32 = 6102;
 const OPTIONS_RETRY_ID: i32 = 6103;
 const OPTIONS_RETRY_TIMES_ID: i32 = 6104;
 const OPTIONS_RETRY_DELAY_ID: i32 = 6105;
+const OPTIONS_PERFORM_ID: i32 = 6106;
 const OPTIONS_TIMESTAMP_SHOW_ID: i32 = 6201;
 const OPTIONS_TIMESTAMP_FORMAT_ID: i32 = 6202;
 const OPTIONS_TIMESTAMP_TOKENS_ID: u16 = 6203;
@@ -19425,6 +19429,7 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
             OPTIONS_RETRY_ID as u16,
             OPTIONS_RETRY_TIMES_ID as u16,
             OPTIONS_RETRY_DELAY_ID as u16,
+            OPTIONS_PERFORM_ID as u16,
         ]
     );
 
@@ -19867,6 +19872,8 @@ fn options_connect_page_saves_reconnect_and_retry() -> Result<(), Box<dyn std::e
             retry_times: "99".to_owned(),
             retry_delay: "10".to_owned(),
             retry_fields_enabled: true,
+            perform_enabled: false,
+            perform_lines: Vec::new(),
         }
     );
 
@@ -19921,10 +19928,133 @@ fn options_connect_page_saves_reconnect_and_retry() -> Result<(), Box<dyn std::e
             retry_times: "5".to_owned(),
             retry_delay: "30".to_owned(),
             retry_fields_enabled: true,
+            perform_enabled: false,
+            perform_lines: Vec::new(),
         }
     );
     post_options_command(dialog, IDCANCEL)?;
     wait_for_window_gone(dialog, "Options dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+const PERFORM_DIALOG_ENABLED_ID: i32 = 6150;
+const PERFORM_DIALOG_EDIT_ID: i32 = 6151;
+const PERFORM_DIALOG_OK_ID: WPARAM = 6152;
+const PERFORM_DIALOG_CANCEL_ID: WPARAM = 6153;
+
+/// Perform... on the open Options dialog `options`: the Perform dialog,
+/// owned by it.
+fn open_perform_dialog(options: HWND) -> Result<HWND, Box<dyn std::error::Error>> {
+    post_dialog_command(options, OPTIONS_PERFORM_ID as WPARAM);
+    let dialog = wait_for_window(&wide_null("mirxWin32PerformDialog"), "Perform dialog")?;
+    assert_eq!(unsafe { read_window_text(dialog) }, "Perform");
+    assert_eq!(unsafe { GetWindow(dialog, GW_OWNER) }, options);
+    Ok(dialog)
+}
+
+fn perform_dialog_enabled(dialog: HWND) -> bool {
+    // BM_GETCHECK: BST_CHECKED is 1.
+    unsafe { SendMessageW(GetDlgItem(dialog, PERFORM_DIALOG_ENABLED_ID), 0x00F0, 0, 0) == 1 }
+}
+
+/// The Perform dialog edits what the Options dialog's OK saves: its OK
+/// hands the checked lines to the form, a wrong line keeps it open with
+/// that line selected, and Options' Cancel drops its edits too.
+#[test]
+fn options_perform_dialog_edits_what_options_ok_saves() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let menu_thread = open_options_from_menu(&app);
+    let options = wait_for_options_dialog(&app)?;
+    let connect_options =
+        |app: &GuiTestApp| -> Result<UiConnectOptions, Box<dyn std::error::Error>> {
+            Ok(app
+                .dump_ui_state()?
+                .options_dialog
+                .ok_or("the dialog is open")?
+                .connect)
+        };
+    let perform = open_perform_dialog(options)?;
+    assert!(!perform_dialog_enabled(perform));
+    let edit = unsafe { GetDlgItem(perform, PERFORM_DIALOG_EDIT_ID) };
+    assert_eq!(unsafe { read_window_text(edit) }, "");
+    unsafe {
+        set_options_check(perform, PERFORM_DIALOG_ENABLED_ID, true);
+        set_options_text(
+            perform,
+            PERFORM_DIALOG_EDIT_ID,
+            "join #a:example\r\n\r\n  msg @b:example hi | echo -s x  ",
+        );
+    }
+    accept_address_entry(&app, perform, PERFORM_DIALOG_OK_ID)?;
+    let connect = connect_options(&app)?;
+    assert!(connect.perform_enabled);
+    assert_eq!(
+        connect.perform_lines,
+        ["join #a:example", "msg @b:example hi | echo -s x"]
+    );
+    assert!(!settings_file_path(&local_app_data).exists());
+    post_options_command(options, IDOK)?;
+    wait_for_window_gone(options, "Options dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+    let saved = "[perform]\r\nenabled=on\r\nn0=join #a:example\r\n\
+                 n1=msg @b:example hi | echo -s x\r\n";
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    assert!(ini.ends_with(saved), "{ini}");
+
+    // Reopened, it shows what was saved; a wrong line is refused and
+    // selected, and the dialog stays open.
+    let menu_thread = open_options_from_menu(&app);
+    let options = wait_for_options_dialog(&app)?;
+    let perform = open_perform_dialog(options)?;
+    assert!(perform_dialog_enabled(perform));
+    let edit = unsafe { GetDlgItem(perform, PERFORM_DIALOG_EDIT_ID) };
+    assert_eq!(
+        unsafe { read_window_text(edit) },
+        "join #a:example\r\nmsg @b:example hi | echo -s x"
+    );
+    unsafe { set_options_text(perform, PERFORM_DIALOG_EDIT_ID, "join #a\r\n{ x") };
+    post_dialog_command(perform, PERFORM_DIALOG_OK_ID);
+    let (message_box, text) = wait_for_owned_message_box(perform);
+    assert_eq!(
+        text,
+        "Line 2: nested blocks need mIRC scripting, which mirx does not have"
+    );
+    answer_message_box(&app, message_box, IDOK)?;
+    assert_eq!(unsafe { IsWindow(perform) }, 1);
+    assert_eq!(edit_selection(edit), (9, 12));
+
+    // Cleared and unchecked, then Options' Cancel: nothing is saved.
+    unsafe {
+        set_options_check(perform, PERFORM_DIALOG_ENABLED_ID, false);
+        set_options_text(perform, PERFORM_DIALOG_EDIT_ID, "");
+    }
+    accept_address_entry(&app, perform, PERFORM_DIALOG_OK_ID)?;
+    let connect = connect_options(&app)?;
+    assert!(!connect.perform_enabled && connect.perform_lines.is_empty());
+    post_options_command(options, IDCANCEL)?;
+    wait_for_window_gone(options, "Options dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        fs::read_to_string(settings_file_path(&local_app_data))?,
+        ini
+    );
+
+    // Its Cancel drops its own edits.
+    let menu_thread = open_options_from_menu(&app);
+    let options = wait_for_options_dialog(&app)?;
+    let perform = open_perform_dialog(options)?;
+    unsafe { set_options_check(perform, PERFORM_DIALOG_ENABLED_ID, false) };
+    post_dialog_command(perform, PERFORM_DIALOG_CANCEL_ID);
+    wait_for_window_gone(perform, "Perform dialog")?;
+    assert!(connect_options(&app)?.perform_enabled);
+    post_options_command(options, IDCANCEL)?;
+    wait_for_window_gone(options, "Options dialog")?;
     menu_thread.join().expect("the menu thread must not panic");
 
     drop(app);
@@ -20264,7 +20394,8 @@ fn address_book_edits_the_notify_list() -> Result<(), Box<dyn std::error::Error>
     post_dialog_command(dialog, IDOK as WPARAM);
     wait_for_window_gone(dialog, "Address Book")?;
     app.wait_idle(Duration::from_secs(5))?;
-    let saved = "[notify]\r\nactive=on\r\nn0=+@bob:example lunch box\r\n";
+    let saved = "[notify]\r\nactive=on\r\nn0=+@bob:example lunch box\r\n\
+                 [perform]\r\nenabled=off\r\n";
     let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
     assert!(ini.ends_with(saved), "{ini}");
     let ui_state = app.dump_ui_state()?;

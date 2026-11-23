@@ -6,6 +6,7 @@
 
 use mirx_core::{HighlightWord, validate_highlight_word};
 
+use super::perform::PerformSetting;
 use super::settings::{
     ActivityColors, LoggingSetting, MarkerSetting, Settings, TipsSetting, TraySetting,
     parse_button_width, parse_retry_delay, parse_retry_times, parse_window_buffer,
@@ -126,6 +127,9 @@ pub(super) struct OptionsForm {
     /// Checkboxes, so never wrong.
     pub(super) tips: TipsSetting,
     pub(super) window_buffer: String,
+    /// The Perform dialog checks it before the form takes it, so never
+    /// wrong.
+    pub(super) perform: PerformSetting,
 }
 
 impl OptionsForm {
@@ -146,6 +150,7 @@ impl OptionsForm {
             tray: settings.tray,
             tips: settings.tips,
             window_buffer: settings.other.window_buffer.to_string(),
+            perform: settings.perform.clone(),
         }
     }
 
@@ -178,6 +183,7 @@ impl OptionsForm {
         settings.connect.retry = self.retry;
         settings.connect.retry_times = retry_times;
         settings.connect.retry_delay = retry_delay;
+        settings.perform = self.perform.clone();
         settings.timestamp.show = self.timestamp_show;
         settings.timestamp.format = format;
         settings.typing.send = self.send_typing;

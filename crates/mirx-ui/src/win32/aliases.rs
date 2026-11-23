@@ -28,7 +28,7 @@ const DEFAULT_SOURCE: &[&str] = &[
     "/s /server $$1",
 ];
 
-const NESTED_BLOCK: &str = "nested blocks need mIRC scripting, which mirx does not have";
+pub(super) const NESTED_BLOCK: &str = "nested blocks need mIRC scripting, which mirx does not have";
 
 /// The alias lines as the user wrote them (comments and blank lines too),
 /// and the definitions they make. Only `Aliases::from_source` builds one,
@@ -202,7 +202,9 @@ fn check_name(name: &str) -> Result<(), String> {
 
 /// A line's words split into commands at each `|` word; a brace word is a
 /// block inside the block.
-fn split_commands<'a>(words: impl Iterator<Item = &'a str>) -> Result<Vec<String>, String> {
+pub(super) fn split_commands<'a>(
+    words: impl Iterator<Item = &'a str>,
+) -> Result<Vec<String>, String> {
     let mut commands = Vec::new();
     let mut command: Vec<&str> = Vec::new();
     for word in words {

@@ -46,6 +46,8 @@ use super::options::{
     FIRST_PAGE, HighlightChanges, HighlightList, OPTIONS_TREE, OptionsField, OptionsForm,
     OptionsPage, page_tree_index, tree_index, tree_paths,
 };
+use super::perform::PerformSetting;
+use super::perform_dialog::run_perform_dialog;
 use super::settings::{
     ActivityColors, LoggingSetting, MarkerSetting, Settings, TipsSetting, TraySetting,
 };
@@ -69,6 +71,7 @@ pub(super) const OPTIONS_RECONNECT_ID: u16 = 6102;
 pub(super) const OPTIONS_RETRY_ID: u16 = 6103;
 pub(super) const OPTIONS_RETRY_TIMES_ID: u16 = 6104;
 pub(super) const OPTIONS_RETRY_DELAY_ID: u16 = 6105;
+pub(super) const OPTIONS_PERFORM_ID: u16 = 6106;
 pub(super) const OPTIONS_TIMESTAMP_SHOW_ID: u16 = 6201;
 pub(super) const OPTIONS_TIMESTAMP_FORMAT_ID: u16 = 6202;
 pub(super) const OPTIONS_TIMESTAMP_TOKENS_ID: u16 = 6203;
@@ -147,7 +150,9 @@ struct Fields {
 }
 
 impl Fields {
-    unsafe fn read(&self) -> OptionsForm {
+    /// The form the page controls show, with the Perform dialog's
+    /// `perform`.
+    unsafe fn read(&self, perform: &PerformSetting) -> OptionsForm {
         let checked = |button| SendMessageW(button, BM_GETCHECK, 0, 0) == BST_CHECKED as LRESULT;
         OptionsForm {
             connect_on_startup: checked(self.connect_on_startup),
@@ -182,6 +187,7 @@ impl Fields {
                 channels: checked(self.tips_channels),
             },
             window_buffer: read_window_text(self.window_buffer),
+            perform: perform.clone(),
         }
     }
 
@@ -228,6 +234,8 @@ struct DialogState {
     /// open does not change it.
     highlight: Option<HighlightList>,
     highlight_controls: HighlightControls,
+    /// Perform on connect as its dialog's OK left it, which OK saves.
+    perform: PerformSetting,
     tree: HWND,
     /// The tree's items, in `OPTIONS_TREE` order.
     tree_items: Vec<isize>,
@@ -256,6 +264,7 @@ impl OptionsDialog {
         let mut state = Box::new(WindowData::new(DialogState {
             current: current.clone(),
             highlight: highlight_words.map(|words| HighlightList::new(words.to_vec())),
+            perform: current.perform.clone(),
             highlight_controls: HighlightControls {
                 list: null_mut(),
                 word: null_mut(),
@@ -496,6 +505,23 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         }
         row_y += edit_height + gap;
     }
+    // mIRC's Perform... button, under the Retry rows, opens its dialog.
+    let perform = place(
+        control(
+            BUTTON_CLASS_NAME,
+            "Perform...",
+            WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            OPTIONS_PERFORM_ID,
+        )?,
+        page_x,
+        row_y,
+        button_width,
+        button_height,
+    );
+    state
+        .page_controls
+        .push((OptionsPage::ConnectOptions, perform));
 
     state.fields.timestamp_show = place(
         control(
@@ -1033,7 +1059,7 @@ unsafe fn show_error(hwnd: HWND, message: &str) {
 /// wrong field and says what is wrong with it.
 unsafe fn handle_ok(hwnd: HWND) {
     let state = dialog_state(hwnd);
-    match state.fields.read().apply(&state.current) {
+    match state.fields.read(&state.perform).apply(&state.current) {
         Ok(settings) => {
             state.saved = Some(OptionsResult {
                 settings,
@@ -1052,6 +1078,17 @@ unsafe fn handle_ok(hwnd: HWND) {
             SendMessageW(field, EM_SETSEL, 0, -1);
             show_error(hwnd, &error.message);
         }
+    }
+}
+
+/// Perform...: the Perform dialog over this one; its OK changes what this
+/// dialog's OK saves.
+unsafe fn edit_perform(hwnd: HWND) {
+    let current = dialog_state(hwnd).perform.clone();
+    match run_perform_dialog(hwnd, &current) {
+        Ok(Some(perform)) => dialog_state(hwnd).perform = perform,
+        Ok(None) => {}
+        Err(message) => show_error(hwnd, &message),
     }
 }
 
@@ -1146,6 +1183,10 @@ pub(super) unsafe extern "system" fn window_proc(
                 state.highlight_controls.delete,
                 selected_highlight_index(state).is_some().into(),
             );
+            0
+        }
+        WM_COMMAND if wparam & 0xffff == usize::from(OPTIONS_PERFORM_ID) => {
+            edit_perform(hwnd);
             0
         }
         WM_COMMAND
@@ -1253,7 +1294,7 @@ pub(super) unsafe fn dump(hwnd: HWND) -> Result<UiOptionsDialog, String> {
             "the Retry and Delay rows are half greyed: {retry_rows_enabled:?}"
         ));
     }
-    let form = state.fields.read();
+    let form = state.fields.read(&state.perform);
     Ok(UiOptionsDialog {
         connect: UiConnectOptions {
             startup: form.connect_on_startup,
@@ -1262,6 +1303,13 @@ pub(super) unsafe fn dump(hwnd: HWND) -> Result<UiOptionsDialog, String> {
             retry_times: form.retry_times.clone(),
             retry_delay: form.retry_delay.clone(),
             retry_fields_enabled,
+            perform_enabled: form.perform.enabled,
+            perform_lines: form
+                .perform
+                .lines()
+                .iter()
+                .map(|line| line.text().to_owned())
+                .collect(),
         },
         tree: paths,
         selected: selected.ok_or_else(|| "the options tree has no selection".to_owned())?,

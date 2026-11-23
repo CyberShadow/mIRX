@@ -244,6 +244,8 @@ mod notify;
 mod open_link;
 mod options;
 mod options_dialog;
+mod perform;
+mod perform_dialog;
 mod presence;
 mod reactions;
 mod read_receipts;

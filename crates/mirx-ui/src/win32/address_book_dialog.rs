@@ -23,20 +23,20 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
-    BST_CHECKED, BST_UNCHECKED, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDDS_SUBITEM, CDRF_NEWFONT,
-    CDRF_NOTIFYITEMDRAW, CDRF_NOTIFYSUBITEMDRAW, DRAWITEMSTRUCT, LVN_ITEMCHANGED,
-    LVS_NOCOLUMNHEADER, LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, MEASUREITEMSTRUCT,
-    NM_CUSTOMDRAW, NM_DBLCLK, NM_RETURN, NMHDR, NMLVCUSTOMDRAW, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT,
-    TCM_GETCURSEL, TCM_GETITEMRECT, TCM_INSERTITEMW, TCM_SETCURSEL, TCN_SELCHANGE,
+    CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDDS_SUBITEM, CDRF_NEWFONT, CDRF_NOTIFYITEMDRAW,
+    CDRF_NOTIFYSUBITEMDRAW, DRAWITEMSTRUCT, LVN_ITEMCHANGED, LVS_NOCOLUMNHEADER, LVS_REPORT,
+    LVS_SHOWSELALWAYS, LVS_SINGLESEL, MEASUREITEMSTRUCT, NM_CUSTOMDRAW, NM_DBLCLK, NM_RETURN,
+    NMHDR, NMLVCUSTOMDRAW, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT, TCM_GETCURSEL, TCM_GETITEMRECT,
+    TCM_INSERTITEMW, TCM_SETCURSEL, TCN_SELCHANGE,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled, SetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, DM_GETDEFID,
-    DefWindowProcW, EN_CHANGE, ES_READONLY, GWL_STYLE, GetDlgCtrlID, GetDlgItem, GetWindowLongPtrW,
-    HWND_BOTTOM, IDCANCEL, IDOK, MB_ICONWARNING, MB_OK, MessageBoxW, MoveWindow, SW_HIDE, SW_SHOW,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetWindowPos, ShowWindow, WM_CLOSE,
-    WM_COMMAND, WM_DRAWITEM, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_SETFONT,
-    WNDPROC, WS_CHILD, WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE,
+    BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, DM_GETDEFID, DefWindowProcW, EN_CHANGE,
+    ES_READONLY, GWL_STYLE, GetDlgCtrlID, GetDlgItem, GetWindowLongPtrW, HWND_BOTTOM, IDCANCEL,
+    IDOK, MB_ICONWARNING, MB_OK, MessageBoxW, MoveWindow, SW_HIDE, SW_SHOW, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetWindowPos, ShowWindow, WM_CLOSE, WM_COMMAND,
+    WM_DRAWITEM, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_SETFONT, WNDPROC,
+    WS_CHILD, WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE,
 };
 
 use mirx_core::Command;
@@ -50,7 +50,7 @@ use super::color_drop_down::{
 };
 use super::dialogs::{
     DialogColumn, DialogMetrics, create_modal_dialog, default_button, dialog_text_size,
-    end_modal_dialog,
+    end_modal_dialog, is_checked, set_check,
 };
 use super::dpi::Dpi;
 use super::ignore::user_label;
@@ -697,15 +697,6 @@ unsafe fn grey_row_buttons(state: &DialogState) {
         state.colors.down,
         colors_selected.is_some_and(|row| Some(row) != last).into(),
     );
-}
-
-unsafe fn set_check(checkbox: HWND, checked: bool) {
-    let check = if checked { BST_CHECKED } else { BST_UNCHECKED };
-    SendMessageW(checkbox, BM_SETCHECK, check as WPARAM, 0);
-}
-
-unsafe fn is_checked(checkbox: HWND) -> bool {
-    SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED as LRESULT
 }
 
 unsafe fn handle_notify_add(dialog: HWND) -> Result<(), String> {
