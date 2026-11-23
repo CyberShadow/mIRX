@@ -1762,22 +1762,18 @@ fn user_id_localpart(user_id: &str) -> &str {
 }
 
 /// `/names`: the members, in nick list order, with their rank prefixes.
-pub(super) fn names_lines(room_name: &str, members: &[RoomMemberSummary]) -> Vec<String> {
+pub(super) fn names_line(room_name: &str, members: &[RoomMemberSummary]) -> String {
     let names = members
         .iter()
         .map(|member| format!("{}{}", rank_prefix(member.rank), member.nick))
         .collect::<Vec<_>>()
         .join(" ");
-    vec![
-        format!("* Names {room_name}: {names}"),
-        "* End of /NAMES list".to_owned(),
-    ]
+    format!("* Members of {room_name}: {names}")
 }
 
-/// `/whois`: the user's server profile, the rooms shared with them (each
-/// with their rank prefix there), their homeserver, and whether they are
-/// away and how long idle, in IRC's order (311, 319, 312, 301, 317). The
-/// display name fills mIRC's "real name" slot; the nick is the one a room
+/// `/whois`: the user's ID and profile display name, the rooms shared
+/// with them (each with their rank prefix there), their homeserver, then
+/// whether they are away and how long idle. The nick is the one a room
 /// knows them by, else the display name, else the ID. Offline prints no
 /// presence: a server without presence says it of everyone.
 pub(super) fn whois_lines(
@@ -1789,7 +1785,7 @@ pub(super) fn whois_lines(
         .or(profile.display_name.as_deref())
         .unwrap_or(&profile.user_id);
     let mut lines = vec![match &profile.display_name {
-        Some(display_name) => format!("* {nick} is {} * {display_name}", profile.user_id),
+        Some(display_name) => format!("* {nick} is {} ({display_name})", profile.user_id),
         None => format!("* {nick} is {}", profile.user_id),
     }];
     if !shared_rooms.is_empty() {
@@ -1798,7 +1794,7 @@ pub(super) fn whois_lines(
             .map(|(rank, room_name)| format!("{}{room_name}", rank_prefix(*rank)))
             .collect::<Vec<_>>()
             .join(" ");
-        lines.push(format!("* {nick} on {rooms}"));
+        lines.push(format!("* {nick} shares rooms with you: {rooms}"));
     }
     let (_, server) = profile.user_id.split_once(':').unwrap_or_else(|| {
         panic!(
@@ -1806,7 +1802,7 @@ pub(super) fn whois_lines(
             profile.user_id
         )
     });
-    lines.push(format!("* {nick} using {server}"));
+    lines.push(format!("* {nick}'s homeserver is {server}"));
     if let Some(presence) = &profile.presence
         && presence.kind != PresenceKind::Offline
     {
@@ -1822,12 +1818,11 @@ pub(super) fn whois_lines(
             ));
         }
     }
-    lines.push(format!("* {nick} End of /WHOIS list"));
     lines
 }
 
-/// IRC's `RPL_AWAY`, as mIRC prints it: in `/whois`, and when you message
-/// an away user.
+/// An away user, as mIRC prints it: in `/whois`, and when you message
+/// them.
 pub(super) fn away_line(nick: &str, status_msg: Option<&str>) -> String {
     match status_msg {
         Some(message) => format!("* {nick} is away: {message}"),
@@ -1862,7 +1857,7 @@ pub(super) fn duration_text(secs: u64) -> String {
     parts.join(" ")
 }
 
-/// The answer to `/away` and `/back`, as IRC's 306 and 305. An away the
+/// The answer to `/away` and `/back`, in mIRC's words. An away the
 /// server does not show others says why.
 pub(super) fn away_lines(changed: &AwayChanged) -> Vec<String> {
     match (&changed.message, changed.seen_as) {
@@ -1964,7 +1959,6 @@ pub(super) fn devices_lines(
         }
         line
     }));
-    lines.push(format!("* {nick} End of /DEVICES list"));
     lines
 }
 
@@ -3491,7 +3485,6 @@ mod tests {
                 "* me L4PT0P \"Element Desktop\" verified, last seen Fri Nov 20 14:02:11 2026 (this session)",
                 "* me PH0NE unverified, last seen Thu Jan 01 00:00:00 1970",
                 "* me K3YL3SS \"Old \"web\"\" unverified",
-                "* me End of /DEVICES list",
             ]
         );
 
@@ -3524,7 +3517,7 @@ mod tests {
                     false,
                     super::super::timestamp::utc_local_time
                 ),
-                vec![line, "* Bob B0B unverified", "* Bob End of /DEVICES list"],
+                vec![line, "* Bob B0B unverified"],
                 "{identity:?}"
             );
         }
@@ -3540,10 +3533,7 @@ mod tests {
                 false,
                 super::super::timestamp::utc_local_time
             ),
-            vec![
-                "* Bob is not verified; /verify @bob:example",
-                "* Bob End of /DEVICES list"
-            ]
+            vec!["* Bob is not verified; /verify @bob:example"]
         );
         // Only a room's identity stream knows a pinned identity changed.
         assert_eq!(
@@ -3554,10 +3544,7 @@ mod tests {
                 true,
                 super::super::timestamp::utc_local_time
             ),
-            vec![
-                "* Bob changed identity; /identity accept @bob:example, or /verify @bob:example",
-                "* Bob End of /DEVICES list"
-            ]
+            vec!["* Bob changed identity; /identity accept @bob:example, or /verify @bob:example"]
         );
     }
 
@@ -3571,11 +3558,8 @@ mod tests {
             member("@ghost:example", "ghost", RoomMemberRank::Member),
         ];
         assert_eq!(
-            names_lines("Ops", &members),
-            vec![
-                "* Names Ops: ~Creator &Admin @Mod +Voice ghost".to_owned(),
-                "* End of /NAMES list".to_owned(),
-            ]
+            names_line("Ops", &members),
+            "* Members of Ops: ~Creator &Admin @Mod +Voice ghost"
         );
         let profile = |user_id: &str, display_name: Option<&str>| UserProfile {
             user_id: user_id.to_owned(),
@@ -3592,19 +3576,17 @@ mod tests {
                 ]
             ),
             vec![
-                "* Mod is @mod:example * Moderator Mo".to_owned(),
-                "* Mod on @Ops Lobby".to_owned(),
-                "* Mod using example".to_owned(),
-                "* Mod End of /WHOIS list".to_owned(),
+                "* Mod is @mod:example (Moderator Mo)".to_owned(),
+                "* Mod shares rooms with you: @Ops Lobby".to_owned(),
+                "* Mod's homeserver is example".to_owned(),
             ]
         );
         // A stranger: no shared rooms, and the display name is the nick.
         assert_eq!(
             whois_lines(&profile("@far:remote.org:8448", Some("Far")), None, &[]),
             vec![
-                "* Far is @far:remote.org:8448 * Far".to_owned(),
-                "* Far using remote.org:8448".to_owned(),
-                "* Far End of /WHOIS list".to_owned(),
+                "* Far is @far:remote.org:8448 (Far)".to_owned(),
+                "* Far's homeserver is remote.org:8448".to_owned(),
             ]
         );
         assert_eq!(
@@ -3617,9 +3599,8 @@ mod tests {
             ),
             vec![
                 "* ghost is @ghost:example".to_owned(),
-                "* ghost on Ops".to_owned(),
-                "* ghost using example".to_owned(),
-                "* ghost End of /WHOIS list".to_owned(),
+                "* ghost shares rooms with you: Ops".to_owned(),
+                "* ghost's homeserver is example".to_owned(),
             ]
         );
         assert_eq!(
@@ -3651,7 +3632,7 @@ mod tests {
     }
 
     #[test]
-    fn whois_says_who_is_away_and_idle_in_ircs_order() {
+    fn whois_says_who_is_away_and_idle_last() {
         let profile = |kind, status_msg: Option<&str>, idle_ms, currently_active| UserProfile {
             user_id: "@bob:example".to_owned(),
             display_name: Some("Bob".to_owned()),
@@ -3664,17 +3645,16 @@ mod tests {
         };
         let presence_lines = |profile: &UserProfile| {
             let lines = whois_lines(profile, None, &[(RoomMemberRank::Member, "Ops")]);
-            // 311, 319, 312 first, and 318 last.
+            // Who they are, the rooms you share and their server first.
             assert_eq!(
                 lines[..3],
                 [
-                    "* Bob is @bob:example * Bob",
-                    "* Bob on Ops",
-                    "* Bob using example"
+                    "* Bob is @bob:example (Bob)",
+                    "* Bob shares rooms with you: Ops",
+                    "* Bob's homeserver is example"
                 ]
             );
-            assert_eq!(lines.last().unwrap(), "* Bob End of /WHOIS list");
-            lines[3..lines.len() - 1].to_vec()
+            lines[3..].to_vec()
         };
         assert_eq!(
             presence_lines(&profile(

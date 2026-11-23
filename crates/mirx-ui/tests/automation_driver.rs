@@ -4221,7 +4221,7 @@ fn whois_on_notify_and_notifies_in_the_active_window() -> Result<(), Box<dyn std
     let mark = server.request_count();
 
     server.serve_presence(vec![bob_presence("online")])?;
-    wait_for_view_lines_with(&app, &beta, "End of /WHOIS list", 1)?;
+    wait_for_view_lines_with(&app, &beta, "* Bob's homeserver is example", 1)?;
     assert_eq!(status_lines_with(&app, "Matrix")?, ["* Bob is on Matrix"]);
     let whois = view_lines_with(&app, &beta, "* Bob ")?;
     assert_eq!(
@@ -4229,7 +4229,7 @@ fn whois_on_notify_and_notifies_in_the_active_window() -> Result<(), Box<dyn std
         Some("* Bob is on Matrix")
     );
     assert!(
-        whois.contains(&"* Bob is @bob:example * Bob".to_owned()),
+        whois.contains(&"* Bob is @bob:example (Bob)".to_owned()),
         "{whois:?}"
     );
     server.serve_presence(vec![bob_presence("offline")])?;
@@ -7686,10 +7686,8 @@ fn automation_driver_devices_lists_sessions_whois_style() -> Result<(), Box<dyn 
         "* Alice sessions:",
         "* Alice L4PT0P \"Laptop\" verified, last seen Fri Nov 20 14:02:11 2026 (this session)",
         "* Alice PH0NE unverified",
-        "* Alice End of /DEVICES list",
         "* Bob changed identity since you verified them; /verify @bob:example",
         "* Bob B0B \"Bob's phone\" verified",
-        "* Bob End of /DEVICES list",
     ] {
         assert!(view_contains(beta, line), "{line}");
     }
@@ -7867,7 +7865,7 @@ fn sessions_dialog_lists_your_sessions_without_printing_them()
     let ui_state = app.dump_ui_state()?;
     let beta_view = find_view(&ui_state, &beta);
     assert!(!view_contains(beta_view, "Alice"), "{:?}", beta_view.lines);
-    assert!(view_contains(beta_view, "* Bob End of /DEVICES list"));
+    assert!(view_contains(beta_view, "* Bob B0B verified"));
 
     let shown = select_session(&app, dialog, 1)?;
     assert!(shown.verify_enabled && shown.rename_enabled && shown.sign_out_enabled);
@@ -7894,7 +7892,7 @@ fn sessions_dialog_lists_your_sessions_without_printing_them()
     let ui_state = app.dump_ui_state()?;
     assert!(view_contains(
         find_view(&ui_state, &beta),
-        "* Alice End of /DEVICES list"
+        "* Alice sessions:"
     ));
 
     drop(app);
@@ -9137,12 +9135,10 @@ fn automation_driver_irc_info_commands_echo_in_active_window()
     assert_eq!(ui_state.mdi.active, beta);
     let view = find_view(&ui_state, &beta);
     for line in [
-        "] * Names Beta: Alice Bob",
-        "] * End of /NAMES list",
-        "] * Alice is @alice:example * Alice Liddell",
-        "] * Alice on Beta Alpha",
-        "] * Alice using example",
-        "] * Alice End of /WHOIS list",
+        "] * Members of Beta: Alice Bob",
+        "] * Alice is @alice:example (Alice Liddell)",
+        "] * Alice shares rooms with you: Beta Alpha",
+        "] * Alice's homeserver is example",
         "] * /names [#room] - list this room's members, or the named room's",
         "] -> *alice* hi there",
     ] {
@@ -10757,8 +10753,8 @@ fn power_levels_event(
 }
 
 #[test]
-fn automation_driver_power_level_change_renders_settings_line() -> Result<(), Box<dyn std::error::Error>>
-{
+fn automation_driver_power_level_change_renders_settings_line()
+-> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let room_id = "!ops:example";
@@ -23745,9 +23741,8 @@ fn slash_whois_prints_server_profile() -> Result<(), Box<dyn std::error::Error>>
     let ui_state = app.dump_ui_state()?;
     let view = find_view(&ui_state, &beta);
     for line in [
-        "] * Stranger is @stranger:remote * Stranger",
-        "] * Stranger using remote",
-        "] * Stranger End of /WHOIS list",
+        "] * Stranger is @stranger:remote (Stranger)",
+        "] * Stranger's homeserver is remote",
         "] * /whois: no such user @nobody:remote",
     ] {
         assert!(
@@ -23756,18 +23751,17 @@ fn slash_whois_prints_server_profile() -> Result<(), Box<dyn std::error::Error>>
             view.lines
         );
     }
-    let lazy: Vec<_> = view_lines_containing(view, "* Lazy ")
+    let lazy: Vec<_> = view_lines_containing(view, "* Lazy")
         .into_iter()
         .map(|line| line.split_once("] ").map_or(line, |(_, text)| text))
         .collect();
     assert_eq!(
         lazy,
         [
-            "* Lazy is @lazy:remote * Lazy",
-            "* Lazy using remote",
+            "* Lazy is @lazy:remote (Lazy)",
+            "* Lazy's homeserver is remote",
             "* Lazy is away: lunch",
             "* Lazy has been idle 1hr 2mins 5secs",
-            "* Lazy End of /WHOIS list",
         ]
     );
     assert!(!view_contains(

@@ -605,7 +605,7 @@ pub(super) fn enqueue_send_message(
 }
 
 /// After a message to `room_id`: if it is a query whose user is away, the
-/// line that says so (IRC's `RPL_AWAY`), once per away status
+/// line that says so, once per away status
 /// (`PresenceBook::away_notice`). It prints in [`away_view`], after any
 /// echo of the message.
 pub(super) fn away_notice(state: &mut WindowState, room_id: &str) -> Option<String> {
@@ -1836,7 +1836,7 @@ mod tests {
         handle.join().expect("test core must stop cleanly");
     }
 
-    /// IRC's `RPL_AWAY` in a query: once for each away status, and never
+    /// The away line in a query: once for each away status, and never
     /// in a channel.
     #[test]
     fn a_message_to_an_away_user_says_so_once() {

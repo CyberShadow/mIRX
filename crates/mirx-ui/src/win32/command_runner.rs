@@ -158,14 +158,14 @@ pub(super) unsafe fn run_slash_command(
             Ok(None)
         }
         SlashCommand::Names { target } => {
-            let lines = {
+            let line = {
                 let state = state_ref(hwnd);
                 let room_id = resolve_joined_room_target(state, window, target.as_deref())?;
                 let room = room_by_id(&state.model.rooms, &room_id)
                     .expect("a joined room target must exist");
-                commands::names_lines(&room.display_name, room_members(&state.model, &room_id))
+                commands::names_line(&room.display_name, room_members(&state.model, &room_id))
             };
-            echo_in_window(hwnd, window, lines)?;
+            echo_in_window(hwnd, window, [line])?;
             Ok(None)
         }
         SlashCommand::Whois { nick } => {
@@ -2037,19 +2037,16 @@ mod tests {
                 }
                 let lines = render_room_lines(state_ref(hwnd), "!ops:example");
                 assert_eq!(
-                    &lines[lines.len() - 11..],
+                    &lines[lines.len() - 8..],
                     [
-                        "[22:12] * Names Ops: Alice @Bob",
-                        "[22:12] * End of /NAMES list",
+                        "[22:12] * Members of Ops: Alice @Bob",
                         "[22:12] * /names: unknown room: Nowhere",
                         "[22:12] * /whois: no such nick: Nobody",
-                        "[22:12] * Alice is @alice:example * Alice Liddell",
-                        "[22:12] * Alice on Ops Alice",
-                        "[22:12] * Alice using example",
-                        "[22:12] * Alice End of /WHOIS list",
+                        "[22:12] * Alice is @alice:example (Alice Liddell)",
+                        "[22:12] * Alice shares rooms with you: Ops Alice",
+                        "[22:12] * Alice's homeserver is example",
                         "[22:12] * @stranger:remote is @stranger:remote",
-                        "[22:12] * @stranger:remote using remote",
-                        "[22:12] * @stranger:remote End of /WHOIS list",
+                        "[22:12] * @stranger:remote's homeserver is remote",
                     ]
                 );
             });
@@ -2105,16 +2102,14 @@ mod tests {
                 }
                 let lines = render_room_lines(state_ref(hwnd), "!ops:example");
                 assert_eq!(
-                    &lines[lines.len() - 8..],
+                    &lines[lines.len() - 6..],
                     [
                         "[22:12] * /devices: not connected to server",
                         "[22:12] * /devices: no such nick: Nobody",
                         "[22:12] * @me:example sessions:",
                         "[22:12] * @me:example MINE verified (this session)",
-                        "[22:12] * @me:example End of /DEVICES list",
                         "[22:12] * Bob is not verified; /verify @bob:example",
                         "[22:12] * Bob B0B unverified",
-                        "[22:12] * Bob End of /DEVICES list",
                     ]
                 );
             });
@@ -2173,7 +2168,7 @@ mod tests {
                 .unwrap();
                 let lines = render_room_lines(state_ref(hwnd), "!ops:example");
                 assert_eq!(
-                    &lines[lines.len() - 9..],
+                    &lines[lines.len() - 8..],
                     [
                         "[22:12] * Warning: Bob's identity was reset; /identity accept \
                          @bob:example to accept it, or /verify @bob:example",
@@ -2184,7 +2179,6 @@ mod tests {
                         "[22:12] * /identity: no such nick: Nobody",
                         "[22:12] * Bob changed identity; /identity accept @bob:example, or \
                          /verify @bob:example",
-                        "[22:12] * Bob End of /DEVICES list",
                         "[22:12] * Bob's new identity accepted",
                     ]
                 );

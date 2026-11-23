@@ -1530,7 +1530,7 @@ mod tests {
             state.active_view = active.clone();
             answer_and_error(&mut state);
             let (room_lines, status_lines) = whois_texts(&state);
-            let (expected_room, expected_status) = if in_room { (4, 0) } else { (0, 4) };
+            let (expected_room, expected_status) = if in_room { (3, 0) } else { (0, 3) };
             assert_eq!(
                 (room_lines.len(), status_lines.len()),
                 (expected_room, expected_status),
@@ -1538,7 +1538,7 @@ mod tests {
             );
             let lines = if in_room { room_lines } else { status_lines };
             assert!(
-                lines[3].ends_with("* /whois: no profile for @bob:example"),
+                lines[2].ends_with("* /whois: no profile for @bob:example"),
                 "{lines:?}"
             );
         }

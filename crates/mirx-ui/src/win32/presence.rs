@@ -1,6 +1,6 @@
 //! Other users' presence, as the sync reports it: the nick list greys away
 //! and offline members, as HexChat does, and a message to an away user's
-//! query says they are away, as IRC's `RPL_AWAY` does.
+//! query says they are away, as mIRC does.
 //!
 //! Pure code: the book of every user's latest presence the session heard.
 
@@ -64,7 +64,7 @@ impl PresenceBook {
 
     /// The away line for a message sent to `room_id`, the query with
     /// `user_id`, who goes by `nick`; `None` unless they are away, and once
-    /// per query for each away status. mIRC prints the server's `RPL_AWAY`
+    /// per query for each away status. mIRC prints the away reply
     /// at every message; Element marks users away after a few idle
     /// minutes, so that would fill a normal conversation.
     pub(super) fn away_notice(

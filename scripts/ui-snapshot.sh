@@ -2281,14 +2281,12 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!ops:example::[22:11] <Alice> who is around?'
-        --expect-room-view '!ops:example::[22:12] * Names Ops: ~Creator &Admin @Mod +Voice Alan Alice Sam Sam'
-        --expect-room-view '!ops:example::[22:12] * End of /NAMES list'
+        --expect-room-view '!ops:example::[22:12] * Members of Ops: ~Creator &Admin @Mod +Voice Alan Alice Sam Sam'
         --expect-room-view '!ops:example::[22:12] * /kick: insufficient parameters'
         --expect-room-view '!ops:example::[22:12] * /kick: Sam is ambiguous (@sam-one:example, @sam-two:example)'
-        --expect-room-view '!ops:example::[22:12] * Alice is @alice:example * Alice Liddell'
-        --expect-room-view '!ops:example::[22:12] * Alice on Ops Alice'
-        --expect-room-view '!ops:example::[22:12] * Alice using example'
-        --expect-room-view '!ops:example::[22:12] * Alice End of /WHOIS list'
+        --expect-room-view '!ops:example::[22:12] * Alice is @alice:example (Alice Liddell)'
+        --expect-room-view '!ops:example::[22:12] * Alice shares rooms with you: Ops Alice'
+        --expect-room-view '!ops:example::[22:12] * Alice'"'"'s homeserver is example'
         --expect-room-view '!ops:example::[22:12] -> *Alice* hi there'
         --expect-room-view '!ops:example::[22:12] * /kick <nick> [reason] - kick a member from this room'
       )
@@ -2316,7 +2314,6 @@ configure_case_expectations() {
         --expect-room-view '!ops:example::[22:12] * Me MIRXDEVICE "mirx" verified, last seen Fri Nov 20 14:02:11 2026 (this session)'
         --expect-room-view '!ops:example::[22:12] * Me PH0NE "Element Android" verified, last seen Thu Nov 19 14:02:11 2026'
         --expect-room-view '!ops:example::[22:12] * Me 0LDW3B "Element Web" unverified'
-        --expect-room-view '!ops:example::[22:12] * Me End of /DEVICES list'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::@me:example'
@@ -2379,7 +2376,6 @@ configure_case_expectations() {
         --expect-room-view '!ops:example::[22:12] * Warning: you verified Carol, and their identity was reset; /verify @carol:example to verify it again, or /identity accept @carol:example to withdraw your verification'
         --expect-room-view '!ops:example::[22:12] * Bob changed identity; /identity accept @bob:example, or /verify @bob:example'
         --expect-room-view '!ops:example::[22:12] * Bob B0BPH0NE "Bob'"'"'s phone" unverified'
-        --expect-room-view '!ops:example::[22:12] * Bob End of /DEVICES list'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::@me:example'
@@ -2397,7 +2393,6 @@ configure_case_expectations() {
         --expect-room-view '!ops:example::[22:12] * Alice changed identity since you verified them; /verify @alice:example, or /identity accept @alice:example'
         --expect-room-view '!ops:example::[22:12] * Alice ALICEPHONE "Alice'"'"'s phone" unverified'
         --expect-room-view '!ops:example::[22:12] * Alice ALICELAPTOP unverified'
-        --expect-room-view '!ops:example::[22:12] * Alice End of /DEVICES list'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::@me:example'
@@ -2430,10 +2425,9 @@ configure_case_expectations() {
         --expect-room-view '!ops:example::[22:12] -> *#lobby* see ops'
         --expect-room-view '!ops:example::[22:12] * Ignore list is empty'
         --expect-room-view '!ops:example::[22:12] * Added Spam (@spam:example) to ignore list'
-        --expect-room-view '!ops:example::[22:12] * Bob is @bob:example * Bob Builder'
-        --expect-room-view '!ops:example::[22:12] * Bob on Ops Lobby'
-        --expect-room-view '!ops:example::[22:12] * Bob using example'
-        --expect-room-view '!ops:example::[22:12] * Bob End of /WHOIS list'
+        --expect-room-view '!ops:example::[22:12] * Bob is @bob:example (Bob Builder)'
+        --expect-room-view '!ops:example::[22:12] * Bob shares rooms with you: Ops Lobby'
+        --expect-room-view '!ops:example::[22:12] * Bob'"'"'s homeserver is example'
         --expect-room-view '!ops:example::[22:12] * Error during change room settings: you are not allowed to change power levels'
         --expect-room-view '!ops:example::[22:12] * Ignore list:'
         --expect-room-view '!ops:example::[22:12] *   Spam (@spam:example)'
@@ -2464,12 +2458,11 @@ configure_case_expectations() {
       room_view_expect_args=(
         --expect-room-view '!ops:example::[22:12] * You have been marked as being away'
         --expect-room-view '!ops:example::[22:12] * Others still see you as online: another of your sessions is active'
-        --expect-room-view '!ops:example::[22:12] * Bob is @bob:example * Bob Builder'
-        --expect-room-view '!ops:example::[22:12] * Bob on Ops'
-        --expect-room-view '!ops:example::[22:12] * Bob using example'
+        --expect-room-view '!ops:example::[22:12] * Bob is @bob:example (Bob Builder)'
+        --expect-room-view '!ops:example::[22:12] * Bob shares rooms with you: Ops'
+        --expect-room-view '!ops:example::[22:12] * Bob'"'"'s homeserver is example'
         --expect-room-view '!ops:example::[22:12] * Bob is away: in a meeting'
         --expect-room-view '!ops:example::[22:12] * Bob has been idle 1hr 2mins'
-        --expect-room-view '!ops:example::[22:12] * Bob End of /WHOIS list'
         --expect-room-view '!ops:example::[22:12] * You are no longer marked as being away'
       )
       # /back is the last thing to set the status.
