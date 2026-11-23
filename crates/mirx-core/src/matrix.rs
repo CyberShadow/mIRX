@@ -3876,18 +3876,18 @@ fn power_levels_change(
             TimelineEventType::RoomEncrypted,
         ]);
     }
-    let other_events = |events: &BTreeMap<TimelineEventType, Int>| {
-        events
-            .iter()
-            .filter(|(event_type, _)| !mode_events.contains(event_type))
-            .map(|(event_type, level)| (event_type.clone(), *level))
-            .collect::<BTreeMap<_, _>>()
-    };
+    // Both maps are ordered: their other entries compare in order.
+    let other_entry =
+        |(event_type, _): &(&TimelineEventType, &Int)| !mode_events.contains(event_type);
     let other_permissions_changed = old.ban != new.ban
         || old.kick != new.kick
         || old.redact != new.redact
         || old.invite != new.invite
-        || other_events(&old.events) != other_events(&new.events)
+        || !old
+            .events
+            .iter()
+            .filter(other_entry)
+            .eq(new.events.iter().filter(other_entry))
         || (moderated.is_none() && old.events_default != new.events_default)
         || old.state_default != new.state_default
         || old.notifications.room != new.notifications.room;
