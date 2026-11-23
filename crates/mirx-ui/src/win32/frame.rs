@@ -220,6 +220,12 @@ unsafe extern "system" fn window_proc(
             }
             0
         }
+        WM_PERFORM => {
+            if let Err(message) = script::run_perform(hwnd) {
+                show_error_message(hwnd, "Perform", &message);
+            }
+            0
+        }
         WM_CONNECT_AT_STARTUP => {
             if let Err(message) = connect(hwnd, None) {
                 show_error_message(hwnd, "Connect", &message);

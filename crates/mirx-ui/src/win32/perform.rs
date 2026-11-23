@@ -41,6 +41,10 @@ impl PerformLine {
     pub(super) fn text(&self) -> &str {
         &self.text
     }
+
+    pub(super) fn commands(&self) -> &[String] {
+        &self.commands
+    }
 }
 
 impl PerformSetting {

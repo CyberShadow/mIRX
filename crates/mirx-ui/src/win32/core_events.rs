@@ -933,6 +933,8 @@ pub(super) unsafe fn apply_events_and_refresh(
     let mut history_backfill_anchor = None;
     let mut history_backfill_views = Vec::new();
     let mut backfill_result = false;
+    // A connect in the batch: perform runs after it.
+    let mut connected = false;
     let mut failed_backfill_room_id = None;
     let mut attention = ActivityAttention::default();
     for event in events {
@@ -990,6 +992,7 @@ pub(super) unsafe fn apply_events_and_refresh(
         };
         let connection_lost = !state.synthetic_load_in_progress
             && matches!(event, Event::SyncStopped(SyncStopReason::Lost(_)));
+        connected |= !state.synthetic_load_in_progress && matches!(event, Event::SyncConnected);
         attention = attention.then(apply_core_event(state, event)?);
         state.event_generation += 1;
         if let Some(url) = browser_url {
@@ -1021,6 +1024,11 @@ pub(super) unsafe fn apply_events_and_refresh(
     // After the anchor, so the jump's scroll wins.
     if backfill_result {
         continue_event_jump(hwnd, failed_backfill_room_id.as_deref())?;
+    }
+    // Posted, as the log-out warning: perform's commands may open modal
+    // dialogs, which must not run inside the batch.
+    if connected {
+        PostMessageW(hwnd, WM_PERFORM, 0, 0);
     }
     if !log_out_warning_posted && state_ref(hwnd).log_out_warning.is_some() {
         PostMessageW(hwnd, WM_LOG_OUT_WARNING, 0, 0);

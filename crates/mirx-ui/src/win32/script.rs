@@ -1,12 +1,13 @@
-//! Running aliases (`aliases.rs`): each command of an alias typed in the
-//! editbox is evaluated, then run as a typed command would be. A `//line`
-//! typed in the editbox is run the same way, as mIRC's is: evaluated, with
-//! no parameters, then run as a command.
+//! Running command lines with mIRC's identifiers: each command of an alias
+//! typed in the editbox (`aliases.rs`) is evaluated, then run as a typed
+//! command would be. A `//line` typed in the editbox is run the same way,
+//! as mIRC's is: evaluated, with no parameters, then run as a command. So
+//! are the lines of Perform on connect (`perform.rs`), as typed in Status.
 //!
 //! What a call evaluates is fixed when it starts: `#` and `$me` are those
-//! of the window the alias was typed in. Where a command acts is not: a
-//! `say` goes to the window active when it runs, so `/q $$1 | say hi`
-//! greets in the query.
+//! of the window the alias was typed in. Where a typed call's command acts
+//! is not: a `say` goes to the window active when it runs, so `/q $$1 |
+//! say hi` greets in the query (`ActsIn`). Perform's act in Status.
 //!
 //! A `$$` identifier left empty stops the whole call silently, nested
 //! aliases too; a command's error stops it after printing the error with
@@ -30,6 +31,8 @@ enum ActsIn {
     /// Typed: each command acts in the window active when it runs, so
     /// `/q $$1 | say hi` greets in the query.
     FrontWindow,
+    /// Perform: every command acts in Status, whatever is in front.
+    Status,
 }
 
 /// The window a call was given in, as `#` and `$me` see it, and where its
@@ -50,11 +53,21 @@ impl CallWindow {
         }
     }
 
+    /// Status, where perform's lines run: `#` is empty, `$me` the user ID.
+    fn status(state: &WindowState) -> Self {
+        Self {
+            chan: chan(&state.model, &ViewId::Status),
+            me: me(&state.model, &ViewId::Status),
+            acts_in: ActsIn::Status,
+        }
+    }
+
     /// The window the call's next command acts in, and prints in. The one
     /// place where the window in front decides where a command acts.
     fn window(&self, state: &WindowState) -> ViewId {
         match self.acts_in {
             ActsIn::FrontWindow => state.active_view.clone(),
+            ActsIn::Status => ViewId::Status,
         }
     }
 }
@@ -66,6 +79,8 @@ enum Caller<'a> {
     Alias(&'a str),
     /// A typed `//line`: nothing.
     Line,
+    /// Perform on connect: ` (in perform)`.
+    Perform,
 }
 
 impl Caller<'_> {
@@ -74,6 +89,24 @@ impl Caller<'_> {
         match self {
             Caller::Alias(name) => format!("{error} (in alias /{name})"),
             Caller::Line => error.to_string(),
+            Caller::Perform => format!("{error} (in perform)"),
+        }
+    }
+
+    /// The error of `command`, which it could not evaluate: an alias's
+    /// names the alias, as mIRC's names its line; another's names the
+    /// command.
+    fn evaluation_error(self, command: &str, reason: &str) -> String {
+        match self {
+            Caller::Alias(name) => format!("* /{name}: {reason}"),
+            Caller::Line | Caller::Perform => {
+                let name = command
+                    .split_ascii_whitespace()
+                    .next()
+                    .expect("a command with a wrong identifier has a word")
+                    .trim_start_matches('/');
+                self.error_line(format!("* /{name}: {reason}"))
+            }
         }
     }
 }
@@ -105,26 +138,34 @@ pub(super) unsafe fn run_evaluated_line(
     line: &str,
 ) -> Result<(), String> {
     let window = CallWindow::typed_in(state_ref(hwnd), window);
-    let context = CallContext {
-        params: &[],
-        chan: &window.chan,
-        me: &window.me,
-    };
-    match evaluate(line, &context) {
-        Ok(Evaluated::Command(text)) => {
-            run_command(hwnd, &text, Caller::Line, &window, &mut Vec::new()).map(|_| ())
-        }
-        Ok(Evaluated::Halt) => Ok(()),
-        Err(reason) => {
-            let name = line
-                .split_ascii_whitespace()
-                .next()
-                .expect("a line with a wrong identifier has a word")
-                .trim_start_matches('/');
-            let acts_in = window.window(state_ref(hwnd));
-            report_error_line(hwnd, &acts_in, format!("* /{name}: {reason}"))
-        }
+    let commands = [line.to_owned()];
+    run_commands(hwnd, &commands, &[], &window, Caller::Line, &mut Vec::new()).map(|_| ())
+}
+
+/// mIRC's Perform on connect: each line of the setting, if it is enabled,
+/// run as if typed in Status, whatever window is in front. A line stops at
+/// its first error, which Status prints, and the next line still runs:
+/// each is a step of its own.
+pub(super) unsafe fn run_perform(hwnd: HWND) -> Result<(), String> {
+    // Cloned: a line may change the settings (`/notify`, `/cnick`).
+    let perform = state_ref(hwnd).settings.settings().perform.clone();
+    // Read when it runs: the setting may have changed since the connect
+    // posted it.
+    if !perform.enabled {
+        return Ok(());
     }
+    let window = CallWindow::status(state_ref(hwnd));
+    for line in perform.lines() {
+        run_commands(
+            hwnd,
+            line.commands(),
+            &[],
+            &window,
+            Caller::Perform,
+            &mut Vec::new(),
+        )?;
+    }
+    Ok(())
 }
 
 /// Runs `alias` with `stack` holding the aliases running it, by lowercase
@@ -137,33 +178,42 @@ unsafe fn run_alias(
     stack: &mut Vec<String>,
 ) -> Result<Flow, String> {
     stack.push(alias.name.to_ascii_lowercase());
-    let flow = run_alias_commands(hwnd, alias, args, window, stack);
+    let params = args.split_ascii_whitespace().collect::<Vec<_>>();
+    let flow = run_commands(
+        hwnd,
+        &alias.commands,
+        &params,
+        window,
+        Caller::Alias(&alias.name),
+        stack,
+    );
     stack.pop();
     flow
 }
 
-unsafe fn run_alias_commands(
+/// Evaluates each of `commands` with `params` and runs it, until one stops
+/// the call: an empty `$$` identifier silently, a wrong one or a failing
+/// command with its error.
+unsafe fn run_commands(
     hwnd: HWND,
-    alias: &Alias,
-    args: &str,
+    commands: &[String],
+    params: &[&str],
     window: &CallWindow,
+    caller: Caller,
     stack: &mut Vec<String>,
 ) -> Result<Flow, String> {
-    let params = args.split_ascii_whitespace().collect::<Vec<_>>();
     let context = CallContext {
-        params: &params,
+        params,
         chan: &window.chan,
         me: &window.me,
     };
-    for command in &alias.commands {
+    for command in commands {
         let flow = match evaluate(command, &context) {
-            Ok(Evaluated::Command(text)) => {
-                run_command(hwnd, &text, Caller::Alias(&alias.name), window, stack)?
-            }
+            Ok(Evaluated::Command(text)) => run_command(hwnd, &text, caller, window, stack)?,
             Ok(Evaluated::Halt) => Flow::Stop,
             Err(reason) => {
                 let acts_in = window.window(state_ref(hwnd));
-                report_error_line(hwnd, &acts_in, format!("* /{}: {reason}", alias.name))?;
+                report_error_line(hwnd, &acts_in, caller.evaluation_error(command, &reason))?;
                 Flow::Stop
             }
         };
@@ -289,6 +339,7 @@ fn me(model: &UiModel, view: &ViewId) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::perform::PerformSetting;
     use super::super::test_fixtures::*;
     use super::*;
 
@@ -694,6 +745,65 @@ mod tests {
                 }
                 type_compose_line(hwnd, "/alias");
                 assert_eq!(ops_lines(hwnd).last().unwrap(), "[22:12] * No aliases");
+            });
+        }
+    }
+
+    #[test]
+    fn perform_runs_each_line_in_status_and_goes_on_after_an_error() {
+        unsafe {
+            with_alias_frame(&[], |hwnd| {
+                let lines = PerformSetting::parse_lines(
+                    [
+                        "say hi",
+                        "join #new:example | echo -s $me done",
+                        "msg nobody x | echo -s not reached",
+                        "notify +@bob:example",
+                    ]
+                    .into_iter(),
+                )
+                .unwrap();
+                let ops_before = ops_lines(hwnd);
+                let status_before = status_log_lines(state_ref(hwnd)).len();
+                let set = |enabled: bool| {
+                    state_mut(hwnd)
+                        .settings
+                        .update(|settings| {
+                            settings.perform = PerformSetting::new(enabled, lines.clone())
+                        })
+                        .unwrap()
+                };
+
+                set(false);
+                run_perform(hwnd).unwrap();
+                assert!(state_ref(hwnd).recorded_commands.is_empty());
+                assert_eq!(status_log_lines(state_ref(hwnd)).len(), status_before);
+
+                set(true);
+                run_perform(hwnd).unwrap();
+                assert!(sent(state_ref(hwnd)).is_empty());
+                assert_eq!(joins(state_ref(hwnd)), ["#new:example"]);
+                let status = status_log_lines(state_ref(hwnd));
+                let status = &status[status_before..];
+                assert_eq!(
+                    status,
+                    [
+                        "[22:12] * /say: no room selected (in perform)",
+                        "@me:example done",
+                        "[22:12] * /msg: no such nick: nobody (in perform)",
+                        "[22:12] * Added +@bob:example to notify list",
+                    ]
+                );
+                assert!(
+                    state_ref(hwnd)
+                        .settings
+                        .settings()
+                        .notify
+                        .list
+                        .contains("@bob:example")
+                );
+                assert_eq!(ops_lines(hwnd), ops_before);
+                assert_eq!(state_ref(hwnd).active_view, room_view_id("!ops:example"));
             });
         }
     }

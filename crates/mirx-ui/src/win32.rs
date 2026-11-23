@@ -575,6 +575,9 @@ const WM_SYNC_VIEWS: u32 = WM_APP + 5;
 /// Posted: a modal must not run inside the events' application, which an
 /// automation `WM_COPYDATA` may be running.
 const WM_LOG_OUT_WARNING: u32 = WM_APP + 6;
+/// A connect happened: mIRC's Perform on connect runs (`script::run_perform`).
+/// Posted after the connect's events are applied, for the same reason.
+const WM_PERFORM: u32 = WM_APP + 7;
 const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
 /// A connect retry is due (`reconnect`).

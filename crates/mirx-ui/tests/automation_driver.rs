@@ -19005,6 +19005,83 @@ fn commands_menu_part_parts_the_active_room_and_empty_join_echoes_the_error()
     Ok(())
 }
 
+/// Perform on connect runs its lines as typed in Status on each connect
+/// (an appended `SyncConnected`), never for a replayed load, and not at
+/// all when it is off.
+#[test]
+fn perform_runs_in_status_on_each_connect() -> Result<(), Box<dyn std::error::Error>> {
+    let performed = |app: &GuiTestApp| -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        Ok(status_view_lines(app)?
+            .into_iter()
+            .filter(|line| line.ends_with("performed") || line.contains("(in perform)"))
+            .collect())
+    };
+    let launch = |enabled: &str| -> Result<(GuiTestApp, PathBuf), Box<dyn std::error::Error>> {
+        let local_app_data = unique_local_app_data_path();
+        write_settings(
+            &local_app_data,
+            &format!(
+                "[perform]\r\nenabled={enabled}\r\nn0=join #perform:example\r\n\
+                 n1=say hi\r\nn2=echo -s performed\r\n"
+            ),
+        )?;
+        let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
+        let mut events = base_events();
+        events.insert(
+            1,
+            Event::LoggedIn {
+                session: core_stored_session(),
+                homeserver_url: "https://matrix.example/".to_owned(),
+            },
+        );
+        events.push(Event::SyncConnected);
+        app.load_events(&serde_json::to_string(&events)?)?;
+        app.wait_idle(Duration::from_secs(5))?;
+        Ok((app, local_app_data))
+    };
+    let (app, local_app_data) = launch("on")?;
+    let alpha = room_identity("!alpha:example");
+    app.select_view(alpha.clone())?;
+    // The load replays a connect: nothing runs.
+    assert!(performed(&app)?.is_empty());
+    let alpha_lines = find_view(&app.dump_ui_state()?, &alpha).lines.clone();
+
+    append_events(&app, vec![Event::SyncConnected])?;
+    let lines = performed(&app)?;
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].ends_with("* /say: no room selected (in perform)"));
+    assert_eq!(lines[1], "performed");
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::Join,
+            target: "#perform:example".to_owned(),
+        }]
+    );
+    assert!(model.submitted_message_commands.is_empty());
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, alpha);
+    assert_eq!(find_view(&ui_state, &alpha).lines, alpha_lines);
+
+    // A reconnect performs again.
+    append_events(&app, vec![Event::SyncStarted, Event::SyncConnected])?;
+    let lines = performed(&app)?;
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert_eq!(lines[3], "performed");
+    assert_eq!(app.dump_model()?.submitted_membership_commands.len(), 2);
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+
+    let (app, local_app_data) = launch("off")?;
+    append_events(&app, vec![Event::SyncConnected])?;
+    assert!(performed(&app)?.is_empty());
+    assert!(app.dump_model()?.submitted_membership_commands.is_empty());
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 /// A Commands prompt runs its command in the window it was opened from,
 /// even when a join completing meanwhile activated another one.
 #[test]
