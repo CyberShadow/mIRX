@@ -11,6 +11,7 @@
 
 mod support;
 
+use std::collections::BTreeMap;
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -29,18 +30,21 @@ use matrix_sdk::ruma::api::client::room::Visibility;
 use matrix_sdk::ruma::api::client::room::create_room::v3::{
     Request as CreateRoomRequest, RoomPreset,
 };
+use matrix_sdk::ruma::api::client::state::get_state_event_for_key;
 use matrix_sdk::ruma::api::client::uiaa::{
     AuthData, Dummy, MatrixUserIdentifier, Password, UserIdentifier,
 };
-use matrix_sdk::ruma::events::InitialStateEvent;
+use matrix_sdk::ruma::events::direct::DirectEventContent;
 use matrix_sdk::ruma::events::ignored_user_list::IgnoredUserListEventContent;
 use matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent;
 use matrix_sdk::ruma::events::room::member::MembershipState;
 use matrix_sdk::ruma::events::room::message::{
     OriginalSyncRoomMessageEvent, RoomMessageEventContent,
 };
+use matrix_sdk::ruma::events::room::power_levels::RoomPowerLevelsEventContent;
+use matrix_sdk::ruma::events::{InitialStateEvent, StateEventType};
 use matrix_sdk::ruma::{DeviceId, OwnedDeviceId, OwnedRoomId, OwnedUserId, RoomId, UserId};
-use mirx_core::{E2eeRecoveryState, E2eeStatus, RoomMembership};
+use mirx_core::{E2eeRecoveryState, E2eeStatus, RoomMemberRank, RoomMembership};
 use mirx_testkit::{AutomationDialog, ComposeKey, ContextMenuCommand, MirxApp, ViewIdentity};
 use support::*;
 use windows_sys::Win32::Foundation::{HWND, WPARAM};
@@ -295,6 +299,81 @@ impl Peer<'_> {
                 .map(ToString::to_string)
                 .collect()
         })
+    }
+
+    /// Creates a direct room with `user`, invited, as Element does.
+    fn create_dm(&self, user: &UserId) -> OwnedRoomId {
+        self.homeserver
+            .runtime
+            .block_on(self.client.create_dm(user))
+            .expect("creating a direct room succeeds")
+            .room_id()
+            .to_owned()
+    }
+
+    /// The account's direct rooms as the server has them (`m.direct`):
+    /// each user's rooms, as `user ID -> room IDs`.
+    fn direct_rooms(&self) -> BTreeMap<String, Vec<String>> {
+        self.homeserver.runtime.block_on(async {
+            let raw = self
+                .client
+                .account()
+                .fetch_account_data_static::<DirectEventContent>()
+                .await
+                .expect("reading m.direct succeeds");
+            raw.map(|raw| raw.deserialize().expect("m.direct decodes"))
+                .unwrap_or_default()
+                .iter()
+                .map(|(user, rooms)| {
+                    (
+                        user.to_string(),
+                        rooms.iter().map(ToString::to_string).collect(),
+                    )
+                })
+                .collect()
+        })
+    }
+
+    /// Sets `user`'s power level in the room, editing the server's power
+    /// levels.
+    fn set_power_level(&self, room_id: &RoomId, user: &UserId, level: i32) {
+        let mut content = self.server_power_levels_content(room_id);
+        content.users.insert(user.to_owned(), level.into());
+        self.homeserver
+            .runtime
+            .block_on(self.room(room_id).send_state_event(content).into_future())
+            .expect("setting a power level succeeds");
+    }
+
+    fn join(&self, room_id: &RoomId) {
+        self.homeserver
+            .runtime
+            .block_on(self.client.join_room_by_id(room_id))
+            .unwrap_or_else(|error| panic!("{} could not join {room_id}: {error}", self.localpart));
+    }
+
+    fn server_power_levels_content(&self, room_id: &RoomId) -> RoomPowerLevelsEventContent {
+        let request = get_state_event_for_key::v3::Request::new(
+            room_id.to_owned(),
+            StateEventType::RoomPowerLevels,
+            String::new(),
+        );
+        self.homeserver
+            .runtime
+            .block_on(self.client.send(request).into_future())
+            .expect("reading the power levels succeeds")
+            .into_content()
+            .deserialize_as_unchecked::<RoomPowerLevelsEventContent>()
+            .expect("the power levels decode")
+    }
+
+    /// The room's `users` power levels as the server has them.
+    fn server_power_levels(&self, room_id: &RoomId) -> BTreeMap<String, i64> {
+        self.server_power_levels_content(room_id)
+            .users
+            .iter()
+            .map(|(user, level)| (user.to_string(), i64::from(*level)))
+            .collect()
     }
 
     fn device_id(&self) -> &DeviceId {
@@ -1126,6 +1205,201 @@ fn ignore_list_changes_in_a_row_all_stay() -> Result<(), Box<dyn Error>> {
     let only_dave = vec![dave.user_id().to_string()];
     wait_for_server_ignore_list(&app, &alice, &only_dave)?;
     wait_for_ignored_users(&app, &only_dave)?;
+
+    finish(app, &local_app_data)
+}
+
+/// Waits until `check` holds for what `read` returns, as the server
+/// settles after mirx's writes; on timeout, says what it read last.
+fn wait_for_server<T: std::fmt::Debug>(
+    app: &MirxApp,
+    what: &str,
+    mut read: impl FnMut() -> T,
+    check: impl Fn(&T) -> bool,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + TIMEOUT;
+    let mut on_the_server = read();
+    while !check(&on_the_server) {
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "the server never had {what}: {on_the_server:?}; Status: {:?}",
+                status_texts(app)?
+            )
+            .into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+        on_the_server = read();
+    }
+    Ok(())
+}
+
+/// Two direct-room invitations accepted back to back both stay direct
+/// rooms of the account: each join adds its room to `m.direct`, and the
+/// second must not write over the first.
+#[test]
+fn accepting_two_direct_invites_keeps_both_direct() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let bob = homeserver.register("bob", "Bob");
+    let carol = homeserver.register("carol", "Carol");
+    let alice = homeserver.register("alice", "Alice");
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_live_app(&local_app_data)?;
+    sign_in(&app, &homeserver, &alice)?;
+    let with_bob = bob.create_dm(alice.user_id());
+    let with_carol = carol.create_dm(alice.user_id());
+    wait_for_room_membership(&app, &with_bob, RoomMembership::Invite)?;
+    wait_for_room_membership(&app, &with_carol, RoomMembership::Invite)?;
+
+    app.select_status_view()?;
+    type_commands(
+        &app,
+        &[
+            &format!("/accept {with_bob}"),
+            &format!("/accept {with_carol}"),
+        ],
+    )?;
+    wait_for_room_membership(&app, &with_bob, RoomMembership::Join)?;
+    wait_for_room_membership(&app, &with_carol, RoomMembership::Join)?;
+    let both = BTreeMap::from([
+        (bob.user_id().to_string(), vec![with_bob.to_string()]),
+        (carol.user_id().to_string(), vec![with_carol.to_string()]),
+    ]);
+    wait_for_server(
+        &app,
+        &format!("m.direct {both:?}"),
+        || alice.direct_rooms(),
+        |direct| *direct == both,
+    )?;
+    // And mirx shows both as queries once the sync echoes it.
+    app.wait_for_ui_state("both rooms direct", TIMEOUT, |ui_state| {
+        [(&with_bob, &bob), (&with_carol, &carol)]
+            .iter()
+            .all(|(room_id, peer)| {
+                ui_state.rooms.iter().any(|room| {
+                    room.room_id == room_id.as_str()
+                        && room.is_direct
+                        && room.direct_user_ids == [peer.user_id().to_string()]
+                })
+            })
+    })?;
+
+    finish(app, &local_app_data)
+}
+
+/// The members of the room's window in mirx, as `user ID -> rank`.
+fn nick_list_ranks(
+    app: &MirxApp,
+    room_id: &RoomId,
+) -> Result<BTreeMap<String, RoomMemberRank>, Box<dyn Error>> {
+    let ui_state = app.dump_ui_state()?;
+    Ok(find_view(&ui_state, &room_identity(room_id.as_str()))
+        .members
+        .iter()
+        .map(|member| (member.user_id.clone(), member.rank))
+        .collect())
+}
+
+fn wait_for_nick_list(
+    app: &MirxApp,
+    room_id: &RoomId,
+    expected: &BTreeMap<String, RoomMemberRank>,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let ranks = nick_list_ranks(app, room_id)?;
+        if ranks == *expected {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("the nick list never became {expected:?}: {ranks:?}").into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Rank changes typed in a row all stay (each is sent before the server's
+/// echo of the last), and several nicks in one command change in one
+/// write, shown as one line.
+#[test]
+fn rank_changes_in_a_row_and_together_all_stay() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let bob = homeserver.register("bob", "Bob");
+    let carol = homeserver.register("carol", "Carol");
+    let dave = homeserver.register("dave", "Dave");
+    let alice = homeserver.register("alice", "Alice");
+    let alias_localpart = unique_name("ranks");
+    let room_id = bob.create_public_room("Ranks", &alias_localpart);
+    bob.set_power_level(&room_id, alice.user_id(), 100);
+    carol.join(&room_id);
+    dave.join(&room_id);
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_live_app(&local_app_data)?;
+    sign_in(&app, &homeserver, &alice)?;
+    join_by_address(&app, &format!("#{alias_localpart}:localhost"), &room_id)?;
+    let (alice_id, bob_id, carol_id, dave_id) = (
+        alice.user_id().to_string(),
+        bob.user_id().to_string(),
+        carol.user_id().to_string(),
+        dave.user_id().to_string(),
+    );
+    let ranks = |carol_rank, dave_rank| {
+        BTreeMap::from([
+            (alice_id.clone(), RoomMemberRank::Administrator),
+            // Conduit's rooms are version 12: their creator's level is
+            // infinite, and not in the power levels.
+            (bob_id.clone(), RoomMemberRank::Creator),
+            (carol_id.clone(), carol_rank),
+            (dave_id.clone(), dave_rank),
+        ])
+    };
+    wait_for_nick_list(
+        &app,
+        &room_id,
+        &ranks(RoomMemberRank::Member, RoomMemberRank::Member),
+    )?;
+    let levels = |carol_level: Option<i64>, dave_level: Option<i64>| {
+        let mut levels = BTreeMap::from([(alice_id.clone(), 100)]);
+        levels.extend(carol_level.map(|level| (carol_id.clone(), level)));
+        levels.extend(dave_level.map(|level| (dave_id.clone(), level)));
+        levels
+    };
+
+    let room = room_identity(room_id.as_str());
+    app.select_view(room.clone())?;
+    type_commands(&app, &["/op Carol", "/voice Dave"])?;
+    let opped_and_voiced = levels(Some(50), Some(1));
+    wait_for_server(
+        &app,
+        &format!("power levels {opped_and_voiced:?}"),
+        || bob.server_power_levels(&room_id),
+        |users| *users == opped_and_voiced,
+    )?;
+    wait_for_nick_list(
+        &app,
+        &room_id,
+        &ranks(RoomMemberRank::Moderator, RoomMemberRank::Voiced),
+    )?;
+
+    type_commands(&app, &["/deop Carol"])?;
+    wait_for_nick_list(
+        &app,
+        &room_id,
+        &ranks(RoomMemberRank::Member, RoomMemberRank::Voiced),
+    )?;
+    type_commands(&app, &["/op Carol Dave"])?;
+    let both_opped = levels(Some(50), Some(50));
+    wait_for_server(
+        &app,
+        &format!("power levels {both_opped:?}"),
+        || bob.server_power_levels(&room_id),
+        |users| *users == both_opped,
+    )?;
+    // One write, one line, for both.
+    wait_for_view_line(
+        &app,
+        &room,
+        "* Alice sets power level: Carol 0 -> 50, Dave 1 -> 50",
+    )?;
 
     finish(app, &local_app_data)
 }
