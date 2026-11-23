@@ -146,9 +146,9 @@ pub(super) enum SlashCommand {
         nick: String,
         room: Option<String>,
     },
-    /// `/op`, `/deop`, `/voice` and `/devoice`.
+    /// `/op`, `/deop`, `/voice` and `/devoice`, of one or more nicks.
     SetRank {
-        nick: String,
+        nicks: Vec<String>,
         change: RankChange,
     },
     Nick {
@@ -525,8 +525,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "deop",
-        usage: "<nick>",
-        summary: "take a member's operator status",
+        usage: "<nick> [nick ...]",
+        summary: "take members' operator status",
     },
     CommandSpec {
         name: "describe",
@@ -540,8 +540,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "devoice",
-        usage: "<nick>",
-        summary: "take a member's voice",
+        usage: "<nick> [nick ...]",
+        summary: "take members' voice",
     },
     CommandSpec {
         name: "e2ee",
@@ -645,8 +645,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "op",
-        usage: "<nick>",
-        summary: "make a member an operator (moderator)",
+        usage: "<nick> [nick ...]",
+        summary: "make members operators (moderators)",
     },
     CommandSpec {
         name: "part",
@@ -755,8 +755,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "voice",
-        usage: "<nick>",
-        summary: "give a member voice",
+        usage: "<nick> [nick ...]",
+        summary: "give members voice",
     },
     CommandSpec {
         name: "whois",
@@ -970,8 +970,9 @@ fn parse_named(name: &str, argument: &str) -> Result<SlashCommand, CommandError>
                 "voice" => RankChange::Voice,
                 _ => RankChange::Devoice,
             };
+            required(argument)?;
             Ok(SlashCommand::SetRank {
-                nick: single_word(&name, argument)?,
+                nicks: argument.split_whitespace().map(str::to_owned).collect(),
                 change,
             })
         }
@@ -3484,19 +3485,26 @@ mod tests {
                 room: Some("Lobby Room".to_owned()),
             })
         );
-        for (input, change) in [
-            ("/op Bob", RankChange::Op),
-            ("/DEOP Bob", RankChange::Deop),
-            ("/voice Bob", RankChange::Voice),
-            ("/devoice Bob", RankChange::Devoice),
+        for (input, nicks, change) in [
+            ("/op Bob", &["Bob"][..], RankChange::Op),
+            ("/DEOP Bob", &["Bob"][..], RankChange::Deop),
+            ("/voice Bob", &["Bob"][..], RankChange::Voice),
+            ("/devoice Bob", &["Bob"][..], RankChange::Devoice),
+            ("/op Bob Carol", &["Bob", "Carol"][..], RankChange::Op),
+            (
+                "/devoice a  b   c ",
+                &["a", "b", "c"][..],
+                RankChange::Devoice,
+            ),
         ] {
             let command = parse(input).unwrap();
             assert_eq!(
                 command,
                 SlashCommand::SetRank {
-                    nick: "Bob".to_owned(),
+                    nicks: nicks.iter().map(|nick| (*nick).to_owned()).collect(),
                     change,
-                }
+                },
+                "{input}"
             );
             assert_eq!(
                 command.name(),
@@ -3514,7 +3522,7 @@ mod tests {
         ] {
             assert_eq!(parse(&format!("/{name}")), insufficient(name), "{name}");
         }
-        assert_eq!(parse("/op Bob Carol"), error("op", "too many parameters"));
+        assert_eq!(parse("/op   "), insufficient("op"));
     }
 
     #[test]

@@ -501,6 +501,13 @@ pub enum MemberModerationAction {
 #[serde(deny_unknown_fields)]
 pub struct SubmittedPowerLevelCommand {
     pub room_id: String,
+    /// Made together, in one write.
+    pub changes: Vec<SubmittedPowerLevelChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedPowerLevelChange {
     pub user_id: String,
     pub role: MemberPowerRole,
 }

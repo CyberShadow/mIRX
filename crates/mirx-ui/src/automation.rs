@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 83;
+pub(crate) const PROTOCOL_VERSION: u32 = 84;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -2039,6 +2039,13 @@ pub(crate) enum DumpMemberModerationAction {
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpSubmittedPowerLevelCommand {
     pub(crate) room_id: String,
+    /// Made together, in one write.
+    pub(crate) changes: Vec<DumpPowerLevelChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpPowerLevelChange {
     pub(crate) user_id: String,
     pub(crate) role: DumpMemberPowerRole,
 }
@@ -3578,33 +3585,33 @@ mod tests {
         COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE,
         ChooseTrayMenuItemArgs, CommandKind, ComposeKey, ComposeTextResponse, ConnectionState,
         ContextMenuCommand, CrashArgs, DumpE2eeRecoverySetupResult, DumpMemberModerationAction,
-        DumpMemberPowerRole, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
-        DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
-        DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
-        DumpRoomEncryptedFileKey, DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity,
-        DumpRoomImageInfo, DumpRoomMediaSource, DumpRoomMessageActivity,
-        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomPreviewMediaState,
-        DumpRoomReactionSummary, DumpRoomRedactedActivity, DumpRoomStateNoticeActivity,
-        DumpRoomStateNoticeContent, DumpRoomVideoActivity, DumpRoomVideoInfo,
-        DumpSubmittedAwayCommand, DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
-        DumpSubmittedMemberModerationCommand, DumpSubmittedPowerLevelCommand,
-        DumpSubmittedProfileCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
-        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
-        DumpSubmittedSetupRecoveryCommand, DumpSubmittedTypingCommand, DumpSubmittedUserCommand,
-        DumpSubmittedVerificationRequest, DumpUnsupportedRoomMessageActivity,
-        DumpUserCommandAction, FindActiveViewArgs, FindActiveViewResponse, GetVersionResponse,
-        IdleProbe, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiArrangement,
-        MdiState, MdiView, MdiWindowPlacement, MdiWindowState, MircFormatKey, NavigationNode,
-        NavigationNodeKey, NavigationPathSegment, NoArgs, OpenDialogArgs,
-        OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs, PROTOCOL_VERSION,
-        ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
-        RoomMemberView, SelectMemberArgs, SelectNavigationPathArgs, SelectOptionsPageArgs,
-        SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs, SelectViewArgs,
-        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendFileArgs,
-        SendTextArgs, SendTextResponse, SetComposeTextArgs, SetNavigationExpandedArgs,
-        SetViewWindowStateArgs, SetupE2eeRecoveryArgs, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiFindHistorySearchState, UiFindState, UiFrameLayout, UiRect,
-        UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiToolbarButton,
+        DumpMemberPowerRole, DumpModel, DumpPowerLevelChange, DumpRoomActivity,
+        DumpRoomActivityArgs, DumpRoomActivityKind, DumpRoomActivityRelation,
+        DumpRoomActivityResponse, DumpRoomAudioActivity, DumpRoomAudioInfo,
+        DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey, DumpRoomFileActivity,
+        DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomMediaSource,
+        DumpRoomMessageActivity, DumpRoomMessageActivityLine, DumpRoomMessageSendState,
+        DumpRoomPreviewMediaState, DumpRoomReactionSummary, DumpRoomRedactedActivity,
+        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent, DumpRoomVideoActivity,
+        DumpRoomVideoInfo, DumpSubmittedAwayCommand, DumpSubmittedEditCommand,
+        DumpSubmittedHistoryCommand, DumpSubmittedMemberModerationCommand,
+        DumpSubmittedPowerLevelCommand, DumpSubmittedProfileCommand, DumpSubmittedReactionCommand,
+        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
+        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand,
+        DumpSubmittedTypingCommand, DumpSubmittedUserCommand, DumpSubmittedVerificationRequest,
+        DumpUnsupportedRoomMessageActivity, DumpUserCommandAction, FindActiveViewArgs,
+        FindActiveViewResponse, GetVersionResponse, IdleProbe, LifecycleState, ListRoomsResponse,
+        LoadEventsArgs, LoginArgs, MdiArrangement, MdiState, MdiView, MdiWindowPlacement,
+        MdiWindowState, MircFormatKey, NavigationNode, NavigationNodeKey, NavigationPathSegment,
+        NoArgs, OpenDialogArgs, OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs,
+        PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
+        RestoreSessionArgs, RoomMemberView, SelectMemberArgs, SelectNavigationPathArgs,
+        SelectOptionsPageArgs, SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs,
+        SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
+        SendFileArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs,
+        SetNavigationExpandedArgs, SetViewWindowStateArgs, SetupE2eeRecoveryArgs, StatusBarState,
+        SwitchbarItem, SwitchbarState, UiFindHistorySearchState, UiFindState, UiFrameLayout,
+        UiRect, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiToolbarButton,
         VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
         failure_response, parse_command_request, success_response,
     };
@@ -3718,8 +3725,16 @@ mod tests {
         ];
         model.submitted_power_level_commands = vec![DumpSubmittedPowerLevelCommand {
             room_id: "!ops:example".to_owned(),
-            user_id: "@bob:example".to_owned(),
-            role: DumpMemberPowerRole::Voiced,
+            changes: vec![
+                DumpPowerLevelChange {
+                    user_id: "@bob:example".to_owned(),
+                    role: DumpMemberPowerRole::Voiced,
+                },
+                DumpPowerLevelChange {
+                    user_id: "@carol:example".to_owned(),
+                    role: DumpMemberPowerRole::Moderator,
+                },
+            ],
         }];
         model.submitted_profile_commands = vec![DumpSubmittedProfileCommand {
             display_name: "New Name".to_owned(),
@@ -3773,8 +3788,16 @@ mod tests {
             testkit_model.submitted_power_level_commands,
             vec![mirx_testkit::SubmittedPowerLevelCommand {
                 room_id: "!ops:example".to_owned(),
-                user_id: "@bob:example".to_owned(),
-                role: mirx_testkit::MemberPowerRole::Voiced,
+                changes: vec![
+                    mirx_testkit::SubmittedPowerLevelChange {
+                        user_id: "@bob:example".to_owned(),
+                        role: mirx_testkit::MemberPowerRole::Voiced,
+                    },
+                    mirx_testkit::SubmittedPowerLevelChange {
+                        user_id: "@carol:example".to_owned(),
+                        role: mirx_testkit::MemberPowerRole::Moderator,
+                    },
+                ],
             }]
         );
         assert_eq!(
@@ -4075,8 +4098,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_83() {
-        assert_eq!(PROTOCOL_VERSION, 83);
+    fn protocol_version_is_84() {
+        assert_eq!(PROTOCOL_VERSION, 84);
     }
 
     #[test]
@@ -6115,7 +6138,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":83,
+                    "protocol_version":84,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })

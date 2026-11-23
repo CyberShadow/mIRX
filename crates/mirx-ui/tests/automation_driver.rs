@@ -43,13 +43,13 @@ use mirx_testkit::{
     StoredSession, SubmittedAwayCommand, SubmittedDirectRoomCommand, SubmittedEditCommand,
     SubmittedFileCommand, SubmittedHistoryCommand, SubmittedIdentityReset,
     SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedMessageCommand,
-    SubmittedNotificationCommand, SubmittedPowerLevelCommand, SubmittedProfileCommand,
-    SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
-    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomKeyTransfer,
-    SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSessionCommand,
-    SubmittedSetupRecoveryCommand, SubmittedTypingCommand, SubmittedUserCommand,
-    SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem, TestkitError,
-    UiActiveTimeline, UiActivityColors, UiAddressBook, UiColorCodePart, UiColorItem,
+    SubmittedNotificationCommand, SubmittedPowerLevelChange, SubmittedPowerLevelCommand,
+    SubmittedProfileCommand, SubmittedReactionCommand, SubmittedRecoveryCommand,
+    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
+    SubmittedRoomKeyTransfer, SubmittedRoomListRequest, SubmittedRoomTopicCommand,
+    SubmittedSessionCommand, SubmittedSetupRecoveryCommand, SubmittedTypingCommand,
+    SubmittedUserCommand, SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem,
+    TestkitError, UiActiveTimeline, UiActivityColors, UiAddressBook, UiColorCodePart, UiColorItem,
     UiColorsDialog, UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError,
     UiFindHistorySearchState, UiFindState, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem,
     UiOptionsDialog, UiPoint, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
@@ -3425,7 +3425,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 83);
+    assert_eq!(version.protocol_version, 84);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -9801,6 +9801,9 @@ fn automation_driver_irc_moderation_commands_submit_core_commands()
         "/voice alice",
         "/deop Bob",
         "/devoice Vic",
+        "/op alice Vic",
+        // Bob is already an operator: nothing is sent for Alice either.
+        "/op alice Bob",
         "/nick New Name",
     ] {
         app.set_compose_text(input)?;
@@ -9830,18 +9833,28 @@ fn automation_driver_irc_moderation_commands_submit_core_commands()
             moderation(MemberModerationAction::Invite, "@carol:example", None),
         ]
     );
-    let power = |user_id: &str, role| SubmittedPowerLevelCommand {
+    let power = |changes: &[(&str, MemberPowerRole)]| SubmittedPowerLevelCommand {
         room_id: "!beta:example".to_owned(),
-        user_id: user_id.to_owned(),
-        role,
+        changes: changes
+            .iter()
+            .map(|(user_id, role)| SubmittedPowerLevelChange {
+                user_id: (*user_id).to_owned(),
+                role: *role,
+            })
+            .collect(),
     };
     assert_eq!(
         model.submitted_power_level_commands,
         vec![
-            power("@alice:example", MemberPowerRole::Moderator),
-            power("@alice:example", MemberPowerRole::Voiced),
-            power("@bob:example", MemberPowerRole::Default),
-            power("@vic:example", MemberPowerRole::Default),
+            power(&[("@alice:example", MemberPowerRole::Moderator)]),
+            power(&[("@alice:example", MemberPowerRole::Voiced)]),
+            power(&[("@bob:example", MemberPowerRole::Default)]),
+            power(&[("@vic:example", MemberPowerRole::Default)]),
+            // One command, one write, for both.
+            power(&[
+                ("@alice:example", MemberPowerRole::Moderator),
+                ("@vic:example", MemberPowerRole::Moderator),
+            ]),
         ]
     );
     assert_eq!(
@@ -9874,6 +9887,11 @@ fn automation_driver_irc_moderation_commands_submit_core_commands()
         );
     }
     assert!(!view_contains(status, "room member"), "{:?}", status.lines);
+    assert!(
+        view_contains(beta, "* /op: Bob is already an operator"),
+        "{:?}",
+        beta.lines
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -10593,8 +10611,10 @@ fn member_menu_control_items() -> Result<(), Box<dyn std::error::Error>> {
         model.submitted_power_level_commands,
         vec![SubmittedPowerLevelCommand {
             room_id: "!beta:example".to_owned(),
-            user_id: "@bob:example".to_owned(),
-            role: MemberPowerRole::Moderator,
+            changes: vec![SubmittedPowerLevelChange {
+                user_id: "@bob:example".to_owned(),
+                role: MemberPowerRole::Moderator,
+            }],
         }]
     );
     assert_eq!(

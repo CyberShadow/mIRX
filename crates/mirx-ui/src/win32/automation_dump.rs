@@ -790,21 +790,23 @@ fn submitted_power_level_commands_from_state(
     state
         .recorded_commands
         .iter()
-        .flat_map(|command| match command {
-            Command::SetRoomMemberPowerLevel(request) => request
-                .changes
-                .iter()
-                .map(|change| DumpSubmittedPowerLevelCommand {
-                    room_id: request.room_id.clone(),
-                    user_id: change.user_id.clone(),
-                    role: match change.role {
-                        MemberPowerRole::Moderator => DumpMemberPowerRole::Moderator,
-                        MemberPowerRole::Voiced => DumpMemberPowerRole::Voiced,
-                        MemberPowerRole::Default => DumpMemberPowerRole::Default,
-                    },
-                })
-                .collect(),
-            _ => Vec::new(),
+        .filter_map(|command| match command {
+            Command::SetRoomMemberPowerLevel(request) => Some(DumpSubmittedPowerLevelCommand {
+                room_id: request.room_id.clone(),
+                changes: request
+                    .changes
+                    .iter()
+                    .map(|change| DumpPowerLevelChange {
+                        user_id: change.user_id.clone(),
+                        role: match change.role {
+                            MemberPowerRole::Moderator => DumpMemberPowerRole::Moderator,
+                            MemberPowerRole::Voiced => DumpMemberPowerRole::Voiced,
+                            MemberPowerRole::Default => DumpMemberPowerRole::Default,
+                        },
+                    })
+                    .collect(),
+            }),
+            _ => None,
         })
         .collect()
 }

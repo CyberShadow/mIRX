@@ -537,7 +537,7 @@ pub(super) fn member_menu_command(id: usize, user_id: &str) -> Option<SlashComma
     let nick = user_id.to_owned();
     let rank = |change| {
         Some(SlashCommand::SetRank {
-            nick: nick.clone(),
+            nicks: vec![nick.clone()],
             change,
         })
     };
@@ -1046,28 +1046,28 @@ mod tests {
             (
                 MENU_ID_MEMBER_OP,
                 Some(SlashCommand::SetRank {
-                    nick: nick(),
+                    nicks: vec![nick()],
                     change: RankChange::Op,
                 }),
             ),
             (
                 MENU_ID_MEMBER_DEOP,
                 Some(SlashCommand::SetRank {
-                    nick: nick(),
+                    nicks: vec![nick()],
                     change: RankChange::Deop,
                 }),
             ),
             (
                 MENU_ID_MEMBER_VOICE,
                 Some(SlashCommand::SetRank {
-                    nick: nick(),
+                    nicks: vec![nick()],
                     change: RankChange::Voice,
                 }),
             ),
             (
                 MENU_ID_MEMBER_DEVOICE,
                 Some(SlashCommand::SetRank {
-                    nick: nick(),
+                    nicks: vec![nick()],
                     change: RankChange::Devoice,
                 }),
             ),

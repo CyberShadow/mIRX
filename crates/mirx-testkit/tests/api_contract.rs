@@ -36,18 +36,18 @@ use mirx_testkit::{
     RoomVideoActivity, RoomVideoInfo, SendFileArgs, SessionAuth, SetupE2eeRecoveryArgs, SpaceChild,
     StatusBarState, StoredSession, SubmittedDirectRoomCommand, SubmittedHistoryCommand,
     SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedMessageCommand,
-    SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
-    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
-    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SubmittedUserCommand, SwitchbarItem,
-    SwitchbarState, TestkitError, UiActiveTimeline, UiActivityColors, UiColorItem, UiColors,
-    UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
-    UiFindState, UiFrameLayout, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem,
-    UiOptionsDialog, UiPoint, UiRect, UiRefreshCounters, UiRoomHistoryBackfillState, UiRoomList,
-    UiRoomReadState, UiRoomState, UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind,
-    UiTimelineLink, UiTimestamp, UiTipsOptions, UiToolbarButton, UiTray, UiTrayMenuItem,
-    UiTrayOptions, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
-    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
-    ViewActivityLevel, ViewIdentity,
+    SubmittedPowerLevelChange, SubmittedPowerLevelCommand, SubmittedProfileCommand,
+    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
+    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
+    SubmittedUserCommand, SwitchbarItem, SwitchbarState, TestkitError, UiActiveTimeline,
+    UiActivityColors, UiColorItem, UiColors, UiComposeTarget, UiComposeTargetKind,
+    UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState, UiFrameLayout,
+    UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRect,
+    UiRefreshCounters, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState,
+    UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
+    UiTipsOptions, UiToolbarButton, UiTray, UiTrayMenuItem, UiTrayOptions,
+    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionArgs,
+    VerificationDecimals, VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -4918,13 +4918,14 @@ fn submitted_power_level_and_profile_commands_have_strict_json_contracts() {
     ] {
         let command = SubmittedPowerLevelCommand {
             room_id: "!ops:example.org".to_owned(),
-            user_id: "@bob:example.org".to_owned(),
-            role,
+            changes: vec![SubmittedPowerLevelChange {
+                user_id: "@bob:example.org".to_owned(),
+                role,
+            }],
         };
         let value = serde_json::json!({
             "room_id": "!ops:example.org",
-            "user_id": "@bob:example.org",
-            "role": wire
+            "changes": [{ "user_id": "@bob:example.org", "role": wire }]
         });
         assert_eq!(serde_json::to_value(&command).unwrap(), value);
         assert_eq!(
@@ -4934,13 +4935,21 @@ fn submitted_power_level_and_profile_commands_have_strict_json_contracts() {
     }
     assert!(
         serde_json::from_value::<SubmittedPowerLevelCommand>(serde_json::json!({
-            "room_id": "!ops:example.org", "user_id": "@bob:example.org", "role": "admin"
+            "room_id": "!ops:example.org",
+            "changes": [{ "user_id": "@bob:example.org", "role": "admin" }]
         }))
         .is_err()
     );
     assert!(
         serde_json::from_value::<SubmittedPowerLevelCommand>(serde_json::json!({
-            "room_id": "!ops:example.org", "user_id": "@bob:example.org", "role": "voiced", "extra": 1
+            "room_id": "!ops:example.org",
+            "changes": [{ "user_id": "@bob:example.org", "role": "voiced", "extra": 1 }]
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<SubmittedPowerLevelCommand>(serde_json::json!({
+            "room_id": "!ops:example.org", "changes": [], "extra": 1
         }))
         .is_err()
     );

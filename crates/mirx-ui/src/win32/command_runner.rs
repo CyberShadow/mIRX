@@ -389,22 +389,35 @@ pub(super) unsafe fn run_slash_command(
             )?;
             Ok(Some(format!("invite submitted: {user_id}")))
         }
-        SlashCommand::SetRank { nick, change } => {
+        SlashCommand::SetRank { nicks, change } => {
             let state = state_mut(hwnd);
-            let (room_id, member) = room_member_target(state, &nick)?;
-            let role = commands::rank_change_role(change, member)?;
-            let user_id = member.user_id.clone();
+            let room_id = resolve_joined_room_target(state, None)?;
+            // One write carries every change or none: the first refusal
+            // sends nothing.
+            let mut changes = Vec::<MemberPowerLevelChange>::with_capacity(nicks.len());
+            for nick in &nicks {
+                let member = commands::resolve_nick(room_members(&state.model, &room_id), nick)?;
+                if changes.iter().any(|known| known.user_id == member.user_id) {
+                    return Err(format!("{} is named twice", member.nick));
+                }
+                changes.push(MemberPowerLevelChange {
+                    user_id: member.user_id.clone(),
+                    role: commands::rank_change_role(change, member)?,
+                });
+            }
+            let user_ids = changes
+                .iter()
+                .map(|change| change.user_id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
             enqueue_command(
                 state,
                 Command::SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest {
                     room_id,
-                    changes: vec![MemberPowerLevelChange {
-                        user_id: user_id.clone(),
-                        role,
-                    }],
+                    changes,
                 }),
             )?;
-            Ok(Some(format!("power level change submitted: {user_id}")))
+            Ok(Some(format!("power level change submitted: {user_ids}")))
         }
         SlashCommand::Nick { display_name } => {
             enqueue_command(
@@ -2181,6 +2194,65 @@ mod tests {
                         "[22:12] * /op: Bob is already an operator",
                         "[22:12] * /devoice: Alice is not voiced",
                         "[22:12] * /deop: you cannot deop yourself",
+                    ]
+                );
+            });
+        }
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn rank_commands_change_several_members_in_one_command_or_none() {
+        let (mut state, handle) = irc_command_state();
+        let ops = state.model.room_views.get_mut("!ops:example").unwrap();
+        ops.members
+            .push(member_summary("@carol:example", "Carol", false));
+        let mut me = member_summary("@me:example", "Me", false);
+        me.rank = RoomMemberRank::Moderator;
+        me.is_own_user = true;
+        ops.members.push(me);
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                type_compose_line(hwnd, "/op Alice  Carol");
+                assert_eq!(
+                    state_ref(hwnd).model.status,
+                    "power level change submitted: @alice:example, @carol:example"
+                );
+                for input in [
+                    "/op Carol Bob",
+                    "/op Carol @carol:example",
+                    "/deop Bob Me",
+                    "/voice Carol Nobody",
+                ] {
+                    type_compose_line(hwnd, input);
+                }
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![Command::SetRoomMemberPowerLevel(
+                        SetRoomMemberPowerLevelRequest {
+                            room_id: "!ops:example".to_owned(),
+                            changes: vec![
+                                MemberPowerLevelChange {
+                                    user_id: "@alice:example".to_owned(),
+                                    role: MemberPowerRole::Moderator,
+                                },
+                                MemberPowerLevelChange {
+                                    user_id: "@carol:example".to_owned(),
+                                    role: MemberPowerRole::Moderator,
+                                },
+                            ],
+                        }
+                    )]
+                );
+                let lines = render_room_lines(state_ref(hwnd), "!ops:example");
+                assert_eq!(
+                    &lines[lines.len() - 4..],
+                    [
+                        "[22:12] * /op: Bob is already an operator",
+                        "[22:12] * /op: Carol is named twice",
+                        "[22:12] * /deop: you cannot deop yourself",
+                        "[22:12] * /voice: no such nick: Nobody",
                     ]
                 );
             });
