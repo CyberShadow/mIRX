@@ -24,7 +24,7 @@ dpi144_prefix=
 # expectations, the default frame size (scaled, clamped to the screen) and
 # --expect-dpi 144.
 dpi144_cases=(multi-room image-message-loaded room-list-listing compose-color-index
-  dialog-options-display dialog-options-irc dialog-colors dialog-sign-out-session dialog-log-out
+  dialog-options-display dialog-options-chat dialog-colors dialog-sign-out-session dialog-log-out
   dialog-export-room-keys dialog-address-book-notify dialog-address-book-colors toolbar-connected
   line-marker dialog-channel-central dialog-sessions)
 
@@ -320,20 +320,20 @@ configure_case_expectations() {
           ordered_actions=(dialog:options:Connect/Options)
           expect_dialog_title='mirx Options'
           ;;
-        dialog-options-irc)
-          ordered_actions=(dialog:options:IRC)
+        dialog-options-chat)
+          ordered_actions=(dialog:options:Chat)
           expect_dialog_title='mirx Options'
           ;;
         dialog-options-messages)
-          ordered_actions=(dialog:options:IRC/Messages)
+          ordered_actions=(dialog:options:Chat/Messages)
           expect_dialog_title='mirx Options'
           ;;
         dialog-options-highlight)
-          ordered_actions=(dialog:options:IRC/Highlight)
+          ordered_actions=(dialog:options:Chat/Highlight)
           expect_dialog_title='mirx Options'
           ;;
         dialog-options-logging)
-          ordered_actions=(dialog:options:IRC/Logging)
+          ordered_actions=(dialog:options:Chat/Logging)
           expect_dialog_title='mirx Options'
           ;;
         dialog-options-display)
@@ -2636,7 +2636,7 @@ configure_case_expectations() {
       ;;
     nick-colors)
       # The away-nicks fixture with a line from Admin, then mIRC's nick
-      # colours: Any mode in red (the staff), then anyone in an auto colour.
+      # colours: any rank in red (the staff), then anyone in an auto colour.
       # Away members stay grey in the nick list.
       ordered_actions=(
         'input:/cnick -a * 4'
@@ -2674,8 +2674,8 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!ops:example'
       ;;
-    mode-prefix)
-      # Options > IRC > Show mode prefix on: a channel's senders carry
+    rank-prefix)
+      # Options > Chat > Show rank prefix on: a room's senders carry
       # their rank's glyph, members none.
       expect_selected='!ops:example'
       expect_active_view='room:!ops:example'
