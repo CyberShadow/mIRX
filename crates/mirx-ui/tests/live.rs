@@ -48,7 +48,7 @@ use matrix_sdk::ruma::{DeviceId, OwnedDeviceId, OwnedRoomId, OwnedUserId, RoomId
 use mirx_core::{E2eeRecoveryState, E2eeStatus, RoomMemberRank, RoomMembership};
 use mirx_testkit::{
     AutomationDialog, ComposeKey, ContextMenuCommand, MirxApp, UiChannelCentral, UiCheckState,
-    ViewIdentity,
+    UiSessions, ViewIdentity,
 };
 use support::*;
 use windows_sys::Win32::Foundation::{HWND, WPARAM};
@@ -81,6 +81,15 @@ const CHANNEL_CENTRAL_TOPIC_ID: i32 = 7602;
 const CHANNEL_CENTRAL_BANS_ID: i32 = 7603;
 const CHANNEL_CENTRAL_REMOVE_ID: WPARAM = 7604;
 const CHANNEL_CENTRAL_MODE_IDS: [i32; 4] = [7605, 7606, 7607, 7608];
+/// The Sessions dialog's list and buttons, the Rename Session prompt's
+/// field and OK, and the Sign Out Session dialog's password and button.
+const SESSIONS_LIST_ID: i32 = 7701;
+const SESSIONS_RENAME_ID: WPARAM = 7703;
+const SESSIONS_SIGN_OUT_ID: WPARAM = 7704;
+const SINGLE_FIELD_DIALOG_EDIT_ID: i32 = 5010;
+const SINGLE_FIELD_DIALOG_OK_ID: usize = 5011;
+const SIGN_OUT_SESSION_DIALOG_PASSWORD_ID: i32 = 5019;
+const SIGN_OUT_SESSION_DIALOG_SIGN_OUT_ID: usize = 5020;
 
 /// The homeserver under test, and the runtime its peers run on.
 struct Homeserver {
@@ -452,6 +461,19 @@ impl Peer<'_> {
             .collect::<Vec<_>>();
         devices.sort();
         devices
+    }
+
+    /// The name the server has for one of the user's devices.
+    fn device_display_name(&self, device_id: &DeviceId) -> Option<String> {
+        self.homeserver
+            .runtime
+            .block_on(self.client.devices())
+            .expect("listing devices succeeds")
+            .devices
+            .into_iter()
+            .find(|device| device.device_id == device_id)
+            .unwrap_or_else(|| panic!("{device_id} is listed"))
+            .display_name
     }
 
     /// Signs one of the user's devices out, with the password the server
@@ -1743,5 +1765,99 @@ fn mode_changes_the_room_and_ranks_in_one_write() -> Result<(), Box<dyn Error>> 
     type_commands(&app, &[&format!("/mode {alias} +i")])?;
     wait_for_view_line(&app, &room, "* Alice makes the room invite only")?;
 
+    finish(app, &local_app_data)
+}
+
+/// Waits until the open Sessions dialog's state passes `check`.
+fn wait_for_sessions(
+    app: &MirxApp,
+    what: &str,
+    check: impl Fn(&UiSessions) -> bool,
+) -> Result<UiSessions, Box<dyn Error>> {
+    let ui_state = app.wait_for_ui_state(what, TIMEOUT, |ui_state| {
+        ui_state.sessions.as_ref().is_some_and(&check)
+    })?;
+    Ok(ui_state.sessions.expect("waited for above"))
+}
+
+/// The Sessions dialog renames another of the account's sessions and signs
+/// it out, on the server: the peer is Alice's phone, mirx her second
+/// device. The server's name for the phone is read by the phone itself;
+/// once signed out, the phone's own token is refused.
+#[test]
+fn sessions_dialog_renames_and_signs_out_another_session() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let alice_phone = homeserver.register("alice", "Alice");
+    let phone = alice_phone.device_id().to_string();
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_live_app(&local_app_data)?;
+    let device = sign_in(&app, &homeserver, &alice_phone)?;
+
+    app.open_dialog(AutomationDialog::Sessions)?;
+    let dialog = wait_for_dialog(&app, "mirxWin32SessionsDialog")?;
+    let shown = wait_for_sessions(&app, "both sessions", |sessions| sessions.rows.len() == 2)?;
+    assert_eq!(shown.rows[0][0], device, "{shown:?}");
+    assert_eq!(shown.rows[0][3], "this session", "{shown:?}");
+    assert_eq!(shown.rows[1][0], phone, "{shown:?}");
+    let list = unsafe { GetDlgItem(dialog, SESSIONS_LIST_ID) };
+    post_left_click(list, &shown.row_click_points[1], false);
+    wait_for_sessions(&app, "the phone selected", |sessions| {
+        sessions.selected == Some(1) && sessions.sign_out_enabled
+    })?;
+
+    // Rename... asks for the name over the dialog.
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, SESSIONS_RENAME_ID, 0) },
+        0
+    );
+    let prompt = wait_for_window(&wide_null("mirxWin32SingleFieldDialog"), "Rename Session")?;
+    set_dialog_text(prompt, SINGLE_FIELD_DIALOG_EDIT_ID, "Old phone");
+    press_dialog_button(&app, prompt, SINGLE_FIELD_DIALOG_OK_ID, "Rename Session")?;
+    wait_for_server(
+        &app,
+        "the phone's new name",
+        || alice_phone.device_display_name(phone.as_str().into()),
+        |name| name.as_deref() == Some("Old phone"),
+    )?;
+    wait_for_sessions(&app, "the new name listed", |sessions| {
+        sessions
+            .rows
+            .get(1)
+            .is_some_and(|row| row[1] == "Old phone")
+            && sessions.selected == Some(1)
+    })?;
+
+    // Sign Out... confirms with the password.
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, SESSIONS_SIGN_OUT_ID, 0) },
+        0
+    );
+    let confirm = wait_for_window(
+        &wide_null("mirxWin32SignOutSessionDialog"),
+        "Sign Out Session",
+    )?;
+    set_dialog_text(confirm, SIGN_OUT_SESSION_DIALOG_PASSWORD_ID, PASSWORD);
+    press_dialog_button(
+        &app,
+        confirm,
+        SIGN_OUT_SESSION_DIALOG_SIGN_OUT_ID,
+        "Sign Out Session",
+    )?;
+    let shown = wait_for_sessions(&app, "the phone gone", |sessions| sessions.rows.len() == 1)?;
+    assert_eq!(shown.rows[0][0], device, "{shown:?}");
+    // "; this session is not verified" may follow: no cross-signing here.
+    assert!(shown.status.starts_with("1 session"), "{shown:?}");
+    wait_for_view_line(
+        &app,
+        &ViewIdentity::Status,
+        &format!("* Session {phone} signed out"),
+    )?;
+    let refused = homeserver.runtime.block_on(alice_phone.client.devices());
+    assert!(
+        refused.is_err(),
+        "the phone's token still works: {refused:?}"
+    );
+
+    press_dialog_button(&app, dialog, IDCANCEL as usize, "Sessions")?;
     finish(app, &local_app_data)
 }
