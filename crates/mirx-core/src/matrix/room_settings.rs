@@ -600,6 +600,129 @@ mod tests {
         });
     }
 
+    /// `event` as redacted: what the redaction algorithm kept of its
+    /// content, and the redaction in `unsigned`.
+    fn redacted(mut event: serde_json::Value, kept: serde_json::Value) -> serde_json::Value {
+        let event_id = event["event_id"].clone();
+        event["content"] = kept;
+        event["unsigned"] = serde_json::json!({
+            "redacted_because": {
+                "type": "m.room.redaction",
+                "sender": OWN,
+                "event_id": "$redaction",
+                "origin_server_ts": 100,
+                "room_id": ROOM,
+                "redacts": event_id,
+                "content": { "redacts": event_id },
+            },
+        });
+        event
+    }
+
+    #[test]
+    fn redacted_name_topic_and_power_levels_read_as_before() {
+        runtime().block_on(async {
+            let server = MatrixMockServer::new().await;
+            let client = joined_client(&server, serde_json::json!({ "creator": OWN })).await;
+            mount_state(
+                &server,
+                vec![
+                    // The redaction keeps no keys of a name or a topic.
+                    redacted(
+                        state_event("m.room.name", "", OWN, 4, serde_json::json!({})),
+                        serde_json::json!({}),
+                    ),
+                    redacted(
+                        state_event("m.room.topic", "", OWN, 5, serde_json::json!({})),
+                        serde_json::json!({}),
+                    ),
+                    // It keeps the levels.
+                    redacted(
+                        state_event("m.room.power_levels", "", OWN, 3, serde_json::json!({})),
+                        serde_json::json!({ "users": { OWN: 100 } }),
+                    ),
+                    // And a member's membership.
+                    redacted(
+                        ban("@carol:example.org", 10, serde_json::json!({})),
+                        serde_json::json!({ "membership": "ban" }),
+                    ),
+                ],
+            )
+            .await;
+            mount_directory(&server, "private").await;
+
+            let settings = fetch_room_settings(&client, ROOM).await.expect("settings");
+
+            assert_eq!(
+                settings,
+                RoomSettings {
+                    room_id: ROOM.to_owned(),
+                    name: None,
+                    topic: None,
+                    join_rule: RoomJoinRule::Invite,
+                    topic_by_operators: true,
+                    moderated: false,
+                    listed_in_directory: false,
+                    bans: vec![RoomBan {
+                        user_id: "@carol:example.org".to_owned(),
+                        display_name: None,
+                        banned_by: OWN.to_owned(),
+                        reason: None,
+                        timestamp_ms: 10,
+                    }],
+                    allowed: RoomSettingsPermissions {
+                        name: true,
+                        topic: true,
+                        join_rule: true,
+                        power_levels: true,
+                        directory: true,
+                        unban: true,
+                    },
+                }
+            );
+        });
+    }
+
+    async fn fetch_error(state: Vec<serde_json::Value>) -> String {
+        let server = MatrixMockServer::new().await;
+        let client = joined_client(&server, serde_json::json!({ "creator": OWN })).await;
+        mount_state(&server, state).await;
+        mount_directory(&server, "private").await;
+        fetch_room_settings(&client, ROOM)
+            .await
+            .expect_err("malformed settings")
+            .to_string()
+    }
+
+    #[test]
+    fn a_malformed_settings_event_fails_the_read() {
+        runtime().block_on(async {
+            let err = fetch_error(vec![state_event(
+                "m.room.join_rules",
+                "",
+                OWN,
+                6,
+                serde_json::json!({ "join_rule": 5 }),
+            )])
+            .await;
+            assert!(
+                err.starts_with("failed to load Matrix room settings: m.room.join_rules: "),
+                "{err}"
+            );
+
+            let mut nameless = state_event("m.room.name", "", OWN, 4, serde_json::json!({}));
+            nameless
+                .as_object_mut()
+                .expect("event object")
+                .remove("content");
+            let err = fetch_error(vec![nameless]).await;
+            assert!(
+                err.starts_with("failed to load Matrix room settings: m.room.name: "),
+                "{err}"
+            );
+        });
+    }
+
     fn request(room_id: &str) -> UpdateRoomSettingsRequest {
         UpdateRoomSettingsRequest {
             room_id: room_id.to_owned(),
