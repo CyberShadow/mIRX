@@ -172,21 +172,8 @@ pub(super) unsafe fn run_slash_command(
             Ok(Some(format!("devices requested: {user_id}")))
         }
         SlashCommand::DevicesDelete { device_id } => {
-            let auth = match &state_ref(hwnd).model.own_account {
-                Some(account) => account.auth.clone(),
-                None => return Err("not connected to server".to_owned()),
-            };
-            let password = match auth {
-                // The account page confirms it, on its own.
-                SessionAuth::OAuth { .. } => None,
-                SessionAuth::Matrix => match show_sign_out_session_dialog(hwnd, &device_id)? {
-                    Some(form) => form.password,
-                    None => return Ok(None),
-                },
-            };
             let status = format!("session sign-out submitted: {device_id}");
-            submit_device_sign_out(state_mut(hwnd), device_id, password)?;
-            Ok(Some(status))
+            Ok(sign_out_session(hwnd, hwnd, device_id)?.then_some(status))
         }
         SlashCommand::DevicesRename {
             device_id,
@@ -1260,6 +1247,30 @@ pub(super) fn resolve_invite_command_room_id(
             }
         }
     }
+}
+
+/// Signs out another of the user's sessions (`/devices delete`, the
+/// Sessions dialog's Sign Out...): a password account confirms in the Sign
+/// Out Session dialog, owned by `owner`; an OAuth 2.0 account's page
+/// confirms it on its own. `false` when the user cancelled: nothing sent.
+pub(super) unsafe fn sign_out_session(
+    owner: HWND,
+    hwnd: HWND,
+    device_id: String,
+) -> Result<bool, String> {
+    let auth = match &state_ref(hwnd).model.own_account {
+        Some(account) => account.auth.clone(),
+        None => return Err("not connected to server".to_owned()),
+    };
+    let password = match auth {
+        SessionAuth::OAuth { .. } => None,
+        SessionAuth::Matrix => match show_sign_out_session_dialog(owner, &device_id)? {
+            Some(form) => form.password,
+            None => return Ok(false),
+        },
+    };
+    submit_device_sign_out(state_mut(hwnd), device_id, password)?;
+    Ok(true)
 }
 
 /// The user's own ID, for commands that need a session.
