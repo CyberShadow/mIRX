@@ -3894,6 +3894,7 @@ run_case() {
     return 1
   fi
   cleanup_app
+  crop_to_frame "$case_name" "$generated_png" "$(snapshot_frame_rect "$case_name")" || return 1
   echo "PNG $generated_png"
 
   if [[ ! -f "$baseline_png" ]]; then
@@ -3907,6 +3908,50 @@ run_case() {
     accept_or_reject_snapshot "$baseline_png" "$generated_png"
     return
   fi
+}
+
+# The frame's outer size, which the snapshot keeps from 0,0: the case's
+# frame size, else the default frame (1024x768; at 144 dpi the scaled frame
+# is clamped to the 1280x1024 screen).
+snapshot_frame_rect() {
+  local case_name=$1
+  if [[ -n "${case_frame_size:-}" ]]; then
+    echo "$case_frame_size"
+  elif is_dpi144_case "$case_name"; then
+    echo 1280x1024
+  else
+    echo 1024x768
+  fi
+}
+
+# Crops the root capture to the frame's rect, failing if anything was drawn
+# outside it (a menu, tooltip or dialog spilling out of the frame): such a
+# case needs a larger rect, never a silent cut.
+crop_to_frame() {
+  local case_name=$1
+  local png=$2
+  local rect=$3
+  local width=${rect%x*}
+  local height=${rect#*x}
+  local root_width root_height outside
+  read -r root_width root_height < <(magick identify -format '%w %h\n' "$png")
+  ((width <= root_width && height <= root_height)) \
+    || die "$case_name: frame rect $rect is larger than the screen ${root_width}x${root_height}"
+  if ((width < root_width)); then
+    outside=$(magick "$png" -alpha off -crop "$((root_width - width))x${root_height}+${width}+0" +repage -format '%[max]' info:)
+    if [[ $outside != 0 ]]; then
+      echo "$case_name: something is drawn right of the frame rect $rect: $png" >&2
+      return 1
+    fi
+  fi
+  if ((height < root_height)); then
+    outside=$(magick "$png" -alpha off -crop "${width}x$((root_height - height))+0+${height}" +repage -format '%[max]' info:)
+    if [[ $outside != 0 ]]; then
+      echo "$case_name: something is drawn below the frame rect $rect: $png" >&2
+      return 1
+    fi
+  fi
+  magick "$png" -crop "${width}x${height}+0+0" +repage "$png"
 }
 
 # Status 0 = the generated PNG became the baseline (update mode), 1 = failure.
