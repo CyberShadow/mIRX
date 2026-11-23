@@ -1337,7 +1337,12 @@ fn load_render_state(options: &RunOptions) -> Result<Option<Vec<Event>>, String>
 
     let file_bytes = fs::read(path)
         .map_err(|err| format!("failed to read render-state file {}: {err}", path.display()))?;
-    serde_json::from_slice(&file_bytes)
+    // Through a `Value`, as the automation's `LoadEventsArgs` decodes its
+    // events: a second entry point (`from_slice`) would put a second copy of
+    // the whole `Event` deserializer into the exe (~126 KiB). Type errors
+    // lose their line and column; they still name the field or variant.
+    serde_json::from_slice::<serde_json::Value>(&file_bytes)
+        .and_then(serde_json::from_value::<Vec<Event>>)
         .map(Some)
         .map_err(|err| {
             format!(
