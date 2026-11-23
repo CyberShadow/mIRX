@@ -503,32 +503,6 @@ pub(super) unsafe fn run_slash_command(
             )?;
             Ok(Some(format!("power level change submitted: {user_ids}")))
         }
-        SlashCommand::Mode { room, changes } => {
-            let state = state_mut(hwnd);
-            let room_id = resolve_joined_room_target(state, window, room.as_deref())?;
-            let member_roles = commands::member_role_changes(
-                room_members(&state.model, &room_id),
-                changes
-                    .ranks
-                    .iter()
-                    .map(|(nick, change)| (nick.as_str(), *change)),
-            )?;
-            enqueue_command(
-                state,
-                Command::UpdateRoomSettings(UpdateRoomSettingsRequest {
-                    room_id: room_id.clone(),
-                    topic_by_operators: changes.topic_by_operators,
-                    moderated: changes.moderated,
-                    member_roles,
-                    invite_only: changes.invite_only,
-                    name: None,
-                    topic: None,
-                    listed_in_directory: changes.listed_in_directory,
-                    unban: Vec::new(),
-                }),
-            )?;
-            Ok(Some(format!("mode change submitted for {room_id}")))
-        }
         SlashCommand::Nick { display_name } => {
             enqueue_command(
                 state_mut(hwnd),
@@ -2593,90 +2567,6 @@ mod tests {
                         "[22:12] * /op: Carol is named twice",
                         "[22:12] * /deop: you cannot deop yourself",
                         "[22:12] * /voice: no such nick: Nobody",
-                    ]
-                );
-            });
-        }
-        stop_test_core(handle);
-    }
-
-    #[test]
-    fn mode_sends_room_modes_and_ranks_in_one_request_or_none() {
-        let (mut state, handle) = irc_command_state();
-        let mut other = room("!other:example", "Other", false);
-        other.canonical_alias = Some("#other:example".to_owned());
-        state.model.rooms.push(other);
-        state.model.room_views.insert(
-            "!other:example".to_owned(),
-            RoomViewModel {
-                members: vec![member_summary("@dan:example", "Dan", false)],
-                ..Default::default()
-            },
-        );
-        let ops = state.model.room_views.get_mut("!ops:example").unwrap();
-        let mut carol = member_summary("@carol:example", "Carol", false);
-        carol.rank = RoomMemberRank::Voiced;
-        ops.members.push(carol);
-        let update =
-            |room_id: &str, topic_by_operators, moderated, roles: &[(&str, MemberPowerRole)]| {
-                Command::UpdateRoomSettings(UpdateRoomSettingsRequest {
-                    room_id: room_id.to_owned(),
-                    topic_by_operators,
-                    moderated,
-                    member_roles: roles
-                        .iter()
-                        .map(|(user_id, role)| MemberPowerLevelChange {
-                            user_id: (*user_id).to_owned(),
-                            role: *role,
-                        })
-                        .collect(),
-                    invite_only: None,
-                    name: None,
-                    topic: None,
-                    listed_in_directory: None,
-                    unban: Vec::new(),
-                })
-            };
-        unsafe {
-            with_test_compose_window(state, |hwnd| {
-                install_test_view_content(hwnd);
-                type_compose_line(hwnd, "/mode +m-t+o-v Alice Carol");
-                assert_eq!(
-                    state_ref(hwnd).model.status,
-                    "mode change submitted for !ops:example"
-                );
-                // Dan is a member of the named room only.
-                type_compose_line(hwnd, "/mode #other +v Dan");
-                for input in ["/mode +o Bob", "/mode +v Dan", "/mode +o-o Alice Alice"] {
-                    type_compose_line(hwnd, input);
-                }
-                assert_eq!(
-                    state_ref(hwnd).recorded_commands,
-                    vec![
-                        update(
-                            "!ops:example",
-                            Some(false),
-                            Some(true),
-                            &[
-                                ("@alice:example", MemberPowerRole::Moderator),
-                                ("@carol:example", MemberPowerRole::Default),
-                            ]
-                        ),
-                        update(
-                            "!other:example",
-                            None,
-                            None,
-                            &[("@dan:example", MemberPowerRole::Voiced)]
-                        ),
-                    ]
-                );
-                let lines = render_room_lines(state_ref(hwnd), "!ops:example");
-                assert_eq!(
-                    &lines[lines.len() - 3..],
-                    [
-                        "[22:12] * /mode: Bob is already an operator",
-                        "[22:12] * /mode: no such nick: Dan",
-                        "[22:12] * /mode: Alice is named twice",
                     ]
                 );
             });

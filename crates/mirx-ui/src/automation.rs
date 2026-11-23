@@ -2057,7 +2057,7 @@ pub(crate) struct DumpModel {
     pub(crate) submitted_membership_commands: Vec<DumpSubmittedMembershipCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_member_moderation_commands: Vec<DumpSubmittedMemberModerationCommand>,
-    /// Channel Central's reads and changes, `/mode` and the rank changes
+    /// Channel Central's reads and changes and the rank changes
     /// (`/op` etc.), in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_room_settings_commands: Vec<DumpSubmittedRoomSettingsCommand>,

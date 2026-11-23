@@ -189,12 +189,6 @@ pub(super) enum SlashCommand {
         nicks: Vec<String>,
         change: RankChange,
     },
-    /// `/mode [#room] <modes> [nicks]`: in the named room, else the active
-    /// window's.
-    Mode {
-        room: Option<String>,
-        changes: ModeChanges,
-    },
     Nick {
         display_name: String,
     },
@@ -389,22 +383,6 @@ pub(super) enum RankChange {
     Devoice,
 }
 
-/// What `/mode` changes: the room modes Matrix has (`None` leaves one as
-/// it is) and the members' ranks.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ModeChanges {
-    /// `+i`/`-i`: the join rule invite or public.
-    pub(super) invite_only: Option<bool>,
-    /// `+t`/`-t`.
-    pub(super) topic_by_operators: Option<bool>,
-    /// `+m`/`-m`.
-    pub(super) moderated: Option<bool>,
-    /// `-p`/`-s` list the room in the directory, `+p`/`+s` unlist it.
-    pub(super) listed_in_directory: Option<bool>,
-    /// `+o`, `-o`, `+v` and `-v` with their nicks, in order.
-    pub(super) ranks: Vec<(String, RankChange)>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum VerificationAction {
     Accept,
@@ -463,7 +441,6 @@ impl SlashCommand {
                 RankChange::Voice => "voice",
                 RankChange::Devoice => "devoice",
             },
-            Self::Mode { .. } => "mode",
             Self::Nick { .. } => "nick",
             Self::Accept { .. } => "accept",
             Self::Reject { .. } => "reject",
@@ -569,7 +546,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "channel",
         usage: "[#room]",
-        summary: "Channel Central: this room's name, topic, bans and modes, or the named room's",
+        summary: "Channel Central: this room's name, topic, bans and settings, or the named room's",
     },
     CommandSpec {
         name: "clear",
@@ -690,11 +667,6 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "me",
         usage: "<action>",
         summary: "send an action",
-    },
-    CommandSpec {
-        name: "mode",
-        usage: "[#room] <+|-modes> [nicks]",
-        summary: "change the room's modes: i t m p s, o and v with nicks",
     },
     CommandSpec {
         name: "msg",
@@ -1058,7 +1030,6 @@ fn parse_named(name: &str, argument: &str) -> Result<SlashCommand, CommandError>
                 change,
             })
         }
-        "mode" => parse_mode(argument),
         "nick" => Ok(SlashCommand::Nick {
             display_name: required(argument)?,
         }),
@@ -1160,111 +1131,6 @@ fn parse_named(name: &str, argument: &str) -> Result<SlashCommand, CommandError>
 
 /// `[colour] [-switches] [#room|!id] <text>`, mIRC's `/echo` order. With
 /// `-a` or `-s` the window is chosen, so a `#` word is text.
-/// `/mode [#room] <+|-modes> [nicks]`, mIRC's channel modes mapped onto
-/// Matrix (see `ModeChanges`); `+n` is accepted and changes nothing
-/// (Matrix rooms only take messages from members). A letter Matrix has no
-/// counterpart for, one mode asked both ways, or a nick too few or too
-/// many is refused, before anything is sent.
-fn parse_mode(argument: &str) -> Result<SlashCommand, CommandError> {
-    let error = |reason: String| CommandError::new("mode", reason);
-    if argument.is_empty() {
-        return Err(CommandError::insufficient_parameters("mode"));
-    }
-    // As `/topic`: a first word naming a room is the room.
-    let (first, rest) = split_word(argument);
-    let (room, rest) = if first.starts_with(['#', '!']) {
-        (Some(first.to_owned()), rest)
-    } else {
-        (None, argument)
-    };
-    let (modes, nicks) = split_word(rest);
-    if modes.is_empty() {
-        return Err(error(
-            "give the modes to change, e.g. +m; /channel shows the room's settings".to_owned(),
-        ));
-    }
-    if !modes.starts_with(['+', '-']) {
-        return Err(error(match room {
-            Some(_) => "modes start with + or -".to_owned(),
-            None => "Matrix has no user modes".to_owned(),
-        }));
-    }
-
-    /// A setting and how it was spelled (`+p`), for a refusal naming both.
-    type Setting = Option<(bool, String)>;
-    let set = |setting: &mut Setting, value: bool, spelled: String| match setting {
-        Some((known, known_spelled)) if *known != value => {
-            Err(error(format!("{known_spelled} and {spelled} together")))
-        }
-        Some(_) => Ok(()),
-        None => {
-            *setting = Some((value, spelled));
-            Ok(())
-        }
-    };
-    let mut invite_only: Setting = None;
-    let mut topic_by_operators: Setting = None;
-    let mut moderated: Setting = None;
-    let mut unlisted: Setting = None;
-    let mut nicks = nicks.split_whitespace();
-    let mut ranks = Vec::new();
-    let mut on = true;
-    for letter in modes.chars() {
-        let spelled = format!("{}{letter}", if on { '+' } else { '-' });
-        match letter {
-            '+' | '-' => on = letter == '+',
-            'i' => set(&mut invite_only, on, spelled)?,
-            't' => set(&mut topic_by_operators, on, spelled)?,
-            'm' => set(&mut moderated, on, spelled)?,
-            'p' | 's' => set(&mut unlisted, on, spelled)?,
-            'o' | 'v' => {
-                let nick = nicks
-                    .next()
-                    .ok_or_else(|| error(format!("{spelled} needs a nick")))?;
-                let change = match (letter, on) {
-                    ('o', true) => RankChange::Op,
-                    ('o', false) => RankChange::Deop,
-                    ('v', true) => RankChange::Voice,
-                    _ => RankChange::Devoice,
-                };
-                ranks.push((nick.to_owned(), change));
-            }
-            'n' if on => {}
-            'n' => {
-                return Err(error(
-                    "Matrix rooms only take messages from members".to_owned(),
-                ));
-            }
-            'b' => {
-                return Err(error(
-                    "bans: /ban, /unban, or the Bans List in /channel".to_owned(),
-                ));
-            }
-            _ => return Err(error(format!("Matrix rooms have no mode {letter}"))),
-        }
-    }
-    if nicks.next().is_some() {
-        return Err(error("too many parameters".to_owned()));
-    }
-    let value = |setting: Setting| setting.map(|(value, _)| value);
-    let changes = ModeChanges {
-        invite_only: value(invite_only),
-        topic_by_operators: value(topic_by_operators),
-        moderated: value(moderated),
-        listed_in_directory: value(unlisted).map(|unlisted| !unlisted),
-        ranks,
-    };
-    if changes.invite_only.is_none()
-        && changes.topic_by_operators.is_none()
-        && changes.moderated.is_none()
-        && changes.listed_in_directory.is_none()
-        && changes.ranks.is_empty()
-    {
-        return Err(error("nothing to change".to_owned()));
-    }
-    Ok(SlashCommand::Mode { room, changes })
-}
-
 fn parse_echo(argument: &str) -> Result<EchoCommand, CommandError> {
     let error = |reason: &str| CommandError::new("echo", reason);
     let (first, rest) = split_word(argument);
@@ -3211,7 +3077,7 @@ mod tests {
         assert_eq!(
             help_lines(Some("channel")),
             Ok(vec![
-                "* /channel [#room] - Channel Central: this room's name, topic, bans and modes, or the named room's"
+                "* /channel [#room] - Channel Central: this room's name, topic, bans and settings, or the named room's"
                     .to_owned()
             ])
         );
@@ -3919,142 +3785,15 @@ mod tests {
         assert_eq!(parse("/op   "), insufficient("op"));
     }
 
-    fn no_mode_changes() -> ModeChanges {
-        ModeChanges {
-            invite_only: None,
-            topic_by_operators: None,
-            moderated: None,
-            listed_in_directory: None,
-            ranks: Vec::new(),
-        }
-    }
-
     #[test]
-    fn parse_mode_maps_irc_room_modes_and_ranks() {
-        let mode = |room: Option<&str>, changes| {
-            Ok(SlashCommand::Mode {
-                room: room.map(str::to_owned),
-                changes,
-            })
-        };
-        let ranks = |ranks: &[(&str, RankChange)]| {
-            ranks
-                .iter()
-                .map(|(nick, change)| ((*nick).to_owned(), *change))
-                .collect::<Vec<_>>()
-        };
-        for (input, changes) in [
-            (
-                "/mode +i",
-                ModeChanges {
-                    invite_only: Some(true),
-                    ..no_mode_changes()
-                },
-            ),
-            (
-                "/MODE -i",
-                ModeChanges {
-                    invite_only: Some(false),
-                    ..no_mode_changes()
-                },
-            ),
-            (
-                "/mode +t-m",
-                ModeChanges {
-                    topic_by_operators: Some(true),
-                    moderated: Some(false),
-                    ..no_mode_changes()
-                },
-            ),
-            (
-                "/mode +p",
-                ModeChanges {
-                    listed_in_directory: Some(false),
-                    ..no_mode_changes()
-                },
-            ),
-            (
-                "/mode -s",
-                ModeChanges {
-                    listed_in_directory: Some(true),
-                    ..no_mode_changes()
-                },
-            ),
-            // The same both times is one change; +n changes nothing.
-            (
-                "/mode +ntps+m",
-                ModeChanges {
-                    topic_by_operators: Some(true),
-                    moderated: Some(true),
-                    listed_in_directory: Some(false),
-                    ..no_mode_changes()
-                },
-            ),
-            (
-                "/mode +m-t+o-v  Bob Carol ",
-                ModeChanges {
-                    topic_by_operators: Some(false),
-                    moderated: Some(true),
-                    ranks: ranks(&[("Bob", RankChange::Op), ("Carol", RankChange::Devoice)]),
-                    ..no_mode_changes()
-                },
-            ),
-            (
-                "/mode -o+v Bob Carol",
-                ModeChanges {
-                    ranks: ranks(&[("Bob", RankChange::Deop), ("Carol", RankChange::Voice)]),
-                    ..no_mode_changes()
-                },
-            ),
-        ] {
-            assert_eq!(parse(input), mode(None, changes), "{input}");
+    fn mode_is_not_a_command() {
+        for input in ["/mode +m", "/mode #ops +i", "/MODE"] {
+            assert_eq!(parse(input), Err(CommandError::unknown("mode")), "{input}");
         }
-        for room in ["#ops", "!ops:example"] {
-            assert_eq!(
-                parse(&format!("/mode {room} +v Dan")),
-                mode(
-                    Some(room),
-                    ModeChanges {
-                        ranks: ranks(&[("Dan", RankChange::Voice)]),
-                        ..no_mode_changes()
-                    }
-                )
-            );
-        }
-        assert_eq!(parse("/mode +m").unwrap().name(), "mode");
-    }
-
-    #[test]
-    fn parse_mode_refuses_what_matrix_has_not_before_sending() {
-        assert_eq!(parse("/mode"), insufficient("mode"));
-        assert_eq!(parse("/mode   "), insufficient("mode"));
-        for (input, reason) in [
-            (
-                "/mode #ops",
-                "give the modes to change, e.g. +m; /channel shows the room's settings",
-            ),
-            ("/mode #ops m", "modes start with + or -"),
-            ("/mode Bob +i", "Matrix has no user modes"),
-            ("/mode +k secret", "Matrix rooms have no mode k"),
-            ("/mode +l 10", "Matrix rooms have no mode l"),
-            ("/mode +mx", "Matrix rooms have no mode x"),
-            (
-                "/mode +b Bob",
-                "bans: /ban, /unban, or the Bans List in /channel",
-            ),
-            ("/mode -n", "Matrix rooms only take messages from members"),
-            ("/mode +o", "+o needs a nick"),
-            ("/mode +v-v Bob", "-v needs a nick"),
-            ("/mode +o Bob Carol", "too many parameters"),
-            ("/mode +i Bob", "too many parameters"),
-            ("/mode +m-m", "+m and -m together"),
-            ("/mode +p-s", "+p and -s together"),
-            ("/mode -i+ti", "-i and +i together"),
-            ("/mode +n", "nothing to change"),
-            ("/mode +", "nothing to change"),
-        ] {
-            assert_eq!(parse(input), error("mode", reason), "{input}");
-        }
+        assert_eq!(
+            help_lines(Some("mode")),
+            Err("no such command: mode".to_owned())
+        );
     }
 
     #[test]

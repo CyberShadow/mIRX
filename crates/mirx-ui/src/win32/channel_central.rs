@@ -150,7 +150,7 @@ impl ChannelCentralForm {
             room_id: self.settings.room_id.clone(),
             topic_by_operators: changed(loaded.topic_by_operators, edits.topic_by_operators),
             moderated: changed(loaded.moderated, edits.moderated),
-            // Ranks change in the nick list, `/op` and `/mode`.
+            // Ranks change in the nick list and `/op`.
             member_roles: Vec::new(),
             // Indeterminate leaves the rule; a state it started in too.
             invite_only: edits

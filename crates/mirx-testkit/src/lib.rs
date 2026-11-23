@@ -407,7 +407,7 @@ pub struct Model {
     pub submitted_membership_commands: Vec<SubmittedMembershipCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_member_moderation_commands: Vec<SubmittedMemberModerationCommand>,
-    /// Channel Central's reads and changes, `/mode` and the rank changes
+    /// Channel Central's reads and changes and the rank changes
     /// (`/op` etc.), in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_room_settings_commands: Vec<SubmittedRoomSettingsCommand>,
