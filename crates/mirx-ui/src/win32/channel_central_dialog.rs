@@ -432,7 +432,17 @@ pub(super) unsafe fn take_core_answer(dialog: HWND, event: &Event) {
     let state = dialog_state(dialog);
     match event {
         Event::RoomSettings(settings) if settings.room_id == state.room_id => {
-            fill(state, ChannelCentralForm::new(settings.clone()));
+            let (form, edits) = match state.form.take() {
+                None => {
+                    let form = ChannelCentralForm::new(settings.clone());
+                    let edits = form.loaded_edits();
+                    (form, edits)
+                }
+                // A later answer (the room's lane answers its reads in
+                // order, so it is the newest) keeps the user's edits.
+                Some(form) => form.rebase(settings.clone(), &read_edits(&state.controls)),
+            };
+            fill(state, form, &edits);
         }
         Event::Error(error)
             if error.operation == Operation::FetchRoomSettings
@@ -444,12 +454,11 @@ pub(super) unsafe fn take_core_answer(dialog: HWND, event: &Event) {
     }
 }
 
-/// Shows `form`'s settings, enabling what the user may change. A second
-/// answer replaces the first, edits and all.
-unsafe fn fill(state: &mut DialogState, form: ChannelCentralForm) {
+/// Shows `form`'s settings with `edits` in the controls, enabling what the
+/// user may change.
+unsafe fn fill(state: &mut DialogState, form: ChannelCentralForm, edits: &ChannelCentralEdits) {
     let controls = &state.controls;
     let settings = form.settings();
-    let edits = form.loaded_edits();
     let allowed = settings.allowed;
 
     set_text(controls.name, &edits.name);
@@ -536,17 +545,21 @@ unsafe fn handle_remove(dialog: HWND) {
     refill_bans(state);
 }
 
-unsafe fn handle_ok(dialog: HWND) {
-    let state = dialog_state(dialog);
-    let controls = &state.controls;
-    let edits = ChannelCentralEdits {
+/// The controls as the user left them.
+unsafe fn read_edits(controls: &Controls) -> ChannelCentralEdits {
+    ChannelCentralEdits {
         name: read_window_text(controls.name),
         topic: read_window_text(controls.topic),
         topic_by_operators: check_state(controls.topic_by_operators) == Some(true),
         invite_only: check_state(controls.invite_only),
         moderated: check_state(controls.moderated) == Some(true),
         private: check_state(controls.private) == Some(true),
-    };
+    }
+}
+
+unsafe fn handle_ok(dialog: HWND) {
+    let state = dialog_state(dialog);
+    let edits = read_edits(&state.controls);
     state.request = state
         .form
         .as_ref()

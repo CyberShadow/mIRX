@@ -27277,6 +27277,7 @@ fn buffer_save_on_the_window_menu_saves_through_the_save_dialog()
     Ok(())
 }
 
+const CHANNEL_CENTRAL_NAME_ID: i32 = 7601;
 const CHANNEL_CENTRAL_TOPIC_ID: i32 = 7602;
 const CHANNEL_CENTRAL_BANS_ID: i32 = 7603;
 const CHANNEL_CENTRAL_REMOVE_ID: WPARAM = 7604;
@@ -27533,6 +27534,124 @@ fn double_click_in_a_room_opens_channel_central() -> Result<(), Box<dyn std::err
             .is_err()
     );
     assert_eq!(app.dump_model()?.submitted_room_settings_commands.len(), 1);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+fn beta_settings(
+    name: &str,
+    topic: &str,
+    moderated: bool,
+    allowed: mirx_core::RoomSettingsPermissions,
+) -> Event {
+    Event::RoomSettings(mirx_core::RoomSettings {
+        room_id: "!beta:example".to_owned(),
+        name: Some(name.to_owned()),
+        topic: Some(topic.to_owned()),
+        join_rule: mirx_core::RoomJoinRule::Invite,
+        topic_by_operators: true,
+        moderated,
+        listed_in_directory: false,
+        bans: Vec::new(),
+        allowed,
+    })
+}
+
+/// A settings answer that comes after the dialog was filled (an earlier
+/// read's answer filled it) refreshes only what the user left: their edits
+/// stay, and OK sends them against the newest settings.
+#[test]
+fn channel_central_keeps_edits_when_a_later_answer_arrives()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let mut events = base_events();
+    events.insert(
+        1,
+        Event::LoggedIn {
+            session: core_stored_session(),
+            homeserver_url: "https://matrix.example/".to_owned(),
+        },
+    );
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_view(room_identity("!beta:example"))?;
+
+    app.set_compose_text("/channel")?;
+    app.open_dialog(AutomationDialog::ComposeReturn)?;
+    // This core answers the read with an error; the answers below are the
+    // server's.
+    let (dialog, _) = wait_for_channel_central(&app)?;
+    let all = mirx_core::RoomSettingsPermissions {
+        name: true,
+        topic: true,
+        join_rule: true,
+        power_levels: true,
+        directory: true,
+        unban: true,
+    };
+    app.append_synthetic_events(&serde_json::to_string(&[beta_settings(
+        "Beta",
+        "old topic",
+        false,
+        all,
+    )])?)?;
+    app.wait_for_ui_state("the first answer", Duration::from_secs(5), |ui_state| {
+        ui_state
+            .channel_central
+            .as_ref()
+            .is_some_and(|central| central.name == "Beta" && central.ok_enabled)
+    })?;
+    set_dialog_text(dialog, CHANNEL_CENTRAL_NAME_ID, "Mine");
+
+    app.append_synthetic_events(&serde_json::to_string(&[beta_settings(
+        "Beta2",
+        "new topic",
+        true,
+        mirx_core::RoomSettingsPermissions {
+            unban: false,
+            ..all
+        },
+    )])?)?;
+    app.wait_for_ui_state("the later answer", Duration::from_secs(5), |ui_state| {
+        ui_state
+            .channel_central
+            .as_ref()
+            .is_some_and(|central| central.topic == "new topic")
+    })?;
+    let central = channel_central(&app)?;
+    assert_eq!(central.name, "Mine");
+    assert_eq!(central.topic_items, ["new topic"]);
+    assert_eq!(central.moderated.state, UiCheckState::Checked);
+    assert_eq!(central.status, "Some settings need a higher power level.");
+
+    post_dialog_command(dialog, IDOK as WPARAM);
+    wait_for_window_gone(dialog, "Channel Central")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_model()?.submitted_room_settings_commands,
+        [
+            SubmittedRoomSettingsCommand::Fetch {
+                room_id: "!beta:example".to_owned(),
+            },
+            SubmittedRoomSettingsCommand::Update {
+                room_id: "!beta:example".to_owned(),
+                topic_by_operators: None,
+                moderated: None,
+                invite_only: None,
+                name: Some("Mine".to_owned()),
+                topic: None,
+                listed_in_directory: None,
+                unban: Vec::new(),
+            },
+        ]
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

@@ -103,6 +103,45 @@ impl ChannelCentralForm {
         self.removed_bans.push(user_id);
     }
 
+    /// A later answer to the open dialog's read: `settings` replace the
+    /// loaded ones, and every control the user left as the previous answer
+    /// filled it shows the new settings, while what the user changed stays.
+    /// A removed ban stays removed while `settings` still list it. The
+    /// controls to show come back with the form.
+    pub(super) fn rebase(
+        self,
+        settings: RoomSettings,
+        edits: &ChannelCentralEdits,
+    ) -> (ChannelCentralForm, ChannelCentralEdits) {
+        let old = self.loaded_edits();
+        let removed_bans = self
+            .removed_bans
+            .into_iter()
+            .filter(|user_id| settings.bans.iter().any(|ban| &ban.user_id == user_id))
+            .collect();
+        let form = Self {
+            settings,
+            removed_bans,
+        };
+        let new = form.loaded_edits();
+        fn kept<T: PartialEq + Clone>(old: T, new: T, edited: &T) -> T {
+            if *edited == old { new } else { edited.clone() }
+        }
+        let edits = ChannelCentralEdits {
+            name: kept(old.name, new.name, &edits.name),
+            topic: kept(old.topic, new.topic, &edits.topic),
+            topic_by_operators: kept(
+                old.topic_by_operators,
+                new.topic_by_operators,
+                &edits.topic_by_operators,
+            ),
+            invite_only: kept(old.invite_only, new.invite_only, &edits.invite_only),
+            moderated: kept(old.moderated, new.moderated, &edits.moderated),
+            private: kept(old.private, new.private, &edits.private),
+        };
+        (form, edits)
+    }
+
     /// What OK sends: the parts `edits` change, `None` when nothing does.
     /// Unbans go in the list's order.
     pub(super) fn request(&self, edits: &ChannelCentralEdits) -> Option<UpdateRoomSettingsRequest> {
@@ -444,5 +483,137 @@ mod tests {
         );
         assert_eq!(topic_history(None, ["b"]), ["b"]);
         assert!(topic_history(None, []).is_empty());
+    }
+
+    /// Answer A as `settings()` with topic `t1`; the user named the room
+    /// `Mine`, made it moderated and removed Carol's ban.
+    fn edited_after_answer_a() -> (ChannelCentralForm, ChannelCentralEdits) {
+        let mut form = ChannelCentralForm::new(RoomSettings {
+            topic: Some("t1".to_owned()),
+            ..settings()
+        });
+        form.remove_ban(0);
+        let edits = ChannelCentralEdits {
+            name: "Mine".to_owned(),
+            moderated: true,
+            ..form.loaded_edits()
+        };
+        (form, edits)
+    }
+
+    fn answer_b() -> RoomSettings {
+        RoomSettings {
+            name: Some("Ops2".to_owned()),
+            topic: Some("t2".to_owned()),
+            join_rule: RoomJoinRule::Public,
+            listed_in_directory: false,
+            bans: vec![
+                ban("@carol:example", Some("Carol"), Some("spam")),
+                ban("@erin:example", None, None),
+            ],
+            ..settings()
+        }
+    }
+
+    #[test]
+    fn a_later_answer_refreshes_what_the_user_left() {
+        let (form, edits) = edited_after_answer_a();
+        let (form, edits) = form.rebase(answer_b(), &edits);
+        assert_eq!(
+            edits,
+            ChannelCentralEdits {
+                name: "Mine".to_owned(),
+                topic: "t2".to_owned(),
+                topic_by_operators: true,
+                invite_only: Some(false),
+                moderated: true,
+                private: true,
+            }
+        );
+        assert_eq!(form.settings(), &answer_b());
+        // Carol's ban stays removed; Dave's, gone from the answer, is
+        // forgotten.
+        assert_eq!(form.removed_bans, ["@carol:example"]);
+        assert_eq!(
+            form.ban_rows(&|_: &str| None, utc_local_time)
+                .iter()
+                .map(|row| row[0].as_str())
+                .collect::<Vec<_>>(),
+            ["@erin:example"]
+        );
+        assert_eq!(
+            form.request(&edits),
+            Some(UpdateRoomSettingsRequest {
+                name: Some("Mine".to_owned()),
+                moderated: Some(true),
+                unban: vec!["@carol:example".to_owned()],
+                ..untouched()
+            })
+        );
+        // A third answer rebases on the second.
+        let (form, edits) = form.rebase(
+            RoomSettings {
+                topic: Some("t3".to_owned()),
+                ..answer_b()
+            },
+            &ChannelCentralEdits {
+                private: false,
+                ..edits
+            },
+        );
+        assert_eq!(edits.topic, "t3");
+        assert!(!edits.private);
+        assert_eq!(
+            form.request(&edits)
+                .map(|request| request.listed_in_directory),
+            Some(Some(true))
+        );
+    }
+
+    #[test]
+    fn a_later_answer_equal_to_an_edit_makes_it_unchanged() {
+        let form = ChannelCentralForm::new(settings());
+        let edits = ChannelCentralEdits {
+            topic: "t2".to_owned(),
+            ..form.loaded_edits()
+        };
+        let (form, edits) = form.rebase(
+            RoomSettings {
+                topic: Some("t2".to_owned()),
+                ..settings()
+            },
+            &edits,
+        );
+        assert_eq!(edits.topic, "t2");
+        assert_eq!(form.request(&edits), None);
+    }
+
+    #[test]
+    fn a_later_answer_rebases_an_indeterminate_invite_only() {
+        let knock = ChannelCentralForm::new(RoomSettings {
+            join_rule: RoomJoinRule::Knock,
+            ..settings()
+        });
+        let invite = settings();
+
+        // Left indeterminate: the new rule's state.
+        let (form, edits) = knock.clone().rebase(invite.clone(), &knock.loaded_edits());
+        assert_eq!(edits.invite_only, Some(true));
+        assert_eq!(form.request(&edits), None);
+
+        // Unchecked by the user: kept, and sent against the new rule.
+        let unchecked = ChannelCentralEdits {
+            invite_only: Some(false),
+            ..knock.loaded_edits()
+        };
+        let (form, edits) = knock.rebase(invite, &unchecked);
+        assert_eq!(edits.invite_only, Some(false));
+        assert_eq!(
+            form.request(&edits),
+            Some(UpdateRoomSettingsRequest {
+                invite_only: Some(false),
+                ..untouched()
+            })
+        );
     }
 }
