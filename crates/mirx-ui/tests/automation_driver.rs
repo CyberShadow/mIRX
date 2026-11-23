@@ -81,8 +81,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES,
     IsIconic, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETITEMRECT,
     LB_GETSELCOUNT, LB_GETSELITEMS, LB_GETTEXT, LB_GETTEXTLEN, LB_GETTOPINDEX, LB_SETTOPINDEX,
-    LBS_EXTENDEDSEL, LBS_OWNERDRAWFIXED, PostMessageW, RegisterWindowMessageW, SB_BOTTOM,
-    SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE, SC_RESTORE, SCROLLINFO, SIF_ALL,
+    LBS_EXTENDEDSEL, LBS_NOTIFY, LBS_OWNERDRAWFIXED, PostMessageW, RegisterWindowMessageW,
+    SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE, SC_RESTORE, SCROLLINFO, SIF_ALL,
     SMTO_NORMAL, SPI_GETWHEELSCROLLLINES, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW,
     SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, SystemParametersInfoW,
     WM_CHAR, WM_COMMAND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
@@ -9199,8 +9199,9 @@ fn nick_list_is_owner_drawn_in_the_text_font() -> Result<(), Box<dyn std::error:
         unsafe { window_style(members) } & LBS_OWNERDRAWFIXED as u32,
         0
     );
-    // It takes several nicks, as mIRC's.
-    assert_ne!(unsafe { window_style(members) } & LBS_EXTENDEDSEL as u32, 0);
+    // It takes several nicks, as mIRC's, and tells of double-clicks.
+    let notifying = (LBS_EXTENDEDSEL | LBS_NOTIFY) as u32;
+    assert_eq!(unsafe { window_style(members) } & notifying, notifying);
     // Items are a text font line tall, as the stock listbox makes them.
     assert_eq!(item_height(), app.dump_ui_state()?.text_font.line_height);
 
@@ -11544,6 +11545,33 @@ fn nick_list_right_click_keeps_a_selection_it_lands_on() -> Result<(), Box<dyn s
         ]
     );
     assert_eq!(unsafe { listbox_selected_indices(list) }, [1]);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn nick_list_double_click_opens_a_query() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_ranked_members_app(&local_app_data)?;
+    let list = unsafe { active_room_member_list_hwnd(&app) };
+    // Bob is the third nick.
+    post_left_click(list, &unsafe { nick_list_item_point(list, 2) }, true);
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_model()?.submitted_direct_room_commands,
+        [SubmittedDirectRoomCommand {
+            user_id: "@bob:example".to_owned()
+        }]
+    );
+    // This core has no session: it answers with an error after.
+    let status = app.dump_ui_state()?.status_bar.text;
+    assert!(
+        status.starts_with("query submitted: @bob:example"),
+        "{status}"
+    );
+    assert_eq!(unsafe { listbox_selected_indices(list) }, [2]);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -28349,6 +28377,48 @@ fn double_click_in_a_room_opens_channel_central() -> Result<(), Box<dyn std::err
             .is_err()
     );
     assert_eq!(app.dump_model()?.submitted_room_settings_commands.len(), 1);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// A double-click in a query's text, off a link and a quote, runs `/whois`
+/// on its user, as mIRC's default does.
+#[test]
+fn query_window_double_click_whois_its_user() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let mut events = base_events_with_a_query();
+    events.insert(
+        1,
+        Event::LoggedIn {
+            session: core_stored_session(),
+            homeserver_url: "https://matrix.example/".to_owned(),
+        },
+    );
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_view(room_identity("!dm:example"))?;
+
+    let point = text_point(&app, "dm first", 2)?;
+    send_left_click(app.active_timeline_hwnd()? as HWND, &point, true);
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_model()?.submitted_user_commands,
+        [SubmittedUserCommand {
+            action: UserCommandAction::FetchProfile,
+            user_id: "@alice:example".to_owned(),
+        }]
+    );
+    assert!(
+        app.wait_for_modal_dialog(Duration::from_millis(500))
+            .is_err()
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

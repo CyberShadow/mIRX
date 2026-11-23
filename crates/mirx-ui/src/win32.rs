@@ -123,13 +123,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCARETINDEX, LB_GETITEMRECT,
     LB_GETSEL, LB_GETSELCOUNT, LB_GETSELITEMS, LB_GETTEXT, LB_GETTEXTLEN, LB_GETTOPINDEX,
     LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCARETINDEX, LB_SETITEMHEIGHT, LB_SETSEL,
-    LB_SETTOPINDEX, LBS_EXTENDEDSEL, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED,
-    LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION, MB_OK, MB_YESNO,
-    MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL, MESSAGEBOX_STYLE, MF_BYCOMMAND,
-    MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
-    MessageBoxW, MoveWindow, PM_QS_POSTMESSAGE, PM_REMOVE, PeekMessageW, PostMessageW,
-    PostQuitMessage, QS_ALLPOSTMESSAGE, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
-    SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE,
+    LB_SETTOPINDEX, LBN_DBLCLK, LBS_EXTENDEDSEL, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY,
+    LBS_OWNERDRAWFIXED, LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION, MB_OK,
+    MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL, MESSAGEBOX_STYLE,
+    MF_BYCOMMAND, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MSG, MessageBoxW, MoveWindow, PM_QS_POSTMESSAGE, PM_REMOVE, PeekMessageW,
+    PostMessageW, PostQuitMessage, QS_ALLPOSTMESSAGE, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN,
+    SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE,
     SC_MINIMIZE, SCROLLINFO, SHOW_WINDOW_CMD, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
     SIZE_MINIMIZED, SW_HIDE, SW_MINIMIZE, SW_SHOW, SW_SHOWMINNOACTIVE, SendMessageW,
     SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD,
@@ -382,9 +382,9 @@ use frame::{
 #[cfg(test)]
 use frame_menus::active_message_action_state;
 use frame_menus::{
-    active_message_action_state_for_automation, active_room_action_state, append_menu_text,
-    connect, context_menu_command_id, context_menu_screen_point_for_lparam, create_frame_menu,
-    default_context_point_for_window, disconnect, double_click_opens_channel_central,
+    DoubleClick, active_message_action_state_for_automation, active_room_action_state,
+    append_menu_text, connect, context_menu_command_id, context_menu_screen_point_for_lparam,
+    create_frame_menu, default_context_point_for_window, disconnect, double_click_action,
     frame_menu_item_enabled, handle_menu_command, handle_switchbar_command,
     handle_window_key_command, invoke_menu_command_for_automation,
     invoke_navigation_context_menu_for_automation, invoke_timeline_context_menu_for_automation,
@@ -453,9 +453,9 @@ use nick_completion::NickCompletion;
 use nick_list::{
     ListedMember, active_member_action_state, active_view_members, draw_nick_list_item,
     invoke_member_context_menu_for_automation, invoke_selected_member_context_menu_for_automation,
-    nick_list_items, refresh_member_menu_state, room_member_nick, room_member_view_rows,
-    run_member_menu_item, select_member_for_automation, show_member_context_menu, sync_nick_list,
-    text_font_item_height,
+    nick_list_items, query_double_clicked_member, refresh_member_menu_state, room_member_nick,
+    room_member_view_rows, run_member_menu_item, select_member_for_automation,
+    show_member_context_menu, sync_nick_list, text_font_item_height,
 };
 use presence::PresenceBook;
 use replies::ComposeTarget;

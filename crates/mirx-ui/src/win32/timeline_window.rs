@@ -185,8 +185,8 @@ unsafe extern "system" fn timeline_window_proc(
         }
         // The second click of a double-click: it selects as a click does,
         // and follows a link, or on a quote line goes to the quoted message,
-        // or elsewhere in a channel window opens Channel Central. It marks
-        // nothing.
+        // or elsewhere does what the window's double-click does
+        // (`double_click_action`). It marks nothing.
         WM_LBUTTONDBLCLK => {
             select_timeline_row(hwnd, lparam);
             let frame = frame_window_for(hwnd);
@@ -204,10 +204,22 @@ unsafe extern "system" fn timeline_window_proc(
                 if let Err(message) = go_to_original_of_selected_message(frame) {
                     show_error_message(frame, "Message", &message);
                 }
-            } else if double_click_opens_channel_central(state_ref(frame)) {
-                // Posted: the dialog's modal loop runs after the click's
-                // handling, as from the Room menu.
-                PostMessageW(frame, WM_COMMAND, MENU_ID_ROOM_CHANNEL_CENTRAL, 0);
+            } else {
+                match double_click_action(state_ref(frame)) {
+                    // Posted: the dialog's modal loop runs after the
+                    // click's handling, as from the Room menu.
+                    Some(DoubleClick::ChannelCentral) => {
+                        PostMessageW(frame, WM_COMMAND, MENU_ID_ROOM_CHANNEL_CENTRAL, 0);
+                    }
+                    // As typed: it opens no modal loop.
+                    Some(DoubleClick::Whois(nick)) => {
+                        if let Err(message) = run_local_command(frame, SlashCommand::Whois { nick })
+                        {
+                            show_error_message(frame, "Whois", &message);
+                        }
+                    }
+                    None => {}
+                }
             }
             0
         }

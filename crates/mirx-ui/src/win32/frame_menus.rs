@@ -307,12 +307,30 @@ pub(super) fn active_room_action_state(state: &WindowState) -> RoomActionState {
     }
 }
 
-/// A double-click in a channel window's text opens Channel Central, mIRC's
-/// default for it (Options > Mouse); in Status, a query or a thread it
-/// does nothing.
-pub(super) fn double_click_opens_channel_central(state: &WindowState) -> bool {
-    matches!(state.active_view, ViewId::Room(_))
-        && active_room_action_state(state).channel_central_enabled
+/// What a double-click in a window's text does, off a link and a quote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum DoubleClick {
+    ChannelCentral,
+    /// `/whois` of this user.
+    Whois(String),
+}
+
+/// What a double-click in the active window's text does, as mIRC's
+/// defaults (Options > Mouse): a channel window opens Channel Central
+/// while it can, a query runs `/whois` on its user; Status, a thread, an
+/// invite and a direct room that is not one user's query do nothing.
+pub(super) fn double_click_action(state: &WindowState) -> Option<DoubleClick> {
+    let ViewId::Room(room_id) = &state.active_view else {
+        return None;
+    };
+    let room = room_by_id(&state.model.rooms, room_id).expect("a room window's room exists");
+    match (room_window_kind(room), room.direct_user_ids.as_slice()) {
+        (RoomWindowKind::Channel, _) => active_room_action_state(state)
+            .channel_central_enabled
+            .then_some(DoubleClick::ChannelCentral),
+        (RoomWindowKind::Query, [user_id]) => Some(DoubleClick::Whois(user_id.clone())),
+        (RoomWindowKind::Query, _) | (RoomWindowKind::Invite, _) => None,
+    }
 }
 
 /// Notifications checks the room's mode, or nothing while it is greyed.
@@ -1550,7 +1568,7 @@ mod tests {
             channel_central_room(&state, None),
             Err("not connected to server".to_owned())
         );
-        assert!(!double_click_opens_channel_central(&state));
+        assert_eq!(double_click_action(&state), None);
 
         state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
         state.model.connection = ConnectionState::Syncing;
@@ -1558,7 +1576,10 @@ mod tests {
             channel_central_room(&state, None),
             Ok("!ops:example".to_owned())
         );
-        assert!(double_click_opens_channel_central(&state));
+        assert_eq!(
+            double_click_action(&state),
+            Some(DoubleClick::ChannelCentral)
+        );
         assert_eq!(
             channel_central_room(&state, Some("Ops")),
             Ok("!ops:example".to_owned())
@@ -1574,20 +1595,16 @@ mod tests {
                 "{target:?}"
             );
         }
-        for (view, opens) in [
-            (room_view_id("!query:example"), false),
-            (room_view_id("!invite:example"), false),
+        for (view, action) in [
+            (room_view_id("!query:example"), None),
+            (room_view_id("!invite:example"), None),
             // The Room menu acts on a thread's room; its double-click is
             // no channel window's.
-            (thread_view_id("!ops:example", "$thread:example"), false),
-            (ViewId::Status, false),
+            (thread_view_id("!ops:example", "$thread:example"), None),
+            (ViewId::Status, None),
         ] {
             state.active_view = view.clone();
-            assert_eq!(
-                double_click_opens_channel_central(&state),
-                opens,
-                "{view:?}"
-            );
+            assert_eq!(double_click_action(&state), action, "{view:?}");
         }
         state.active_view = thread_view_id("!ops:example", "$thread:example");
         assert!(active_room_action_state(&state).channel_central_enabled);
@@ -1596,6 +1613,46 @@ mod tests {
             channel_central_room(&state, None),
             Err("no room selected".to_owned())
         );
+    }
+
+    #[test]
+    fn a_double_click_in_a_query_whois_its_user() {
+        let mut state = test_state();
+        let direct = |room_id: &str, users: &[&str]| RoomSummary {
+            is_direct: true,
+            direct_user_ids: users.iter().map(|user| (*user).to_owned()).collect(),
+            ..room(room_id, "Direct", false)
+        };
+        state.model.rooms = vec![
+            room("!ops:example", "Ops", false),
+            direct("!bob:example", &["@bob:example"]),
+            direct("!two:example", &["@bob:example", "@carol:example"]),
+            direct("!nobody:example", &[]),
+        ];
+        state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
+        state.model.connection = ConnectionState::Syncing;
+        for (view, action) in [
+            (
+                room_view_id("!ops:example"),
+                Some(DoubleClick::ChannelCentral),
+            ),
+            (
+                room_view_id("!bob:example"),
+                Some(DoubleClick::Whois("@bob:example".to_owned())),
+            ),
+            // A direct room is one user's query only.
+            (room_view_id("!two:example"), None),
+            (room_view_id("!nobody:example"), None),
+            (thread_view_id("!bob:example", "$thread:example"), None),
+            (ViewId::Status, None),
+        ] {
+            state.active_view = view.clone();
+            assert_eq!(double_click_action(&state), action, "{view:?}");
+        }
+        // Channel Central greyed: signed out.
+        state.model.connection = ConnectionState::SignedOut;
+        state.active_view = room_view_id("!ops:example");
+        assert_eq!(double_click_action(&state), None);
     }
 
     #[test]

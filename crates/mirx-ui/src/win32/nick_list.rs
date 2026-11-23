@@ -57,13 +57,37 @@ pub(super) fn nick_list_color(
 /// up by user ID in its room's members: the window's listing
 /// (`MdiViewState::nick_list`) maps an item to its member.
 fn listed_member(state: &WindowState, content: HWND, index: u32) -> &RoomMemberSummary {
-    let (view_id, view) = state
+    let view_id = content_view(state, content);
+    let user_id = &state.views[view_id].nick_list[index as usize].user_id;
+    room_member(state, view_id, user_id)
+}
+
+/// The window whose room content window is `content`.
+fn content_view(state: &WindowState, content: HWND) -> &ViewId {
+    state
         .views
         .iter()
         .find(|(_, view)| view.content == content)
-        .expect("a nick list's window is a view's");
-    let user_id = &view.nick_list[index as usize].user_id;
-    room_member(state, view_id, user_id)
+        .map(|(view_id, _)| view_id)
+        .expect("a nick list's window is a view's")
+}
+
+/// A double-click on a nick in the nick list of `content`, a room content
+/// window, opens a query with it, mIRC's default (Options > Mouse >
+/// Nicklist `/query $$1`); its first click made it the only selection.
+/// The window need not be the active one. In an empty list it does
+/// nothing.
+pub(super) unsafe fn query_double_clicked_member(content: HWND) -> Result<(), String> {
+    let frame = frame_window_for(content);
+    let action = {
+        let state = state_ref(frame);
+        let members = selected_members(state, content_view(state, content));
+        if members.is_empty() {
+            return Ok(());
+        }
+        member_action(state, MENU_ID_MEMBER_QUERY, &members)
+    };
+    run_member_action(frame, action)
 }
 
 /// A member of the room of `view_id`, a window with a nick list. The

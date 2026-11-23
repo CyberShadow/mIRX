@@ -502,6 +502,19 @@ unsafe extern "system" fn room_content_window_proc(
             draw_nick_list_item(hwnd, &*(lparam as *const DRAWITEMSTRUCT));
             1
         }
+        // The nick list's notifications (`LBS_NOTIFY`); only the
+        // double-click does something.
+        WM_COMMAND if (wparam >> 16) as u32 == LBN_DBLCLK => {
+            assert_eq!(
+                lparam as HWND,
+                room_content_member_list(hwnd),
+                "only the nick list notifies"
+            );
+            if let Err(message) = query_double_clicked_member(hwnd) {
+                show_error_message(frame_window_for(hwnd), "Member", &message);
+            }
+            0
+        }
         WM_NCDESTROY => {
             window_data::drop_owned::<RoomContentState>(hwnd);
             DefWindowProcW(hwnd, message, wparam, lparam)
@@ -557,7 +570,11 @@ unsafe fn create_room_content_state(hwnd: HWND) -> Result<Box<RoomContentState>,
             | WS_VISIBLE
             | WS_VSCROLL
             | WS_CLIPSIBLINGS
-            | (LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_EXTENDEDSEL) as u32,
+            | (LBS_NOINTEGRALHEIGHT
+                | LBS_OWNERDRAWFIXED
+                | LBS_HASSTRINGS
+                | LBS_EXTENDEDSEL
+                | LBS_NOTIFY) as u32,
         0,
         0,
         0,
