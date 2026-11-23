@@ -1,6 +1,6 @@
 # mirx — Vision
 
-> mIRC, but Matrix instead of IRC.
+> mIRC, but Matrix instead of IRC: mIRC's client experience, Matrix's concepts.
 
 A Matrix chat client for Windows that looks, feels, and weighs like mIRC: a
 dense, native, keyboard-driven UI rendered with the actual Win32 common
@@ -22,6 +22,35 @@ from scratch.
   come from `matrix-rust-sdk`. We do not hand-roll crypto.
 - **Well-behaved E2EE.** Encrypted rooms work out of the box, including the
   verification + recovery flows other Matrix users expect (see E2EE scope).
+
+## Fidelity boundary: mIRC's client, not IRC's protocol
+
+mirx borrows **mIRC the application** — its window model, density, menus,
+dialogs, keyboard habits, options layout, and the ergonomics long-time users
+know — and applies them to **Matrix concepts, named in Matrix terms**. It does
+not import the IRC protocol, or conventions that exist only because of IRC,
+into the user-facing surface. A user should never have to know IRC to
+understand mirx, and nothing should suggest the program speaks IRC.
+
+Concretely:
+
+- **Name things as Matrix does.** Rooms, spaces, direct messages, members,
+  power levels, invites, sessions — not channels, networks, modes, or
+  user@host. No UI label, menu, dialog or option page called "IRC".
+- **No IRC protocol vocabulary as a user interface.** No `/mode` flag letters
+  (`+i`, `+m`, `+o`…) mapped onto room settings, no CTCP, no raw-protocol
+  numerics or IRC server concepts. Room settings are changed through dialogs
+  and commands that describe the Matrix setting itself.
+- **Matrix formatting, not IRC formatting.** Message formatting is Matrix's
+  (HTML / Markdown-style body); IRC control codes and the IRC colour palette are
+  neither a wire format nor an intermediate representation.
+- **Familiar mIRC commands are fine where they mean the same thing in Matrix**
+  (`/join`, `/part`, `/msg`, `/query`, `/me`, `/topic`, `/whois`-style lookups,
+  aliases, perform on connect), as long as their behaviour and output are honest
+  about Matrix semantics.
+- **When in doubt, ask "would this confuse someone who has never used IRC?"**
+  If yes, prefer the Matrix-native framing while keeping mIRC's look and
+  workflow.
 
 ## Non-goals (for now)
 
