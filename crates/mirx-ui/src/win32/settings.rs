@@ -100,6 +100,7 @@ pub(super) struct Settings {
     pub(super) tips: TipsSetting,
     pub(super) marker: MarkerSetting,
     pub(super) typing: TypingSetting,
+    pub(super) irc: IrcSetting,
     pub(super) other: OtherSetting,
     /// mIRC's Tools > Colors.
     pub(super) colors: ColorScheme,
@@ -492,6 +493,38 @@ impl Default for TypingSetting {
     }
 }
 
+/// mIRC's Options > IRC: the options of its page that Matrix has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct IrcSetting {
+    /// Show mode prefix: a channel line's sender has their rank's glyph
+    /// (`<@Mod> hi`).
+    pub(super) mode_prefix: bool,
+    /// Auto-join channel on invite: an arriving invite to a group room is
+    /// accepted at once, its window opening behind the active one.
+    pub(super) auto_join_invite: bool,
+    /// Show in active: Away. A user's away line prints in their query
+    /// window; off, in Status.
+    pub(super) active_away: bool,
+    /// Show in active: Invites. An arriving invite's line prints in the
+    /// active window; off, in Status.
+    pub(super) active_invites: bool,
+    /// Show in active: Whois. `/whois` answers print in the active window;
+    /// off, in Status.
+    pub(super) active_whois: bool,
+}
+
+impl Default for IrcSetting {
+    fn default() -> Self {
+        Self {
+            mode_prefix: false,
+            auto_join_invite: false,
+            active_away: true,
+            active_invites: true,
+            active_whois: true,
+        }
+    }
+}
+
 /// mIRC's Options > Other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct OtherSetting {
@@ -555,6 +588,7 @@ enum Section {
     Tips,
     Marker,
     Typing,
+    Irc,
     Other,
     Colors,
     NickColors,
@@ -589,6 +623,7 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                 "tips" => Section::Tips,
                 "marker" => Section::Marker,
                 "typing" => Section::Typing,
+                "irc" => Section::Irc,
                 "other" => Section::Other,
                 "colors" => Section::Colors,
                 "nickcolors" => Section::NickColors,
@@ -704,6 +739,23 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Typing, "send") => {
                 settings.typing.send = parse_on_off(value, "send").map_err(error)?;
             }
+            (Section::Irc, "mode_prefix") => {
+                settings.irc.mode_prefix = parse_on_off(value, "mode_prefix").map_err(error)?;
+            }
+            (Section::Irc, "auto_join_invite") => {
+                settings.irc.auto_join_invite =
+                    parse_on_off(value, "auto_join_invite").map_err(error)?;
+            }
+            (Section::Irc, "active_away") => {
+                settings.irc.active_away = parse_on_off(value, "active_away").map_err(error)?;
+            }
+            (Section::Irc, "active_invites") => {
+                settings.irc.active_invites =
+                    parse_on_off(value, "active_invites").map_err(error)?;
+            }
+            (Section::Irc, "active_whois") => {
+                settings.irc.active_whois = parse_on_off(value, "active_whois").map_err(error)?;
+            }
             (Section::Other, "buffer") => {
                 settings.other.window_buffer =
                     parse_window_buffer(value.trim_end()).map_err(error)?;
@@ -777,6 +829,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
     let logging = &settings.logging;
     let tray = &settings.tray;
     let tips = &settings.tips;
+    let irc = &settings.irc;
     let colors = ColorItem::ALL
         .into_iter()
         .map(|item| format!("{}={}\r\n", item.ini_key(), settings.colors.get(item).get()))
@@ -824,6 +877,8 @@ pub(super) fn to_ini(settings: &Settings) -> String {
          [tips]\r\nhighlights={}\r\nqueries={}\r\nchannels={}\r\n\
          [marker]\r\nshow={}\r\ncolor={}\r\n\
          [typing]\r\nsend={}\r\n\
+         [irc]\r\nmode_prefix={}\r\nauto_join_invite={}\r\n\
+         active_away={}\r\nactive_invites={}\r\nactive_whois={}\r\n\
          [other]\r\nbuffer={}\r\n\
          [colors]\r\n{colors}\
          [nickcolors]\r\nactive={}\r\n{nick_colors}\
@@ -860,6 +915,11 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         on_off(settings.marker.show),
         settings.marker.color.get(),
         on_off(settings.typing.send),
+        on_off(irc.mode_prefix),
+        on_off(irc.auto_join_invite),
+        on_off(irc.active_away),
+        on_off(irc.active_invites),
+        on_off(irc.active_whois),
         settings.other.window_buffer,
         on_off(settings.nick_colors.active),
         on_off(settings.notify.active),
@@ -1007,6 +1067,8 @@ mod tests {
         [tips]\r\nhighlights=on\r\nqueries=on\r\nchannels=off\r\n\
         [marker]\r\nshow=on\r\ncolor=4\r\n\
         [typing]\r\nsend=on\r\n\
+        [irc]\r\nmode_prefix=off\r\nauto_join_invite=off\r\n\
+        active_away=on\r\nactive_invites=on\r\nactive_whois=on\r\n\
         [other]\r\nbuffer=5000\r\n\
         [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\ninvite=3\r\n\
         join=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\nnotice=5\r\nnotify=7\r\nother=6\r\nown=1\r\n\
@@ -1116,7 +1178,7 @@ mod tests {
             ..Settings::default()
         };
         let text = to_ini(&settings);
-        assert!(text.contains("[typing]\r\nsend=off\r\n[other]"));
+        assert!(text.contains("[typing]\r\nsend=off\r\n[irc]"));
         assert_eq!(parse_ini(&text), Ok(settings));
         assert_eq!(
             parse_ini("[typing]\r\n").map(|settings| settings.typing),
@@ -1126,6 +1188,70 @@ mod tests {
             parse_ini("[typing]\nsend=yes"),
             Err("line 2: send must be on or off".to_owned())
         );
+    }
+
+    #[test]
+    fn the_irc_settings_round_trip() {
+        let settings = Settings {
+            irc: IrcSetting {
+                mode_prefix: true,
+                auto_join_invite: true,
+                active_away: false,
+                active_invites: false,
+                active_whois: false,
+            },
+            ..Settings::default()
+        };
+        let text = to_ini(&settings);
+        assert!(text.contains(
+            "[irc]\r\nmode_prefix=on\r\nauto_join_invite=on\r\n\
+             active_away=off\r\nactive_invites=off\r\nactive_whois=off\r\n[other]"
+        ));
+        assert_eq!(parse_ini(&text), Ok(settings));
+        assert_eq!(
+            parse_ini("[IRC]\nMode_Prefix=On\nactive_whois=off").map(|settings| settings.irc),
+            Ok(IrcSetting {
+                mode_prefix: true,
+                active_whois: false,
+                ..IrcSetting::default()
+            })
+        );
+        assert_eq!(
+            parse_ini("[irc]\r\n").map(|settings| settings.irc),
+            Ok(IrcSetting::default())
+        );
+        for (text, error) in [
+            (
+                "[irc]\nmode_prefix=yes",
+                "line 2: mode_prefix must be on or off",
+            ),
+            (
+                "[irc]\nauto_join_invite=",
+                "line 2: auto_join_invite must be on or off",
+            ),
+            (
+                "[irc]\nactive_away=1",
+                "line 2: active_away must be on or off",
+            ),
+            (
+                "[irc]\nactive_invites=no",
+                "line 2: active_invites must be on or off",
+            ),
+            (
+                "[irc]\nactive_whois=true",
+                "line 2: active_whois must be on or off",
+            ),
+            (
+                "[irc]\nactive_whois=on\nactive_whois=off",
+                "line 3: duplicate key active_whois",
+            ),
+            (
+                "[irc]\nactive_queries=on",
+                "line 2: unknown key active_queries",
+            ),
+        ] {
+            assert_eq!(parse_ini(text), Err(error.to_owned()), "{text}");
+        }
     }
 
     #[test]
@@ -1245,7 +1371,7 @@ mod tests {
             ..Settings::default()
         };
         let text = to_ini(&settings);
-        assert!(text.contains("send=on\r\n[other]\r\nbuffer=100\r\n[colors]"));
+        assert!(text.contains("active_whois=on\r\n[other]\r\nbuffer=100\r\n[colors]"));
         assert_eq!(parse_ini(&text), Ok(settings));
         assert_eq!(
             parse_ini("[Other]\nBuffer=50000").map(|settings| settings.other.window_buffer),

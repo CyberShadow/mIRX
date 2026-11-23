@@ -53,7 +53,7 @@ use mirx_testkit::{
     TestkitError, UiActiveTimeline, UiActivityColors, UiAddressBook, UiChannelCentral,
     UiCheckState, UiColorCodePart, UiColorItem, UiColorsDialog, UiComposeTarget,
     UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState,
-    UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
+    UiIrcOptions, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
     UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiSessions, UiState,
     UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiTipsOptions, UiTrayOptions,
     UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionKind,
@@ -3595,7 +3595,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 90);
+    assert_eq!(version.protocol_version, 91);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -9340,6 +9340,8 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
          [tips]\r\nhighlights=on\r\nqueries=on\r\nchannels=off\r\n\
          [marker]\r\nshow=on\r\ncolor=4\r\n\
          [typing]\r\nsend=on\r\n\
+         [irc]\r\nmode_prefix=off\r\nauto_join_invite=off\r\n\
+         active_away=on\r\nactive_invites=on\r\nactive_whois=on\r\n\
          [other]\r\nbuffer=5000\r\n\
          [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\n\
          invite=3\r\njoin=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\n\
@@ -9635,6 +9637,7 @@ fn rooms_log_automatically_as_the_options_say_and_exit_closes_the_logs()
     let mut rooms = close_lifecycle_rooms();
     rooms[2].membership = RoomMembership::Join;
     rooms[2].notification_mode = Some(RoomNotificationMode::AllMessages);
+    rooms[2].invite = None;
     let said_at = now_ms();
     app.append_synthetic_events(&serde_json::to_string(&vec![
         Event::SyncedRooms(rooms),
@@ -19492,6 +19495,11 @@ const OPTIONS_TIPS_QUERIES_ID: i32 = 6702;
 const OPTIONS_TIPS_CHANNELS_ID: i32 = 6703;
 const OPTIONS_TIPS_NOTE_ID: i32 = 6704;
 const OPTIONS_WINDOW_BUFFER_ID: i32 = 6801;
+const OPTIONS_IRC_MODE_PREFIX_ID: i32 = 6901;
+const OPTIONS_IRC_AUTO_JOIN_INVITE_ID: i32 = 6902;
+const OPTIONS_IRC_ACTIVE_AWAY_ID: i32 = 6903;
+const OPTIONS_IRC_ACTIVE_INVITES_ID: i32 = 6904;
+const OPTIONS_IRC_ACTIVE_WHOIS_ID: i32 = 6905;
 
 /// Waits for the Options dialog to be open and shown, and returns it.
 fn wait_for_options_dialog(app: &MirxApp) -> Result<HWND, Box<dyn std::error::Error>> {
@@ -19573,18 +19581,25 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
         ]
     );
 
-    // Down from Connect/Options is the IRC category, which shows its page.
+    // Down from Connect/Options is the IRC category, which has a page of
+    // its own; Down again is IRC > Messages.
     let tree = unsafe { GetDlgItem(dialog, 6001) };
-    assert_ne!(
-        unsafe { PostMessageW(tree, WM_KEYDOWN, VK_DOWN as WPARAM, 0) },
-        0
-    );
-    let ui_state = app.wait_for_ui_state("IRC > Messages", Duration::from_secs(5), |ui_state| {
-        ui_state
-            .options_dialog
-            .as_ref()
-            .is_some_and(|options| options.selected == "IRC/Messages")
-    })?;
+    let mut ui_state = None;
+    for page in ["IRC", "IRC/Messages"] {
+        assert_ne!(
+            unsafe { PostMessageW(tree, WM_KEYDOWN, VK_DOWN as WPARAM, 0) },
+            0
+        );
+        ui_state = Some(
+            app.wait_for_ui_state(page, Duration::from_secs(5), |ui_state| {
+                ui_state
+                    .options_dialog
+                    .as_ref()
+                    .is_some_and(|options| options.selected == page)
+            })?,
+        );
+    }
+    let ui_state = ui_state.expect("two pages were shown");
     let options = ui_state.options_dialog.expect("the dialog is open");
     assert_eq!(
         options.visible_controls,
@@ -19748,6 +19763,75 @@ fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn 
     // Without timestamps.
     let log = read_log(&log_file_path(&local_app_data, "@carol.example"))?;
     assert_eq!(log[2..], ["<@carol:example> carol news".to_owned()]);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn options_irc_page_saves_its_options() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let irc_options = |app: &MirxApp| -> Result<UiOptionsDialog, Box<dyn std::error::Error>> {
+        Ok(app
+            .dump_ui_state()?
+            .options_dialog
+            .expect("the dialog is open"))
+    };
+    app.open_dialog(AutomationDialog::Options)?;
+    let dialog = wait_for_options_dialog(&app)?;
+    app.select_options_page("IRC")?;
+    let options = irc_options(&app)?;
+    assert_eq!(options.selected, "IRC");
+    assert_eq!(
+        options.visible_controls,
+        [
+            OPTIONS_IRC_MODE_PREFIX_ID as u16,
+            OPTIONS_IRC_AUTO_JOIN_INVITE_ID as u16,
+            OPTIONS_IRC_ACTIVE_AWAY_ID as u16,
+            OPTIONS_IRC_ACTIVE_INVITES_ID as u16,
+            OPTIONS_IRC_ACTIVE_WHOIS_ID as u16,
+        ]
+    );
+    assert_eq!(
+        options.irc,
+        UiIrcOptions {
+            mode_prefix: false,
+            auto_join_invite: false,
+            active_away: true,
+            active_invites: true,
+            active_whois: true,
+        }
+    );
+    let toggled = UiIrcOptions {
+        mode_prefix: true,
+        auto_join_invite: true,
+        active_away: false,
+        active_invites: false,
+        active_whois: false,
+    };
+    unsafe {
+        set_options_check(dialog, OPTIONS_IRC_MODE_PREFIX_ID, true);
+        set_options_check(dialog, OPTIONS_IRC_AUTO_JOIN_INVITE_ID, true);
+        set_options_check(dialog, OPTIONS_IRC_ACTIVE_AWAY_ID, false);
+        set_options_check(dialog, OPTIONS_IRC_ACTIVE_INVITES_ID, false);
+        set_options_check(dialog, OPTIONS_IRC_ACTIVE_WHOIS_ID, false);
+    }
+    assert_eq!(irc_options(&app)?.irc, toggled);
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(
+        fs::read_to_string(settings_file_path(&local_app_data))?.contains(
+            "[irc]\r\nmode_prefix=on\r\nauto_join_invite=on\r\n\
+             active_away=off\r\nactive_invites=off\r\nactive_whois=off\r\n"
+        )
+    );
+
+    app.open_dialog(AutomationDialog::Options)?;
+    let dialog = wait_for_options_dialog(&app)?;
+    assert_eq!(irc_options(&app)?.irc, toggled);
+    close_dialog(&app, dialog)?;
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -21296,13 +21380,13 @@ fn launch_highlight_words_app() -> Result<(GuiTestApp, PathBuf), Box<dyn std::er
 }
 
 /// Selects IRC > Highlight with the tree's arrow keys: Down to the IRC
-/// category shows IRC > Messages, Down again is Highlight.
+/// category shows its page, then IRC > Messages, then Highlight.
 fn show_options_highlight_page(
     app: &MirxApp,
     dialog: HWND,
 ) -> Result<mirx_testkit::UiOptionsDialog, Box<dyn std::error::Error>> {
     let tree = unsafe { GetDlgItem(dialog, 6001) };
-    for page in ["IRC/Messages", "IRC/Highlight"] {
+    for page in ["IRC", "IRC/Messages", "IRC/Highlight"] {
         assert_ne!(
             unsafe { PostMessageW(tree, WM_KEYDOWN, VK_DOWN as WPARAM, 0) },
             0
@@ -21785,9 +21869,9 @@ fn select_options_page_selects_each_page() -> Result<(), Box<dyn std::error::Err
         ("IRC/Highlight", "IRC/Highlight"),
         ("IRC/Logging", "IRC/Logging"),
         ("Display", "Display"),
-        ("Connect/Options", "Connect/Options"),
+        ("IRC", "IRC"),
         // A category without a page of its own shows its first page.
-        ("IRC", "IRC/Messages"),
+        ("Connect", "Connect/Options"),
     ] {
         app.select_options_page(path)?;
         let options = app
@@ -21803,7 +21887,7 @@ fn select_options_page_selects_each_page() -> Result<(), Box<dyn std::error::Err
         .dump_ui_state()?
         .options_dialog
         .expect("the dialog is open");
-    assert_eq!(options.selected, "IRC/Messages");
+    assert_eq!(options.selected, "Connect/Options");
     close_dialog(&app, dialog.hwnd as HWND)?;
 
     drop(app);

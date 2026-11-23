@@ -49,7 +49,7 @@ use super::options::{
 use super::perform::PerformSetting;
 use super::perform_dialog::run_perform_dialog;
 use super::settings::{
-    ActivityColors, LoggingSetting, MarkerSetting, Settings, TipsSetting, TraySetting,
+    ActivityColors, IrcSetting, LoggingSetting, MarkerSetting, Settings, TipsSetting, TraySetting,
 };
 use super::timestamp::format_tokens;
 use super::window_data::{self, WindowData};
@@ -59,8 +59,8 @@ use super::{
     run_modal_dialog, selected_tree_item, set_window_text, wide_null,
 };
 use crate::automation::{
-    UiConnectOptions, UiLoggingOptions, UiMarkerOptions, UiOptionsDialog, UiTipsOptions,
-    UiTrayOptions,
+    UiConnectOptions, UiIrcOptions, UiLoggingOptions, UiMarkerOptions, UiOptionsDialog,
+    UiTipsOptions, UiTrayOptions,
 };
 
 pub(super) const OPTIONS_DIALOG_CLASS_NAME: &str = "mirxWin32OptionsDialog";
@@ -100,6 +100,11 @@ pub(super) const OPTIONS_TIPS_QUERIES_ID: u16 = 6702;
 pub(super) const OPTIONS_TIPS_CHANNELS_ID: u16 = 6703;
 pub(super) const OPTIONS_TIPS_NOTE_ID: u16 = 6704;
 pub(super) const OPTIONS_WINDOW_BUFFER_ID: u16 = 6801;
+pub(super) const OPTIONS_IRC_MODE_PREFIX_ID: u16 = 6901;
+pub(super) const OPTIONS_IRC_AUTO_JOIN_INVITE_ID: u16 = 6902;
+pub(super) const OPTIONS_IRC_ACTIVE_AWAY_ID: u16 = 6903;
+pub(super) const OPTIONS_IRC_ACTIVE_INVITES_ID: u16 = 6904;
+pub(super) const OPTIONS_IRC_ACTIVE_WHOIS_ID: u16 = 6905;
 const LISTBOX_CLASS_NAME: &str = "LISTBOX";
 const HIGHLIGHT_NOTE: &str = "Words are matched as whole words; * and ? are wildcards. \
 Highlight words are kept on your Matrix server and shared with your other clients.";
@@ -130,6 +135,11 @@ struct Fields {
     timestamp_show: HWND,
     timestamp_format: HWND,
     send_typing: HWND,
+    irc_mode_prefix: HWND,
+    irc_auto_join_invite: HWND,
+    irc_active_away: HWND,
+    irc_active_invites: HWND,
+    irc_active_whois: HWND,
     switchbar_buttons: HWND,
     /// Event, Message, Highlight.
     activity_colors: [HWND; 3],
@@ -163,6 +173,13 @@ impl Fields {
             timestamp_show: checked(self.timestamp_show),
             timestamp_format: read_window_text(self.timestamp_format),
             send_typing: checked(self.send_typing),
+            irc: IrcSetting {
+                mode_prefix: checked(self.irc_mode_prefix),
+                auto_join_invite: checked(self.irc_auto_join_invite),
+                active_away: checked(self.irc_active_away),
+                active_invites: checked(self.irc_active_invites),
+                active_whois: checked(self.irc_active_whois),
+            },
             switchbar_buttons: read_window_text(self.switchbar_buttons),
             activity_colors: self.read_activity_colors(),
             marker: MarkerSetting {
@@ -284,6 +301,11 @@ impl OptionsDialog {
                 timestamp_show: null_mut(),
                 timestamp_format: null_mut(),
                 send_typing: null_mut(),
+                irc_mode_prefix: null_mut(),
+                irc_auto_join_invite: null_mut(),
+                irc_active_away: null_mut(),
+                irc_active_invites: null_mut(),
+                irc_active_whois: null_mut(),
                 switchbar_buttons: null_mut(),
                 activity_colors: [null_mut(); 3],
                 marker_show: null_mut(),
@@ -800,6 +822,46 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     )?;
     state.page_controls.push((OptionsPage::IrcLogging, folder));
 
+    // mIRC's IRC page, the options of it Matrix has, in its order. mIRC
+    // puts the Show in active boxes in a column at the right; here they
+    // sit under their label.
+    let mut row_y = page_top;
+    state.fields.irc_mode_prefix = check_box_row(
+        "Show mode &prefix",
+        OPTIONS_IRC_MODE_PREFIX_ID,
+        0,
+        &mut row_y,
+    )?;
+    state.fields.irc_auto_join_invite = check_box_row(
+        "Auto-join ch&annel on invite",
+        OPTIONS_IRC_AUTO_JOIN_INVITE_ID,
+        0,
+        &mut row_y,
+    )?;
+    let (active_label, (_, active_label_height)) =
+        label("Show in active:", 0, 0, page_x, row_y + gap)?;
+    let mut row_y = row_y + gap + active_label_height + label_gap;
+    state.fields.irc_active_away =
+        check_box_row("Awa&y", OPTIONS_IRC_ACTIVE_AWAY_ID, margin, &mut row_y)?;
+    state.fields.irc_active_invites = check_box_row(
+        "&Invites",
+        OPTIONS_IRC_ACTIVE_INVITES_ID,
+        margin,
+        &mut row_y,
+    )?;
+    state.fields.irc_active_whois =
+        check_box_row("Whoi&s", OPTIONS_IRC_ACTIVE_WHOIS_ID, margin, &mut row_y)?;
+    for control in [
+        state.fields.irc_mode_prefix,
+        state.fields.irc_auto_join_invite,
+        active_label,
+        state.fields.irc_active_away,
+        state.fields.irc_active_invites,
+        state.fields.irc_active_whois,
+    ] {
+        state.page_controls.push((OptionsPage::Irc, control));
+    }
+
     // mIRC's Tray page: when the icon shows, and what opens mirx from it.
     let mut row_y = page_top;
     state.fields.tray_always = check_box_row(
@@ -941,6 +1003,11 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         (state.fields.retry, form.retry),
         (state.fields.timestamp_show, form.timestamp_show),
         (state.fields.send_typing, form.send_typing),
+        (state.fields.irc_mode_prefix, form.irc.mode_prefix),
+        (state.fields.irc_auto_join_invite, form.irc.auto_join_invite),
+        (state.fields.irc_active_away, form.irc.active_away),
+        (state.fields.irc_active_invites, form.irc.active_invites),
+        (state.fields.irc_active_whois, form.irc.active_whois),
         (state.fields.marker_show, form.marker.show),
         (state.fields.log_channels, form.logging.channels),
         (state.fields.log_queries, form.logging.queries),
@@ -1319,6 +1386,13 @@ pub(super) unsafe fn dump(hwnd: HWND) -> Result<UiOptionsDialog, String> {
         highlight_delete_enabled: IsWindowEnabled(controls.delete) != 0,
         activity_colors: dump_activity_colors(&form.activity_colors),
         send_typing: form.send_typing,
+        irc: UiIrcOptions {
+            mode_prefix: form.irc.mode_prefix,
+            auto_join_invite: form.irc.auto_join_invite,
+            active_away: form.irc.active_away,
+            active_invites: form.irc.active_invites,
+            active_whois: form.irc.active_whois,
+        },
         marker: UiMarkerOptions {
             show: form.marker.show,
             color: form.marker.color.get(),

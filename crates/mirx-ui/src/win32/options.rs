@@ -8,7 +8,7 @@ use mirx_core::{HighlightWord, validate_highlight_word};
 
 use super::perform::PerformSetting;
 use super::settings::{
-    ActivityColors, LoggingSetting, MarkerSetting, Settings, TipsSetting, TraySetting,
+    ActivityColors, IrcSetting, LoggingSetting, MarkerSetting, Settings, TipsSetting, TraySetting,
     parse_button_width, parse_retry_delay, parse_retry_times, parse_window_buffer,
 };
 use super::timestamp::TimestampFormat;
@@ -16,6 +16,7 @@ use super::timestamp::TimestampFormat;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OptionsPage {
     ConnectOptions,
+    Irc,
     IrcMessages,
     IrcHighlight,
     IrcLogging,
@@ -26,7 +27,8 @@ pub(super) enum OptionsPage {
 }
 
 use OptionsPage::{
-    ConnectOptions, Display, DisplayTips, DisplayTray, IrcHighlight, IrcLogging, IrcMessages, Other,
+    ConnectOptions, Display, DisplayTips, DisplayTray, Irc, IrcHighlight, IrcLogging, IrcMessages,
+    Other,
 };
 
 /// The tree, in order: (label, depth, page). A category without a page of
@@ -34,7 +36,7 @@ use OptionsPage::{
 pub(super) const OPTIONS_TREE: &[(&str, u8, OptionsPage)] = &[
     ("Connect", 0, ConnectOptions),
     ("Options", 1, ConnectOptions),
-    ("IRC", 0, IrcMessages),
+    ("IRC", 0, Irc),
     ("Messages", 1, IrcMessages),
     ("Highlight", 1, IrcHighlight),
     ("Logging", 1, IrcLogging),
@@ -115,6 +117,8 @@ pub(super) struct OptionsForm {
     pub(super) timestamp_show: bool,
     pub(super) timestamp_format: String,
     pub(super) send_typing: bool,
+    /// Checkboxes, so never wrong.
+    pub(super) irc: IrcSetting,
     pub(super) switchbar_buttons: String,
     /// Picked from the palette, so never wrong.
     pub(super) activity_colors: ActivityColors,
@@ -143,6 +147,7 @@ impl OptionsForm {
             timestamp_show: settings.timestamp.show,
             timestamp_format: settings.timestamp.format.to_string(),
             send_typing: settings.typing.send,
+            irc: settings.irc,
             switchbar_buttons: settings.switchbar.buttons.to_string(),
             activity_colors: settings.switchbar.activity,
             marker: settings.marker,
@@ -187,6 +192,7 @@ impl OptionsForm {
         settings.timestamp.show = self.timestamp_show;
         settings.timestamp.format = format;
         settings.typing.send = self.send_typing;
+        settings.irc = self.irc;
         settings.switchbar.buttons = buttons;
         settings.switchbar.activity = self.activity_colors;
         settings.marker = self.marker;
@@ -336,6 +342,8 @@ mod tests {
             ]
         );
         assert_eq!(page_tree_index(ConnectOptions), 1);
+        // IRC has a page of its own, above its children's.
+        assert_eq!(page_tree_index(Irc), 2);
         assert_eq!(page_tree_index(IrcMessages), 3);
         assert_eq!(page_tree_index(IrcHighlight), 4);
         assert_eq!(page_tree_index(IrcLogging), 5);
@@ -471,10 +479,16 @@ mod tests {
             |form: &mut OptionsForm| form.tips.highlights = false,
             |form: &mut OptionsForm| form.tips.queries = false,
             |form: &mut OptionsForm| form.tips.channels = true,
+            |form: &mut OptionsForm| form.irc.mode_prefix = true,
+            |form: &mut OptionsForm| form.irc.auto_join_invite = true,
+            |form: &mut OptionsForm| form.irc.active_away = false,
+            |form: &mut OptionsForm| form.irc.active_invites = false,
+            |form: &mut OptionsForm| form.irc.active_whois = false,
         ] {
             let mut changed = form.clone();
             change(&mut changed);
             let mut expected = current.clone();
+            expected.irc = changed.irc;
             expected.logging = changed.logging;
             expected.tray = changed.tray;
             expected.tips = changed.tips;

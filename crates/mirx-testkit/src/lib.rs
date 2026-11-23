@@ -1624,6 +1624,8 @@ pub struct UiOptionsDialog {
     pub activity_colors: UiActivityColors,
     /// The IRC > Messages page's Send typing notifications checkbox.
     pub send_typing: bool,
+    /// The IRC page's checkboxes.
+    pub irc: UiIrcOptions,
     /// The Display page's line marker checkbox and colour.
     pub marker: UiMarkerOptions,
     /// The Logging page's checkboxes.
@@ -1649,6 +1651,18 @@ pub struct UiConnectOptions {
     pub perform_enabled: bool,
     /// One command line each, as typed.
     pub perform_lines: Vec<String>,
+}
+
+/// Options > IRC's checkboxes: Show mode prefix, Auto-join channel on
+/// invite, and Show in active: Away, Invites, Whois.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiIrcOptions {
+    pub mode_prefix: bool,
+    pub auto_join_invite: bool,
+    pub active_away: bool,
+    pub active_invites: bool,
+    pub active_whois: bool,
 }
 
 /// Options > Display's line marker: shown, and its palette index.

@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 90;
+pub(crate) const PROTOCOL_VERSION: u32 = 91;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1290,6 +1290,8 @@ pub(crate) struct UiOptionsDialog {
     pub(crate) activity_colors: UiActivityColors,
     /// The IRC > Messages page's Send typing notifications checkbox.
     pub(crate) send_typing: bool,
+    /// The IRC page's checkboxes.
+    pub(crate) irc: UiIrcOptions,
     /// The Display page's line marker checkbox and colour.
     pub(crate) marker: UiMarkerOptions,
     /// The Logging page's checkboxes.
@@ -1315,6 +1317,18 @@ pub(crate) struct UiConnectOptions {
     pub(crate) perform_enabled: bool,
     /// One command line each, as typed.
     pub(crate) perform_lines: Vec<String>,
+}
+
+/// Options > IRC's checkboxes: Show mode prefix, Auto-join channel on
+/// invite, and Show in active: Away, Invites, Whois.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiIrcOptions {
+    pub(crate) mode_prefix: bool,
+    pub(crate) auto_join_invite: bool,
+    pub(crate) active_away: bool,
+    pub(crate) active_invites: bool,
+    pub(crate) active_whois: bool,
 }
 
 /// Options > Display's line marker: shown, and its palette index.
@@ -4259,8 +4273,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_90() {
-        assert_eq!(PROTOCOL_VERSION, 90);
+    fn protocol_version_is_91() {
+        assert_eq!(PROTOCOL_VERSION, 91);
     }
 
     #[test]
@@ -6303,7 +6317,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":90,
+                    "protocol_version":91,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6998,6 +7012,13 @@ mod tests {
                             highlight: 12,
                         },
                         send_typing: true,
+                        irc: super::UiIrcOptions {
+                            mode_prefix: true,
+                            auto_join_invite: false,
+                            active_away: true,
+                            active_invites: false,
+                            active_whois: true,
+                        },
                         marker: super::UiMarkerOptions {
                             show: true,
                             color: 4,
@@ -7359,6 +7380,7 @@ mod tests {
                         "highlight_delete_enabled":false,
                         "activity_colors":{"event":5,"message":4,"highlight":12},
                         "send_typing":true,
+                        "irc":{"mode_prefix":true,"auto_join_invite":false,"active_away":true,"active_invites":false,"active_whois":true},
                         "marker":{"show":true,"color":4},
                         "logging":{"channels":true,"queries":false,"strip_codes":false,"timestamp":true},
                         "tray":{"always":true,"startup":false,"minimize":true,"single_click":false},
