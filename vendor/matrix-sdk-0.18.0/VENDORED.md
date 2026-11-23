@@ -71,10 +71,38 @@ mirx's own: `max_retry_time` sets the backoff's `with_total_delay`
 (`src/http_client/native.rs`); the 60 s cap of one delay stays. A
 server's `Retry-After` still sets the delay of each retry.
 
+## 4. Accepting a direct invite drops another direct room
+
+### Why
+
+Joining a room the user was invited to as a direct room (`Room::join`,
+`Client::join_room_by_id`) ends in `finish_join_room`, which marks it
+direct with `Room::set_is_direct(true)`. That read the account's
+`m.direct` from the store, added the room, and wrote the whole map back,
+without the `mark_as_dm_lock` that `Account::mark_as_dm` (`create_dm`'s)
+holds. The store only learns a write when a sync echoes it, so two joins
+close together each wrote "store + its own room": the second dropped the
+first, and the room stopped being direct for the account in every client.
+mirx accepts invites in per-room lanes, side by side; and a `create_dm`
+racing an accept lost whichever wrote first.
+`mirx-core/tests/concurrency.rs`
+(`accepting_two_direct_invites_at_once_keeps_both`,
+`creating_a_direct_room_while_accepting_one_keeps_both`) reproduces both.
+Upstream `main` (as of 2025-09) has the same code; not reported there yet.
+
+### The fix
+
+mirx's own, shaped as `mark_as_dm`: `set_is_direct` fetches `m.direct`
+from the server (`fetch_account_data_static`) and holds
+`mark_as_dm_lock` from that read to the write (`src/room/mod.rs`). The
+members it may ask the server for are read before taking the lock.
+Another client writing `m.direct` between the read and the write can
+still be lost (account data has no compare-and-swap).
+
 ## When to remove
 
-When upgrading to a matrix-sdk release that contains all three fixes
-(check the second and third against upstream; they are not reported there
-yet): delete this directory and its line in `[patch.crates-io]` (and,
+When upgrading to a matrix-sdk release that contains all four fixes
+(check the second, third and fourth against upstream; they are not
+reported there yet): delete this directory and its line in `[patch.crates-io]` (and,
 with the last vendored crate, the section and the workspace's
 `exclude = ["vendor"]`).

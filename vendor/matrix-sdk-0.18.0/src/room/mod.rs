@@ -1793,10 +1793,25 @@ impl Room {
     pub async fn set_is_direct(&self, is_direct: bool) -> Result<()> {
         let user_id = self.client.user_id().ok_or(Error::AuthenticationRequired)?;
 
+        // Before taking the lock: this may ask the server for the members.
+        let room_members = if is_direct {
+            let mut room_members = self.members(RoomMemberships::ACTIVE).await?;
+            room_members.retain(|member| member.user_id() != self.own_user_id());
+            Some(room_members)
+        } else {
+            None
+        };
+
+        // A read/update/store of the `m.direct` event, as `Account::mark_as_dm`
+        // does: under the same lock, so that two of them never trample on each
+        // other, and from the server's copy, which the store only has once a
+        // sync echoes the last update.
+        let _guard = self.client.locks().mark_as_dm_lock.lock().await;
+
         let mut content = self
             .client
             .account()
-            .account_data::<DirectEventContent>()
+            .fetch_account_data_static::<DirectEventContent>()
             .await?
             .map(|c| c.deserialize())
             .transpose()?
@@ -1804,10 +1819,7 @@ impl Room {
 
         let this_room_id = self.inner.room_id();
 
-        if is_direct {
-            let mut room_members = self.members(RoomMemberships::ACTIVE).await?;
-            room_members.retain(|member| member.user_id() != self.own_user_id());
-
+        if let Some(room_members) = room_members {
             for member in room_members {
                 let entry = content.entry(member.user_id().into()).or_default();
                 if !entry.iter().any(|room_id| room_id == this_room_id) {
