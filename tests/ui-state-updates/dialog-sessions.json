@@ -1,0 +1,31 @@
+[
+  {
+    "UserDevices": {
+      "user_id": "@me:example",
+      "identity": "verified",
+      "devices": [
+        {
+          "device_id": "MIRXDEVICE",
+          "display_name": "mirx",
+          "verified": true,
+          "this_session": true,
+          "last_seen_ms": 1795183331000
+        },
+        {
+          "device_id": "PH0NE",
+          "display_name": "Element Android",
+          "verified": false,
+          "this_session": false,
+          "last_seen_ms": 1795096931000
+        },
+        {
+          "device_id": "0LDW3B",
+          "display_name": "Element Web",
+          "verified": false,
+          "this_session": false,
+          "last_seen_ms": null
+        }
+      ]
+    }
+  }
+]

@@ -26,7 +26,7 @@ dpi144_prefix=
 dpi144_cases=(multi-room image-message-loaded room-list-listing compose-color-index
   dialog-options-display dialog-colors dialog-sign-out-session dialog-log-out
   dialog-export-room-keys dialog-address-book-notify dialog-address-book-colors toolbar-connected
-  line-marker dialog-channel-central)
+  line-marker dialog-channel-central dialog-sessions)
 
 die() {
   echo "ui-snapshot: $*" >&2
@@ -433,6 +433,23 @@ configure_case_expectations() {
           # A password session: the dialog asks for the account password.
           ordered_actions=(dialog:reset_e2ee)
           expect_dialog_title='Reset E2EE Identity'
+          ;;
+        dialog-sessions)
+          # Tools > Sessions..., and the core's answer: this session, an
+          # unverified phone, and a session the server has no time for.
+          ordered_actions=(
+            dialog:sessions
+            "append:$root_dir/tests/ui-state-updates/dialog-sessions.json"
+          )
+          expect_dialog_title='Sessions - @me:example'
+          ;;
+        dialog-sessions-not-verified)
+          # This session is not verified: the line under the list says so.
+          ordered_actions=(
+            dialog:sessions
+            "append:$root_dir/tests/ui-state-updates/dialog-sessions-not-verified.json"
+          )
+          expect_dialog_title='Sessions - @me:example'
           ;;
         dialog-sign-out-session)
           # /devices delete of a password session asks for the password.
