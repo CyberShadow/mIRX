@@ -11,12 +11,13 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mirx_testkit::{
-    ComposeKey, LaunchOptions, MdiView, MirxApp, TestkitError, UiState, ViewIdentity,
+    ComposeKey, LaunchOptions, MdiView, MirxApp, TestkitError, UiPoint, UiState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{HWND, WPARAM};
+use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     FindWindowW, GetDlgItem, IsWindow, IsWindowVisible, PostMessageW, SendMessageW, SetWindowTextW,
-    WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH,
+    WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
 };
 
 pub const POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -421,4 +422,25 @@ pub fn type_commands(app: &MirxApp, inputs: &[&str]) -> Result<(), Box<dyn std::
         assert_eq!(app.compose_text()?, "", "{input}");
     }
     Ok(())
+}
+
+pub fn mouse_lparam(point: &UiPoint) -> isize {
+    ((point.y as u16 as isize) << 16) | point.x as u16 as isize
+}
+
+/// Clicks, or double-clicks, `hwnd` at `point` in its client area with the
+/// left button, through the mouse messages the control itself handles.
+pub fn post_left_click(hwnd: HWND, point: &UiPoint, double: bool) {
+    let lparam = mouse_lparam(point);
+    let mut messages = vec![(WM_LBUTTONDOWN, MK_LBUTTON), (WM_LBUTTONUP, 0)];
+    if double {
+        messages.extend([(WM_LBUTTONDBLCLK, MK_LBUTTON), (WM_LBUTTONUP, 0)]);
+    }
+    for (message, buttons) in messages {
+        assert_ne!(
+            unsafe { PostMessageW(hwnd, message, buttons as WPARAM, lparam) },
+            0,
+            "posting a mouse message must succeed"
+        );
+    }
 }

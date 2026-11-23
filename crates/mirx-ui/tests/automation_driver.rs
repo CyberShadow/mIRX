@@ -17683,27 +17683,6 @@ fn room_list_control(app: &MirxApp) -> Result<HWND, Box<dyn std::error::Error>> 
     Ok(list)
 }
 
-fn mouse_lparam(point: &UiPoint) -> isize {
-    ((point.y as u16 as isize) << 16) | point.x as u16 as isize
-}
-
-/// Clicks, or double-clicks, `hwnd` at `point` in its client area with the
-/// left button, through the mouse messages the control itself handles.
-fn post_left_click(hwnd: HWND, point: &UiPoint, double: bool) {
-    let lparam = mouse_lparam(point);
-    let mut messages = vec![(WM_LBUTTONDOWN, MK_LBUTTON), (WM_LBUTTONUP, 0)];
-    if double {
-        messages.extend([(WM_LBUTTONDBLCLK, MK_LBUTTON), (WM_LBUTTONUP, 0)]);
-    }
-    for (message, buttons) in messages {
-        assert_ne!(
-            unsafe { PostMessageW(hwnd, message, buttons as WPARAM, lparam) },
-            0,
-            "posting a mouse message must succeed"
-        );
-    }
-}
-
 /// Like `post_left_click`, but sent: the click is handled before this
 /// returns, so a later automation request cannot overtake it
 /// (`.cydo/memory/posted-input-vs-sent-automation-race.md`). Only for
@@ -19214,7 +19193,8 @@ fn address_book_edits_the_notify_list() -> Result<(), Box<dyn std::error::Error>
 /// click on the tab shows it; `/abook -c` opens it. Adds are refused as
 /// `/ignore` refuses them, and OK sends one command per change, adds
 /// first. (The core here has no session and answers them with errors, so
-/// the status bar it then shows is pinned by the live lane.)
+/// what the status bar says after OK is pinned by `address_book_dialog`'s
+/// unit tests.)
 #[test]
 fn address_book_control_tab_sends_the_changes() -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =

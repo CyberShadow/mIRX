@@ -45,7 +45,7 @@ use mirx_testkit::{AutomationDialog, ComposeKey, ContextMenuCommand, MirxApp, Vi
 use support::*;
 use windows_sys::Win32::Foundation::{HWND, WPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetDlgItem, PostMessageW, SetWindowTextW, WM_COMMAND,
+    GetDlgItem, IDOK, PostMessageW, SetWindowTextW, WM_COMMAND,
 };
 
 /// Every live user's password.
@@ -56,6 +56,14 @@ const TIMEOUT: Duration = Duration::from_secs(90);
 /// The Recover E2EE dialog's secret field and its OK button.
 const RECOVER_E2EE_DIALOG_SECRET_ID: i32 = 5007;
 const RECOVER_E2EE_DIALOG_OK_ID: usize = 5008;
+/// The Address Book's tabs, its Control tab's list and buttons, and the
+/// Add Ignore dialog's nickname and OK.
+const ADDRESS_BOOK_TAB_ID: i32 = 7001;
+const ADDRESS_BOOK_CONTROL_LIST_ID: i32 = 7202;
+const ADDRESS_BOOK_CONTROL_ADD_ID: WPARAM = 7203;
+const ADDRESS_BOOK_CONTROL_DELETE_ID: WPARAM = 7204;
+const ADDRESS_ENTRY_NICKNAME_ID: i32 = 7301;
+const ADDRESS_ENTRY_OK_ID: usize = 7304;
 /// The recovery key handoff dialog's "I Saved It".
 const RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID: usize = 5018;
 
@@ -1001,14 +1009,68 @@ fn wait_for_ignored_users(app: &MirxApp, expected: &[String]) -> Result<(), Box<
     }
 }
 
-/// Two ignore-list changes typed in a row both stay: the second is sent
-/// before the server's echo of the first reaches mirx, so it must not edit
-/// the stored copy of the list.
+/// Waits until the server's copy of `peer`'s ignore list holds
+/// `expected`, as it settles after mirx's writes.
+fn wait_for_server_ignore_list(
+    app: &MirxApp,
+    peer: &Peer,
+    expected: &[String],
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + TIMEOUT;
+    let mut on_the_server = peer.ignored_users();
+    while on_the_server != expected {
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "the server's ignore list never became {expected:?}: {on_the_server:?}; \
+                 Status: {:?}",
+                status_texts(app)?
+            )
+            .into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+        on_the_server = peer.ignored_users();
+    }
+    Ok(())
+}
+
+/// The Address Book's Control tab, opened on the server's list: the first
+/// row selected and deleted.
+fn delete_first_ignore_row(app: &MirxApp, dialog: HWND) -> Result<(), Box<dyn Error>> {
+    let book = app
+        .dump_ui_state()?
+        .address_book
+        .ok_or("the Address Book")?;
+    let rows = book.control_rows.len();
+    let list = unsafe { GetDlgItem(dialog, ADDRESS_BOOK_CONTROL_LIST_ID) };
+    post_left_click(list, &book.control_row_click_points[0], false);
+    app.wait_for_ui_state("a selected row", TIMEOUT, |ui_state| {
+        ui_state
+            .address_book
+            .as_ref()
+            .is_some_and(|book| book.control_delete_enabled)
+    })?;
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, ADDRESS_BOOK_CONTROL_DELETE_ID, 0) },
+        0
+    );
+    app.wait_for_ui_state("a deleted row", TIMEOUT, |ui_state| {
+        ui_state
+            .address_book
+            .as_ref()
+            .is_some_and(|book| book.control_rows.len() == rows - 1)
+    })?;
+    Ok(())
+}
+
+/// Ignore-list changes in a row all stay: each is sent before the server's
+/// echo of the last reaches mirx, so none may edit the stored copy of the
+/// list. Two typed `/ignore`s, then the Address Book's three at once.
 #[test]
-fn ignoring_two_users_in_a_row_keeps_both() -> Result<(), Box<dyn Error>> {
+fn ignore_list_changes_in_a_row_all_stay() -> Result<(), Box<dyn Error>> {
     let homeserver = homeserver();
     let bob = homeserver.register("bob", "Bob");
     let carol = homeserver.register("carol", "Carol");
+    let dave = homeserver.register("dave", "Dave");
     let alice = homeserver.register("alice", "Alice");
     let local_app_data = unique_local_app_data_path();
     let app = launch_live_app(&local_app_data)?;
@@ -1024,18 +1086,46 @@ fn ignoring_two_users_in_a_row_keeps_both() -> Result<(), Box<dyn Error>> {
         ],
     )?;
     let both = vec![bob.user_id().to_string(), carol.user_id().to_string()];
-    let deadline = Instant::now() + TIMEOUT;
-    let mut on_the_server = alice.ignored_users();
-    while !on_the_server.contains(&carol.user_id().to_string()) {
-        assert!(
-            Instant::now() < deadline,
-            "the server never listed Carol: {on_the_server:?}"
-        );
-        std::thread::sleep(POLL_INTERVAL);
-        on_the_server = alice.ignored_users();
-    }
-    assert_eq!(on_the_server, both, "Status: {:?}", status_texts(&app)?);
+    wait_for_server_ignore_list(&app, &alice, &both)?;
     wait_for_ignored_users(&app, &both)?;
+
+    // Tools > Address Book, its Control tab: delete both, add Dave, OK.
+    app.open_dialog(AutomationDialog::AddressBook)?;
+    let dialog = wait_for_dialog(&app, "mirxWin32AddressBookDialog")?;
+    let book = app
+        .dump_ui_state()?
+        .address_book
+        .ok_or("the Address Book")?;
+    let tab_control = unsafe { GetDlgItem(dialog, ADDRESS_BOOK_TAB_ID) };
+    post_left_click(tab_control, &book.tab_click_points[1], false);
+    app.wait_for_ui_state("the Control tab", TIMEOUT, |ui_state| {
+        ui_state
+            .address_book
+            .as_ref()
+            .is_some_and(|book| book.tab == "Control" && book.control_rows.len() == 2)
+    })?;
+    delete_first_ignore_row(&app, dialog)?;
+    delete_first_ignore_row(&app, dialog)?;
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, ADDRESS_BOOK_CONTROL_ADD_ID, 0) },
+        0
+    );
+    let entry = wait_for_window(&wide_null("mirxWin32AddressEntryDialog"), "Add Ignore")?;
+    let nickname = wide_null(dave.user_id().as_str());
+    assert_ne!(
+        unsafe {
+            SetWindowTextW(
+                GetDlgItem(entry, ADDRESS_ENTRY_NICKNAME_ID),
+                nickname.as_ptr(),
+            )
+        },
+        0
+    );
+    press_dialog_button(&app, entry, ADDRESS_ENTRY_OK_ID, "Add Ignore")?;
+    press_dialog_button(&app, dialog, IDOK as usize, "Address Book")?;
+    let only_dave = vec![dave.user_id().to_string()];
+    wait_for_server_ignore_list(&app, &alice, &only_dave)?;
+    wait_for_ignored_users(&app, &only_dave)?;
 
     finish(app, &local_app_data)
 }

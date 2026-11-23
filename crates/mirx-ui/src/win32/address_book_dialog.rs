@@ -1060,3 +1060,60 @@ pub(super) const DIALOG_CLASSES: [(&str, WNDPROC); 2] = [
     (ADDRESS_BOOK_DIALOG_CLASS_NAME, Some(window_proc)),
     (ADDRESS_ENTRY_DIALOG_CLASS_NAME, Some(entry_window_proc)),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_fixtures::*;
+    use super::*;
+
+    fn form(ignore: Option<IgnoreEdit>) -> AddressBookForm {
+        AddressBookForm {
+            notify: NotifySetting::default(),
+            ignore,
+            people: People::new(Vec::new(), Some("@me:example".to_owned())),
+        }
+    }
+
+    #[test]
+    fn ok_sends_the_ignore_changes_adds_first() {
+        unsafe {
+            with_test_frame(800, 600, |hwnd| {
+                let (sender, commands) = inert_command_sender();
+                std::mem::forget(commands);
+                state_mut(hwnd).command_sender = Some(sender);
+                let mut edit = IgnoreEdit::new(vec!["@spam:remote".to_owned()]);
+                edit.remove(0);
+                edit.add("@bob:example".to_owned());
+                apply(hwnd, form(Some(edit))).unwrap();
+                let state = state_ref(hwnd);
+                assert_eq!(
+                    state.recorded_commands,
+                    [
+                        Command::IgnoreUser("@bob:example".to_owned()),
+                        Command::UnignoreUser("@spam:remote".to_owned()),
+                    ]
+                );
+                assert_eq!(
+                    state.model.status,
+                    "address book saved; ignore list sent to the server"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn ok_without_ignore_changes_sends_nothing() {
+        unsafe {
+            with_test_frame(800, 600, |hwnd| {
+                // Signed out: no list to edit.
+                apply(hwnd, form(None)).unwrap();
+                // Opened and left as it was.
+                let edit = IgnoreEdit::new(vec!["@spam:remote".to_owned()]);
+                apply(hwnd, form(Some(edit))).unwrap();
+                let state = state_ref(hwnd);
+                assert!(state.recorded_commands.is_empty());
+                assert_eq!(state.model.status, "address book saved");
+            });
+        }
+    }
+}
