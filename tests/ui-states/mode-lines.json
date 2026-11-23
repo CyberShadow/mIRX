@@ -1,0 +1,189 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!modes:example",
+        "display_name": "Modes",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!modes:example",
+      "activity_id": "state:$modes-power-1",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$modes-power-1",
+        "sender": {
+          "user_id": "@admin:example",
+          "nick": "Admin",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "power_levels",
+          "changes": [
+            {
+              "target": {
+                "user_id": "@voice:example",
+                "nick": "Voice",
+                "nick_ambiguous": false
+              },
+              "old": 0,
+              "new": 1
+            }
+          ],
+          "users_default": null,
+          "topic_by_operators": null,
+          "moderated": true,
+          "other_permissions_changed": false
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!modes:example",
+      "activity_id": "state:$modes-power-2",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$modes-power-2",
+        "sender": {
+          "user_id": "@admin:example",
+          "nick": "Admin",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "power_levels",
+          "changes": [],
+          "users_default": null,
+          "topic_by_operators": true,
+          "moderated": false,
+          "other_permissions_changed": false
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!modes:example",
+      "activity_id": "state:$modes-power-3",
+      "timestamp_ms": 1700000120000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$modes-power-3",
+        "sender": {
+          "user_id": "@admin:example",
+          "nick": "Admin",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "power_levels",
+          "changes": [],
+          "users_default": null,
+          "topic_by_operators": false,
+          "moderated": null,
+          "other_permissions_changed": true
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!modes:example",
+      "activity_id": "state:$modes-power-4",
+      "timestamp_ms": 1700000180000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$modes-power-4",
+        "sender": {
+          "user_id": "@admin:example",
+          "nick": "Admin",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "power_levels",
+          "changes": [
+            {
+              "target": {
+                "user_id": "@mod:example",
+                "nick": "Mod",
+                "nick_ambiguous": false
+              },
+              "old": 0,
+              "new": 50
+            }
+          ],
+          "users_default": null,
+          "topic_by_operators": null,
+          "moderated": null,
+          "other_permissions_changed": false
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!modes:example",
+      "members": [
+        {
+          "user_id": "@admin:example",
+          "nick": "Admin",
+          "nick_ambiguous": false,
+          "is_own_user": true,
+          "rank": "administrator",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@mod:example",
+          "nick": "Mod",
+          "nick_ambiguous": false,
+          "is_own_user": false,
+          "rank": "moderator",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@voice:example",
+          "nick": "Voice",
+          "nick_ambiguous": false,
+          "is_own_user": false,
+          "rank": "voiced",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@alan:example",
+          "nick": "Alan",
+          "nick_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        }
+      ]
+    }
+  }
+]

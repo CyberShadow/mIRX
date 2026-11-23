@@ -2694,6 +2694,35 @@ configure_case_expectations() {
         --expect-no-navigation-text 'ranks sort above names'
       )
       ;;
+    mode-lines)
+      # Power-level lines naming the room modes they change (+m, +t-m, -t
+      # with other permissions), beside a levels-only line.
+      expect_selected='!modes:example'
+      expect_active_view='room:!modes:example'
+      room_expect_args=(
+        --expect-room '!modes:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!modes:example::* Now talking in Modes (!modes:example)'
+        --expect-room-view '!modes:example::[22:13] * Admin sets mode: +m; power level: Voice 0 -> 1'
+        --expect-room-view '!modes:example::[22:14] * Admin sets mode: +t-m'
+        --expect-room-view '!modes:example::[22:15] * Admin sets mode: -t; room permissions changed'
+        --expect-room-view '!modes:example::[22:16] * Admin sets power level: Mod 0 -> 50'
+      )
+      room_member_expect_args=(
+        --expect-room-member '!modes:example::Admin'
+        --expect-room-member '!modes:example::Voice'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!modes:example::Modes'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!modes:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!modes:example'
+      ;;
     member-list-narrow)
       expect_selected='!members:example'
       expect_active_view='room:!members:example'
