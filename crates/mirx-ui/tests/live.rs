@@ -1524,6 +1524,13 @@ fn channel_central_changes_the_room_on_the_server() -> Result<(), Box<dyn Error>
     bob.join(&room_id);
     carol.join(&room_id);
     let room = room_identity(room_id.as_str());
+    // The room's creation prints its settings.
+    wait_for_view_line(&app, &room, "* Alice makes the room public")?;
+    wait_for_view_line(
+        &app,
+        &room,
+        &format!("* Alice changes room name to '{room_name}'"),
+    )?;
     wait_for_view_line(&app, &room, "Carol")?;
     app.select_view(room.clone())?;
     type_commands(&app, &["/ban Carol spam"])?;
