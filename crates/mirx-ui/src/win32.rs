@@ -38,10 +38,10 @@ use mirx_core::{
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
     SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest, SetRoomMemberPowerLevelRequest,
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    SignOutDeviceRequest, StoredSession, TextStyleSpan, UnbanRoomMemberRequest, UserDevices,
-    UserLinkSpan, UserProfile, VerificationDirection, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, login_method, login_server,
-    start,
+    SignOutDeviceRequest, StoredSession, TextStyleSpan, UnbanRoomMemberRequest,
+    UpdateRoomSettingsRequest, UserDevices, UserLinkSpan, UserProfile, VerificationDirection,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, login_method, login_server, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -166,21 +166,21 @@ use crate::{
         DumpSubmittedPowerLevelCommand, DumpSubmittedProfileCommand, DumpSubmittedReactionCommand,
         DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
         DumpSubmittedReplyThreadTarget, DumpSubmittedRoomKeyTransfer, DumpSubmittedRoomListRequest,
-        DumpSubmittedRoomTopicCommand, DumpSubmittedSessionCommand,
-        DumpSubmittedSetupRecoveryCommand, DumpSubmittedTypingCommand, DumpSubmittedUserCommand,
-        DumpSubmittedVerificationAction, DumpSubmittedVerificationRequest, DumpUserCommandAction,
-        DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
-        FindActiveViewResponse, GetVersionResponse, IdleProbe, LifecycleState, ListRoomsResponse,
-        LoadEventsResponse, MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState,
-        NavigationNode, NavigationNodeKey, NavigationPathSegment, ParsedCommand, PongResponse,
-        ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
-        SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind,
-        UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiPoint, UiRect,
-        UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState, UiTextFont, UiTimelineLine,
-        UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiToolbarButton, VerificationActionArgs,
-        ViewActivityLevel, ViewIdentity, WaitIdleResponse, dump_error_from_core,
-        dump_room_activity_from_activity, dump_room_from_summary,
+        DumpSubmittedRoomSettingsCommand, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedSessionCommand, DumpSubmittedSetupRecoveryCommand, DumpSubmittedTypingCommand,
+        DumpSubmittedUserCommand, DumpSubmittedVerificationAction,
+        DumpSubmittedVerificationRequest, DumpUserCommandAction, DumpVerificationActionKind,
+        DumpVerificationMenuState, FailureEnvelope, FindActiveViewResponse, GetVersionResponse,
+        IdleProbe, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiArrangement, MdiState,
+        MdiView, MdiWindowPlacement, MdiWindowState, NavigationNode, NavigationNodeKey,
+        NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView,
+        SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse,
+        StatusBarState, SwitchbarItem, SwitchbarState, UiActiveTimeline, UiComposeTarget,
+        UiComposeTargetKind, UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu,
+        UiMenuItem, UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState,
+        UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
+        UiToolbarButton, VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleResponse,
+        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
         dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
         dump_verification_from_state_event, failure_response, parse_command_request,
         success_response,
@@ -198,6 +198,8 @@ mod app_resources;
 mod attachments;
 mod automation_dump;
 mod automation_host;
+mod channel_central;
+mod channel_central_dialog;
 mod clipboard;
 mod cmap;
 mod color_drop_down;
@@ -227,6 +229,7 @@ mod ignore;
 mod images;
 mod line_edits;
 mod line_marker;
+mod list_view;
 mod logging;
 mod mdi;
 mod menus;
@@ -306,9 +309,9 @@ use command_runner::clear_window;
 #[cfg(test)]
 use command_runner::run_slash_command;
 use command_runner::{
-    devices_lines, echo_in_active_view, echo_lines_in_active_view, echo_lines_in_view, echo_view,
-    enqueue_command, known_nick, open_room_link, own_server, push_lines_in_view,
-    report_command_error, report_error_line, resolve_invite_command_room_id,
+    channel_central_room, devices_lines, echo_in_active_view, echo_lines_in_active_view,
+    echo_lines_in_view, echo_view, enqueue_command, known_nick, open_room_link, own_server,
+    push_lines_in_view, report_command_error, report_error_line, resolve_invite_command_room_id,
     resolve_joined_room_target, run_local_command, send_edit, send_reply, set_local_command_status,
     submit_accept_slash_command, submit_join_room, submit_part_slash_command,
     submit_query_slash_command, submit_redact_slash_command, submit_reject_slash_command,
@@ -378,8 +381,9 @@ use frame_menus::active_message_action_state;
 use frame_menus::{
     active_message_action_state_for_automation, active_room_action_state, append_menu_text,
     connect, context_menu_command_id, context_menu_screen_point_for_lparam, create_frame_menu,
-    default_context_point_for_window, disconnect, frame_menu_item_enabled, handle_menu_command,
-    handle_switchbar_command, handle_window_key_command, invoke_menu_command_for_automation,
+    default_context_point_for_window, disconnect, double_click_opens_channel_central,
+    frame_menu_item_enabled, handle_menu_command, handle_switchbar_command,
+    handle_window_key_command, invoke_menu_command_for_automation,
     invoke_navigation_context_menu_for_automation, invoke_timeline_context_menu_for_automation,
     log_out, log_out_warning, open_dialog_for_automation, refresh_menu_popup,
     refresh_message_menu_state, refresh_room_menu_state, refresh_tools_menu_state,
@@ -415,16 +419,17 @@ use menus::{
     MENU_ID_MEMBER_UNIGNORE, MENU_ID_MEMBER_VERIFY, MENU_ID_MEMBER_VOICE, MENU_ID_MEMBER_WHOIS,
     MENU_ID_MESSAGE_EDIT, MENU_ID_MESSAGE_GO_TO_ORIGINAL, MENU_ID_MESSAGE_REACT,
     MENU_ID_MESSAGE_REDACT, MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_SAVE_ATTACHMENT,
-    MENU_ID_RECOVER_E2EE, MENU_ID_RESET_E2EE, MENU_ID_ROOM_ACCEPT_INVITE, MENU_ID_ROOM_NOTIFY_ALL,
-    MENU_ID_ROOM_NOTIFY_MENTIONS, MENU_ID_ROOM_NOTIFY_MUTE, MENU_ID_ROOM_PART,
-    MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_TOOLS_ADDRESS_BOOK,
-    MENU_ID_TOOLS_ALIASES, MENU_ID_TOOLS_COLORS, MENU_ID_TOOLS_OPTIONS, MENU_ID_TOOLS_SESSIONS,
-    MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL, MENU_ID_VERIFY_CONFIRM_SAS,
-    MENU_ID_VERIFY_REJECT_SAS, MENU_ID_VERIFY_THIS_SESSION, MENU_ID_VIEW_SWITCHBAR,
-    MENU_ID_VIEW_TOOLBAR, MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS,
-    MENU_ID_WINDOW_CASCADE, MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL,
-    MenuEntry, ROOM_NOTIFICATIONS_MENU, TOOLBAR_ID_SEND_FILE, TOOLS_MENU, VIEW_MENU, WINDOW_MENU,
-    WindowKey, commands_menu_item, commands_menu_line, commands_menu_title, file_menu_state,
+    MENU_ID_RECOVER_E2EE, MENU_ID_RESET_E2EE, MENU_ID_ROOM_ACCEPT_INVITE,
+    MENU_ID_ROOM_CHANNEL_CENTRAL, MENU_ID_ROOM_NOTIFY_ALL, MENU_ID_ROOM_NOTIFY_MENTIONS,
+    MENU_ID_ROOM_NOTIFY_MUTE, MENU_ID_ROOM_PART, MENU_ID_ROOM_REJECT_INVITE,
+    MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_TOOLS_ADDRESS_BOOK, MENU_ID_TOOLS_ALIASES,
+    MENU_ID_TOOLS_COLORS, MENU_ID_TOOLS_OPTIONS, MENU_ID_TOOLS_SESSIONS, MENU_ID_VERIFY_ACCEPT,
+    MENU_ID_VERIFY_CANCEL, MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS,
+    MENU_ID_VERIFY_THIS_SESSION, MENU_ID_VIEW_SWITCHBAR, MENU_ID_VIEW_TOOLBAR,
+    MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE,
+    MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry,
+    ROOM_NOTIFICATIONS_MENU, TOOLBAR_ID_SEND_FILE, TOOLS_MENU, VIEW_MENU, WINDOW_MENU, WindowKey,
+    commands_menu_item, commands_menu_line, commands_menu_title, file_menu_state,
     member_menu_command, member_menu_item_enabled, member_menu_item_ids, notification_menu_id,
     notification_menu_mode, notification_mode_label, verification_menu_action_enabled,
     view_menu_bar, view_menu_checks, window_key,
@@ -828,6 +833,9 @@ struct WindowState {
     colors_dialog: Option<HWND>,
     /// The Address Book while it is open, for the automation dump.
     address_book_dialog: Option<HWND>,
+    /// Channel Central while it is open: the core's answer to its read
+    /// goes to it, and the automation dump reads it.
+    channel_central_dialog: Option<HWND>,
     tray: TrayState,
     /// The retry bookkeeping; `reconnect` and the sync events move it.
     reconnect: connection::Reconnect,
@@ -1087,6 +1095,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         options_dialog: None,
         colors_dialog: None,
         address_book_dialog: None,
+        channel_central_dialog: None,
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
         notify_watch: notify::NotifyWatch::default(),

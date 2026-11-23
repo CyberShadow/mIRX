@@ -85,6 +85,9 @@ pub(super) const TOOLBAR_ID_SEND_FILE: usize = 40059;
 pub(super) const MENU_ID_TOOLS_ALIASES: usize = 40060;
 /// Address Book..., which Alt+B sends, as in mIRC.
 pub(super) const MENU_ID_TOOLS_ADDRESS_BOOK: usize = 40061;
+/// Room > Channel Central..., which `/channel` and a double-click in a
+/// channel window open too, as in mIRC.
+pub(super) const MENU_ID_ROOM_CHANNEL_CENTRAL: usize = 40062;
 /// The window keys' command ids: accelerators with no menu item, in the
 /// gap below the Commands menu's. Alt+n sends `ACCEL_ID_WINDOW_FIRST + n - 1`.
 pub(super) const ACCEL_ID_WINDOW_FIRST: usize = 40080;

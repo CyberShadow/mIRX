@@ -238,7 +238,7 @@ pub(super) struct SingleFieldDialogState {
 }
 
 /// Every mirx dialog's class and window procedure.
-const DIALOG_CLASSES: [(&str, WNDPROC); 16] = [
+const DIALOG_CLASSES: [(&str, WNDPROC); 17] = [
     (LOGIN_DIALOG_CLASS_NAME, Some(login_dialog_window_proc)),
     (
         RECOVER_E2EE_DIALOG_CLASS_NAME,
@@ -279,6 +279,7 @@ const DIALOG_CLASSES: [(&str, WNDPROC); 16] = [
     address_book_dialog::DIALOG_CLASSES[0],
     address_book_dialog::DIALOG_CLASSES[1],
     address_book_dialog::DIALOG_CLASSES[2],
+    channel_central_dialog::DIALOG_CLASS,
 ];
 
 /// Registers every dialog class on the button face, the colour labels and

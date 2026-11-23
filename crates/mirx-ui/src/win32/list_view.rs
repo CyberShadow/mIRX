@@ -1,0 +1,77 @@
+//! Report-style ListView helpers the dialogs share.
+
+use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
+use windows_sys::Win32::UI::Controls::{
+    LVIF_TEXT, LVIR_LABEL, LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT, LVM_GETITEMRECT,
+    LVM_GETITEMTEXTW, LVM_GETNEXTITEM, LVM_INSERTITEMW, LVM_SETITEMTEXTW, LVNI_SELECTED,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW;
+
+use super::room_list_window::{rect_center, wide_buffer_text};
+use super::wide_null;
+use crate::automation::UiPoint;
+
+pub(super) const LIST_VIEW_CLASS_NAME: &str = "SysListView32";
+
+/// Fills a list's rows; nothing is selected afterwards, so the buttons
+/// that act on a selected row are greyed until something is.
+pub(super) unsafe fn fill_list(list: HWND, rows: &[Vec<String>]) {
+    SendMessageW(list, LVM_DELETEALLITEMS, 0, 0);
+    for (row, cells) in rows.iter().enumerate() {
+        for (column, cell) in cells.iter().enumerate() {
+            let mut text = wide_null(cell);
+            let item = LVITEMW {
+                mask: LVIF_TEXT,
+                iItem: row as i32,
+                iSubItem: column as i32,
+                pszText: text.as_mut_ptr(),
+                ..LVITEMW::default()
+            };
+            let message = if column == 0 {
+                LVM_INSERTITEMW
+            } else {
+                LVM_SETITEMTEXTW
+            };
+            SendMessageW(list, message, row, &item as *const LVITEMW as LPARAM);
+        }
+    }
+}
+
+pub(super) unsafe fn selected_row(list: HWND) -> Option<usize> {
+    let row = SendMessageW(list, LVM_GETNEXTITEM, usize::MAX, LVNI_SELECTED as LPARAM);
+    usize::try_from(row).ok()
+}
+
+/// A list's rows, `columns` cells each, and where a click selects each, in
+/// the list's client coordinates.
+pub(super) unsafe fn dump_list(list: HWND, columns: usize) -> (Vec<Vec<String>>, Vec<UiPoint>) {
+    let mut buffer = [0u16; 512];
+    let rows = usize::try_from(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0))
+        .expect("LVM_GETITEMCOUNT succeeds");
+    (0..rows)
+        .map(|row| {
+            let cells = (0..columns)
+                .map(|column| {
+                    let mut item = LVITEMW {
+                        iSubItem: column as i32,
+                        pszText: buffer.as_mut_ptr(),
+                        cchTextMax: buffer.len() as i32,
+                        ..LVITEMW::default()
+                    };
+                    SendMessageW(list, LVM_GETITEMTEXTW, row, &mut item as *mut _ as LPARAM);
+                    wide_buffer_text(&buffer)
+                })
+                .collect();
+            let mut rect = RECT {
+                left: LVIR_LABEL as i32,
+                ..RECT::default()
+            };
+            assert_ne!(
+                SendMessageW(list, LVM_GETITEMRECT, row, &mut rect as *mut _ as LPARAM),
+                0,
+                "LVM_GETITEMRECT must place row {row}"
+            );
+            (cells, rect_center(&rect))
+        })
+        .unzip()
+}

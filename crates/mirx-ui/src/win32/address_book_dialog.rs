@@ -25,13 +25,11 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDDS_SUBITEM, CDRF_NEWFONT,
     CDRF_NOTIFYITEMDRAW, CDRF_NOTIFYSUBITEMDRAW, DRAWITEMSTRUCT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW,
-    LVIF_STATE, LVIF_TEXT, LVIR_LABEL, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVM_DELETEALLITEMS,
-    LVM_ENSUREVISIBLE, LVM_GETITEMCOUNT, LVM_GETITEMRECT, LVM_GETITEMTEXTW, LVM_GETNEXTITEM,
-    LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE,
-    LVM_SETITEMTEXTW, LVN_ITEMCHANGED, LVNI_SELECTED, LVS_EX_FULLROWSELECT, LVS_NOCOLUMNHEADER,
-    LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, MEASUREITEMSTRUCT, NM_CUSTOMDRAW, NM_DBLCLK,
-    NM_RETURN, NMHDR, NMLVCUSTOMDRAW, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT, TCM_GETCURSEL,
-    TCM_GETITEMRECT, TCM_INSERTITEMW, TCM_SETCURSEL, TCN_SELCHANGE,
+    LVIF_STATE, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVM_ENSUREVISIBLE, LVM_INSERTCOLUMNW,
+    LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVN_ITEMCHANGED, LVS_EX_FULLROWSELECT,
+    LVS_NOCOLUMNHEADER, LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, MEASUREITEMSTRUCT,
+    NM_CUSTOMDRAW, NM_DBLCLK, NM_RETURN, NMHDR, NMLVCUSTOMDRAW, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT,
+    TCM_GETCURSEL, TCM_GETITEMRECT, TCM_INSERTITEMW, TCM_SETCURSEL, TCN_SELCHANGE,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled, SetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -58,23 +56,23 @@ use super::dialogs::{
 };
 use super::dpi::Dpi;
 use super::ignore::user_label;
+use super::list_view::{LIST_VIEW_CLASS_NAME, dump_list, fill_list, selected_row};
 use super::nick_colors::{NickColor, NickColorEntry, NickColorSetting};
 use super::notify::NotifySetting;
-use super::room_list_window::{rect_center, wide_buffer_text};
+use super::room_list_window::rect_center;
 use super::window_data::{self, WindowData};
 use super::{
     BUTTON_CLASS_NAME, STATIC_CLASS_NAME, announce_notify_changes, create_child_window, echo_view,
     enqueue_command, read_window_text, refresh_view_content, run_modal_dialog,
     set_local_command_status, show_nick_colors, state_mut, state_ref, wide_null,
 };
-use crate::automation::{UiAddressBook, UiPoint};
+use crate::automation::UiAddressBook;
 
 pub(super) const ADDRESS_BOOK_DIALOG_CLASS_NAME: &str = "mirxWin32AddressBookDialog";
 pub(super) const ADDRESS_ENTRY_DIALOG_CLASS_NAME: &str = "mirxWin32AddressEntryDialog";
 pub(super) const ADDRESS_COLOR_ENTRY_DIALOG_CLASS_NAME: &str = "mirxWin32AddressColorEntryDialog";
 const ADDRESS_BOOK_TITLE: &str = "Address Book";
 const TAB_CONTROL_CLASS_NAME: &str = "SysTabControl32";
-const LIST_VIEW_CLASS_NAME: &str = "SysListView32";
 
 pub(super) const ADDRESS_BOOK_TAB_ID: u16 = 7001;
 pub(super) const ADDRESS_BOOK_NOTIFY_LIST_ID: u16 = 7101;
@@ -670,30 +668,6 @@ unsafe fn selected_tab(state: &DialogState) -> AddressBookTab {
     AddressBookTab::ALL[usize::try_from(index).expect("a tab is always selected")]
 }
 
-/// Fills a list's rows; nothing is selected afterwards, so its Edit and
-/// Delete are greyed until something is.
-unsafe fn fill_list(list: HWND, rows: &[Vec<String>]) {
-    SendMessageW(list, LVM_DELETEALLITEMS, 0, 0);
-    for (row, cells) in rows.iter().enumerate() {
-        for (column, cell) in cells.iter().enumerate() {
-            let mut text = wide_null(cell);
-            let item = LVITEMW {
-                mask: LVIF_TEXT,
-                iItem: row as i32,
-                iSubItem: column as i32,
-                pszText: text.as_mut_ptr(),
-                ..LVITEMW::default()
-            };
-            let message = if column == 0 {
-                LVM_INSERTITEMW
-            } else {
-                LVM_SETITEMTEXTW
-            };
-            SendMessageW(list, message, row, &item as *const LVITEMW as LPARAM);
-        }
-    }
-}
-
 unsafe fn refill_notify_list(state: &DialogState) {
     let rows = state
         .form
@@ -743,11 +717,6 @@ unsafe fn select_row(list: HWND, row: usize) {
         &item as *const LVITEMW as LPARAM,
     );
     SendMessageW(list, LVM_ENSUREVISIBLE, row, 0);
-}
-
-unsafe fn selected_row(list: HWND) -> Option<usize> {
-    let row = SendMessageW(list, LVM_GETNEXTITEM, usize::MAX, LVNI_SELECTED as LPARAM);
-    usize::try_from(row).ok()
 }
 
 /// Edit and Delete act on the selected row: greyed without one.
@@ -1120,40 +1089,6 @@ pub(super) unsafe fn dump(dialog: HWND) -> UiAddressBook {
         color_up_enabled: enabled(state.colors.up),
         color_down_enabled: enabled(state.colors.down),
     }
-}
-
-/// A list's rows, `columns` cells each, and where a click selects each, in
-/// the list's client coordinates.
-unsafe fn dump_list(list: HWND, columns: usize) -> (Vec<Vec<String>>, Vec<UiPoint>) {
-    let mut buffer = [0u16; 512];
-    let rows = usize::try_from(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0))
-        .expect("LVM_GETITEMCOUNT succeeds");
-    (0..rows)
-        .map(|row| {
-            let cells = (0..columns)
-                .map(|column| {
-                    let mut item = LVITEMW {
-                        iSubItem: column as i32,
-                        pszText: buffer.as_mut_ptr(),
-                        cchTextMax: buffer.len() as i32,
-                        ..LVITEMW::default()
-                    };
-                    SendMessageW(list, LVM_GETITEMTEXTW, row, &mut item as *mut _ as LPARAM);
-                    wide_buffer_text(&buffer)
-                })
-                .collect();
-            let mut rect = RECT {
-                left: LVIR_LABEL as i32,
-                ..RECT::default()
-            };
-            assert_ne!(
-                SendMessageW(list, LVM_GETITEMRECT, row, &mut rect as *mut _ as LPARAM),
-                0,
-                "LVM_GETITEMRECT must place row {row}"
-            );
-            (cells, rect_center(&rect))
-        })
-        .unzip()
 }
 
 /// What an entry dialog shows.

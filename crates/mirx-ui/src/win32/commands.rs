@@ -149,6 +149,10 @@ pub(super) enum SlashCommand {
     Notify(NotifyCommand),
     /// `/cnick`: mIRC's nick colour list.
     NickColor(NickColorCommand),
+    /// `/channel [room]`: Channel Central for this room or the named one.
+    Channel {
+        target: Option<String>,
+    },
     /// `/abook [-n|-c|-l]`: the Address Book at its Notify, Control or
     /// Colors tab.
     AddressBook {
@@ -411,6 +415,7 @@ impl SlashCommand {
                 }
             },
             Self::Names { .. } => "names",
+            Self::Channel { .. } => "channel",
             Self::Whois { .. } => "whois",
             Self::Away { .. } => "away",
             Self::Devices { .. } | Self::DevicesDelete { .. } | Self::DevicesRename { .. } => {
@@ -537,6 +542,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "ban",
         usage: "<nick> [reason]",
         summary: "ban a member from this room",
+    },
+    CommandSpec {
+        name: "channel",
+        usage: "[#room]",
+        summary: "Channel Central: this room's name, topic, bans and modes, or the named room's",
     },
     CommandSpec {
         name: "clear",
@@ -961,6 +971,9 @@ fn parse_named(name: &str, argument: &str) -> Result<SlashCommand, CommandError>
             })
         }
         "names" => Ok(SlashCommand::Names {
+            target: optional(argument),
+        }),
+        "channel" => Ok(SlashCommand::Channel {
             target: optional(argument),
         }),
         "whois" => Ok(SlashCommand::Whois {
@@ -2784,6 +2797,7 @@ mod tests {
             "/msg x t",
             "/notice x t",
             "/names",
+            "/channel",
             "/whois x",
             "/away x",
             "/back",
@@ -2946,7 +2960,7 @@ mod tests {
         let lines = help_lines(None).unwrap();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with(
-            "* Commands: /accept /alias /ame /amsg /away /back /ban /clear /clearall /close /cnick /create /deop /describe /devices /devoice /e2ee"
+            "* Commands: /accept /alias /ame /amsg /away /back /ban /channel /clear /clearall /close /cnick /create /deop /describe /devices /devoice /e2ee"
         ));
         assert!(lines[0].contains(" /help /identity /ignore "));
         assert!(lines[0].contains(" /reply /savebuf /say /sendfile "));
@@ -3029,6 +3043,23 @@ mod tests {
             })
         );
         assert_eq!(parse("/names"), Ok(SlashCommand::Names { target: None }));
+        assert_eq!(
+            parse("/channel"),
+            Ok(SlashCommand::Channel { target: None })
+        );
+        assert_eq!(
+            parse("/channel #ops"),
+            Ok(SlashCommand::Channel {
+                target: Some("#ops".to_owned()),
+            })
+        );
+        assert_eq!(
+            help_lines(Some("channel")),
+            Ok(vec![
+                "* /channel [#room] - Channel Central: this room's name, topic, bans and modes, or the named room's"
+                    .to_owned()
+            ])
+        );
         assert_eq!(
             parse("/names Ops"),
             Ok(SlashCommand::Names {

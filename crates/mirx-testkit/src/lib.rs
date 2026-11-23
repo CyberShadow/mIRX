@@ -408,6 +408,9 @@ pub struct Model {
     pub submitted_member_moderation_commands: Vec<SubmittedMemberModerationCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_power_level_commands: Vec<SubmittedPowerLevelCommand>,
+    /// Channel Central's reads and changes, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_room_settings_commands: Vec<SubmittedRoomSettingsCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_profile_commands: Vec<SubmittedProfileCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -495,6 +498,25 @@ pub enum MemberModerationAction {
     Ban,
     Unban,
     Invite,
+}
+
+/// `FetchRoomSettings` and `UpdateRoomSettings`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SubmittedRoomSettingsCommand {
+    Fetch {
+        room_id: String,
+    },
+    Update {
+        room_id: String,
+        topic_by_operators: Option<bool>,
+        moderated: Option<bool>,
+        invite_only: Option<bool>,
+        name: Option<String>,
+        topic: Option<String>,
+        listed_in_directory: Option<bool>,
+        unban: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1451,6 +1473,8 @@ pub struct UiState {
     pub colors_dialog: Option<UiColorsDialog>,
     /// The Address Book while it is open, read back from its controls.
     pub address_book: Option<UiAddressBook>,
+    /// Channel Central while it is open, read back from its controls.
+    pub channel_central: Option<UiChannelCentral>,
     /// The colour index while it shows.
     pub color_index: Option<UiColorIndex>,
     /// The tray icon and the frame's place behind it.
@@ -2331,6 +2355,47 @@ pub struct MdiWindowPlacement {
     pub height: i32,
 }
 
+/// Channel Central: its caption, fields, bans list and modes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiChannelCentral {
+    pub caption: String,
+    pub room_id: String,
+    /// The line over OK: reading, an error, or why controls are greyed.
+    pub status: String,
+    pub name: String,
+    pub name_enabled: bool,
+    /// Topic History's text, and its items.
+    pub topic: String,
+    pub topic_items: Vec<String>,
+    pub topic_enabled: bool,
+    /// The Bans List's rows: User, Set by, Date and Reason.
+    pub ban_rows: Vec<Vec<String>>,
+    /// In the Bans List's client coordinates.
+    pub ban_row_click_points: Vec<UiPoint>,
+    pub remove_enabled: bool,
+    pub topic_by_operators: UiCheckBox,
+    pub invite_only: UiCheckBox,
+    pub moderated: UiCheckBox,
+    pub private: UiCheckBox,
+    pub ok_enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiCheckBox {
+    pub state: UiCheckState,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiCheckState {
+    Checked,
+    Unchecked,
+    Indeterminate,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MdiWindowState {
@@ -2352,6 +2417,8 @@ pub enum AutomationDialog {
     Aliases,
     /// Tools > Address Book...
     AddressBook,
+    /// Room > Channel Central..., for the active window's room.
+    ChannelCentral,
     /// File > Select Server...
     SelectServer,
     /// Help > About mirx

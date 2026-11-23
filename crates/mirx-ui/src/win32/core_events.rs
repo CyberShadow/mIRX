@@ -931,6 +931,9 @@ pub(super) unsafe fn apply_events_and_refresh(
         if let Event::E2eeRecoverySetupSucceeded(result) = &event {
             show_e2ee_recovery_key(hwnd, &result.recovery_key)?;
         }
+        if let Some(dialog) = state_ref(hwnd).channel_central_dialog {
+            channel_central_dialog::take_core_answer(dialog, &event);
+        }
         let state = state_mut(hwnd);
         if history_backfill_anchor.is_none()
             && let Event::RoomHistoryBackfill(backfill) = &event

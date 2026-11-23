@@ -375,6 +375,12 @@ pub(super) unsafe fn run_slash_command(
             echo_in_active_view(hwnd, [line])?;
             Ok(Some("nick colors saved".to_owned()))
         }
+        SlashCommand::Channel { target } => {
+            let room_id = channel_central_room(state_ref(hwnd), target.as_deref())?;
+            // Modal: it says what it sent itself.
+            channel_central_dialog::run_channel_central_dialog(hwnd, room_id)?;
+            Ok(None)
+        }
         SlashCommand::AddressBook { tab } => {
             // Modal: it says what it saved itself.
             address_book_dialog::run_address_book_dialog(hwnd, tab)?;
@@ -1176,6 +1182,22 @@ pub(super) fn resolve_joined_room_target(
         Err(RoomTargetError::Unknown) => Err(format!("unknown room: {target}")),
         Err(RoomTargetError::Ambiguous) => Err(format!("ambiguous room: {target}")),
     }
+}
+
+/// The room Channel Central opens for: `target`, else the active window's
+/// room. It reads the server, so it needs the session; a query is no
+/// channel.
+pub(super) fn channel_central_room(
+    state: &WindowState,
+    target: Option<&str>,
+) -> Result<String, String> {
+    own_user_id(&state.model)?;
+    let room_id = resolve_joined_room_target(state, target)?;
+    let room = room_by_id(&state.model.rooms, &room_id).expect("a joined room target must exist");
+    if room.is_direct {
+        return Err(format!("{} is a query, not a channel", room.display_name));
+    }
+    Ok(room_id)
 }
 
 pub(super) fn resolve_invite_command_room_id(
@@ -2508,7 +2530,7 @@ mod tests {
                 type_compose_line(hwnd, "/help nope");
                 let lines = render_room_lines(state_ref(hwnd), "!room:example");
                 let echo = &lines[lines.len() - 4..];
-                assert!(echo[0].starts_with("[22:12] * Commands: /accept /alias /ame /amsg /away /back /ban /clear /clearall /close /cnick "));
+                assert!(echo[0].starts_with("[22:12] * Commands: /accept /alias /ame /amsg /away /back /ban /channel /clear /clearall /close /cnick "));
                 assert_eq!(echo[1], "[22:12] * /help <command> for usage");
                 assert_eq!(echo[2], "[22:12] * /clear - clear this window");
                 assert_eq!(echo[3], "[22:12] * /help: no such command: nope");

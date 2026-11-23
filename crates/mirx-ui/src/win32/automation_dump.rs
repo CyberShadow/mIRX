@@ -635,6 +635,9 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         address_book: state
             .address_book_dialog
             .map(|dialog| address_book_dialog::dump(dialog)),
+        channel_central: state
+            .channel_central_dialog
+            .map(|dialog| channel_central_dialog::dump(dialog)),
         color_index: color_index::dump(hwnd),
         tray: dump_tray(hwnd),
         ignored_users: state.model.ignored_users.clone(),
@@ -816,6 +819,43 @@ fn submitted_power_level_commands_from_state(
                     })
                     .collect(),
             }),
+            _ => None,
+        })
+        .collect()
+}
+
+fn submitted_room_settings_commands_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedRoomSettingsCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(|command| match command {
+            Command::FetchRoomSettings(room_id) => Some(DumpSubmittedRoomSettingsCommand::Fetch {
+                room_id: room_id.clone(),
+            }),
+            Command::UpdateRoomSettings(request) => {
+                let UpdateRoomSettingsRequest {
+                    room_id,
+                    topic_by_operators,
+                    moderated,
+                    invite_only,
+                    name,
+                    topic,
+                    listed_in_directory,
+                    unban,
+                } = request.clone();
+                Some(DumpSubmittedRoomSettingsCommand::Update {
+                    room_id,
+                    topic_by_operators,
+                    moderated,
+                    invite_only,
+                    name,
+                    topic,
+                    listed_in_directory,
+                    unban,
+                })
+            }
             _ => None,
         })
         .collect()
@@ -1310,6 +1350,7 @@ pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
             state,
         ),
         submitted_power_level_commands: submitted_power_level_commands_from_state(state),
+        submitted_room_settings_commands: submitted_room_settings_commands_from_state(state),
         submitted_profile_commands: submitted_profile_commands_from_state(state),
         submitted_away_commands: submitted_away_commands_from_state(state),
         submitted_typing_commands: submitted_typing_commands_from_state(state),

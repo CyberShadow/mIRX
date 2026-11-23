@@ -184,8 +184,9 @@ unsafe extern "system" fn timeline_window_proc(
             1
         }
         // The second click of a double-click: it selects as a click does,
-        // and follows a link, or on a quote line goes to the quoted message.
-        // It marks nothing.
+        // and follows a link, or on a quote line goes to the quoted message,
+        // or elsewhere in a channel window opens Channel Central. It marks
+        // nothing.
         WM_LBUTTONDBLCLK => {
             select_timeline_row(hwnd, lparam);
             let frame = frame_window_for(hwnd);
@@ -199,8 +200,14 @@ unsafe extern "system" fn timeline_window_proc(
             let on_quote = timeline_source_row_index_at_client_y(hwnd, y).is_some_and(|index| {
                 timeline_state_ref(hwnd).source_rows[index].kind == TimelineRowKind::ReplyQuote
             });
-            if on_quote && let Err(message) = go_to_original_of_selected_message(frame) {
-                show_error_message(frame, "Message", &message);
+            if on_quote {
+                if let Err(message) = go_to_original_of_selected_message(frame) {
+                    show_error_message(frame, "Message", &message);
+                }
+            } else if double_click_opens_channel_central(state_ref(frame)) {
+                // Posted: the dialog's modal loop runs after the click's
+                // handling, as from the Room menu.
+                PostMessageW(frame, WM_COMMAND, MENU_ID_ROOM_CHANNEL_CENTRAL, 0);
             }
             0
         }

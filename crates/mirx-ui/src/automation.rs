@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 85;
+pub(crate) const PROTOCOL_VERSION: u32 = 86;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -699,6 +699,8 @@ pub(crate) enum AutomationDialog {
     Aliases,
     /// Tools > Address Book...
     AddressBook,
+    /// Room > Channel Central..., for the active window's room.
+    ChannelCentral,
     /// File > Select Server...
     SelectServer,
     /// Help > About mirx
@@ -1128,6 +1130,8 @@ pub(crate) struct UiState {
     pub(crate) colors_dialog: Option<UiColorsDialog>,
     /// The Address Book while it is open, read back from its controls.
     pub(crate) address_book: Option<UiAddressBook>,
+    /// Channel Central while it is open, read back from its controls.
+    pub(crate) channel_central: Option<UiChannelCentral>,
     /// The colour index while it shows.
     pub(crate) color_index: Option<UiColorIndex>,
     /// The tray icon and the frame's place behind it.
@@ -1529,6 +1533,47 @@ pub(crate) struct UiAddressBook {
     pub(crate) color_delete_enabled: bool,
     pub(crate) color_up_enabled: bool,
     pub(crate) color_down_enabled: bool,
+}
+
+/// Channel Central: its caption, fields, bans list and modes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiChannelCentral {
+    pub(crate) caption: String,
+    pub(crate) room_id: String,
+    /// The line over OK: reading, an error, or why controls are greyed.
+    pub(crate) status: String,
+    pub(crate) name: String,
+    pub(crate) name_enabled: bool,
+    /// Topic History's text, and its items.
+    pub(crate) topic: String,
+    pub(crate) topic_items: Vec<String>,
+    pub(crate) topic_enabled: bool,
+    /// The Bans List's rows: User, Set by, Date and Reason.
+    pub(crate) ban_rows: Vec<Vec<String>>,
+    /// In the Bans List's client coordinates.
+    pub(crate) ban_row_click_points: Vec<UiPoint>,
+    pub(crate) remove_enabled: bool,
+    pub(crate) topic_by_operators: UiCheckBox,
+    pub(crate) invite_only: UiCheckBox,
+    pub(crate) moderated: UiCheckBox,
+    pub(crate) private: UiCheckBox,
+    pub(crate) ok_enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiCheckBox {
+    pub(crate) state: UiCheckState,
+    pub(crate) enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum UiCheckState {
+    Checked,
+    Unchecked,
+    Indeterminate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1972,6 +2017,9 @@ pub(crate) struct DumpModel {
     pub(crate) submitted_member_moderation_commands: Vec<DumpSubmittedMemberModerationCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_power_level_commands: Vec<DumpSubmittedPowerLevelCommand>,
+    /// Channel Central's reads and changes, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_room_settings_commands: Vec<DumpSubmittedRoomSettingsCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_profile_commands: Vec<DumpSubmittedProfileCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2067,6 +2115,25 @@ pub(crate) struct DumpSubmittedPowerLevelCommand {
     pub(crate) room_id: String,
     /// Made together, in one write.
     pub(crate) changes: Vec<DumpPowerLevelChange>,
+}
+
+/// `FetchRoomSettings` and `UpdateRoomSettings`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum DumpSubmittedRoomSettingsCommand {
+    Fetch {
+        room_id: String,
+    },
+    Update {
+        room_id: String,
+        topic_by_operators: Option<bool>,
+        moderated: Option<bool>,
+        invite_only: Option<bool>,
+        name: Option<String>,
+        topic: Option<String>,
+        listed_in_directory: Option<bool>,
+        unban: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3641,21 +3708,22 @@ mod tests {
         DumpSubmittedHistoryCommand, DumpSubmittedMemberModerationCommand,
         DumpSubmittedPowerLevelCommand, DumpSubmittedProfileCommand, DumpSubmittedReactionCommand,
         DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
-        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand,
-        DumpSubmittedTypingCommand, DumpSubmittedUserCommand, DumpSubmittedVerificationRequest,
-        DumpUnsupportedRoomMessageActivity, DumpUserCommandAction, FindActiveViewArgs,
-        FindActiveViewResponse, GetVersionResponse, IdleProbe, LifecycleState, ListRoomsResponse,
-        LoadEventsArgs, LoginArgs, MdiArrangement, MdiState, MdiView, MdiWindowPlacement,
-        MdiWindowState, MircFormatKey, NavigationNode, NavigationNodeKey, NavigationPathSegment,
-        NoArgs, OpenDialogArgs, OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs,
-        PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
-        RestoreSessionArgs, RoomMemberView, SelectMemberArgs, SelectNavigationPathArgs,
-        SelectOptionsPageArgs, SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs,
-        SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
-        SendFileArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs,
-        SetNavigationExpandedArgs, SetViewWindowStateArgs, SetupE2eeRecoveryArgs, StatusBarState,
-        SwitchbarItem, SwitchbarState, UiFindHistorySearchState, UiFindState, UiFrameLayout,
-        UiRect, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiToolbarButton,
+        DumpSubmittedRoomSettingsCommand, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedSetupRecoveryCommand, DumpSubmittedTypingCommand, DumpSubmittedUserCommand,
+        DumpSubmittedVerificationRequest, DumpUnsupportedRoomMessageActivity,
+        DumpUserCommandAction, FindActiveViewArgs, FindActiveViewResponse, GetVersionResponse,
+        IdleProbe, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiArrangement,
+        MdiState, MdiView, MdiWindowPlacement, MdiWindowState, MircFormatKey, NavigationNode,
+        NavigationNodeKey, NavigationPathSegment, NoArgs, OpenDialogArgs,
+        OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs, PROTOCOL_VERSION,
+        ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
+        RoomMemberView, SelectMemberArgs, SelectNavigationPathArgs, SelectOptionsPageArgs,
+        SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs, SelectViewArgs,
+        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendFileArgs,
+        SendTextArgs, SendTextResponse, SetComposeTextArgs, SetNavigationExpandedArgs,
+        SetViewWindowStateArgs, SetupE2eeRecoveryArgs, StatusBarState, SwitchbarItem,
+        SwitchbarState, UiFindHistorySearchState, UiFindState, UiFrameLayout, UiRect,
+        UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiToolbarButton,
         VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
         failure_response, parse_command_request, success_response,
     };
@@ -3780,6 +3848,21 @@ mod tests {
                 },
             ],
         }];
+        model.submitted_room_settings_commands = vec![
+            DumpSubmittedRoomSettingsCommand::Fetch {
+                room_id: "!ops:example".to_owned(),
+            },
+            DumpSubmittedRoomSettingsCommand::Update {
+                room_id: "!ops:example".to_owned(),
+                topic_by_operators: None,
+                moderated: Some(true),
+                invite_only: Some(false),
+                name: Some(String::new()),
+                topic: None,
+                listed_in_directory: Some(false),
+                unban: vec!["@carol:example".to_owned()],
+            },
+        ];
         model.submitted_profile_commands = vec![DumpSubmittedProfileCommand {
             display_name: "New Name".to_owned(),
         }];
@@ -3825,6 +3908,24 @@ mod tests {
                     room_id: "!ops:example".to_owned(),
                     user_id: "@carol:example".to_owned(),
                     reason: None,
+                },
+            ]
+        );
+        assert_eq!(
+            testkit_model.submitted_room_settings_commands,
+            vec![
+                mirx_testkit::SubmittedRoomSettingsCommand::Fetch {
+                    room_id: "!ops:example".to_owned(),
+                },
+                mirx_testkit::SubmittedRoomSettingsCommand::Update {
+                    room_id: "!ops:example".to_owned(),
+                    topic_by_operators: None,
+                    moderated: Some(true),
+                    invite_only: Some(false),
+                    name: Some(String::new()),
+                    topic: None,
+                    listed_in_directory: Some(false),
+                    unban: vec!["@carol:example".to_owned()],
                 },
             ]
         );
@@ -4142,8 +4243,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_85() {
-        assert_eq!(PROTOCOL_VERSION, 85);
+    fn protocol_version_is_86() {
+        assert_eq!(PROTOCOL_VERSION, 86);
     }
 
     #[test]
@@ -5532,6 +5633,7 @@ mod tests {
             ("colors", AutomationDialog::Colors),
             ("aliases", AutomationDialog::Aliases),
             ("address_book", AutomationDialog::AddressBook),
+            ("channel_central", AutomationDialog::ChannelCentral),
             ("select_server", AutomationDialog::SelectServer),
             ("about", AutomationDialog::About),
             ("commands_join", AutomationDialog::CommandsJoin),
@@ -6182,7 +6284,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":85,
+                    "protocol_version":86,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6243,6 +6345,7 @@ mod tests {
                     submitted_membership_commands: Vec::new(),
                     submitted_member_moderation_commands: Vec::new(),
                     submitted_power_level_commands: Vec::new(),
+                    submitted_room_settings_commands: Vec::new(),
                     submitted_profile_commands: Vec::new(),
                     submitted_away_commands: Vec::new(),
                     submitted_typing_commands: Vec::new(),
@@ -6944,6 +7047,41 @@ mod tests {
                         color_up_enabled: false,
                         color_down_enabled: false,
                     }),
+                    channel_central: Some(super::UiChannelCentral {
+                        caption: "Channel Central - Ops".to_owned(),
+                        room_id: "!ops:example".to_owned(),
+                        status: String::new(),
+                        name: "Ops".to_owned(),
+                        name_enabled: true,
+                        topic: "release day".to_owned(),
+                        topic_items: vec!["release day".to_owned()],
+                        topic_enabled: true,
+                        ban_rows: vec![vec![
+                            "@carol:example".to_owned(),
+                            "Alice".to_owned(),
+                            "23/11/2026 22:14".to_owned(),
+                            "spam".to_owned(),
+                        ]],
+                        ban_row_click_points: vec![super::UiPoint { x: 40, y: 30 }],
+                        remove_enabled: false,
+                        topic_by_operators: super::UiCheckBox {
+                            state: super::UiCheckState::Checked,
+                            enabled: true,
+                        },
+                        invite_only: super::UiCheckBox {
+                            state: super::UiCheckState::Indeterminate,
+                            enabled: true,
+                        },
+                        moderated: super::UiCheckBox {
+                            state: super::UiCheckState::Unchecked,
+                            enabled: false,
+                        },
+                        private: super::UiCheckBox {
+                            state: super::UiCheckState::Unchecked,
+                            enabled: true,
+                        },
+                        ok_enabled: true,
+                    }),
                     color_index: Some(super::UiColorIndex {
                         part: super::UiColorCodePart::Background,
                         rect: super::UiRect {
@@ -7216,6 +7354,24 @@ mod tests {
                         "color_up_enabled":false,
                         "color_down_enabled":false
                     },
+                    "channel_central":{
+                        "caption":"Channel Central - Ops",
+                        "room_id":"!ops:example",
+                        "status":"",
+                        "name":"Ops",
+                        "name_enabled":true,
+                        "topic":"release day",
+                        "topic_items":["release day"],
+                        "topic_enabled":true,
+                        "ban_rows":[["@carol:example","Alice","23/11/2026 22:14","spam"]],
+                        "ban_row_click_points":[{"x":40,"y":30}],
+                        "remove_enabled":false,
+                        "topic_by_operators":{"state":"checked","enabled":true},
+                        "invite_only":{"state":"indeterminate","enabled":true},
+                        "moderated":{"state":"unchecked","enabled":false},
+                        "private":{"state":"unchecked","enabled":true},
+                        "ok_enabled":true
+                    },
                     "color_index":{
                         "part":"background",
                         "rect":{"x":10,"y":500,"width":180,"height":44},
@@ -7281,6 +7437,7 @@ mod tests {
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
+            submitted_room_settings_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
             submitted_typing_commands: Vec::new(),
@@ -7384,6 +7541,7 @@ mod tests {
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
+            submitted_room_settings_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
             submitted_typing_commands: Vec::new(),
@@ -7451,6 +7609,7 @@ mod tests {
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
+            submitted_room_settings_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
             submitted_typing_commands: Vec::new(),
@@ -7527,6 +7686,7 @@ mod tests {
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
+            submitted_room_settings_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
             submitted_typing_commands: Vec::new(),
@@ -7630,6 +7790,7 @@ mod tests {
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
+            submitted_room_settings_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
             submitted_typing_commands: Vec::new(),
@@ -7739,6 +7900,7 @@ mod tests {
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
+            submitted_room_settings_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
             submitted_typing_commands: Vec::new(),
@@ -7858,6 +8020,7 @@ mod tests {
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
+            submitted_room_settings_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
             submitted_typing_commands: Vec::new(),
@@ -7998,6 +8161,7 @@ mod tests {
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
+            submitted_room_settings_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
             submitted_typing_commands: Vec::new(),
@@ -8099,6 +8263,7 @@ mod tests {
                 submitted_membership_commands: Vec::new(),
                 submitted_member_moderation_commands: Vec::new(),
                 submitted_power_level_commands: Vec::new(),
+                submitted_room_settings_commands: Vec::new(),
                 submitted_profile_commands: Vec::new(),
                 submitted_away_commands: Vec::new(),
                 submitted_typing_commands: Vec::new(),

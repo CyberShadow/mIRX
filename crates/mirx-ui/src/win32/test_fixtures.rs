@@ -990,6 +990,7 @@ pub(super) fn test_state() -> WindowState {
         options_dialog: None,
         colors_dialog: None,
         address_book_dialog: None,
+        channel_central_dialog: None,
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
         notify_watch: notify::NotifyWatch::default(),

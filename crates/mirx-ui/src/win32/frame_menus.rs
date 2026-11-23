@@ -122,6 +122,12 @@ pub(super) unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
     if AppendMenuW(room_menu, MF_SEPARATOR, 0, null()) == 0 {
         return Err(last_os_error("AppendMenuW"));
     }
+    append_menu_text(
+        room_menu,
+        MF_STRING,
+        MENU_ID_ROOM_CHANNEL_CENTRAL,
+        "Channel &Central...",
+    )?;
     let room_notifications_menu = create_popup_menu()?;
     for (_, id, label) in ROOM_NOTIFICATIONS_MENU {
         append_menu_text(room_notifications_menu, MF_STRING, id, label)?;
@@ -278,6 +284,8 @@ pub(super) struct RoomActionState {
     pub(super) accept_invite_enabled: bool,
     pub(super) reject_invite_enabled: bool,
     pub(super) part_room_enabled: bool,
+    /// The active window's room is a channel Channel Central can show.
+    pub(super) channel_central_enabled: bool,
     /// The active joined room's mode, which Notifications checks; `None`
     /// greys Notifications (an invite, or no room).
     pub(super) notification_mode: Option<RoomNotificationMode>,
@@ -289,6 +297,7 @@ pub(super) fn active_room_action_state(state: &WindowState) -> RoomActionState {
         accept_invite_enabled: resolve_invite_command_room_id(state, "accept", None).is_ok(),
         reject_invite_enabled: resolve_invite_command_room_id(state, "reject", None).is_ok(),
         part_room_enabled: joined_room.is_ok(),
+        channel_central_enabled: channel_central_room(state, None).is_ok(),
         notification_mode: joined_room.ok().map(|room_id| {
             joined_room_notification_mode(
                 sendable_room_by_id(&state.model.rooms, &room_id)
@@ -296,6 +305,14 @@ pub(super) fn active_room_action_state(state: &WindowState) -> RoomActionState {
             )
         }),
     }
+}
+
+/// A double-click in a channel window's text opens Channel Central, mIRC's
+/// default for it (Options > Mouse); in Status, a query or a thread it
+/// does nothing.
+pub(super) fn double_click_opens_channel_central(state: &WindowState) -> bool {
+    matches!(state.active_view, ViewId::Room(_))
+        && active_room_action_state(state).channel_central_enabled
 }
 
 /// Notifications checks the room's mode, or nothing while it is greyed.
@@ -354,6 +371,10 @@ pub(super) unsafe fn refresh_room_menu_state(hwnd: HWND, popup_menu: HMENU) -> R
             action_state.reject_invite_enabled,
         ),
         (MENU_ID_ROOM_PART, action_state.part_room_enabled),
+        (
+            MENU_ID_ROOM_CHANNEL_CENTRAL,
+            action_state.channel_central_enabled,
+        ),
     ] {
         let flags = MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED };
         if EnableMenuItem(popup_menu, item_id as u32, flags) == -1 {
@@ -605,6 +626,7 @@ pub(super) fn frame_menu_item_enabled(state: &WindowState, command_id: usize) ->
         MENU_ID_VERIFY_CANCEL => verification(VerificationAction::Cancel),
         MENU_ID_VERIFY_CONFIRM_SAS => verification(VerificationAction::Confirm),
         MENU_ID_VERIFY_REJECT_SAS => verification(VerificationAction::Reject),
+        MENU_ID_ROOM_CHANNEL_CENTRAL => active_room_action_state(state).channel_central_enabled,
         _ => true,
     }
 }
@@ -736,6 +758,10 @@ unsafe fn menu_command_result(
         MENU_ID_ROOM_PART => (
             "Room",
             submit_room_menu_action(hwnd, submit_part_slash_command).map(|_| Some(())),
+        ),
+        MENU_ID_ROOM_CHANNEL_CENTRAL => (
+            "Channel Central",
+            run_local_command(hwnd, SlashCommand::Channel { target: None }).map(|_| Some(())),
         ),
         MENU_ID_ROOM_NOTIFY_ALL | MENU_ID_ROOM_NOTIFY_MENTIONS | MENU_ID_ROOM_NOTIFY_MUTE => {
             let mode = notification_menu_mode(command_id).expect("a Notifications item");
@@ -955,6 +981,9 @@ pub(super) fn dialog_gesture(dialog: AutomationDialog) -> DialogGesture {
         AutomationDialog::Colors => DialogGesture::MenuCommand(MENU_ID_TOOLS_COLORS),
         AutomationDialog::Aliases => DialogGesture::MenuCommand(MENU_ID_TOOLS_ALIASES),
         AutomationDialog::AddressBook => DialogGesture::MenuCommand(MENU_ID_TOOLS_ADDRESS_BOOK),
+        AutomationDialog::ChannelCentral => {
+            DialogGesture::MenuCommand(MENU_ID_ROOM_CHANNEL_CENTRAL)
+        }
         AutomationDialog::SelectServer => DialogGesture::MenuCommand(MENU_ID_FILE_SELECT_SERVER),
         AutomationDialog::About => DialogGesture::MenuCommand(MENU_ID_HELP_ABOUT),
         AutomationDialog::CommandsJoin => DialogGesture::MenuCommand(MENU_ID_COMMANDS_JOIN),
@@ -1506,6 +1535,69 @@ mod tests {
     }
 
     #[test]
+    fn channel_central_opens_for_a_joined_channel_while_signed_in() {
+        let mut state = test_state();
+        let mut query = room("!query:example", "Bob", false);
+        query.is_direct = true;
+        state.model.rooms = vec![
+            invited_room("!invite:example", "Invite"),
+            room("!ops:example", "Ops", false),
+            query,
+        ];
+        state.active_view = room_view_id("!ops:example");
+        assert_eq!(
+            channel_central_room(&state, None),
+            Err("not connected to server".to_owned())
+        );
+        assert!(!double_click_opens_channel_central(&state));
+
+        state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
+        state.model.connection = ConnectionState::Syncing;
+        assert_eq!(
+            channel_central_room(&state, None),
+            Ok("!ops:example".to_owned())
+        );
+        assert!(double_click_opens_channel_central(&state));
+        assert_eq!(
+            channel_central_room(&state, Some("Ops")),
+            Ok("!ops:example".to_owned())
+        );
+        for (target, refusal) in [
+            (Some("Bob"), "Bob is a query, not a channel"),
+            (Some("Invite"), "room is not joined: Invite"),
+            (Some("Nowhere"), "unknown room: Nowhere"),
+        ] {
+            assert_eq!(
+                channel_central_room(&state, target),
+                Err(refusal.to_owned()),
+                "{target:?}"
+            );
+        }
+        for (view, opens) in [
+            (room_view_id("!query:example"), false),
+            (room_view_id("!invite:example"), false),
+            // The Room menu acts on a thread's room; its double-click is
+            // no channel window's.
+            (thread_view_id("!ops:example", "$thread:example"), false),
+            (ViewId::Status, false),
+        ] {
+            state.active_view = view.clone();
+            assert_eq!(
+                double_click_opens_channel_central(&state),
+                opens,
+                "{view:?}"
+            );
+        }
+        state.active_view = thread_view_id("!ops:example", "$thread:example");
+        assert!(active_room_action_state(&state).channel_central_enabled);
+        state.active_view = ViewId::Status;
+        assert_eq!(
+            channel_central_room(&state, None),
+            Err("no room selected".to_owned())
+        );
+    }
+
+    #[test]
     fn active_room_action_state_matches_active_invite_and_joined_views() {
         let mut state = test_state();
         state.model.rooms = vec![
@@ -1520,6 +1612,7 @@ mod tests {
                 accept_invite_enabled: true,
                 reject_invite_enabled: true,
                 part_room_enabled: false,
+                channel_central_enabled: false,
                 notification_mode: None,
             }
         );
@@ -1531,6 +1624,8 @@ mod tests {
                 accept_invite_enabled: false,
                 reject_invite_enabled: false,
                 part_room_enabled: true,
+                // Not signed in.
+                channel_central_enabled: false,
                 notification_mode: Some(RoomNotificationMode::AllMessages),
             }
         );
