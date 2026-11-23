@@ -1,5 +1,5 @@
 //! Windows resources for `mirx-ui.exe`: mirx's icon (drawn by `icon.rs`),
-//! the toolbar's glyphs (`toolbar_icons.rs`), `VERSIONINFO` and the
+//! the toolbar's and the windows' glyphs (`glyphs.rs`), `VERSIONINFO` and the
 //! application manifest, compiled by windres into one
 //! COFF object that is linked into every bin target (the exe and its unit-test
 //! harness, whose tests read the resources back).
@@ -9,11 +9,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod glyphs;
 mod ico;
 mod icon;
 mod raster;
 mod resources;
-mod toolbar_icons;
 
 fn main() {
     println!("cargo:rerun-if-changed=build");
@@ -36,11 +36,11 @@ fn main() {
     let icon_path = out_dir.join("mirx.ico");
     fs::write(&icon_path, ico::encode(&icon::render_all())).expect("write mirx.ico");
 
-    let toolbar_icons = toolbar_icons::GLYPHS
+    let glyph_icons = glyphs::GLYPHS
         .iter()
         .map(|glyph| {
-            let path = out_dir.join(format!("toolbar-{}.ico", glyph.stem));
-            fs::write(&path, ico::encode(&glyph.render_all())).expect("write a toolbar icon");
+            let path = out_dir.join(format!("glyph-{}.ico", glyph.stem));
+            fs::write(&path, ico::encode(&glyph.render_all())).expect("write a glyph icon");
             (glyph.id, path)
         })
         .collect::<Vec<_>>();
@@ -48,7 +48,7 @@ fn main() {
     let rc_path = out_dir.join("mirx-ui.rc");
     let rc = resources::rc_source(&resources::RcInputs {
         icon_path: &icon_path,
-        toolbar_icons: &toolbar_icons,
+        glyph_icons: &glyph_icons,
         manifest_path: &manifest_dir.join("res").join("mirx-ui.exe.manifest"),
         version: resources::Version::from_cargo_env(),
     });

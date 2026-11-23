@@ -1,13 +1,14 @@
-//! The toolbar's glyphs, as code: mirx's own drawings of the subjects of
-//! mIRC's toolbar buttons, on a 16-unit grid, in the 16-colour palette's
+//! The toolbar's and the windows' glyphs, as code: mirx's own drawings of
+//! the subjects of mIRC's toolbar buttons, and of each kind of window the
+//! treebar and the switchbar show, on a 16-unit grid, in the 16-colour palette's
 //! hues. Bold shapes with a one-device-pixel darker outline, as the app
 //! icon, so each reads at 16 px.
 //!
 //! Each is an icon group whose resource id `win32/app_icon.rs` has too
-//! (`TOOLBAR_ICON_IDS`), at the toolbar's sizes at 100-200% scaling;
+//! (`TOOLBAR_ICON_IDS`, `WINDOW_ICON_IDS`), at the bars' 16-px size at 100-200% scaling;
 //! `LoadImageW` scales the nearest one for any other.
 
-use crate::raster::{self, Image, Point, Rgb, capsule, circle, polygon, rect, ring};
+use crate::raster::{self, Image, Point, Rgb, capsule, circle, polygon, rect, ring, rounded_rect};
 
 pub const SIZES: [u32; 4] = [16, 20, 24, 32];
 
@@ -38,7 +39,7 @@ pub struct Glyph {
     draw: fn(Pen) -> Vec<Layer>,
 }
 
-pub const GLYPHS: [Glyph; 13] = [
+pub const GLYPHS: [Glyph; 18] = [
     glyph(101, "connect", connect),
     glyph(102, "disconnect", disconnect),
     glyph(103, "options", options),
@@ -52,6 +53,13 @@ pub const GLYPHS: [Glyph; 13] = [
     glyph(111, "tilev", tile_vertical),
     glyph(112, "arrange", arrange_icons),
     glyph(113, "help", help),
+    // The windows. The Rooms List and a space folder use the toolbar's
+    // List Rooms page (104) and Join Room folder (105).
+    glyph(114, "status", status),
+    glyph(115, "room", room),
+    glyph(116, "direct", direct),
+    glyph(117, "invite", invite),
+    glyph(118, "thread", thread),
 ];
 
 const fn glyph(id: u16, stem: &'static str, draw: fn(Pen) -> Vec<Layer>) -> Glyph {
@@ -297,5 +305,71 @@ fn help(pen: Pen) -> Vec<Layer> {
                 .min(circle(p, Point(8.0, 12.6), 1.2))
         }),
     ));
+    layers
+}
+
+/// The Status window: the homeserver, a server box with two drive bays and
+/// a green light.
+fn status(pen: Pen) -> Vec<Layer> {
+    let mut layers = pen.outlined(DARK_GREY, GREY, pen.rect((3.0, 1.0), (13.0, 15.0)));
+    for y in [3.0, 6.0] {
+        layers.push((DARK_GREY, Box::new(pen.rect((5.0, y), (11.0, y + 2.0)))));
+    }
+    layers.extend(pen.outlined(DARK_GREEN, GREEN, pen.rect((8.0, 10.0), (11.0, 13.0))));
+    layers
+}
+
+/// A room: `#`, Matrix's room alias sigil.
+fn room(pen: Pen) -> Vec<Layer> {
+    let strokes = [
+        pen.rect((4.0, 1.0), (7.0, 15.0)),
+        pen.rect((9.0, 1.0), (12.0, 15.0)),
+        pen.rect((1.0, 4.0), (15.0, 7.0)),
+        pen.rect((1.0, 9.0), (15.0, 12.0)),
+    ];
+    pen.outlined(DARK_GREEN, GREEN, move |p| {
+        strokes
+            .iter()
+            .map(|stroke| stroke(p))
+            .fold(f32::MAX, f32::min)
+    })
+}
+
+/// A direct message: a person, head and shoulders.
+fn direct(pen: Pen) -> Vec<Layer> {
+    let shoulders = (Point(5.5, 13.0), Point(10.5, 13.0));
+    let body = move |p: Point| capsule(p, shoulders, 3.5).max(p.1 - 15.0);
+    let mut layers = pen.outlined(NAVY_OUTLINE, BLUE, body);
+    layers.extend(pen.outlined(NAVY_OUTLINE, BLUE, |p| circle(p, Point(8.0, 5.0), 3.5)));
+    layers
+}
+
+/// An invite: an envelope, sealed in red.
+fn invite(pen: Pen) -> Vec<Layer> {
+    let mut layers = pen.outlined(DARK_GREY, WHITE, pen.rect((1.0, 3.0), (15.0, 13.0)));
+    let flap = [
+        (Point(1.5, 3.5), Point(8.0, 9.0)),
+        (Point(8.0, 9.0), Point(14.5, 3.5)),
+    ];
+    layers.push((
+        DARK_GREY,
+        Box::new(move |p| capsule(p, flap[0], 0.6).min(capsule(p, flap[1], 0.6))),
+    ));
+    layers.extend(pen.outlined(DARK_RED, RED, |p| circle(p, Point(8.0, 9.0), 2.2)));
+    layers
+}
+
+/// A thread: a speech bubble with two lines of text.
+fn thread(pen: Pen) -> Vec<Layer> {
+    let bubble = |p: Point| {
+        rounded_rect(p, Point(1.0, 1.0), Point(15.0, 11.0), 2.5).min(polygon(
+            p,
+            &[Point(4.0, 10.0), Point(9.0, 10.0), Point(4.0, 15.0)],
+        ))
+    };
+    let mut layers = pen.outlined(NAVY_OUTLINE, WHITE, bubble);
+    for (y, right) in [(4.0, 12.0), (7.0, 10.0)] {
+        layers.push((NAVY, Box::new(pen.rect((4.0, y), (right, y + 1.0)))));
+    }
     layers
 }

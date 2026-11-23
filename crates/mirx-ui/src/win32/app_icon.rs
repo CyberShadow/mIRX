@@ -11,10 +11,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 /// the `app_resources` tests load this id from the exe.
 pub(super) const APP_ICON_ID: u16 = 1;
 
-/// The toolbar's glyphs' icon groups. `build/toolbar_icons.rs` gives its
-/// glyphs these ids; the `app_resources` tests load each.
+/// The toolbar's glyphs' icon groups. `build/glyphs.rs` gives its glyphs
+/// these ids; the `app_resources` tests load each.
 #[cfg(test)]
 pub(super) const TOOLBAR_ICON_IDS: std::ops::RangeInclusive<u16> = 101..=113;
+
+/// The windows' own glyphs' icon groups (`window_icons.rs` names each).
+#[cfg(test)]
+pub(super) const WINDOW_ICON_IDS: std::ops::RangeInclusive<u16> = 114..=118;
 
 #[derive(Clone, Copy)]
 pub(super) enum IconSize {

@@ -19,7 +19,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 use windows_sys::core::{PCWSTR, s, w};
 
-use super::app_icon::{APP_ICON_ID, TOOLBAR_ICON_IDS};
+use super::app_icon::{APP_ICON_ID, TOOLBAR_ICON_IDS, WINDOW_ICON_IDS};
 
 /// `build/resources.rs` gives the version block id 1.
 const VERSION_ID: u16 = 1;
@@ -74,8 +74,8 @@ fn icon_group_entries(id: u16) -> Vec<(u8, u16)> {
 }
 
 #[test]
-fn toolbar_icon_groups_have_the_toolbar_sizes_and_load() {
-    for id in TOOLBAR_ICON_IDS {
+fn glyph_icon_groups_have_the_glyph_sizes_and_load() {
+    for id in TOOLBAR_ICON_IDS.chain(WINDOW_ICON_IDS) {
         assert_eq!(
             icon_group_entries(id),
             [16, 20, 24, 32].map(|width| (width, 32)).to_vec(),

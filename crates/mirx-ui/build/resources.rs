@@ -34,8 +34,8 @@ impl Version {
 
 pub struct RcInputs<'a> {
     pub icon_path: &'a Path,
-    /// The toolbar's icon groups, by resource id.
-    pub toolbar_icons: &'a [(u16, PathBuf)],
+    /// The glyphs' icon groups (the toolbar's and the windows'), by resource id.
+    pub glyph_icons: &'a [(u16, PathBuf)],
     pub manifest_path: &'a Path,
     pub version: Version,
 }
@@ -49,15 +49,15 @@ pub fn rc_source(inputs: &RcInputs) -> String {
     } = &inputs.version;
     let icon = rc_path(inputs.icon_path);
     let manifest = rc_path(inputs.manifest_path);
-    let toolbar_icons = inputs
-        .toolbar_icons
+    let glyph_icons = inputs
+        .glyph_icons
         .iter()
         .map(|(id, path)| format!("{id} ICON \"{}\"\n", rc_path(path)))
         .collect::<String>();
     format!(
         r#"#pragma code_page(65001)
 {APP_ICON_ID} ICON "{icon}"
-{toolbar_icons}1 24 "{manifest}"
+{glyph_icons}1 24 "{manifest}"
 1 VERSIONINFO
 FILEVERSION     {major},{minor},{patch},0
 PRODUCTVERSION  {major},{minor},{patch},0
