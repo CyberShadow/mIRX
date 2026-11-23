@@ -521,12 +521,12 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "ame",
         usage: "<action>",
-        summary: "send an action to every channel",
+        summary: "send an action to every room (not direct messages)",
     },
     CommandSpec {
         name: "amsg",
         usage: "<text>",
-        summary: "send a message to every channel",
+        summary: "send a message to every room (not direct messages)",
     },
     CommandSpec {
         name: "away",
@@ -556,7 +556,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "clearall",
         usage: "[-snq]",
-        summary: "clear every window, or Status (-s), the channels (-n), the queries (-q)",
+        summary: "clear every window, or Status (-s), the rooms (-n), the direct messages (-q)",
     },
     CommandSpec {
         name: "close",

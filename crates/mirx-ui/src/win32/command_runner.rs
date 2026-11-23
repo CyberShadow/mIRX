@@ -640,14 +640,14 @@ pub(super) unsafe fn run_slash_command(
             message_text_from_input(&body)?;
             let room_ids = channel_room_ids(&state.model);
             if room_ids.is_empty() {
-                return Err("not in any channel".to_owned());
+                return Err("not in any room".to_owned());
             }
             for room_id in &room_ids {
                 send_room_message(state, room_id.clone(), presentation, &body)?;
             }
             Ok(Some(match room_ids.len() {
-                1 => "sent to 1 channel".to_owned(),
-                count => format!("sent to {count} channels"),
+                1 => "sent to 1 room".to_owned(),
+                count => format!("sent to {count} rooms"),
             }))
         }
         SlashCommand::SaveBuf { path } => match path {
@@ -1900,6 +1900,7 @@ mod tests {
             with_test_compose_window(state, |hwnd| {
                 install_test_view_content(hwnd);
                 type_compose_line(hwnd, "/amsg hi all");
+                assert_eq!(state_ref(hwnd).model.status, "sent to 2 rooms");
                 type_compose_line(hwnd, "/ame waves");
                 // Refused before the first send.
                 type_compose_line(hwnd, "/amsg \x02\x02");
@@ -1940,7 +1941,7 @@ mod tests {
                 type_compose_line(hwnd, "/amsg hi");
                 assert!(state_ref(hwnd).recorded_commands.is_empty());
                 let lines = render_room_lines(state_ref(hwnd), "!dm:example");
-                assert_eq!(lines.last().unwrap(), "[22:12] * /amsg: not in any channel");
+                assert_eq!(lines.last().unwrap(), "[22:12] * /amsg: not in any room");
             });
         }
         stop_test_core(handle);
