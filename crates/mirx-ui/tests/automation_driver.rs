@@ -9955,6 +9955,77 @@ fn member_roles_update(
 }
 
 #[test]
+fn mode_sends_room_modes_and_ranks_as_one_request() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::RoomMembers(
+        RoomMembers {
+            room_id: "!beta:example".to_owned(),
+            members: vec![
+                ranked_member("@alice:example", "Alice", RoomMemberRank::Member, false),
+                ranked_member("@me:example", "Me", RoomMemberRank::Moderator, true),
+            ],
+        },
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let type_line = |input: &str| -> Result<(), Box<dyn std::error::Error>> {
+        app.set_compose_text(input)?;
+        app.send_compose_key(ComposeKey::Return)?;
+        app.wait_idle(Duration::from_secs(5))?;
+        assert_eq!(app.compose_text()?, "", "{input}");
+        Ok(())
+    };
+
+    app.select_view(room_identity("!beta:example"))?;
+    type_line("/mode +ip-t+v Alice")?;
+    // Typed in Status, for the room it names.
+    app.select_view(ViewIdentity::Status)?;
+    type_line("/mode !beta:example -m")?;
+    app.select_view(room_identity("!beta:example"))?;
+    type_line("/mode +k secret")?;
+
+    let update = |topic_by_operators, moderated, member_roles, invite_only, listed_in_directory| {
+        SubmittedRoomSettingsCommand::Update {
+            room_id: "!beta:example".to_owned(),
+            topic_by_operators,
+            moderated,
+            member_roles,
+            invite_only,
+            name: None,
+            topic: None,
+            listed_in_directory,
+            unban: Vec::new(),
+        }
+    };
+    assert_eq!(
+        app.dump_model()?.submitted_room_settings_commands,
+        vec![
+            update(
+                Some(false),
+                None,
+                vec![SubmittedPowerLevelChange {
+                    user_id: "@alice:example".to_owned(),
+                    role: MemberPowerRole::Voiced,
+                }],
+                Some(true),
+                Some(false),
+            ),
+            update(None, Some(false), Vec::new(), None, None),
+        ]
+    );
+    let ui_state = app.dump_ui_state()?;
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
+    assert!(
+        view_contains(beta, "* /mode: Matrix rooms have no mode k"),
+        "{:?}",
+        beta.lines
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn automation_driver_irc_moderation_commands_submit_core_commands()
 -> Result<(), Box<dyn std::error::Error>> {
     let (app, local_app_data) = launch_close_lifecycle_app()?;
