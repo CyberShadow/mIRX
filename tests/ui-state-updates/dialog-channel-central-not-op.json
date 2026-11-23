@@ -1,0 +1,30 @@
+[
+  {
+    "RoomSettings": {
+      "room_id": "!topic:example",
+      "name": "Topic Room",
+      "topic": "incident review",
+      "join_rule": "knock",
+      "topic_by_operators": true,
+      "moderated": true,
+      "listed_in_directory": false,
+      "bans": [
+        {
+          "user_id": "@spam:remote",
+          "display_name": "Spammer",
+          "banned_by": "@me:example",
+          "reason": "link spam",
+          "timestamp_ms": 1700000300000
+        }
+      ],
+      "allowed": {
+        "name": false,
+        "topic": true,
+        "join_rule": false,
+        "power_levels": false,
+        "directory": false,
+        "unban": false
+      }
+    }
+  }
+]

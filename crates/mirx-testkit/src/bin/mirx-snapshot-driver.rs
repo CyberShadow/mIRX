@@ -788,11 +788,23 @@ mod cli {
             .iter()
             .filter(|action| action.is_terminal())
             .count();
-        if terminal_actions > 1
-            || (terminal_actions == 1 && !config.actions.last().is_some_and(Action::is_terminal))
-        {
+        // What follows the terminal action: only the core's answers to a
+        // dialog, which it takes while it is open.
+        let after_terminal = config
+            .actions
+            .iter()
+            .skip_while(|action| !action.is_terminal())
+            .collect::<Vec<_>>();
+        let terminal_last = match after_terminal.split_first() {
+            None => true,
+            Some((Action::Dialog { .. } | Action::OpenedDialog, rest)) => rest
+                .iter()
+                .all(|action| matches!(action, Action::Append(_))),
+            Some((_, rest)) => rest.is_empty(),
+        };
+        if terminal_actions > 1 || !terminal_last {
             return Err(format!(
-                "a dialog: or drag: action must be the only one and the last: a dialog disables the frame, and a drag holds the mouse\n{}",
+                "a dialog: or drag: action must be the only one and the last, but for append: actions after a dialog: a dialog disables the frame, and a drag holds the mouse\n{}",
                 usage()
             ));
         }
@@ -826,7 +838,7 @@ mod cli {
             "  <node> is a treebar item: space:<room_id> for a space folder, or a view identity",
             "  <arrangement> is cascade, tile_horizontal, tile_vertical, or arrange_icons",
             "  <state> is maximized, normal, or minimized",
-            "  <dialog> is options, colors, aliases, select_server, about, commands_join, recover_e2ee, setup_e2ee_recovery, reset_e2ee, close_active_view, or compose_return (Return in the editbox, which runs a command that asks in a dialog); it must be the last action",
+            "  <dialog> is options, colors, aliases, select_server, about, commands_join, recover_e2ee, setup_e2ee_recovery, reset_e2ee, close_active_view, or compose_return (Return in the editbox, which runs a command that asks in a dialog); it must be the last action, but for append: actions with the core's answers to it",
             "  <options page> is an Options tree path such as IRC/Messages",
             "  <point> is <line>,<offset>: a byte offset into the text of a visible line of the active timeline, from 0; the drag is not released, and it must be the last action",
             "  --expect-active-find-history <local_only|loading|exhausted|failed>",
@@ -1634,6 +1646,38 @@ mod cli {
             }
         }
 
+        /// The core's answers to a dialog's read come after it opened.
+        #[test]
+        fn parse_args_accepts_appends_after_a_dialog_action() {
+            let config = parse_args(
+                [
+                    "--action",
+                    "compose-text:/channel",
+                    "--action",
+                    "dialog:compose_return",
+                    "--action",
+                    "append:a.json",
+                    "--action",
+                    "append:b.json",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .expect("appends may follow a dialog");
+            assert_eq!(
+                config.actions,
+                [
+                    Action::ComposeText("/channel".to_owned()),
+                    Action::Dialog {
+                        dialog: AutomationDialog::ComposeReturn,
+                        options_page: None,
+                    },
+                    Action::Append("a.json".to_owned()),
+                    Action::Append("b.json".to_owned()),
+                ]
+            );
+        }
+
         #[test]
         fn parse_args_rejects_bad_dialog_actions() {
             for args in [
@@ -1646,6 +1690,24 @@ mod cli {
                 &["--action", "dialog:about", "--action", "arrange:cascade"],
                 &["--action", "dialog:about", "--action", "dialog:options"],
                 &["--action", "dialog:opened", "--action", "arrange:cascade"],
+                // Only the core's answers may follow it, and only it.
+                &[
+                    "--action",
+                    "dialog:about",
+                    "--action",
+                    "append:a.json",
+                    "--action",
+                    "find:needle",
+                ],
+                &["--action", "drag:3,12:5,0", "--action", "append:a.json"],
+                &[
+                    "--action",
+                    "append:a.json",
+                    "--action",
+                    "dialog:about",
+                    "--action",
+                    "dialog:options",
+                ],
                 &["--action", "dialog:opened:IRC/Messages"],
                 &["--expect-dialog-title", "About mirx"],
                 &["--action", "dialog:about", "--expect-dialog-title"],
@@ -2689,6 +2751,10 @@ mod windows_main {
                     app.wait_idle(config.wait_idle).map_err(|error| {
                         format!("WAIT_IDLE after APPEND_SYNTHETIC_EVENTS failed: {error}")
                     })?;
+                    // An answer to the open dialog changed it.
+                    if let Some(opened) = &opened_dialog {
+                        paint_dialog(&app, &config, opened)?;
+                    }
                 }
                 Action::Arrange(arrangement) => {
                     app.arrange_windows(*arrangement).map_err(|error| {

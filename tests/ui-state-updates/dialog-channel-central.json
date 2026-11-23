@@ -1,0 +1,37 @@
+[
+  {
+    "RoomSettings": {
+      "room_id": "!topic:example",
+      "name": "Topic Room",
+      "topic": "incident review",
+      "join_rule": "invite",
+      "topic_by_operators": true,
+      "moderated": false,
+      "listed_in_directory": true,
+      "bans": [
+        {
+          "user_id": "@spam:remote",
+          "display_name": "Spammer",
+          "banned_by": "@me:example",
+          "reason": "link spam",
+          "timestamp_ms": 1700000300000
+        },
+        {
+          "user_id": "@troll:example",
+          "display_name": null,
+          "banned_by": "@bob:example",
+          "reason": null,
+          "timestamp_ms": 1700000000000
+        }
+      ],
+      "allowed": {
+        "name": true,
+        "topic": true,
+        "join_rule": true,
+        "power_levels": true,
+        "directory": true,
+        "unban": true
+      }
+    }
+  }
+]

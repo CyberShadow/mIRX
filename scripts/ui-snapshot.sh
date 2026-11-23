@@ -26,7 +26,7 @@ dpi144_prefix=
 dpi144_cases=(multi-room image-message-loaded room-list-listing compose-color-index
   dialog-options-display dialog-colors dialog-sign-out-session dialog-log-out
   dialog-export-room-keys dialog-address-book-notify dialog-address-book-colors toolbar-connected
-  line-marker)
+  line-marker dialog-channel-central)
 
 die() {
   echo "ui-snapshot: $*" >&2
@@ -385,6 +385,29 @@ configure_case_expectations() {
           )
           expect_dialog_title='Address Book'
           ;;
+        dialog-channel-central)
+          # /channel, and the core's answer: two bans, the topic set by ops
+          # only, invite only and in the Rooms List; everything the
+          # user's to change. Topic History has the topic the window saw
+          # set too.
+          ordered_actions=(
+            'compose-text:/channel'
+            dialog:compose_return
+            "append:$root_dir/tests/ui-state-updates/dialog-channel-central.json"
+          )
+          expect_dialog_title='Channel Central - Topic Room'
+          ;;
+        dialog-channel-central-not-op)
+          # A member who may set only the topic: the rest greyed, and the
+          # line over OK says why. Knock is neither invite only nor not:
+          # Invite only is indeterminate.
+          ordered_actions=(
+            'compose-text:/channel'
+            dialog:compose_return
+            "append:$root_dir/tests/ui-state-updates/dialog-channel-central-not-op.json"
+          )
+          expect_dialog_title='Channel Central - Topic Room'
+          ;;
         dialog-select-server)
           ordered_actions=(dialog:select_server)
           expect_dialog_title='Select Server'
@@ -464,6 +487,25 @@ configure_case_expectations() {
         --expect-mdi-title 'room:!topic:example::Topic Room: incident review'
       )
     ;;
+
+    # The lines a room's name, join rule and encryption changes print, in
+    # the Topic and Mode colours.
+    room-settings-lines)
+      expect_selected='!topic:example'
+      expect_active_view='room:!topic:example'
+      room_view_expect_args=(
+        --expect-room-view '!topic:example::* Alice turns on end-to-end encryption'
+        --expect-room-view "!topic:example::* Alice changes room name to 'Topic Room'"
+        --expect-room-view '!topic:example::* Alice removes room name'
+        --expect-room-view '!topic:example::* Alice makes the room public'
+        --expect-room-view '!topic:example::* Alice makes the room invite only'
+        --expect-room-view '!topic:example::* Alice makes the room ask to join'
+        --expect-room-view '!topic:example::* Alice makes the room open to members of its spaces'
+        --expect-room-view '!topic:example::* Alice makes the room ask to join, or open to members of its spaces'
+        --expect-room-view '!topic:example::* Alice makes the room private'
+        --expect-room-view '!topic:example::* Alice sets the join rule to xyz.custom'
+      )
+      ;;
 
     # Ctrl+K over the editbox of a small room window: the colour index.
     compose-color-index)

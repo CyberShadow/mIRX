@@ -1,0 +1,265 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!topic:example",
+        "display_name": "Topic Room",
+        "topic": "incident review",
+        "membership": "join",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!topic:example",
+      "activity_id": "state:$settings-0",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$settings-0",
+        "sender": {
+          "user_id": "@alice:example",
+          "nick": "Alice",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "encryption"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!topic:example",
+      "activity_id": "state:$settings-1",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$settings-1",
+        "sender": {
+          "user_id": "@alice:example",
+          "nick": "Alice",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "name",
+          "name": "Topic Room"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!topic:example",
+      "activity_id": "state:$settings-2",
+      "timestamp_ms": 1700000120000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$settings-2",
+        "sender": {
+          "user_id": "@alice:example",
+          "nick": "Alice",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "name",
+          "name": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!topic:example",
+      "activity_id": "state:$settings-3",
+      "timestamp_ms": 1700000180000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$settings-3",
+        "sender": {
+          "user_id": "@alice:example",
+          "nick": "Alice",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "join_rule",
+          "rule": "public"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!topic:example",
+      "activity_id": "state:$settings-4",
+      "timestamp_ms": 1700000240000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$settings-4",
+        "sender": {
+          "user_id": "@alice:example",
+          "nick": "Alice",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "join_rule",
+          "rule": "invite"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!topic:example",
+      "activity_id": "state:$settings-5",
+      "timestamp_ms": 1700000300000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$settings-5",
+        "sender": {
+          "user_id": "@alice:example",
+          "nick": "Alice",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "join_rule",
+          "rule": "knock"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!topic:example",
+      "activity_id": "state:$settings-6",
+      "timestamp_ms": 1700000360000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$settings-6",
+        "sender": {
+          "user_id": "@alice:example",
+          "nick": "Alice",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "join_rule",
+          "rule": "restricted"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!topic:example",
+      "activity_id": "state:$settings-7",
+      "timestamp_ms": 1700000420000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$settings-7",
+        "sender": {
+          "user_id": "@alice:example",
+          "nick": "Alice",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "join_rule",
+          "rule": "knock_restricted"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!topic:example",
+      "activity_id": "state:$settings-8",
+      "timestamp_ms": 1700000480000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$settings-8",
+        "sender": {
+          "user_id": "@alice:example",
+          "nick": "Alice",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "join_rule",
+          "rule": "private"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!topic:example",
+      "activity_id": "state:$settings-9",
+      "timestamp_ms": 1700000540000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$settings-9",
+        "sender": {
+          "user_id": "@alice:example",
+          "nick": "Alice",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "join_rule",
+          "rule": {
+            "other": "xyz.custom"
+          }
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!topic:example",
+      "activity_id": "state:$settings-10",
+      "timestamp_ms": 1700000600000,
+      "highlight": false,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$settings-10",
+        "sender": {
+          "user_id": "@alice:example",
+          "nick": "Alice",
+          "nick_ambiguous": false
+        },
+        "content": {
+          "type": "name",
+          "name": "Topic Room"
+        }
+      },
+      "relation": null
+    }
+  }
+]
