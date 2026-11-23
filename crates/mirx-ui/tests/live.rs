@@ -1516,7 +1516,7 @@ fn open_channel_central(app: &MirxApp) -> Result<(HWND, UiChannelCentral), Box<d
     app.set_compose_text("/channel")?;
     app.open_dialog(AutomationDialog::ComposeReturn)?;
     let dialog = wait_for_dialog(app, "mirxWin32ChannelCentralDialog")?;
-    let ui_state = app.wait_for_ui_state("Channel Central's settings", TIMEOUT, |ui_state| {
+    let ui_state = app.wait_for_ui_state("Room Settings' answer", TIMEOUT, |ui_state| {
         ui_state
             .channel_central
             .as_ref()
@@ -1651,7 +1651,7 @@ fn channel_central_changes_the_room_on_the_server() -> Result<(), Box<dyn Error>
             .as_ref()
             .is_some_and(|central| central.ban_rows.is_empty())
     })?;
-    press_dialog_button(&app, dialog, IDOK as usize, "Channel Central")?;
+    press_dialog_button(&app, dialog, IDOK as usize, "Room Settings")?;
 
     // The server has every part, as Bob reads it.
     let state = |event_type: StateEventType, state_key: &str| {
@@ -1706,7 +1706,7 @@ fn channel_central_changes_the_room_on_the_server() -> Result<(), Box<dyn Error>
     ] {
         assert_eq!(check.state, UiCheckState::Checked);
     }
-    press_dialog_button(&app, dialog, IDCANCEL as usize, "Channel Central")?;
+    press_dialog_button(&app, dialog, IDCANCEL as usize, "Room Settings")?;
 
     finish(app, &local_app_data)
 }
@@ -1883,7 +1883,7 @@ fn an_alias_greets_in_the_query_it_opens() -> Result<(), Box<dyn Error>> {
     let shared_view = room_identity(shared.as_str());
     app.select_view(shared_view.clone())?;
     type_commands(&app, &["/alias greet /query $$1 | say hi $1", "/greet Bob"])?;
-    let ui_state = app.wait_for_ui_state("the query with Bob", TIMEOUT, |ui_state| {
+    let ui_state = app.wait_for_ui_state("the direct messages with Bob", TIMEOUT, |ui_state| {
         ui_state.rooms.iter().any(|room| {
             room.membership == RoomMembership::Join && room.direct_user_ids == [bob_id.clone()]
         })
