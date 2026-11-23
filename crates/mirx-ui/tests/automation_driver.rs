@@ -11578,7 +11578,7 @@ fn nick_list_double_click_opens_a_query() -> Result<(), Box<dyn std::error::Erro
     // This core has no session: it answers with an error after.
     let status = app.dump_ui_state()?.status_bar.text;
     assert!(
-        status.starts_with("query submitted: @bob:example"),
+        status.starts_with("direct messages requested: @bob:example"),
         "{status}"
     );
     assert_eq!(unsafe { listbox_selected_indices(list) }, [2]);
@@ -18613,7 +18613,10 @@ fn automation_driver_slash_query_records_submitted_direct_room_without_creating_
     assert_eq!(app.compose_text()?, "");
 
     let model = app.dump_model()?;
-    assert_eq!(model.status, "query submitted: @alice:example.org");
+    assert_eq!(
+        model.status,
+        "direct messages requested: @alice:example.org"
+    );
     assert_eq!(
         model.submitted_direct_room_commands,
         vec![SubmittedDirectRoomCommand {
@@ -19266,7 +19269,7 @@ fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
                 ("&Join room...", true),
                 ("&List rooms...\tAlt+L", true),
                 ("&Part room", true),
-                ("&Query user...", true),
+                ("&Direct message...", true),
                 ("&Whois user...", true),
                 ("Set &Away...", true),
                 ("Set Ba&ck", true),
@@ -22095,7 +22098,10 @@ fn commands_menu_query_records_submitted_direct_room_without_creating_room()
     run_commands_menu_item(&app, COMMANDS_MENU_QUERY, Some("@alice:example.org"))?;
 
     let model = app.dump_model()?;
-    assert_eq!(model.status, "query submitted: @alice:example.org");
+    assert_eq!(
+        model.status,
+        "direct messages requested: @alice:example.org"
+    );
     assert_eq!(app.compose_text()?, "");
     assert_eq!(
         model.submitted_direct_room_commands,
@@ -22402,7 +22408,7 @@ fn automation_driver_invited_direct_room_fixture_renders_expected_direct_invite_
     assert!(invite_view.title.contains("Daria [invite]"));
     assert!(view_contains(
         invite_view,
-        "* Daria (@daria:example) invites you to a query"
+        "* Daria (@daria:example) invites you to direct messages"
     ));
     assert!(view_contains(
         invite_view,
@@ -22970,7 +22976,7 @@ fn automation_driver_slash_query_opens_existing_direct_room_match()
     assert_eq!(app.compose_text()?, "");
 
     let model = app.dump_model()?;
-    assert_eq!(model.status, "query opened: @alice:example.org");
+    assert_eq!(model.status, "direct messages opened: @alice:example.org");
     assert!(model.submitted_direct_room_commands.is_empty());
 
     let ui_state = app.dump_ui_state()?;
@@ -23064,7 +23070,7 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
     let model = app.dump_model()?;
     assert_eq!(
         model.status,
-        "* /query: ambiguous query target: @alice:example.org"
+        "* /query: ambiguous direct message target: @alice:example.org"
     );
     assert!(model.submitted_direct_room_commands.is_empty());
 
@@ -23112,7 +23118,7 @@ fn automation_driver_literal_query_submission_is_sent_as_text()
         !app.dump_ui_state()?
             .status_bar
             .text
-            .contains("query submitted: @alice:example.org")
+            .contains("direct messages requested: @alice:example.org")
     );
 
     app.send_compose_key(ComposeKey::Up)?;
@@ -23170,7 +23176,7 @@ fn automation_driver_slash_query_existing_direct_room_activates_room_without_sub
     assert_eq!(app.compose_text()?, "");
 
     let model = app.dump_model()?;
-    assert_eq!(model.status, "query opened: @alice:example.org");
+    assert_eq!(model.status, "direct messages opened: @alice:example.org");
     assert!(model.submitted_direct_room_commands.is_empty());
     assert_eq!(model.selected_room.as_deref(), Some("!direct:example"));
     assert_eq!(
@@ -23243,7 +23249,7 @@ fn automation_driver_slash_query_ambiguous_direct_room_reports_local_error()
     let model = app.dump_model()?;
     assert_eq!(
         model.status,
-        "* /query: ambiguous query target: @alice:example.org"
+        "* /query: ambiguous direct message target: @alice:example.org"
     );
     assert!(model.submitted_direct_room_commands.is_empty());
     assert_eq!(model.selected_room.as_deref(), Some("!beta:example"));

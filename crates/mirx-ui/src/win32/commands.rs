@@ -706,7 +706,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "query",
         usage: "<nick> [message]",
-        summary: "open a query with a user, and send a message there",
+        summary: "open direct messages with a user, and send a message there",
     },
     CommandSpec {
         name: "quit",

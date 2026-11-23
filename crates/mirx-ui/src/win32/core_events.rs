@@ -995,7 +995,7 @@ fn preserves_submission_status(status: &str, operation: Operation) -> bool {
     match operation {
         Operation::JoinRoom => status.starts_with("join submitted: "),
         Operation::AcceptRoomInvite => status.starts_with("accept submitted: "),
-        Operation::CreateDirectRoom => status.starts_with("query submitted: "),
+        Operation::CreateDirectRoom => status.starts_with("direct messages requested: "),
         Operation::CreateRoom => status.starts_with("create submitted: "),
         Operation::LeaveRoom => status.starts_with("part submitted: "),
         Operation::RejectRoomInvite => status.starts_with("reject submitted: "),
@@ -3269,7 +3269,7 @@ mod tests {
             })
         );
 
-        state.model.status = "query submitted: @alice:example.org".to_owned();
+        state.model.status = "direct messages requested: @alice:example.org".to_owned();
 
         apply_core_event(
             &mut state,
@@ -3281,7 +3281,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(state.model.status, "query submitted: @alice:example.org");
+        assert_eq!(
+            state.model.status,
+            "direct messages requested: @alice:example.org"
+        );
         assert_eq!(state.model.lifecycle_state, LifecycleState::Error);
         assert_eq!(
             state.model.last_error,
@@ -3645,7 +3648,7 @@ mod tests {
             status_invite_lines(&state),
             [(
                 StatusLineKind::Invite,
-                "* Bob (@bob:example) invites you to a query".to_owned()
+                "* Bob (@bob:example) invites you to direct messages".to_owned()
             )]
         );
         // Nothing was accepted: auto-join is off.

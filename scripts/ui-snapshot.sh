@@ -643,7 +643,7 @@ configure_case_expectations() {
         --expect-direct-room '!invite-direct:example'
       )
       room_view_expect_args=(
-        --expect-room-view '!invite-direct:example::* Daria (@daria:example) invites you to a query'
+        --expect-room-view '!invite-direct:example::* Daria (@daria:example) invites you to direct messages'
         --expect-room-view '!invite-direct:example::Use /accept or /reject to respond.'
       )
       status_bar_expect_args=(

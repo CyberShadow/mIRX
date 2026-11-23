@@ -143,11 +143,11 @@ pub(super) fn topic_is_text(topic: &str) -> String {
 pub(super) const ENCRYPTED_ROOM_TEXT: &str = "Messages in this room are end-to-end encrypted";
 
 /// mIRC's `nick (user@host) invites you to join #chan`; a direct room's
-/// invite is to a query, whatever the room is called.
+/// invite is to direct messages, whatever the room is called.
 pub(super) fn invited_text(invite: &RoomInviteSummary, display_name: &str) -> String {
     let inviter = nick_with_user_id(&invite.inviter);
     if invite.direct {
-        format!("{inviter} invites you to a query")
+        format!("{inviter} invites you to direct messages")
     } else {
         format!("{inviter} invites you to join {display_name}")
     }
@@ -479,7 +479,7 @@ mod tests {
         );
         assert_eq!(
             context_line(&invited_text(&invite(Some("Bob"), true), "Bob")),
-            "* Bob (@bob:example.org) invites you to a query"
+            "* Bob (@bob:example.org) invites you to direct messages"
         );
         // The invite carries no member event for its sender.
         assert_eq!(

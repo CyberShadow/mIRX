@@ -122,10 +122,10 @@ pub(super) unsafe fn run_slash_command(
                             echo_in_window(hwnd, &view, [notice])?;
                         }
                     }
-                    Ok(Some(format!("query opened: {user_id}")))
+                    Ok(Some(format!("direct messages opened: {user_id}")))
                 }
                 QueryTargetResolution::Ambiguous => {
-                    Err(format!("ambiguous query target: {user_id}"))
+                    Err(format!("ambiguous direct message target: {user_id}"))
                 }
                 QueryTargetResolution::None => {
                     let status = submit_query_slash_command(state_mut(hwnd), user_id.clone())?;
@@ -134,7 +134,7 @@ pub(super) unsafe fn run_slash_command(
                             hwnd,
                             window,
                             [format!(
-                                "* /query: creating a query with {user_id}; message not sent"
+                                "* /query: creating direct messages with {user_id}; message not sent"
                             )],
                         )?;
                     }
@@ -1176,8 +1176,12 @@ fn msg_target_room_id(model: &UiModel, target: &str) -> Result<String, String> {
     let user_id = commands::resolve_user(all_room_members(model), target)?.user_id;
     match resolve_direct_room_query_target(model, &user_id) {
         QueryTargetResolution::Single(room_id) => Ok(room_id),
-        QueryTargetResolution::Ambiguous => Err(format!("ambiguous query target: {user_id}")),
-        QueryTargetResolution::None => Err(format!("no query with {target}; use /query {target}")),
+        QueryTargetResolution::Ambiguous => {
+            Err(format!("ambiguous direct message target: {user_id}"))
+        }
+        QueryTargetResolution::None => Err(format!(
+            "no direct messages with {target}; use /query {target}"
+        )),
     }
 }
 
@@ -1679,7 +1683,7 @@ pub(super) fn submit_query_slash_command(
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue create direct room command: {err}"))?;
     state.recorded_commands.push(command);
-    Ok(format!("query submitted: {user_id}"))
+    Ok(format!("direct messages requested: {user_id}"))
 }
 
 /// `/topic [#room]`: the room's topic, as mIRC prints it.
@@ -1816,7 +1820,7 @@ mod tests {
                     [
                         "[22:12] -> *alice* hi there",
                         "[22:12] -> -Alice- heads up",
-                        "[22:12] * /msg: no query with Bob; use /query Bob",
+                        "[22:12] * /msg: no direct messages with Bob; use /query Bob",
                         "[22:12] * /msg: no such nick: Nobody",
                     ]
                 );
@@ -2427,12 +2431,14 @@ mod tests {
                 );
                 assert_eq!(
                     state_ref(hwnd).model.status,
-                    "query submitted: @bob:example"
+                    "direct messages requested: @bob:example"
                 );
                 let lines = render_room_lines(state_ref(hwnd), "!ops:example");
                 assert_eq!(
                     lines.last().map(String::as_str),
-                    Some("[22:12] * /query: creating a query with @bob:example; message not sent")
+                    Some(
+                        "[22:12] * /query: creating direct messages with @bob:example; message not sent"
+                    )
                 );
             });
         }
@@ -3060,7 +3066,7 @@ mod tests {
         let status =
             submit_query_slash_command(&mut state, "@alice:example.org".to_owned()).unwrap();
 
-        assert_eq!(status, "query submitted: @alice:example.org");
+        assert_eq!(status, "direct messages requested: @alice:example.org");
         assert_eq!(
             state.recorded_commands,
             vec![Command::CreateDirectRoom(CreateDirectRoomRequest {

@@ -1938,7 +1938,11 @@ fn an_invite_names_its_inviter_and_auto_join_takes_channels_only() -> Result<(),
     )?;
     bob.wait_for_member(&hall, alice.user_id());
     let with_bob = bob.create_dm(alice.user_id());
-    wait_for_status_line(&app, &format!("{inviter} invites you to a query"), TIMEOUT)?;
+    wait_for_status_line(
+        &app,
+        &format!("{inviter} invites you to direct messages"),
+        TIMEOUT,
+    )?;
     wait_for_room_membership(&app, &hall, RoomMembership::Join)?;
     // The query's invite stays one: mirx never accepted it.
     let_background_tasks_settle(&app)?;

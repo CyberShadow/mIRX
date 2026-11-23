@@ -402,7 +402,7 @@ pub(super) const COMMANDS_MENU: &[CommandsMenuItem] = &[
         prompt: None,
     },
     CommandsMenuItem {
-        label: "&Query user...",
+        label: "&Direct message...",
         command: "query",
         prompt: Some("Nick or user ID"),
     },
@@ -487,7 +487,7 @@ pub(super) const MEMBER_MENU: &[MenuEntry] = &[
     },
     Item {
         id: MENU_ID_MEMBER_QUERY,
-        label: "Query User",
+        label: "Direct Message",
     },
     Item {
         id: MENU_ID_MEMBER_MENTION,
