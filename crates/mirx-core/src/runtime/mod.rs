@@ -76,6 +76,11 @@ impl CommandSender {
     pub fn next_id(&self) -> CommandId {
         CommandId(self.sent() + 1)
     }
+
+    /// The IDs handed out since `next_id` returned `from`, in order.
+    pub fn sent_since(&self, from: CommandId) -> impl Iterator<Item = CommandId> {
+        (from.0..=self.sent()).map(CommandId)
+    }
 }
 
 #[derive(Debug)]

@@ -226,6 +226,12 @@ unsafe extern "system" fn window_proc(
             }
             0
         }
+        WM_SCRIPT_RESUME => {
+            if let Err(message) = script::resume_ready_run(hwnd) {
+                show_error_message(hwnd, "Script", &message);
+            }
+            0
+        }
         WM_CONNECT_AT_STARTUP => {
             if let Err(message) = connect(hwnd, None) {
                 show_error_message(hwnd, "Connect", &message);

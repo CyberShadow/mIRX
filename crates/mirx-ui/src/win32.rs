@@ -149,6 +149,7 @@ use self::app_icon::{IconSize, app_icon};
 use self::command_acks::AnsweredCommands;
 use self::dpi::Dpi;
 use self::glyph_fonts::GlyphFonts;
+use self::script::ScriptRuns;
 use crate::{
     AppCommand, FrameSize, HELP, RunOptions,
     automation::{
@@ -580,6 +581,10 @@ const WM_LOG_OUT_WARNING: u32 = WM_APP + 6;
 /// A connect happened: mIRC's Perform on connect runs (`script::run_perform`).
 /// Posted after the connect's events are applied, for the same reason.
 const WM_PERFORM: u32 = WM_APP + 7;
+/// A script run that waited for the core can go on: the core answered
+/// what its last command sent (`script::resume_ready_run`). Posted after
+/// the answers are applied, for the same reason.
+const WM_SCRIPT_RESUME: u32 = WM_APP + 8;
 const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
 /// A connect retry is due (`reconnect`).
@@ -792,6 +797,8 @@ struct WindowState {
     /// The core's acks applied (`Event::CommandHandled`): the commands the
     /// core has answered, out of `command_sender`'s `sent()`.
     core_answers: AnsweredCommands,
+    /// The alias calls, `//lines` and perform runs waiting for the core.
+    script_runs: ScriptRuns,
     last_idle_probe_generation: Option<u64>,
     synthetic_load_in_progress: bool,
     current_session_homeserver_url: Option<String>,
@@ -1081,6 +1088,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         exit_code: Arc::clone(&exit_code),
         event_generation: 0,
         core_answers: AnsweredCommands::default(),
+        script_runs: ScriptRuns::default(),
         last_idle_probe_generation: None,
         synthetic_load_in_progress: false,
         current_session_homeserver_url: None,

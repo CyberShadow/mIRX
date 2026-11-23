@@ -19082,6 +19082,50 @@ fn perform_runs_in_status_on_each_connect() -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
+/// Perform's commands run in order, each once the core answered what the
+/// one before sent: the join's refusal (the automation's core is not
+/// signed in) prints before the echo after it, and the next line after
+/// both. `wait_idle` covers the whole run: an ack, the posted resume, the
+/// next command.
+#[test]
+fn perform_runs_each_command_after_the_core_answers_the_one_before()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    write_settings(
+        &local_app_data,
+        "[perform]\r\nenabled=on\r\nn0=join #perform:example | echo -s after join\r\n\
+         n1=echo -s line two\r\n",
+    )?;
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
+    let mut events = base_events();
+    events.insert(
+        1,
+        Event::LoggedIn {
+            session: core_stored_session(),
+            homeserver_url: "https://matrix.example/".to_owned(),
+        },
+    );
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let before = status_view_lines(&app)?.len();
+
+    append_events(&app, vec![Event::SyncConnected])?;
+    let lines = status_view_lines(&app)?[before..].to_vec();
+    let position = |wanted: &dyn Fn(&str) -> bool| {
+        lines
+            .iter()
+            .position(|line| wanted(line))
+            .unwrap_or_else(|| panic!("not in Status: {lines:?}"))
+    };
+    let refusal = position(&|line| line.contains("join room requires an authenticated session"));
+    let after_join = position(&|line| line == "after join");
+    let line_two = position(&|line| line == "line two");
+    assert!(refusal < after_join && after_join < line_two, "{lines:?}");
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 /// A Commands prompt runs its command in the window it was opened from,
 /// even when a join completing meanwhile activated another one.
 #[test]

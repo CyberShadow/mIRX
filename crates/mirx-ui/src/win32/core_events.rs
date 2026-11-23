@@ -1039,6 +1039,7 @@ pub(super) unsafe fn apply_events_and_refresh(
     if connected {
         PostMessageW(hwnd, WM_PERFORM, 0, 0);
     }
+    script::post_resume_if_ready(hwnd);
     if !log_out_warning_posted && state_ref(hwnd).log_out_warning.is_some() {
         PostMessageW(hwnd, WM_LOG_OUT_WARNING, 0, 0);
     }

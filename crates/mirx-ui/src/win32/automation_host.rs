@@ -166,7 +166,11 @@ unsafe fn dispatch_command(hwnd: HWND, command: ParsedCommand) -> ResponseEnvelo
 
 /// What WAIT_IDLE looks at, recording the event generation for the next
 /// probe.
-unsafe fn probe_idle(state: &mut WindowState) -> IdleProbe {
+unsafe fn probe_idle(hwnd: HWND) -> IdleProbe {
+    // Before the queue's status is read: the inert drain may post a
+    // script's resume.
+    let pending_core_commands = pending_core_commands(hwnd);
+    let state = state_mut(hwnd);
     let pending_core_events = state
         .event_queue
         .lock()
@@ -178,7 +182,7 @@ unsafe fn probe_idle(state: &mut WindowState) -> IdleProbe {
     IdleProbe {
         event_generation: state.event_generation,
         pending_core_events,
-        pending_core_commands: pending_core_commands(state),
+        pending_core_commands,
         // The probe runs inside the driver's sent WM_COPYDATA, which the
         // thread handles before any posted message: whatever the driver
         // (or a handler) posted before asking still waits in the queue.
@@ -190,14 +194,17 @@ unsafe fn probe_idle(state: &mut WindowState) -> IdleProbe {
 
 /// The commands sent to the core that it has not acked, or whose ack the
 /// UI has not applied yet.
-fn pending_core_commands(state: &mut WindowState) -> u64 {
+unsafe fn pending_core_commands(hwnd: HWND) -> u64 {
+    let state = state_mut(hwnd);
     // The inert core of a render-state run answers nothing: its commands
-    // are handled once dropped.
+    // are handled once dropped, and a script waiting for them goes on.
     if let Some(receiver) = &mut state.inert_command_receiver {
         while let Ok((id, _)) = receiver.try_recv() {
             state.core_answers.answer(id);
         }
+        script::post_resume_if_ready(hwnd);
     }
+    let state = state_ref(hwnd);
     let sent = state.command_sender.as_ref().map_or(0, CommandSender::sent);
     let answered = state.core_answers.count();
     sent.checked_sub(answered)
@@ -215,10 +222,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             drain_core_events_and_refresh(hwnd).map_err(|message| {
                 failure_response(Some(id.clone()), "state_unavailable", message)
             })?;
-            serialize_success_json(
-                &id,
-                WaitIdleResponse::from_probe(probe_idle(state_mut(hwnd))),
-            )
+            serialize_success_json(&id, WaitIdleResponse::from_probe(probe_idle(hwnd)))
         }
         ParsedCommand::DumpModel { id } => {
             let dump = dump_model_from_state(state_ref(hwnd));

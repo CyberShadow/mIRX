@@ -27,7 +27,6 @@ impl AnsweredCommands {
         }
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "the script runner waits next"))]
     pub(super) fn is_answered(&self, id: CommandId) -> bool {
         id.get() <= self.below || self.above.contains(&id.get())
     }

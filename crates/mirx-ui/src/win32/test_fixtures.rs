@@ -952,6 +952,7 @@ pub(super) fn test_state() -> WindowState {
         exit_code: Arc::new(AtomicI32::new(0)),
         event_generation: 0,
         core_answers: AnsweredCommands::default(),
+        script_runs: ScriptRuns::default(),
         last_idle_probe_generation: None,
         synthetic_load_in_progress: false,
         current_session_homeserver_url: None,

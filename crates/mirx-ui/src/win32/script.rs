@@ -12,6 +12,15 @@
 //! A `$$` identifier left empty stops the whole call silently, nested
 //! aliases too; a command's error stops it after printing the error with
 //! the alias named, as mIRC's `(line 3, aliases.ini)` does.
+//!
+//! A call's commands run in order: each once the core has answered what
+//! the one before it sent, as an IRC server reads a client's lines in
+//! order, so `/join #x | msg #x hi` greets in the room just joined. A
+//! call that waits is kept (`ScriptRuns`) and goes on at
+//! `WM_SCRIPT_RESUME`; the UI stays usable meanwhile. A server's refusal
+//! prints where it does and does not stop the call.
+
+use std::collections::VecDeque;
 
 use super::aliases::{Alias, CallContext, Evaluated, evaluate};
 use super::command_runner::execute_slash_command;
@@ -73,19 +82,18 @@ impl CallWindow {
 }
 
 /// Who runs a command, as its error names it.
-#[derive(Clone, Copy)]
-enum Caller<'a> {
-    /// The alias of this name: ` (in alias /x)`.
-    Alias(&'a str),
+enum Caller {
+    /// The alias of this name, as written: ` (in alias /x)`.
+    Alias(String),
     /// A typed `//line`: nothing.
     Line,
     /// Perform on connect: ` (in perform)`.
     Perform,
 }
 
-impl Caller<'_> {
+impl Caller {
     /// An error of a command it ran, as printed.
-    fn error_line(self, error: impl std::fmt::Display) -> String {
+    fn error_line(&self, error: impl std::fmt::Display) -> String {
         match self {
             Caller::Alias(name) => format!("{error} (in alias /{name})"),
             Caller::Line => error.to_string(),
@@ -96,7 +104,7 @@ impl Caller<'_> {
     /// The error of `command`, which it could not evaluate: an alias's
     /// names the alias, as mIRC's names its line; another's names the
     /// command.
-    fn evaluation_error(self, command: &str, reason: &str) -> String {
+    fn evaluation_error(&self, command: &str, reason: &str) -> String {
         match self {
             Caller::Alias(name) => format!("* /{name}: {reason}"),
             Caller::Line | Caller::Perform => {
@@ -111,6 +119,141 @@ impl Caller<'_> {
     }
 }
 
+/// The commands of one caller (an alias, a `//line`, a perform line) with
+/// its parameters, and where it is.
+struct Frame {
+    caller: Caller,
+    commands: Vec<String>,
+    params: Vec<String>,
+    /// The index of the command that runs next.
+    next: usize,
+}
+
+impl Frame {
+    fn new(caller: Caller, commands: Vec<String>, params: Vec<String>) -> Self {
+        Self {
+            caller,
+            commands,
+            params,
+            next: 0,
+        }
+    }
+
+    /// `alias`, called with `args`.
+    fn alias(alias: &Alias, args: &str) -> Self {
+        let params = args.split_ascii_whitespace().map(str::to_owned).collect();
+        Self::new(
+            Caller::Alias(alias.name.clone()),
+            alias.commands.clone(),
+            params,
+        )
+    }
+}
+
+/// A run under way: an alias call, a `//line`, or perform's lines. Owned,
+/// so that it can wait for the core between two commands
+/// (`ScriptRuns`).
+struct Run {
+    window: CallWindow,
+    /// The calls that run after the current one: perform's next lines.
+    calls: VecDeque<Frame>,
+    /// The current call: its own frame first, then the aliases it called,
+    /// innermost last. Empty between calls.
+    frames: Vec<Frame>,
+}
+
+impl Run {
+    fn new(window: CallWindow, calls: impl IntoIterator<Item = Frame>) -> Self {
+        Self {
+            window,
+            calls: calls.into_iter().collect(),
+            frames: Vec::new(),
+        }
+    }
+
+    /// The next command to run, which the innermost frame now holds;
+    /// `None` when the run is done.
+    fn next_command(&mut self) -> Option<String> {
+        loop {
+            match self.frames.last() {
+                Some(frame) if frame.next < frame.commands.len() => break,
+                Some(_) => {
+                    self.frames.pop();
+                }
+                None => self.frames.push(self.calls.pop_front()?),
+            }
+        }
+        let frame = self.innermost_mut();
+        frame.next += 1;
+        Some(frame.commands[frame.next - 1].clone())
+    }
+
+    /// The frame whose command runs.
+    fn innermost(&self) -> &Frame {
+        self.frames.last().expect("a command runs in a frame")
+    }
+
+    fn innermost_mut(&mut self) -> &mut Frame {
+        self.frames.last_mut().expect("a command runs in a frame")
+    }
+
+    /// Whether a command remains to run.
+    fn has_more(&self) -> bool {
+        !self.calls.is_empty()
+            || self
+                .frames
+                .iter()
+                .any(|frame| frame.next < frame.commands.len())
+    }
+
+    /// Whether `name` runs already: an alias never calls itself, nor one
+    /// running it, so such a call names the built-in.
+    fn is_running(&self, name: &str) -> bool {
+        self.frames.iter().any(|frame| match &frame.caller {
+            Caller::Alias(running) => running.eq_ignore_ascii_case(name),
+            Caller::Line | Caller::Perform => false,
+        })
+    }
+}
+
+/// How far a step took a run.
+enum Step {
+    Done,
+    /// Its next command waits for the core to answer these, which its last
+    /// command sent.
+    Waiting(Vec<CommandId>),
+}
+
+/// The runs waiting for the core, in the order they began to wait. Each
+/// waits for commands its last command sent; it is ready once the core
+/// answered them all. A run that is being stepped is not here.
+#[derive(Default)]
+pub(super) struct ScriptRuns(Vec<(Run, Vec<CommandId>)>);
+
+impl ScriptRuns {
+    fn suspend(&mut self, run: Run, ids: Vec<CommandId>) {
+        assert!(!ids.is_empty(), "a run waits for commands");
+        self.0.push((run, ids));
+    }
+
+    pub(super) fn any_ready(&self, answered: &AnsweredCommands) -> bool {
+        self.0.iter().any(|(_, ids)| all_answered(ids, answered))
+    }
+
+    /// The first ready run, taken out.
+    fn take_ready(&mut self, answered: &AnsweredCommands) -> Option<Run> {
+        let index = self
+            .0
+            .iter()
+            .position(|(_, ids)| all_answered(ids, answered))?;
+        Some(self.0.remove(index).0)
+    }
+}
+
+fn all_answered(ids: &[CommandId], answered: &AnsweredCommands) -> bool {
+    ids.iter().all(|id| answered.is_answered(*id))
+}
+
 /// Runs the alias `name`, typed with `args` in `window`.
 pub(super) unsafe fn run_alias_call(
     hwnd: HWND,
@@ -123,10 +266,9 @@ pub(super) unsafe fn run_alias_call(
         .aliases
         .aliases()
         .get(name)
-        .expect("a typed alias call names an alias")
-        .clone();
-    let window = CallWindow::typed_in(state, window);
-    run_alias(hwnd, &alias, args, &window, &mut Vec::new()).map(|_| ())
+        .expect("a typed alias call names an alias");
+    let call = Frame::alias(alias, args);
+    start_run(hwnd, Run::new(CallWindow::typed_in(state, window), [call]))
 }
 
 /// Runs `//line`, typed in `window`: `line` evaluated as an alias's command
@@ -137,115 +279,155 @@ pub(super) unsafe fn run_evaluated_line(
     window: &ViewId,
     line: &str,
 ) -> Result<(), String> {
+    let call = Frame::new(Caller::Line, vec![line.to_owned()], Vec::new());
     let window = CallWindow::typed_in(state_ref(hwnd), window);
-    let commands = [line.to_owned()];
-    run_commands(hwnd, &commands, &[], &window, Caller::Line, &mut Vec::new()).map(|_| ())
+    start_run(hwnd, Run::new(window, [call]))
 }
 
 /// mIRC's Perform on connect: each line of the setting, if it is enabled,
 /// run as if typed in Status, whatever window is in front. A line stops at
 /// its first error, which Status prints, and the next line still runs:
-/// each is a step of its own.
+/// each is a call of its own, in one run, so a line runs once the core
+/// answered what the line before it sent.
 pub(super) unsafe fn run_perform(hwnd: HWND) -> Result<(), String> {
-    // Cloned: a line may change the settings (`/notify`, `/cnick`).
-    let perform = state_ref(hwnd).settings.settings().perform.clone();
+    let state = state_ref(hwnd);
+    let perform = &state.settings.settings().perform;
     // Read when it runs: the setting may have changed since the connect
     // posted it.
     if !perform.enabled {
         return Ok(());
     }
-    let window = CallWindow::status(state_ref(hwnd));
-    for line in perform.lines() {
-        run_commands(
-            hwnd,
-            line.commands(),
-            &[],
-            &window,
-            Caller::Perform,
-            &mut Vec::new(),
-        )?;
+    // Copied: a line may change the settings (`/notify`, `/cnick`).
+    let calls = perform
+        .lines()
+        .iter()
+        .map(|line| Frame::new(Caller::Perform, line.commands().to_vec(), Vec::new()))
+        .collect::<Vec<_>>();
+    start_run(hwnd, Run::new(CallWindow::status(state), calls))
+}
+
+/// Steps the first run whose commands the core has answered
+/// (`WM_SCRIPT_RESUME`), and posts the next resume if another is ready.
+pub(super) unsafe fn resume_ready_run(hwnd: HWND) -> Result<(), String> {
+    let state = state_mut(hwnd);
+    // A resume posted twice finds nothing the second time.
+    let Some(run) = state.script_runs.take_ready(&state.core_answers) else {
+        return Ok(());
+    };
+    let stepped = start_run(hwnd, run);
+    post_resume_if_ready(hwnd);
+    stepped
+}
+
+/// Posts `WM_SCRIPT_RESUME` if a waiting run can go on: after core events
+/// are applied, acks among them. Posted, never run inside the batch: a
+/// command may open a modal dialog, and the activation a `RoomJoined`
+/// asks for happens in the batch's refresh.
+pub(super) unsafe fn post_resume_if_ready(hwnd: HWND) {
+    let state = state_ref(hwnd);
+    if state.script_runs.any_ready(&state.core_answers) {
+        PostMessageW(hwnd, WM_SCRIPT_RESUME, 0, 0);
+    }
+}
+
+/// Steps `run`, and keeps it if it waits for the core.
+unsafe fn start_run(hwnd: HWND, mut run: Run) -> Result<(), String> {
+    match step(hwnd, &mut run)? {
+        Step::Done => {}
+        Step::Waiting(ids) => state_mut(hwnd).script_runs.suspend(run, ids),
     }
     Ok(())
 }
 
-/// Runs `alias` with `stack` holding the aliases running it, by lowercase
-/// name: none of them is called again, so a call names their built-in.
-unsafe fn run_alias(
-    hwnd: HWND,
-    alias: &Alias,
-    args: &str,
-    window: &CallWindow,
-    stack: &mut Vec<String>,
-) -> Result<Flow, String> {
-    stack.push(alias.name.to_ascii_lowercase());
-    let params = args.split_ascii_whitespace().collect::<Vec<_>>();
-    let flow = run_commands(
-        hwnd,
-        &alias.commands,
-        &params,
-        window,
-        Caller::Alias(&alias.name),
-        stack,
-    );
-    stack.pop();
-    flow
-}
-
-/// Evaluates each of `commands` with `params` and runs it, until one stops
-/// the call: an empty `$$` identifier silently, a wrong one or a failing
-/// command with its error.
-unsafe fn run_commands(
-    hwnd: HWND,
-    commands: &[String],
-    params: &[&str],
-    window: &CallWindow,
-    caller: Caller,
-    stack: &mut Vec<String>,
-) -> Result<Flow, String> {
-    let context = CallContext {
-        params,
-        chan: &window.chan,
-        me: &window.me,
+/// Evaluates and runs `run`'s commands until it is done, or until a
+/// command sent requests the core has not answered and another command
+/// remains: that one waits, as an IRC server reads a client's lines in
+/// order. A call stops at an empty `$$` identifier silently, and at a
+/// wrong one or a failing command with its error; a server's refusal,
+/// which comes as the core's answer, does not stop it.
+///
+/// What a command sent is every command ID handed out while it ran: the
+/// UI thread is the only sender (every `CommandSender::send` runs on it),
+/// so those are its requests, incidental ones too (a read receipt for the
+/// window a `/join` activated), which it is right to wait for. Some may be
+/// answered already: a command that opened a modal dialog handled core
+/// events in its loop.
+unsafe fn step(hwnd: HWND, run: &mut Run) -> Result<Step, String> {
+    let sender = || {
+        state_ref(hwnd)
+            .command_sender
+            .as_ref()
+            .expect("scripts run with a core")
     };
-    for command in commands {
-        let flow = match evaluate(command, &context) {
-            Ok(Evaluated::Command(text)) => run_command(hwnd, &text, caller, window, stack)?,
-            Ok(Evaluated::Halt) => Flow::Stop,
-            Err(reason) => {
-                let acts_in = window.window(state_ref(hwnd));
-                report_error_line(hwnd, &acts_in, caller.evaluation_error(command, &reason))?;
-                Flow::Stop
-            }
+    loop {
+        let from = sender().next_id();
+        let Some(flow) = run_next_command(hwnd, run)? else {
+            return Ok(Step::Done);
         };
         if let Flow::Stop = flow {
-            return Ok(Flow::Stop);
+            run.frames.clear();
+        }
+        let answers = &state_ref(hwnd).core_answers;
+        let waiting = sender()
+            .sent_since(from)
+            .filter(|id| !answers.is_answered(*id))
+            .collect::<Vec<_>>();
+        if !waiting.is_empty() && run.has_more() {
+            return Ok(Step::Waiting(waiting));
         }
     }
-    Ok(Flow::Continue)
 }
 
-/// Runs one evaluated command that `caller` runs, in the window `window`
-/// says. Its leading `/` is optional, and `//` the same as `/`: the command
-/// is evaluated already.
-unsafe fn run_command(
-    hwnd: HWND,
-    text: &str,
-    caller: Caller,
-    window: &CallWindow,
-    stack: &mut Vec<String>,
-) -> Result<Flow, String> {
+/// Evaluates `run`'s next command and runs it; `None` when there is none.
+unsafe fn run_next_command(hwnd: HWND, run: &mut Run) -> Result<Option<Flow>, String> {
+    let Some(command) = run.next_command() else {
+        return Ok(None);
+    };
+    let evaluated = {
+        let params = run
+            .innermost()
+            .params
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let context = CallContext {
+            params: &params,
+            chan: &run.window.chan,
+            me: &run.window.me,
+        };
+        evaluate(&command, &context)
+    };
+    let flow = match evaluated {
+        Ok(Evaluated::Command(text)) => run_command(hwnd, run, &text)?,
+        Ok(Evaluated::Halt) => Flow::Stop,
+        Err(reason) => {
+            let acts_in = run.window.window(state_ref(hwnd));
+            let error = run.innermost().caller.evaluation_error(&command, &reason);
+            report_error_line(hwnd, &acts_in, error)?;
+            Flow::Stop
+        }
+    };
+    Ok(Some(flow))
+}
+
+/// Runs one evaluated command of `run`'s innermost frame, in the window
+/// `run`'s window says. Its leading `/` is optional, and `//` the same as
+/// `/`: the command is evaluated already. An alias call pushes the
+/// alias's frame, whose commands run next.
+unsafe fn run_command(hwnd: HWND, run: &mut Run, text: &str) -> Result<Flow, String> {
     // Every word was an empty parameter: there is nothing to run.
     if text.is_empty() {
         return Ok(Flow::Continue);
     }
     let line = format!("/{}", text.trim_start_matches('/'));
-    let acts_in = window.window(state_ref(hwnd));
+    let acts_in = run.window.window(state_ref(hwnd));
     let submission = {
         let aliases = state_ref(hwnd).aliases.aliases();
         classify_command(&line, |name| {
-            aliases.get(name).is_some() && !stack.iter().any(|on| on.eq_ignore_ascii_case(name))
+            aliases.get(name).is_some() && !run.is_running(name)
         })
     };
+    let caller = &run.innermost().caller;
     let failed = |error: CommandError| {
         report_error_line(hwnd, &acts_in, caller.error_line(error)).map(|()| Flow::Stop)
     };
@@ -276,9 +458,9 @@ unsafe fn run_command(
                 .aliases
                 .aliases()
                 .get(name)
-                .expect("classify_command names an alias")
-                .clone();
-            run_alias(hwnd, &alias, args, window, stack)
+                .expect("classify_command names an alias");
+            run.frames.push(Frame::alias(alias, args));
+            Ok(Flow::Continue)
         }
     }
 }
@@ -400,13 +582,14 @@ mod tests {
 
     /// A frame with the channel Ops (`#ops:example`, active) and a query
     /// with Alice, signed in as Mee; `extra` adds alias lines to the
-    /// defaults.
+    /// defaults. What the UI sends waits in `inert_command_receiver`
+    /// until `ack_sent` answers it.
     unsafe fn with_alias_frame(extra: &[&str], test: impl FnOnce(HWND)) {
         with_test_frame(600, 400, |hwnd| {
             let (sender, commands) = inert_command_sender();
-            std::mem::forget(commands);
             let state = state_mut(hwnd);
             state.command_sender = Some(sender);
+            state.inert_command_receiver = Some(commands);
             state.model = context_model();
             state.model.rooms.remove(1);
             state
@@ -424,6 +607,61 @@ mod tests {
             activate_view(hwnd, &room_view_id("!ops:example"), None).unwrap();
             test(hwnd);
         });
+    }
+
+    /// The IDs of the commands sent since the last call.
+    unsafe fn take_sent_ids(hwnd: HWND) -> Vec<CommandId> {
+        let receiver = state_mut(hwnd)
+            .inert_command_receiver
+            .as_mut()
+            .expect("an alias frame keeps its receiver");
+        std::iter::from_fn(|| receiver.try_recv().ok())
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    /// Applies the core's ack of each of `ids`.
+    unsafe fn ack(hwnd: HWND, ids: &[CommandId]) {
+        let acks = ids.iter().map(|id| Event::CommandHandled(*id)).collect();
+        apply_events_and_refresh(hwnd, acks).unwrap();
+    }
+
+    /// Handles the posted `WM_SCRIPT_RESUME`s; whether there was one.
+    unsafe fn resume_posted(hwnd: HWND) -> bool {
+        let mut message = std::mem::zeroed::<MSG>();
+        let mut resumed = false;
+        while PeekMessageW(
+            &mut message,
+            hwnd,
+            WM_SCRIPT_RESUME,
+            WM_SCRIPT_RESUME,
+            PM_REMOVE,
+        ) != 0
+        {
+            resume_ready_run(hwnd).unwrap();
+            resumed = true;
+        }
+        resumed
+    }
+
+    /// Answers every command sent, as the core does with no event of its
+    /// own, and runs what waited for them, until nothing more is sent.
+    unsafe fn ack_sent(hwnd: HWND) {
+        loop {
+            let ids = take_sent_ids(hwnd);
+            if ids.is_empty() {
+                assert!(!resume_posted(hwnd), "a resume without a new ack");
+                return;
+            }
+            ack(hwnd, &ids);
+            resume_posted(hwnd);
+        }
+    }
+
+    /// Types `line`, and answers what it sends until it is done.
+    unsafe fn type_answered(hwnd: HWND, line: &str) {
+        type_compose_line(hwnd, line);
+        ack_sent(hwnd);
     }
 
     fn sent(state: &WindowState) -> Vec<(String, RoomMessagePresentationKind, String)> {
@@ -497,7 +735,7 @@ mod tests {
             with_alias_frame(
                 &["/x {", "  say one", "  me two | bogus", "  say three", "}"],
                 |hwnd| {
-                    type_compose_line(hwnd, "/x");
+                    type_answered(hwnd, "/x");
                     assert_eq!(
                         sent(state_ref(hwnd)),
                         [
@@ -550,7 +788,7 @@ mod tests {
             with_alias_frame(
                 &["/join say joining $1 | join $1", "/a b", "/b a"],
                 |hwnd| {
-                    type_compose_line(hwnd, "/join #beta:example");
+                    type_answered(hwnd, "/join #beta:example");
                     assert_eq!(
                         sent(state_ref(hwnd)),
                         [text_to("!ops:example", "joining #beta:example")]
@@ -581,7 +819,7 @@ mod tests {
                     type_compose_line(hwnd, "/outer");
                     assert!(sent(state_ref(hwnd)).is_empty());
                     assert_eq!(ops_lines(hwnd), lines_before);
-                    type_compose_line(hwnd, "/outer hi");
+                    type_answered(hwnd, "/outer hi");
                     assert_eq!(
                         sent(state_ref(hwnd)),
                         [
@@ -648,7 +886,7 @@ mod tests {
     fn say_goes_to_the_window_active_when_it_runs() {
         unsafe {
             with_alias_frame(&["/greet /q $$1 | say hi $1"], |hwnd| {
-                type_compose_line(hwnd, "/greet Alice");
+                type_answered(hwnd, "/greet Alice");
                 assert_eq!(state_ref(hwnd).active_view, room_view_id("!dm:example"));
                 assert_eq!(sent(state_ref(hwnd)), [text_to("!dm:example", "hi Alice")]);
             });
@@ -781,6 +1019,7 @@ mod tests {
 
                 set(true);
                 run_perform(hwnd).unwrap();
+                ack_sent(hwnd);
                 assert!(sent(state_ref(hwnd)).is_empty());
                 assert_eq!(joins(state_ref(hwnd)), ["#new:example"]);
                 let status = status_log_lines(state_ref(hwnd));
@@ -805,6 +1044,166 @@ mod tests {
                 assert_eq!(ops_lines(hwnd), ops_before);
                 assert_eq!(state_ref(hwnd).active_view, room_view_id("!ops:example"));
             });
+        }
+    }
+
+    fn commands_sent(state: &WindowState) -> Vec<&Command> {
+        state.recorded_commands.iter().collect()
+    }
+
+    fn status_tail(hwnd: HWND, from: usize) -> Vec<String> {
+        unsafe { status_log_lines(state_ref(hwnd))[from..].to_vec() }
+    }
+
+    /// The rooms of the alias frame, and `room` (a room just joined, or a
+    /// direct room just made).
+    unsafe fn rooms_with(hwnd: HWND, room: RoomSummary) -> Event {
+        let mut rooms = state_ref(hwnd).model.rooms.clone();
+        rooms.push(room);
+        Event::SyncedRooms(rooms)
+    }
+
+    #[test]
+    fn commands_of_a_perform_line_wait_for_the_core_to_answer_the_one_before() {
+        unsafe {
+            with_alias_frame(&[], |hwnd| {
+                let lines = PerformSetting::parse_lines(
+                    ["join #new:example | echo -s joined", "msg #new:example hi"].into_iter(),
+                )
+                .unwrap();
+                state_mut(hwnd)
+                    .settings
+                    .update(|settings| settings.perform = PerformSetting::new(true, lines))
+                    .unwrap();
+                let status_before = status_log_lines(state_ref(hwnd)).len();
+
+                run_perform(hwnd).unwrap();
+                assert_eq!(joins(state_ref(hwnd)), ["#new:example"]);
+                assert_eq!(commands_sent(state_ref(hwnd)).len(), 1);
+                assert_eq!(status_tail(hwnd, status_before), Vec::<String>::new());
+                assert!(!resume_posted(hwnd));
+
+                let join = take_sent_ids(hwnd);
+                // Synced: the SDK knows no state of the room yet, so no alias.
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![
+                        rooms_with(hwnd, room("!new:example", "!new:example", false)),
+                        Event::RoomJoined(mirx_core::RoomJoined {
+                            room_id: "!new:example".to_owned(),
+                            alias: Some("#new:example".to_owned()),
+                        }),
+                        Event::CommandHandled(join[0]),
+                    ],
+                )
+                .unwrap();
+                assert!(resume_posted(hwnd));
+                assert_eq!(sent(state_ref(hwnd)), [text_to("!new:example", "hi")]);
+                assert_eq!(
+                    status_tail(hwnd, status_before),
+                    ["joined", "[22:12] -> *#new:example* hi"]
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn an_alias_greets_in_the_query_it_creates() {
+        unsafe {
+            with_alias_frame(&["/greet /q $$1 | say hi $1"], |hwnd| {
+                state_mut(hwnd)
+                    .model
+                    .room_views
+                    .get_mut("!ops:example")
+                    .unwrap()
+                    .members
+                    .push(member_summary("@bob:example", "Bob", false));
+
+                type_compose_line(hwnd, "/greet Bob");
+                assert!(
+                    matches!(
+                        commands_sent(state_ref(hwnd))[..],
+                        [Command::CreateDirectRoom(request)] if request.user_id == "@bob:example"
+                    ),
+                    "{:?}",
+                    state_ref(hwnd).recorded_commands
+                );
+                assert!(sent(state_ref(hwnd)).is_empty());
+
+                let create = take_sent_ids(hwnd);
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![
+                        rooms_with(hwnd, query("!dm-bob:example", "Bob", "@bob:example")),
+                        Event::RoomJoined(mirx_core::RoomJoined {
+                            room_id: "!dm-bob:example".to_owned(),
+                            alias: None,
+                        }),
+                        Event::CommandHandled(create[0]),
+                    ],
+                )
+                .unwrap();
+                assert!(resume_posted(hwnd));
+                assert_eq!(state_ref(hwnd).active_view, room_view_id("!dm-bob:example"));
+                assert_eq!(
+                    sent(state_ref(hwnd)),
+                    [text_to("!dm-bob:example", "hi Bob")]
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn a_refused_request_does_not_stop_the_alias() {
+        unsafe {
+            with_alias_frame(&["/x join #nowhere:example | echo -s after"], |hwnd| {
+                let status_before = status_log_lines(state_ref(hwnd)).len();
+                type_compose_line(hwnd, "/x");
+                let join = take_sent_ids(hwnd);
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![
+                        Event::Error(CoreErrorEvent {
+                            operation: Operation::JoinRoom,
+                            room_id: None,
+                            message: "no such room".to_owned(),
+                        }),
+                        Event::CommandHandled(join[0]),
+                    ],
+                )
+                .unwrap();
+                assert!(resume_posted(hwnd));
+                assert_eq!(
+                    status_tail(hwnd, status_before),
+                    ["[22:12] * Error during join room: no such room", "after"]
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn two_waiting_calls_resume_on_their_own_answers() {
+        unsafe {
+            with_alias_frame(
+                &[
+                    "/a join #one:example | echo -s one done",
+                    "/b join #two:example | echo -s two done",
+                ],
+                |hwnd| {
+                    let status_before = status_log_lines(state_ref(hwnd)).len();
+                    type_compose_line(hwnd, "/a");
+                    type_compose_line(hwnd, "/b");
+                    let [one, two] = take_sent_ids(hwnd)[..] else {
+                        panic!("one join each");
+                    };
+                    ack(hwnd, &[two]);
+                    assert!(resume_posted(hwnd));
+                    assert_eq!(status_tail(hwnd, status_before), ["two done"]);
+                    ack(hwnd, &[one]);
+                    assert!(resume_posted(hwnd));
+                    assert_eq!(status_tail(hwnd, status_before), ["two done", "one done"]);
+                },
+            );
         }
     }
 }
