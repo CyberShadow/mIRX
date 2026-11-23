@@ -26,9 +26,12 @@ nix develop -c ./scripts/ui-snapshot.sh
 nix develop -c ./scripts/dll-gate.sh
 nix develop -c ./scripts/live-lane.sh
 nix develop -c ./scripts/measure.sh
+nix develop -c ./scripts/size-audit.sh [--top N] [--base <rev>]
 ```
 
 `dll-gate.sh` checks the release exe: its DLL imports against an allowlist, that it is a Windows GUI-subsystem program, and that it carries its resources (icon, group icon, version information and the manifest, with the Common-Controls 6 dependency and Windows 10/11 as its supported OS).
+
+`size-audit.sh` says where the release exe's bytes go. It builds the release exe unstripped (otherwise the release profile as it is) in `target/size-audit`, never `target/`, writes `target/size-audit/report/<rev>[-dirty].tsv` (bytes and demangled name of every `.text` symbol, sizes measured to the next symbol's address since COFF symbols carry none) and prints the stripped size, the `.text` and `.rdata` sizes, the biggest symbols and the sums by crate. `--base <rev>` also builds that commit in a temporary worktree with a target dir of its own (`target/size-audit-base`, kept for the next run) and prints the stripped delta, the change by crate and the symbols that grew and shrank most. A first build takes several minutes, a rebuild a few. The crate of a symbol is the first `crate::` path in its name, so a generic counts under whichever crate comes first, and LTO inlines callees into their callers: judge a change by the totals and the crate sums more than by one symbol.
 
 `windows-ui-tests.sh` runs the Wine UI suites in parallel shards (`MIRX_UI_TEST_SHARDS`, default 12), each with its own Wine prefix, Xvfb display and temp dir, and its tests one at a time; `-- [--exact] <filter>...` runs only the tests whose names match, and each shard's output is kept in `target/windows-ui-tests/`. The `scale` suite loads 200 rooms and checks, through the refresh counters in the UI dump (rows built, rows wrapped, treebar and switchbar rebuilds), that one change costs one window's work; `-- two_hundred_rooms` runs it alone.
 
