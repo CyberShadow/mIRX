@@ -1092,7 +1092,8 @@ async fn fetch_power_levels(
         .map_err(|err| load_error(err.to_string()))
 }
 
-/// Edits the member's level in the room's power levels.
+/// Edits the members' levels in the room's power levels, in one write:
+/// every change or none (a refused voice sends nothing).
 ///
 /// Not the SDK's `Room::update_power_levels`: it edits the store's power
 /// levels, which only learn a write from the sync's echo, so a second
@@ -1106,16 +1107,28 @@ pub(crate) async fn set_room_member_power_level(
 ) -> Result<(), MatrixCoreError> {
     let room_id = <&RoomId>::try_from(request.room_id.as_str())
         .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
-    let user_id = <&UserId>::try_from(request.user_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+    let changes = request
+        .changes
+        .iter()
+        .map(|change| {
+            <&UserId>::try_from(change.user_id.as_str())
+                .map(|user_id| (user_id, change.role))
+                .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if changes.is_empty() {
+        return Err(MatrixCoreError::new("no power level changes"));
+    }
     let room = joined_room_by_id(client, room_id.as_str())?;
 
     let mut power_levels = fetch_power_levels(client, room_id).await?;
-    let level = member_power_role_level(&power_levels, request.role)?;
-    if level == power_levels.users_default {
-        power_levels.users.remove(user_id);
-    } else {
-        power_levels.users.insert(user_id.to_owned(), level);
+    for (user_id, role) in changes {
+        let level = member_power_role_level(&power_levels, role)?;
+        if level == power_levels.users_default {
+            power_levels.users.remove(user_id);
+        } else {
+            power_levels.users.insert(user_id.to_owned(), level);
+        }
     }
 
     room.send_state_event(power_levels)
@@ -7158,13 +7171,12 @@ mod tests {
     }
 
     /// Syncs a joined room whose power levels are `store` and serves
-    /// `server` as its power levels, sets `@target:example.org` to `role`
-    /// and returns the result plus the `users` map of every power-levels
-    /// PUT body.
-    async fn set_target_power_role_against(
+    /// `server` as its power levels, makes the `changes` and returns the
+    /// result plus the `users` map of every power-levels PUT body.
+    async fn set_power_roles_against(
         store: serde_json::Value,
         server: serde_json::Value,
-        role: MemberPowerRole,
+        changes: &[(&str, MemberPowerRole)],
     ) -> (Result<(), super::MatrixCoreError>, Vec<serde_json::Value>) {
         let mock_server = MatrixMockServer::new().await;
         let client = mock_server.client_builder().build().await;
@@ -7197,8 +7209,13 @@ mod tests {
             &client,
             &SetRoomMemberPowerLevelRequest {
                 room_id: "!room:example.org".to_owned(),
-                user_id: "@target:example.org".to_owned(),
-                role,
+                changes: changes
+                    .iter()
+                    .map(|(user_id, role)| MemberPowerLevelChange {
+                        user_id: (*user_id).to_owned(),
+                        role: *role,
+                    })
+                    .collect(),
             },
         )
         .await;
@@ -7221,12 +7238,18 @@ mod tests {
         (result, users)
     }
 
-    /// The same, with the store and the server agreeing on `power_levels`.
+    /// The same, with the store and the server agreeing on `power_levels`,
+    /// for the changes of `@target:example.org` to `role`.
     async fn set_target_power_role(
         power_levels: serde_json::Value,
         role: MemberPowerRole,
     ) -> (Result<(), super::MatrixCoreError>, Vec<serde_json::Value>) {
-        set_target_power_role_against(power_levels.clone(), power_levels, role).await
+        set_power_roles_against(
+            power_levels.clone(),
+            power_levels,
+            &[("@target:example.org", role)],
+        )
+        .await
     }
 
     /// The store's power levels lag behind the server's until a sync
@@ -7234,12 +7257,12 @@ mod tests {
     #[test]
     fn set_room_member_power_level_edits_the_servers_power_levels() {
         moderation_test_runtime().block_on(async {
-            let (result, users) = set_target_power_role_against(
+            let (result, users) = set_power_roles_against(
                 serde_json::json!({ "users": { "@example:localhost": 100 } }),
                 serde_json::json!({
                     "users": { "@example:localhost": 100, "@bob:example.org": 50 },
                 }),
-                MemberPowerRole::Moderator,
+                &[("@target:example.org", MemberPowerRole::Moderator)],
             )
             .await;
             result.expect("set power level");
@@ -7318,7 +7341,17 @@ mod tests {
                     "users": { "@example:localhost": 100 },
                 }),
             ] {
-                let (result, users) = set_target_power_role(content, MemberPowerRole::Voiced).await;
+                // With a change that could be made, the refusal still sends
+                // nothing.
+                let (result, users) = set_power_roles_against(
+                    content.clone(),
+                    content,
+                    &[
+                        ("@other:example.org", MemberPowerRole::Moderator),
+                        ("@target:example.org", MemberPowerRole::Voiced),
+                    ],
+                )
+                .await;
                 let err = result.expect_err("no voice level below moderator");
                 assert!(
                     err.to_string()
@@ -7338,20 +7371,21 @@ mod tests {
             mock_server
                 .sync_joined_room(&client, room_id().as_ref())
                 .await;
-            for (room, user, expected) in [
+            for (room, users, expected) in [
                 (
                     "invalid-room-id",
-                    "@target:example.org",
+                    &["@target:example.org"][..],
                     "invalid Matrix room id: leading sigil is incorrect or missing",
                 ),
                 (
                     "!room:example.org",
-                    "invalid-user-id",
+                    &["@target:example.org", "invalid-user-id"][..],
                     "invalid Matrix user id: leading sigil is incorrect or missing",
                 ),
+                ("!room:example.org", &[][..], "no power level changes"),
                 (
                     "!other:example.org",
-                    "@target:example.org",
+                    &["@target:example.org"][..],
                     "joined room not found: !other:example.org",
                 ),
             ] {
@@ -7359,14 +7393,29 @@ mod tests {
                     &client,
                     &SetRoomMemberPowerLevelRequest {
                         room_id: room.to_owned(),
-                        user_id: user.to_owned(),
-                        role: MemberPowerRole::Moderator,
+                        changes: users
+                            .iter()
+                            .map(|user_id| MemberPowerLevelChange {
+                                user_id: (*user_id).to_owned(),
+                                role: MemberPowerRole::Moderator,
+                            })
+                            .collect(),
                     },
                 )
                 .await
                 .expect_err("rejected power level change");
                 assert_eq!(err.to_string(), expected);
             }
+            let requests = mock_server
+                .received_requests()
+                .await
+                .expect("request recording enabled");
+            assert!(
+                !requests
+                    .iter()
+                    .any(|request| request.url.path().contains("/state/m.room.power_levels")),
+                "{requests:?}"
+            );
         });
     }
 
@@ -8260,18 +8309,19 @@ mod tests {
         BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreErrorEvent, E2eeBackupState,
         E2eeCrossSigningStatus, E2eeRecoveryState, Event, FetchRoomEventRequest,
         FetchRoomMediaRequest, HistoryFrom, InviteRoomMemberRequest, KickRoomMemberRequest,
-        MemberPowerRole, Operation, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RoomActivity,
-        RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-        RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
-        RoomEncryptedFileKey, RoomEventFetch, RoomEventFetchResult, RoomFileActivity, RoomFileInfo,
-        RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo,
-        RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
-        RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
-        RoomMessageSendState, RoomPollActivity, RoomPollContent, RoomPowerLevelUserChange,
-        RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
-        RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity, RoomUnableToDecryptCause,
-        RoomUserProfile, RoomVerificationRequestActivity, RoomVideoActivity, RoomVideoInfo,
-        SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SetDisplayNameRequest,
+        MemberPowerLevelChange, MemberPowerRole, Operation, ROOM_HISTORY_BACKFILL_LIMIT_MAX,
+        RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
+        RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
+        RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomEventFetch, RoomEventFetchResult,
+        RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
+        RoomImageActivity, RoomImageInfo, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
+        RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMessageActivity,
+        RoomMessagePresentationKind, RoomMessageSendState, RoomPollActivity, RoomPollContent,
+        RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState,
+        RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
+        RoomUnableToDecryptActivity, RoomUnableToDecryptCause, RoomUserProfile,
+        RoomVerificationRequestActivity, RoomVideoActivity, RoomVideoInfo, SendMessageReplyTarget,
+        SendMessageRequest, SendMessageThreadTarget, SetDisplayNameRequest,
         SetRoomMemberPowerLevelRequest, StoredSession, UnbanRoomMemberRequest,
         UnsupportedRoomMessageActivity, VerificationDecimals, VerificationDirection,
         VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,

@@ -398,8 +398,10 @@ pub(super) unsafe fn run_slash_command(
                 state,
                 Command::SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest {
                     room_id,
-                    user_id: user_id.clone(),
-                    role,
+                    changes: vec![MemberPowerLevelChange {
+                        user_id: user_id.clone(),
+                        role,
+                    }],
                 }),
             )?;
             Ok(Some(format!("power level change submitted: {user_id}")))
@@ -2132,8 +2134,10 @@ mod tests {
                 let power = |user_id: &str, role| {
                     Command::SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest {
                         room_id: room(),
-                        user_id: user_id.to_owned(),
-                        role,
+                        changes: vec![MemberPowerLevelChange {
+                            user_id: user_id.to_owned(),
+                            role,
+                        }],
                     })
                 };
                 assert_eq!(

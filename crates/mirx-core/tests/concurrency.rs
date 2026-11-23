@@ -16,9 +16,9 @@ use matrix_sdk_test::{InvitedRoomBuilder, JoinedRoomBuilder};
 use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CreateDirectRoomRequest,
     EditMessageRequest, Event, HistoryFrom, ListPublicRoomsRequest, LoginMethod, LoginRequest,
-    MemberPowerRole, Operation, RestoreSessionRequest, RoomMessagePresentationKind,
-    SendFileRequest, SendMessageRequest, SessionAuth, SetRoomMemberPowerLevelRequest,
-    StoredSession,
+    MemberPowerLevelChange, MemberPowerRole, Operation, RestoreSessionRequest,
+    RoomMessagePresentationKind, SendFileRequest, SendMessageRequest, SessionAuth,
+    SetRoomMemberPowerLevelRequest, StoredSession,
 };
 use serde_json::json;
 use wiremock::matchers::{method, path_regex};
@@ -753,11 +753,16 @@ fn ranking_in(content: serde_json::Value, delay: Duration) -> (Harness, Document
     (harness, server)
 }
 
-fn rank(user_id: &str, role: MemberPowerRole) -> Command {
+fn rank(changes: &[(&str, MemberPowerRole)]) -> Command {
     Command::SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest {
         room_id: ROOM.to_owned(),
-        user_id: user_id.to_owned(),
-        role,
+        changes: changes
+            .iter()
+            .map(|(user_id, role)| MemberPowerLevelChange {
+                user_id: (*user_id).to_owned(),
+                role: *role,
+            })
+            .collect(),
     })
 }
 
@@ -768,8 +773,8 @@ fn two_rank_changes_in_a_row_keep_both() {
     let mut seen = Seen::new(&harness);
 
     // The second comes before any sync echoes the first.
-    harness.send(rank("@bob:example.org", MemberPowerRole::Moderator));
-    harness.send(rank("@carol:example.org", MemberPowerRole::Voiced));
+    harness.send(rank(&[("@bob:example.org", MemberPowerRole::Moderator)]));
+    harness.send(rank(&[("@carol:example.org", MemberPowerRole::Voiced)]));
     seen.until_acks(2);
 
     assert_eq!(
@@ -786,6 +791,43 @@ fn two_rank_changes_in_a_row_keep_both() {
         server.requests()
     );
     assert_writes_one_after_the_other(&server.requests(), delay);
+    let events = seen.shut_down();
+    assert!(
+        !events.iter().any(|event| matches!(event, Event::Error(_))),
+        "{events:#?}"
+    );
+    harness.join_stopped();
+}
+
+#[test]
+fn several_members_change_in_one_write() {
+    let (harness, server) = ranking_in(
+        power_levels(json!({ "@alice:example.org": 100, "@dave:example.org": 50 })),
+        Duration::ZERO,
+    );
+    let mut seen = Seen::new(&harness);
+
+    harness.send(rank(&[
+        ("@bob:example.org", MemberPowerRole::Moderator),
+        ("@carol:example.org", MemberPowerRole::Voiced),
+        ("@dave:example.org", MemberPowerRole::Default),
+    ]));
+    seen.until_acks(1);
+
+    let requests = server.requests();
+    let methods = requests
+        .iter()
+        .map(|request| request.method)
+        .collect::<Vec<_>>();
+    assert_eq!(methods, ["GET", "PUT"], "{requests:#?}");
+    assert_eq!(
+        requests[1].body,
+        power_levels(json!({
+            "@alice:example.org": 100,
+            "@bob:example.org": 50,
+            "@carol:example.org": 1,
+        }))
+    );
     let events = seen.shut_down();
     assert!(
         !events.iter().any(|event| matches!(event, Event::Error(_))),

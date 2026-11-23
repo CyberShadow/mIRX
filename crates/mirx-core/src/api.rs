@@ -415,6 +415,14 @@ pub enum MemberPowerRole {
 #[serde(deny_unknown_fields)]
 pub struct SetRoomMemberPowerLevelRequest {
     pub room_id: String,
+    /// Applied together, in one write of the room's power levels.
+    pub changes: Vec<MemberPowerLevelChange>,
+}
+
+/// One member's new role in a `SetRoomMemberPowerLevelRequest`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemberPowerLevelChange {
     pub user_id: String,
     pub role: MemberPowerRole,
 }

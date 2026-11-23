@@ -9,18 +9,18 @@ use mirx_core::{
     E2eeStatus, EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
     HighlightWord, HistoryFrom, InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest,
     LeaveRoomRequest, ListPublicRoomsRequest, LoginMethod, LoginRequest, MarkRoomReadRequest,
-    MemberPowerRole, Operation, PresenceChange, PresenceKind, PublicRoom, PublicRoomsPage,
-    PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX,
-    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RenameDeviceRequest,
-    RequestVerificationRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
-    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
-    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
-    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomReadState,
-    RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary,
-    RoomTagSummary, RoomTyping, RoomUserProfile, SendFileRequest, SendMessageRequest,
+    MemberPowerLevelChange, MemberPowerRole, Operation, PresenceChange, PresenceKind, PublicRoom,
+    PublicRoomsPage, PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
+    RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest, RoomActivity,
+    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
+    RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
+    RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
+    RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
+    RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
+    RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTagSummary, RoomTyping, RoomUserProfile, SendFileRequest, SendMessageRequest,
     SendReactionRequest, SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest,
     SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
     SetTypingRequest, SetupE2eeRecoveryRequest, SignOutDeviceRequest, SpaceChildSummary,
@@ -547,8 +547,10 @@ fn set_room_member_power_level_before_login_emits_power_level_error() {
     assert_invalid_authenticated_command(
         Command::SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest {
             room_id: "!ops:example.org".to_owned(),
-            user_id: "@bob:example.org".to_owned(),
-            role: MemberPowerRole::Moderator,
+            changes: vec![MemberPowerLevelChange {
+                user_id: "@bob:example.org".to_owned(),
+                role: MemberPowerRole::Moderator,
+            }],
         }),
         Operation::SetRoomMemberPowerLevel,
         "set room member power level requires an authenticated session",
@@ -1413,21 +1415,23 @@ fn set_room_member_power_level_requests_round_trip_every_role() {
     for (role, json) in [
         (
             MemberPowerRole::Moderator,
-            r#"{"room_id":"!ops:example.org","user_id":"@bob:example.org","role":"moderator"}"#,
+            r#"{"room_id":"!ops:example.org","changes":[{"user_id":"@bob:example.org","role":"moderator"}]}"#,
         ),
         (
             MemberPowerRole::Voiced,
-            r#"{"room_id":"!ops:example.org","user_id":"@bob:example.org","role":"voiced"}"#,
+            r#"{"room_id":"!ops:example.org","changes":[{"user_id":"@bob:example.org","role":"voiced"}]}"#,
         ),
         (
             MemberPowerRole::Default,
-            r#"{"room_id":"!ops:example.org","user_id":"@bob:example.org","role":"default"}"#,
+            r#"{"room_id":"!ops:example.org","changes":[{"user_id":"@bob:example.org","role":"default"}]}"#,
         ),
     ] {
         let request = SetRoomMemberPowerLevelRequest {
             room_id: "!ops:example.org".to_owned(),
-            user_id: "@bob:example.org".to_owned(),
-            role,
+            changes: vec![MemberPowerLevelChange {
+                user_id: "@bob:example.org".to_owned(),
+                role,
+            }],
         };
         assert_eq!(
             serde_json::to_string(&request).expect("serialize power level request"),
@@ -1441,7 +1445,7 @@ fn set_room_member_power_level_requests_round_trip_every_role() {
     }
     assert!(
         serde_json::from_str::<SetRoomMemberPowerLevelRequest>(
-            r#"{"room_id":"!ops:example.org","user_id":"@bob:example.org","role":"admin"}"#
+            r#"{"room_id":"!ops:example.org","changes":[{"user_id":"@bob:example.org","role":"admin"}]}"#
         )
         .is_err(),
         "power level request must reject unknown roles"
@@ -1497,10 +1501,17 @@ fn member_moderation_requests_reject_unknown_fields() {
     );
     assert!(
         serde_json::from_str::<SetRoomMemberPowerLevelRequest>(
-            r#"{"room_id":"!ops:example.org","user_id":"@alice:example.org","role":"voiced","level":1}"#
+            r#"{"room_id":"!ops:example.org","changes":[],"level":1}"#
         )
         .is_err(),
         "power level request must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<SetRoomMemberPowerLevelRequest>(
+            r#"{"room_id":"!ops:example.org","changes":[{"user_id":"@alice:example.org","role":"voiced","level":1}]}"#
+        )
+        .is_err(),
+        "power level change must reject unknown fields"
     );
     assert!(
         serde_json::from_str::<SetDisplayNameRequest>(
