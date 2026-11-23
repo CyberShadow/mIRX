@@ -9,15 +9,16 @@ mod common;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use common::Harness;
+use common::{Harness, alice_member_event};
 use matrix_sdk::ruma::events::AnyStrippedStateEvent;
 use matrix_sdk::ruma::serde::Raw;
-use matrix_sdk_test::InvitedRoomBuilder;
+use matrix_sdk_test::{InvitedRoomBuilder, JoinedRoomBuilder};
 use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CreateDirectRoomRequest,
     EditMessageRequest, Event, HistoryFrom, ListPublicRoomsRequest, LoginMethod, LoginRequest,
-    Operation, RestoreSessionRequest, RoomMessagePresentationKind, SendFileRequest,
-    SendMessageRequest, SessionAuth, StoredSession,
+    MemberPowerRole, Operation, RestoreSessionRequest, RoomMessagePresentationKind,
+    SendFileRequest, SendMessageRequest, SessionAuth, SetRoomMemberPowerLevelRequest,
+    StoredSession,
 };
 use serde_json::json;
 use wiremock::matchers::{method, path_regex};
@@ -666,6 +667,121 @@ fn creating_a_direct_room_while_accepting_one_keeps_both() {
             "@bob:example.org": [DM_BOB],
             "@dave:example.org": ["!dm-dave:example.org"],
         })),
+        "{:#?}",
+        server.requests()
+    );
+    assert_writes_one_after_the_other(&server.requests(), delay);
+    let events = seen.shut_down();
+    assert!(
+        !events.iter().any(|event| matches!(event, Event::Error(_))),
+        "{events:#?}"
+    );
+    harness.join_stopped();
+}
+
+fn power_levels(users: serde_json::Value) -> serde_json::Value {
+    json!({ "users": users })
+}
+
+/// A session in `ROOM` with Bob, Carol and Dave, whose power levels are
+/// `content` in the store and on the server; the server keeps them as a
+/// `DocumentServer`.
+fn ranking_in(content: serde_json::Value, delay: Duration) -> (Harness, DocumentServer) {
+    let state = |event: serde_json::Value| {
+        Raw::from_json_string(event.to_string()).expect("a raw state event")
+    };
+    let member = |user_id: &str| {
+        state(json!({
+            "type": "m.room.member",
+            "state_key": user_id,
+            "sender": user_id,
+            "event_id": format!("$join-{}", user_id.trim_start_matches('@')),
+            "origin_server_ts": 2,
+            "content": { "membership": "join" },
+        }))
+    };
+    let store_content = content.clone();
+    let (harness, _) = Harness::restored_with_sync(move |sync| {
+        sync.add_joined_room(
+            JoinedRoomBuilder::new(
+                &matrix_sdk::ruma::OwnedRoomId::try_from(ROOM).expect("a room ID"),
+            )
+            .add_state_bulk([
+                state(json!({
+                    "type": "m.room.create",
+                    "state_key": "",
+                    "sender": "@alice:example.org",
+                    "event_id": "$create",
+                    "origin_server_ts": 1,
+                    "content": { "creator": "@alice:example.org" },
+                })),
+                state(json!({
+                    "type": "m.room.power_levels",
+                    "state_key": "",
+                    "sender": "@alice:example.org",
+                    "event_id": "$power",
+                    "origin_server_ts": 1,
+                    "content": store_content,
+                })),
+                state(alice_member_event()),
+                member("@bob:example.org"),
+                member("@carol:example.org"),
+                member("@dave:example.org"),
+            ]),
+        );
+    });
+    // The members snapshot after a write asks for them.
+    harness.mount(
+        Mock::given(method("GET"))
+            .and(path_regex(
+                r"^/_matrix/client/v3/rooms/!a:example\.org/members$",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "chunk": [
+                member_join(ROOM, "@alice:example.org"),
+                member_join(ROOM, "@bob:example.org"),
+                member_join(ROOM, "@carol:example.org"),
+                member_join(ROOM, "@dave:example.org"),
+            ] }))),
+    );
+    let server = DocumentServer::mount(
+        &harness,
+        r"^/_matrix/client/v3/rooms/!a:example\.org/state/m\.room\.power_levels/?$",
+        Some(content),
+        json!({ "event_id": "$power-update" }),
+        delay,
+    );
+    (harness, server)
+}
+
+fn rank(user_id: &str, role: MemberPowerRole) -> Command {
+    Command::SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest {
+        room_id: ROOM.to_owned(),
+        user_id: user_id.to_owned(),
+        role,
+    })
+}
+
+#[test]
+fn two_rank_changes_in_a_row_keep_both() {
+    let delay = Duration::from_millis(300);
+    let (harness, server) = ranking_in(power_levels(json!({ "@alice:example.org": 100 })), delay);
+    let mut seen = Seen::new(&harness);
+
+    // The second comes before any sync echoes the first.
+    harness.send(rank("@bob:example.org", MemberPowerRole::Moderator));
+    harness.send(rank("@carol:example.org", MemberPowerRole::Voiced));
+    seen.until_acks(2);
+
+    assert_eq!(
+        server.puts(),
+        [
+            power_levels(json!({ "@alice:example.org": 100, "@bob:example.org": 50 })),
+            power_levels(json!({
+                "@alice:example.org": 100,
+                "@bob:example.org": 50,
+                "@carol:example.org": 1,
+            })),
+        ],
         "{:#?}",
         server.requests()
     );

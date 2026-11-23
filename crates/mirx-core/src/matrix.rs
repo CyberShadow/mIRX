@@ -62,6 +62,7 @@ use matrix_sdk::{
         api::client::profile::DisplayName as DisplayNameField,
         api::client::push::{delete_pushrule, set_pushrule, set_pushrule_enabled},
         api::client::session::get_login_types::v3::LoginType,
+        api::client::state::get_state_event_for_key,
         api::client::uiaa,
         api::client::{
             directory::get_public_rooms_filtered,
@@ -75,8 +76,8 @@ use matrix_sdk::{
         directory::Filter,
         events::{
             AnyMessageLikeEventContent, AnySyncMessageLikeEvent, AnySyncStateEvent,
-            AnySyncTimelineEvent, InitialStateEvent, Mentions, SyncMessageLikeEvent,
-            SyncStateEvent, TimelineEventType, ToDeviceEvent,
+            AnySyncTimelineEvent, InitialStateEvent, Mentions, StateEventType,
+            SyncMessageLikeEvent, SyncStateEvent, TimelineEventType, ToDeviceEvent,
             direct::{DirectEvent, DirectEventContent},
             ignored_user_list::{IgnoredUser, IgnoredUserListEvent, IgnoredUserListEventContent},
             key::verification::{
@@ -102,7 +103,7 @@ use matrix_sdk::{
                 },
                 power_levels::{
                     OriginalSyncRoomPowerLevelsEvent, PossiblyRedactedRoomPowerLevelsEventContent,
-                    RoomPowerLevels, RoomPowerLevelsEventContent, UserPowerLevel,
+                    RoomPowerLevelsEventContent, UserPowerLevel,
                 },
                 redaction::OriginalSyncRoomRedactionEvent,
                 topic::OriginalSyncRoomTopicEvent,
@@ -1043,7 +1044,7 @@ const MODERATOR_POWER_LEVEL: u8 = 50;
 /// `m.room.message`; a room where that level reaches moderator has no
 /// distinct voice level.
 fn member_power_role_level(
-    power_levels: &RoomPowerLevels,
+    power_levels: &RoomPowerLevelsEventContent,
     role: MemberPowerRole,
 ) -> Result<Int, MatrixCoreError> {
     let moderator = Int::from(MODERATOR_POWER_LEVEL);
@@ -1067,6 +1068,38 @@ fn member_power_role_level(
     }
 }
 
+/// The room's power levels as the server has them. The store's lag until
+/// a sync echoes the last write.
+async fn fetch_power_levels(
+    client: &Client,
+    room_id: &RoomId,
+) -> Result<RoomPowerLevelsEventContent, MatrixCoreError> {
+    let request = get_state_event_for_key::v3::Request::new(
+        room_id.to_owned(),
+        StateEventType::RoomPowerLevels,
+        String::new(),
+    );
+    let load_error = |err: String| {
+        MatrixCoreError::new(format!("failed to load Matrix room power levels: {err}"))
+    };
+    let response = client
+        .send(request)
+        .await
+        .map_err(|err| load_error(err.to_string()))?;
+    response
+        .into_content()
+        .deserialize_as_unchecked::<RoomPowerLevelsEventContent>()
+        .map_err(|err| load_error(err.to_string()))
+}
+
+/// Edits the member's level in the room's power levels.
+///
+/// Not the SDK's `Room::update_power_levels`: it edits the store's power
+/// levels, which only learn a write from the sync's echo, so a second
+/// change before the echo reverted the first. This reads the server's;
+/// mirx's own edits of a room's power levels run one at a time (its
+/// `Room` lane), but another client's change between the read and the
+/// write is still lost (state events have no compare-and-swap).
 pub(crate) async fn set_room_member_power_level(
     client: &Client,
     request: &SetRoomMemberPowerLevelRequest,
@@ -1077,12 +1110,15 @@ pub(crate) async fn set_room_member_power_level(
         .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
     let room = joined_room_by_id(client, room_id.as_str())?;
 
-    let power_levels = room.power_levels().await.map_err(|err| {
-        MatrixCoreError::new(format!("failed to load Matrix room power levels: {err}"))
-    })?;
+    let mut power_levels = fetch_power_levels(client, room_id).await?;
     let level = member_power_role_level(&power_levels, request.role)?;
+    if level == power_levels.users_default {
+        power_levels.users.remove(user_id);
+    } else {
+        power_levels.users.insert(user_id.to_owned(), level);
+    }
 
-    room.update_power_levels(vec![(user_id, level)])
+    room.send_state_event(power_levels)
         .await
         .map(|_| ())
         .map_err(|err| {
@@ -7121,18 +7157,20 @@ mod tests {
         });
     }
 
-    /// Syncs a joined room with the given power-levels content, sets
-    /// `@target:example.org` to `role` and returns the result plus the
-    /// `users` map of every power-levels PUT body.
-    async fn set_target_power_role(
-        power_levels: serde_json::Value,
+    /// Syncs a joined room whose power levels are `store` and serves
+    /// `server` as its power levels, sets `@target:example.org` to `role`
+    /// and returns the result plus the `users` map of every power-levels
+    /// PUT body.
+    async fn set_target_power_role_against(
+        store: serde_json::Value,
+        server: serde_json::Value,
         role: MemberPowerRole,
     ) -> (Result<(), super::MatrixCoreError>, Vec<serde_json::Value>) {
         let mock_server = MatrixMockServer::new().await;
         let client = mock_server.client_builder().build().await;
         let state_events = serde_json::json!([
             { "type": "m.room.create", "state_key": "", "sender": "@example:localhost", "event_id": "$create:localhost", "origin_server_ts": 1u64, "content": { "creator": "@example:localhost" } },
-            { "type": "m.room.power_levels", "state_key": "", "sender": "@example:localhost", "event_id": "$power:localhost", "origin_server_ts": 2u64, "content": power_levels },
+            { "type": "m.room.power_levels", "state_key": "", "sender": "@example:localhost", "event_id": "$power:localhost", "origin_server_ts": 2u64, "content": store },
             { "type": "m.room.member", "state_key": "@example:localhost", "sender": "@example:localhost", "event_id": "$actor:localhost", "origin_server_ts": 3u64, "content": { "membership": "join" } }
         ]);
         mock_server
@@ -7141,6 +7179,13 @@ mod tests {
                 JoinedRoomBuilder::new(room_id().as_ref())
                     .add_state_bulk(raw_sync_state_events(&state_events)),
             )
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path_regex(
+                r"/rooms/!room:example\.org/state/m\.room\.power_levels/?$",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(server))
+            .mount(mock_server.server())
             .await;
         mock_server
             .mock_room_send_state()
@@ -7157,12 +7202,56 @@ mod tests {
             },
         )
         .await;
-        let users = request_bodies_ending_with(&mock_server, "/state/m.room.power_levels/")
+        let users = mock_server
+            .received_requests()
             .await
-            .into_iter()
-            .map(|body| body["users"].clone())
+            .expect("request recording enabled")
+            .iter()
+            .filter(|request| {
+                request.method.as_str() == "PUT"
+                    && request.url.path().ends_with("/state/m.room.power_levels/")
+            })
+            .map(|request| {
+                request
+                    .body_json::<serde_json::Value>()
+                    .expect("request JSON body")["users"]
+                    .clone()
+            })
             .collect();
         (result, users)
+    }
+
+    /// The same, with the store and the server agreeing on `power_levels`.
+    async fn set_target_power_role(
+        power_levels: serde_json::Value,
+        role: MemberPowerRole,
+    ) -> (Result<(), super::MatrixCoreError>, Vec<serde_json::Value>) {
+        set_target_power_role_against(power_levels.clone(), power_levels, role).await
+    }
+
+    /// The store's power levels lag behind the server's until a sync
+    /// echoes the last write; an edit starts from the server's.
+    #[test]
+    fn set_room_member_power_level_edits_the_servers_power_levels() {
+        moderation_test_runtime().block_on(async {
+            let (result, users) = set_target_power_role_against(
+                serde_json::json!({ "users": { "@example:localhost": 100 } }),
+                serde_json::json!({
+                    "users": { "@example:localhost": 100, "@bob:example.org": 50 },
+                }),
+                MemberPowerRole::Moderator,
+            )
+            .await;
+            result.expect("set power level");
+            assert_eq!(
+                users,
+                [serde_json::json!({
+                    "@example:localhost": 100,
+                    "@bob:example.org": 50,
+                    "@target:example.org": 50,
+                })]
+            );
+        });
     }
 
     #[test]
