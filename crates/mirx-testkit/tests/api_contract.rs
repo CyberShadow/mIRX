@@ -513,6 +513,7 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
         accept_invite_enabled: true,
         reject_invite_enabled: false,
         part_room_enabled: false,
+        channel_central_enabled: true,
         notification_mode: Some(RoomNotificationMode::Mute),
         notification_items_enabled: true,
     };
@@ -571,6 +572,7 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
             "accept_invite_enabled": true,
             "reject_invite_enabled": false,
             "part_room_enabled": false,
+            "channel_central_enabled": false,
             "notification_mode": null,
             "notification_items_enabled": false,
             "unexpected": true

@@ -1939,6 +1939,7 @@ pub struct RoomMenuState {
     pub accept_invite_enabled: bool,
     pub reject_invite_enabled: bool,
     pub part_room_enabled: bool,
+    pub channel_central_enabled: bool,
     pub notification_mode: Option<RoomNotificationMode>,
     pub notification_items_enabled: bool,
 }

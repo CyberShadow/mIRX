@@ -101,6 +101,7 @@ pub(super) unsafe fn dump_room_menu_state(hwnd: HWND) -> Result<DumpRoomMenuStat
         accept_invite_enabled: action_state.accept_invite_enabled,
         reject_invite_enabled: action_state.reject_invite_enabled,
         part_room_enabled: action_state.part_room_enabled,
+        channel_central_enabled: action_state.channel_central_enabled,
         notification_mode,
         notification_items_enabled,
     })

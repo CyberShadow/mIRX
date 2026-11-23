@@ -46,16 +46,17 @@ use mirx_testkit::{
     SubmittedNotificationCommand, SubmittedPowerLevelChange, SubmittedPowerLevelCommand,
     SubmittedProfileCommand, SubmittedReactionCommand, SubmittedRecoveryCommand,
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
-    SubmittedRoomKeyTransfer, SubmittedRoomListRequest, SubmittedRoomTopicCommand,
-    SubmittedSessionCommand, SubmittedSetupRecoveryCommand, SubmittedTypingCommand,
-    SubmittedUserCommand, SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem,
-    TestkitError, UiActiveTimeline, UiActivityColors, UiAddressBook, UiColorCodePart, UiColorItem,
-    UiColorsDialog, UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError,
-    UiFindHistorySearchState, UiFindState, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem,
-    UiOptionsDialog, UiPoint, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
-    UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiTipsOptions, UiTrayOptions,
-    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionKind,
-    VerificationState, ViewActivityLevel, ViewIdentity,
+    SubmittedRoomKeyTransfer, SubmittedRoomListRequest, SubmittedRoomSettingsCommand,
+    SubmittedRoomTopicCommand, SubmittedSessionCommand, SubmittedSetupRecoveryCommand,
+    SubmittedTypingCommand, SubmittedUserCommand, SubmittedVerificationAction,
+    SubmittedVerificationRequest, SwitchbarItem, TestkitError, UiActiveTimeline, UiActivityColors,
+    UiAddressBook, UiChannelCentral, UiCheckState, UiColorCodePart, UiColorItem, UiColorsDialog,
+    UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
+    UiFindState, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
+    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
+    UiTimelineLink, UiTimestamp, UiTipsOptions, UiTrayOptions, UnsupportedRoomMessageActivity,
+    UserCommandAction, Verification, VerificationActionKind, VerificationState, ViewActivityLevel,
+    ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -325,6 +326,10 @@ struct MockBackfillHomeserver {
     /// Every request it got, as `GET /path` without the query, in arrival
     /// order.
     requests: Arc<Mutex<Vec<String>>>,
+    /// Beta's settings writes, as `PUT state/m.room.topic/` (the path
+    /// after the room's) or `PUT directory`, with their bodies, in arrival
+    /// order.
+    settings_writes: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
 }
 
 /// The presence events every `/sync` serves, and how often they changed:
@@ -444,6 +449,24 @@ impl MockBackfillHomeserver {
             }
             if Instant::now() >= deadline {
                 return Err(format!("the mock got {bodies:?}, not {count} typing notices").into());
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
+    }
+
+    /// Waits until the mock got `count` settings writes; them.
+    fn wait_for_settings_writes(
+        &self,
+        count: usize,
+    ) -> Result<Vec<(String, serde_json::Value)>, Box<dyn std::error::Error>> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let writes = self.settings_writes.lock().expect("the writes").clone();
+            if writes.len() >= count {
+                return Ok(writes);
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("the mock got {writes:?}, not {count} settings writes").into());
             }
             std::thread::sleep(POLL_INTERVAL);
         }
@@ -613,6 +636,8 @@ fn spawn_mock_homeserver_with_auth(
     let mock_presence = Arc::clone(&presence);
     let requests = Arc::new(Mutex::new(Vec::new()));
     let mock_requests = Arc::clone(&requests);
+    let settings_writes = Arc::new(Mutex::new(Vec::new()));
+    let mock_settings_writes = Arc::clone(&settings_writes);
     let room_account_data = fully_read
         .into_iter()
         .map(|event_id| {
@@ -879,19 +904,7 @@ fn spawn_mock_homeserver_with_auth(
                                             },
                                             alice_member,
                                             bob_member,
-                                            {
-                                                "content": {
-                                                    "users": {
-                                                        "@alice:example": 100,
-                                                        "@bob:example": 50
-                                                    }
-                                                },
-                                                "event_id": "$power",
-                                                "origin_server_ts": 1700000000005u64,
-                                                "sender": "@alice:example",
-                                                "state_key": "",
-                                                "type": "m.room.power_levels"
-                                            },
+                                            beta_power_levels(),
                                             {
                                                 "content": {
                                                     "name": "Beta"
@@ -1041,6 +1054,64 @@ fn spawn_mock_homeserver_with_auth(
                         "error": "not found"
                     }),
                 );
+                continue;
+            }
+
+            // Beta's settings, for Channel Central: its whole state, its
+            // power levels, its directory listing, and the writes to them,
+            // which answer as accepted and change nothing served.
+            let method = request_line.split_whitespace().next().unwrap_or_default();
+            let unencoded = path
+                .split_once('?')
+                .map_or(path, |(path, _)| path)
+                .replace("%21beta%3Aexample", "!beta:example");
+            let body = || -> serde_json::Value {
+                let body = &request[request
+                    .find("\r\n\r\n")
+                    .map_or(request.len(), |end| end + 4)..];
+                serde_json::from_str(body).expect("a settings JSON body")
+            };
+            if let Some(rest) = unencoded.strip_prefix("/_matrix/client/v3/rooms/!beta:example/") {
+                let answer = match (method, rest) {
+                    ("GET", "state") => Some(serde_json::json!(beta_settings_state())),
+                    ("GET", "state/m.room.power_levels/") => {
+                        Some(beta_power_levels()["content"].clone())
+                    }
+                    ("PUT", rest) if rest.starts_with("state/m.room.") => {
+                        let mut writes = mock_settings_writes.lock().expect("the writes");
+                        writes.push((format!("PUT {rest}"), body()));
+                        Some(
+                            serde_json::json!({ "event_id": format!("$setting-{}", writes.len()) }),
+                        )
+                    }
+                    ("POST", "unban") => {
+                        mock_settings_writes
+                            .lock()
+                            .expect("the writes")
+                            .push(("POST unban".to_owned(), body()));
+                        Some(serde_json::json!({}))
+                    }
+                    _ => None,
+                };
+                if let Some(answer) = answer {
+                    respond_json(&mut stream, 200, &answer);
+                    continue;
+                }
+            }
+            if unencoded == "/_matrix/client/v3/directory/list/room/!beta:example" {
+                if method == "PUT" {
+                    mock_settings_writes
+                        .lock()
+                        .expect("the writes")
+                        .push(("PUT directory".to_owned(), body()));
+                    respond_json(&mut stream, 200, &serde_json::json!({}));
+                } else {
+                    respond_json(
+                        &mut stream,
+                        200,
+                        &serde_json::json!({ "visibility": "private" }),
+                    );
+                }
                 continue;
             }
 
@@ -1242,7 +1313,89 @@ fn spawn_mock_homeserver_with_auth(
         logouts,
         presence,
         requests,
+        settings_writes,
     })
+}
+
+/// Beta's power levels, as every `/sync` serves them: Alice 100, Bob 50.
+fn beta_power_levels() -> serde_json::Value {
+    serde_json::json!({
+        "content": {
+            "users": {
+                "@alice:example": 100,
+                "@bob:example": 50
+            }
+        },
+        "event_id": "$power",
+        "origin_server_ts": 1700000000005u64,
+        "sender": "@alice:example",
+        "state_key": "",
+        "type": "m.room.power_levels"
+    })
+}
+
+/// Beta's whole current state, as `GET /rooms/{id}/state` answers it:
+/// the sync's, and an invite-only join rule, a topic and Carol banned by
+/// Alice.
+fn beta_settings_state() -> Vec<serde_json::Value> {
+    let state = |event_type: &str, state_key: &str, sender: &str, content: serde_json::Value| {
+        serde_json::json!({
+            "content": content,
+            "event_id": format!("${event_type}-{state_key}"),
+            "origin_server_ts": 1700000000000u64,
+            "room_id": "!beta:example",
+            "sender": sender,
+            "state_key": state_key,
+            "type": event_type
+        })
+    };
+    let mut power_levels = beta_power_levels();
+    power_levels["room_id"] = serde_json::json!("!beta:example");
+    vec![
+        state(
+            "m.room.create",
+            "",
+            "@alice:example",
+            serde_json::json!({ "creator": "@alice:example", "room_version": "10" }),
+        ),
+        state(
+            "m.room.member",
+            "@alice:example",
+            "@alice:example",
+            serde_json::json!({ "membership": "join", "displayname": "Alice" }),
+        ),
+        state(
+            "m.room.member",
+            "@bob:example",
+            "@bob:example",
+            serde_json::json!({ "membership": "join", "displayname": "Bob" }),
+        ),
+        power_levels,
+        state(
+            "m.room.name",
+            "",
+            "@alice:example",
+            serde_json::json!({ "name": "Beta" }),
+        ),
+        state(
+            "m.room.topic",
+            "",
+            "@alice:example",
+            serde_json::json!({ "topic": "Beta's topic" }),
+        ),
+        state(
+            "m.room.join_rules",
+            "",
+            "@alice:example",
+            serde_json::json!({ "join_rule": "invite" }),
+        ),
+        state(
+            "m.room.member",
+            "@carol:example",
+            "@alice:example",
+            serde_json::json!({ "membership": "ban", "reason": "spam" }),
+        ),
+    ]
 }
 
 /// A room directory entry whose topic is "About {name}".
@@ -23763,6 +23916,10 @@ fn automation_driver_room_menu_accept_keeps_invite_until_synced_rooms_join()
     assert!(menu.accept_invite_enabled);
     assert!(menu.reject_invite_enabled);
     assert!(!menu.part_room_enabled);
+    assert!(
+        !menu.channel_central_enabled,
+        "an invite is not a channel yet"
+    );
 
     app.open_selected_navigation_context_menu(ContextMenuCommand::AcceptInvite)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -23893,6 +24050,8 @@ fn automation_driver_room_menu_part_waits_for_synced_rooms_removal()
     assert!(!menu.accept_invite_enabled);
     assert!(!menu.reject_invite_enabled);
     assert!(menu.part_room_enabled);
+    // Channel Central reads the server: not without a session.
+    assert!(!menu.channel_central_enabled);
 
     let path = app.selected_navigation_path()?;
     app.open_navigation_context_menu(path, ContextMenuCommand::PartRoom)?;
@@ -27112,6 +27271,268 @@ fn buffer_save_on_the_window_menu_saves_through_the_save_dialog()
         app.dump_model()?.status,
         format!("saved buffer: {}", saved.display())
     );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+const CHANNEL_CENTRAL_TOPIC_ID: i32 = 7602;
+const CHANNEL_CENTRAL_BANS_ID: i32 = 7603;
+const CHANNEL_CENTRAL_REMOVE_ID: WPARAM = 7604;
+const CHANNEL_CENTRAL_TOPIC_BY_OPERATORS_ID: i32 = 7605;
+const CHANNEL_CENTRAL_INVITE_ONLY_ID: i32 = 7606;
+const CHANNEL_CENTRAL_MODERATED_ID: i32 = 7607;
+
+/// Waits for Channel Central to show and to have the core's answer (the
+/// settings or an error) in its status line.
+fn wait_for_channel_central(
+    app: &MirxApp,
+) -> Result<(HWND, UiChannelCentral), Box<dyn std::error::Error>> {
+    let dialog = wait_for_window(
+        &wide_null("mirxWin32ChannelCentralDialog"),
+        "Channel Central",
+    )?;
+    let ui_state = app.wait_for_ui_state(
+        "Channel Central's answer",
+        Duration::from_secs(30),
+        |ui_state| {
+            ui_state
+                .channel_central
+                .as_ref()
+                .is_some_and(|central| central.status != "Reading the room's settings...")
+        },
+    )?;
+    Ok((dialog, ui_state.channel_central.expect("waited for above")))
+}
+
+fn channel_central(app: &MirxApp) -> Result<UiChannelCentral, Box<dyn std::error::Error>> {
+    Ok(app
+        .dump_ui_state()?
+        .channel_central
+        .ok_or("Channel Central is open")?)
+}
+
+fn set_dialog_check(dialog: HWND, id: i32, checked: bool) {
+    unsafe { SendMessageW(GetDlgItem(dialog, id), BM_SETCHECK, usize::from(checked), 0) };
+}
+
+/// mIRC's Channel Central (`/channel`): the room's settings as the server
+/// has them, and OK writes what changed, the two power-level modes in one
+/// write; the server's echo prints the lines.
+#[test]
+fn channel_central_shows_and_changes_the_room_settings() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_with_saved_session(&local_app_data)?;
+    wait_until_connected(&app)?;
+    wait_for_beta_and_bob(&app)?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+    assert!(app.dump_room_menu_state()?.channel_central_enabled);
+
+    app.set_compose_text("/channel")?;
+    app.open_dialog(AutomationDialog::ComposeReturn)?;
+    let (dialog, central) = wait_for_channel_central(&app)?;
+    assert_eq!(central.caption, "Channel Central - Beta");
+    assert_eq!(central.room_id, "!beta:example");
+    // Alice is the room's 100: everything is hers to change.
+    assert_eq!(central.status, "");
+    assert_eq!(central.name, "Beta");
+    assert_eq!(central.topic, "Beta's topic");
+    assert_eq!(central.topic_items, ["Beta's topic"]);
+    assert_eq!(central.ban_rows.len(), 1, "{:?}", central.ban_rows);
+    let ban = &central.ban_rows[0];
+    assert_eq!(ban[0], "@carol:example");
+    assert_eq!(ban[1], "Alice");
+    // `dd/mm/yyyy HH:nn` in the local time.
+    assert_eq!(ban[2].len(), 16, "{ban:?}");
+    assert_eq!(&ban[2][2..3], "/", "{ban:?}");
+    assert_eq!(ban[3], "spam");
+    // The spec's default levels: only ops (50) set the topic.
+    assert_eq!(central.topic_by_operators.state, UiCheckState::Checked);
+    assert_eq!(central.invite_only.state, UiCheckState::Checked);
+    assert_eq!(central.moderated.state, UiCheckState::Unchecked);
+    assert_eq!(central.private.state, UiCheckState::Checked);
+    assert!(
+        [
+            central.topic_by_operators,
+            central.invite_only,
+            central.moderated,
+            central.private
+        ]
+        .iter()
+        .all(|check| check.enabled)
+    );
+    assert!(central.name_enabled && central.topic_enabled && central.ok_enabled);
+    assert!(!central.remove_enabled, "no ban is selected");
+
+    set_dialog_check(dialog, CHANNEL_CENTRAL_TOPIC_BY_OPERATORS_ID, false);
+    set_dialog_check(dialog, CHANNEL_CENTRAL_MODERATED_ID, true);
+    set_dialog_check(dialog, CHANNEL_CENTRAL_INVITE_ONLY_ID, false);
+    set_dialog_text(dialog, CHANNEL_CENTRAL_TOPIC_ID, "A new topic");
+    let bans = unsafe { GetDlgItem(dialog, CHANNEL_CENTRAL_BANS_ID) };
+    post_left_click(bans, &central.ban_row_click_points[0], false);
+    app.wait_for_ui_state("the ban selected", Duration::from_secs(5), |ui_state| {
+        ui_state
+            .channel_central
+            .as_ref()
+            .is_some_and(|central| central.remove_enabled)
+    })?;
+    post_dialog_command(dialog, CHANNEL_CENTRAL_REMOVE_ID);
+    app.wait_for_ui_state("the ban removed", Duration::from_secs(5), |ui_state| {
+        ui_state
+            .channel_central
+            .as_ref()
+            .is_some_and(|central| central.ban_rows.is_empty() && !central.remove_enabled)
+    })?;
+    // Only the dialog's own edits: unchecked above, Private stays.
+    let central = channel_central(&app)?;
+    assert_eq!(central.topic_by_operators.state, UiCheckState::Unchecked);
+    assert_eq!(central.private.state, UiCheckState::Checked);
+
+    post_dialog_command(dialog, IDOK as WPARAM);
+    wait_for_window_gone(dialog, "Channel Central")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "room settings sent");
+    assert_eq!(
+        model.submitted_room_settings_commands,
+        [
+            SubmittedRoomSettingsCommand::Fetch {
+                room_id: "!beta:example".to_owned(),
+            },
+            SubmittedRoomSettingsCommand::Update {
+                room_id: "!beta:example".to_owned(),
+                topic_by_operators: Some(false),
+                moderated: Some(true),
+                invite_only: Some(false),
+                name: None,
+                topic: Some("A new topic".to_owned()),
+                listed_in_directory: None,
+                unban: vec!["@carol:example".to_owned()],
+            },
+        ]
+    );
+
+    // The server got them in the request's order, the modes in one write.
+    let writes = server.wait_for_settings_writes(4)?;
+    let paths = writes
+        .iter()
+        .map(|(path, _)| path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        [
+            "PUT state/m.room.power_levels/",
+            "PUT state/m.room.join_rules/",
+            "PUT state/m.room.topic/",
+            "POST unban",
+        ]
+    );
+    let power_levels = &writes[0].1;
+    assert_eq!(power_levels["events_default"], 1, "{power_levels}");
+    assert_eq!(power_levels["events"]["m.room.topic"], 0, "{power_levels}");
+    assert_eq!(
+        power_levels["users"],
+        serde_json::json!({ "@alice:example": 100, "@bob:example": 50 })
+    );
+    assert_eq!(writes[1].1["join_rule"], "public");
+    assert_eq!(writes[2].1["topic"], "A new topic");
+    assert_eq!(writes[3].1["user_id"], "@carol:example");
+
+    // The server's echo prints the lines.
+    let echo = |event_type: &str, event_id: &str, content: serde_json::Value| {
+        serde_json::json!({
+            "content": content,
+            "event_id": event_id,
+            "origin_server_ts": 1700000000100u64,
+            "sender": "@alice:example",
+            "state_key": "",
+            "type": event_type
+        })
+    };
+    server.append_timeline(echo(
+        "m.room.join_rules",
+        "$join-rules-echo",
+        serde_json::json!({ "join_rule": "public" }),
+    ));
+    server.append_timeline(echo(
+        "m.room.name",
+        "$name-echo",
+        serde_json::json!({ "name": "Gamma" }),
+    ));
+    wait_for_view_lines_with(&app, &beta, "* Alice makes the room public", 1)?;
+    wait_for_view_lines_with(&app, &beta, "* Alice changes room name to 'Gamma'", 1)?;
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// A double-click in a channel window, off a link and a quote, opens
+/// Channel Central, as mIRC's does; Cancel sends nothing. In Status it
+/// opens nothing. (The link and quote double-clicks are pinned by their
+/// own tests.)
+#[test]
+fn double_click_in_a_room_opens_channel_central() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let mut events = base_events();
+    events.insert(
+        1,
+        Event::LoggedIn {
+            session: core_stored_session(),
+            homeserver_url: "https://matrix.example/".to_owned(),
+        },
+    );
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_view(room_identity("!beta:example"))?;
+    assert!(app.dump_room_menu_state()?.channel_central_enabled);
+
+    let point = text_point(&app, "beta second", 2)?;
+    send_left_click(app.active_timeline_hwnd()? as HWND, &point, true);
+    let (dialog, central) = wait_for_channel_central(&app)?;
+    assert_eq!(central.caption, "Channel Central - Beta");
+    // This core has no session: the read's error, and nothing to change.
+    assert_eq!(
+        central.status,
+        "fetch room settings requires an authenticated session"
+    );
+    assert!(!central.ok_enabled && !central.name_enabled && !central.topic_by_operators.enabled);
+    post_dialog_command(dialog, IDCANCEL as WPARAM);
+    wait_for_window_gone(dialog, "Channel Central")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_model()?.submitted_room_settings_commands,
+        [SubmittedRoomSettingsCommand::Fetch {
+            room_id: "!beta:example".to_owned(),
+        }]
+    );
+
+    app.select_view(ViewIdentity::Status)?;
+    let timeline = app
+        .dump_ui_state()?
+        .active_timeline
+        .ok_or("Status has a timeline")?;
+    let line = timeline
+        .visible_lines
+        .iter()
+        .find(|line| line.links.is_empty())
+        .ok_or_else(|| format!("a line without links: {:?}", timeline.visible_lines))?;
+    send_left_click(app.active_timeline_hwnd()? as HWND, &line.click_point, true);
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(
+        app.wait_for_modal_dialog(Duration::from_millis(500))
+            .is_err()
+    );
+    assert_eq!(app.dump_model()?.submitted_room_settings_commands.len(), 1);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

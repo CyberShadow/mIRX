@@ -1029,6 +1029,7 @@ pub(crate) struct DumpRoomMenuState {
     pub(crate) accept_invite_enabled: bool,
     pub(crate) reject_invite_enabled: bool,
     pub(crate) part_room_enabled: bool,
+    pub(crate) channel_central_enabled: bool,
     /// The mode Notifications checks, if any.
     pub(crate) notification_mode: Option<RoomNotificationMode>,
     pub(crate) notification_items_enabled: bool,
