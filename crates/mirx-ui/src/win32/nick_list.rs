@@ -183,9 +183,7 @@ pub(super) unsafe fn show_member_context_menu(
             if (hit as usize & 0xffff_0000) != 0 {
                 return Ok(());
             }
-            if SendMessageW(member_list, LB_SETCURSEL, hit as usize, 0) == LB_ERR as isize {
-                return Ok(());
-            }
+            select_clicked_item(member_list, hit as usize);
             (x, y)
         }
         None => default_context_point_for_window(member_list)?,
@@ -204,31 +202,61 @@ pub(super) unsafe fn show_member_context_menu(
     Ok(())
 }
 
-pub(super) unsafe fn query_selected_member(hwnd: HWND) -> Result<(), String> {
-    let member = selected_member(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
-    let status = submit_query_slash_command(state_mut(hwnd), member.user_id)?;
-    state_mut(hwnd).model.status = status;
-    refresh_status_bar(hwnd)
+/// A right-click on item `hit`: a nick not selected becomes the only
+/// selection, a selected one keeps the whole selection for the menu, as
+/// in Explorer and mIRC.
+unsafe fn select_clicked_item(list: HWND, hit: usize) {
+    let selected = SendMessageW(list, LB_GETSEL, hit, 0);
+    assert_ne!(selected, LB_ERR as isize, "item {hit} is in the list");
+    if selected == 0 {
+        SendMessageW(list, LB_SETSEL, 0, -1);
+        select_list_items(list, &[hit]);
+        SendMessageW(list, LB_SETCARETINDEX, hit, 0);
+    }
 }
 
-/// Inserts the selected member's nick at the compose caret, replacing any
-/// selection, followed by a space to type on.
-pub(super) unsafe fn mention_selected_member(hwnd: HWND) -> Result<(), String> {
-    let member = selected_member(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
-    let edit = compose_edit(hwnd);
-    active_compose_history(state_mut(hwnd)).reset_navigation();
-    replace_edit_selection(edit, &format!("{} ", member.nick));
-    SetFocus(edit);
-    Ok(())
+/// Runs a member menu item for the active window's selected members, taken
+/// when it runs: the menu's modal loop handles core events, and a member
+/// who left meanwhile is no longer selected.
+pub(super) unsafe fn run_member_menu_item(hwnd: HWND, id: usize) -> Result<(), String> {
+    let action = {
+        let state = state_ref(hwnd);
+        member_action(state, id, &active_selected_members(state))
+    };
+    run_member_action(hwnd, action)
 }
 
-/// Runs a member menu item's command on the selected member, as if typed:
-/// its refusals and errors print where typed ones do.
-pub(super) unsafe fn run_selected_member_command(hwnd: HWND, id: usize) -> Result<(), String> {
-    let member = selected_member(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
-    let command = member_menu_command(id, &member.user_id)
-        .unwrap_or_else(|| panic!("member menu item {id} runs no command"));
-    run_local_command(hwnd, command)
+/// Runs what a member menu item does: commands as if typed (their
+/// refusals and errors print where typed ones do), queries as Query User
+/// opens them (the status bar shows the last), and nicks inserted at the
+/// compose caret, replacing any selection, followed by a space to type on.
+/// An empty action had its members leave while the menu was open.
+unsafe fn run_member_action(hwnd: HWND, action: MemberMenuAction) -> Result<(), String> {
+    if action.is_empty() {
+        return Err("no member is selected".to_owned());
+    }
+    match action {
+        MemberMenuAction::Commands(commands) => {
+            for command in commands {
+                run_local_command(hwnd, command)?;
+            }
+            Ok(())
+        }
+        MemberMenuAction::Query(user_ids) => {
+            for user_id in user_ids {
+                let status = submit_query_slash_command(state_mut(hwnd), user_id)?;
+                state_mut(hwnd).model.status = status;
+            }
+            refresh_status_bar(hwnd)
+        }
+        MemberMenuAction::Mention(nicks) => {
+            let edit = compose_edit(hwnd);
+            active_compose_history(state_mut(hwnd)).reset_navigation();
+            replace_edit_selection(edit, &format!("{} ", nicks.join(" ")));
+            SetFocus(edit);
+            Ok(())
+        }
+    }
 }
 
 pub(super) unsafe fn invoke_member_context_menu_for_automation(
@@ -329,6 +357,11 @@ pub(super) unsafe fn sync_nick_list(
         .into_iter()
         .map(|index| shown[index].user_id.clone())
         .collect::<Vec<_>>();
+    // The caret of an empty list is no item.
+    let caret = usize::try_from(SendMessageW(list, LB_GETCARETINDEX, 0, 0))
+        .ok()
+        .and_then(|index| shown.get(index))
+        .map(|item| item.user_id.clone());
     let top_index = SendMessageW(list, LB_GETTOPINDEX, 0, 0);
     SendMessageW(list, WM_SETREDRAW, 0, 0);
     SendMessageW(list, LB_RESETCONTENT, 0, 0);
@@ -340,21 +373,34 @@ pub(super) unsafe fn sync_nick_list(
     }
     let selected = selected.iter().map(String::as_str).collect::<Vec<_>>();
     select_list_items(list, &restored_selection(&items, &selected));
+    if let Some(caret) = caret.and_then(|caret| items.iter().position(|item| item.user_id == caret))
+    {
+        SendMessageW(list, LB_SETCARETINDEX, caret, 0);
+    }
+    // After the caret, which scrolls to show itself.
     SendMessageW(list, LB_SETTOPINDEX, top_index as WPARAM, 0);
     SendMessageW(list, WM_SETREDRAW, 1, 0);
     *shown = items;
 }
 
-/// The items a nick list selects.
+/// The items a nick list selects, in list order. It takes several
+/// (`LBS_EXTENDEDSEL`), where `LB_GETCURSEL` names the caret item.
 unsafe fn list_selection(list: HWND) -> Vec<usize> {
-    let selected = SendMessageW(list, LB_GETCURSEL, 0, 0);
-    usize::try_from(selected).into_iter().collect()
+    let count = SendMessageW(list, LB_GETSELCOUNT, 0, 0);
+    let count = usize::try_from(count).expect("the nick list takes several items");
+    let mut items = vec![0i32; count];
+    let copied = SendMessageW(list, LB_GETSELITEMS, count, items.as_mut_ptr() as LPARAM);
+    assert_eq!(copied, count as isize, "the selected items are copied");
+    items
+        .into_iter()
+        .map(|item| usize::try_from(item).expect("an item index"))
+        .collect()
 }
 
-/// Selects `items` of a nick list that selects nothing.
+/// Adds `items` to a nick list's selection.
 unsafe fn select_list_items(list: HWND, items: &[usize]) {
     for &item in items {
-        let selected = SendMessageW(list, LB_SETCURSEL, item, 0);
+        let selected = SendMessageW(list, LB_SETSEL, 1, item as LPARAM);
         assert_ne!(selected, LB_ERR as isize, "item {item} is in the list");
     }
 }
@@ -363,8 +409,8 @@ unsafe fn select_list_items(list: HWND, items: &[usize]) {
 pub(super) struct MemberMenuActionState {
     /// Each member menu item, and whether it applies.
     items: Vec<(usize, bool)>,
-    pub(super) selected_user_id: Option<String>,
-    pub(super) selected_label: Option<String>,
+    pub(super) selected_user_ids: Vec<String>,
+    pub(super) selected_labels: Vec<String>,
 }
 
 impl MemberMenuActionState {
@@ -412,38 +458,60 @@ unsafe fn active_member_list(hwnd: HWND) -> Option<HWND> {
     }
 }
 
-/// The active window's selected member, through its listing.
-unsafe fn selected_member(hwnd: HWND) -> Option<RoomMemberSummary> {
-    let list = active_member_list(hwnd)?;
-    let state = state_ref(hwnd);
-    let view_id = &state.active_view;
-    let listing = &state.views[view_id].nick_list;
-    list_selection(list)
+/// The members a window's nick list selects, in list order, through its
+/// listing.
+unsafe fn selected_members(state: &WindowState, view_id: &ViewId) -> Vec<RoomMemberSummary> {
+    let view = &state.views[view_id];
+    list_selection(room_content_member_list(view.content))
         .into_iter()
-        .next()
-        .map(|index| room_member(state, view_id, &listing[index].user_id).clone())
+        .map(|index| room_member(state, view_id, &view.nick_list[index].user_id).clone())
+        .collect()
+}
+
+/// The active window's selected members; none in a window without a nick
+/// list.
+unsafe fn active_selected_members(state: &WindowState) -> Vec<RoomMemberSummary> {
+    match &state.active_view {
+        ViewId::Status | ViewId::RoomList => Vec::new(),
+        view_id @ (ViewId::Room(_) | ViewId::Thread { .. }) => selected_members(state, view_id),
+    }
+}
+
+/// What member menu item `id` does for `members` now.
+fn member_action(
+    state: &WindowState,
+    id: usize,
+    members: &[RoomMemberSummary],
+) -> MemberMenuAction {
+    let model = &state.model;
+    let identity_warned = members
+        .iter()
+        .filter(|member| identity::user_identity_warning(model, &member.user_id).is_some())
+        .map(|member| member.user_id.as_str())
+        .collect::<Vec<_>>();
+    member_menu_action(
+        id,
+        members,
+        &MemberMenuContext {
+            ignored_users: model.ignored_users.as_deref(),
+            own_user_id: model.own_user_id(),
+            identity_warned: &identity_warned,
+        },
+    )
 }
 
 pub(super) unsafe fn active_member_action_state(hwnd: HWND) -> MemberMenuActionState {
-    let selected = selected_member(hwnd);
-    let model = &state_ref(hwnd).model;
+    let state = state_ref(hwnd);
+    let selected = active_selected_members(state);
     MemberMenuActionState {
         items: member_menu_item_ids()
-            .map(|id| {
-                let enabled = selected.as_ref().is_some_and(|member| {
-                    member_menu_item_enabled(
-                        id,
-                        member,
-                        model.ignored_users.as_deref(),
-                        model.own_user_id(),
-                        identity::user_identity_warning(model, &member.user_id).is_some(),
-                    )
-                });
-                (id, enabled)
-            })
+            .map(|id| (id, !member_action(state, id, &selected).is_empty()))
             .collect(),
-        selected_user_id: selected.as_ref().map(|member| member.user_id.clone()),
-        selected_label: selected.as_ref().map(room_member_nick),
+        selected_user_ids: selected
+            .iter()
+            .map(|member| member.user_id.clone())
+            .collect(),
+        selected_labels: selected.iter().map(room_member_nick).collect(),
     }
 }
 
@@ -461,24 +529,15 @@ pub(super) unsafe fn refresh_member_menu_state(
     Ok(())
 }
 
+/// Selects only `user_id`'s nick in the active window, with the caret on
+/// it.
 pub(super) unsafe fn select_member_for_automation(hwnd: HWND, user_id: &str) -> Result<(), String> {
     let index = active_listed_index(hwnd, user_id)?;
     let list = active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
-    let selected = SendMessageW(list, LB_GETCURSEL, 0, 0);
-    if selected == LB_ERR as isize {
-        if SendMessageW(list, LB_SETCURSEL, index, 0) == LB_ERR as isize {
-            return Err("member selection failed".to_owned());
-        }
-    } else {
-        let key = if index > selected as usize {
-            VK_DOWN_KEY
-        } else {
-            VK_UP_KEY
-        };
-        for _ in 0..index.abs_diff(selected as usize) {
-            SendMessageW(list, WM_KEYDOWN, key, 0);
-        }
-    }
+    SendMessageW(list, LB_SETSEL, 0, -1);
+    select_list_items(list, &[index]);
+    SendMessageW(list, LB_SETCARETINDEX, index, 0);
+    assert_eq!(list_selection(list), [index], "only {user_id} is selected");
     Ok(())
 }
 

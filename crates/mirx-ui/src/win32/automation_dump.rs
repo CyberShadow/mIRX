@@ -33,8 +33,8 @@ pub(super) unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenu
         devoice_enabled: state.enabled(MENU_ID_MEMBER_DEVOICE),
         kick_enabled: state.enabled(MENU_ID_MEMBER_KICK),
         ban_enabled: state.enabled(MENU_ID_MEMBER_BAN),
-        selected_user_id: state.selected_user_id,
-        selected_label: state.selected_label,
+        selected_user_ids: state.selected_user_ids,
+        selected_labels: state.selected_labels,
     })
 }
 

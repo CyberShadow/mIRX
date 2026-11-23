@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 88;
+pub(crate) const PROTOCOL_VERSION: u32 = 89;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1067,8 +1067,9 @@ pub(crate) struct DumpMemberMenuState {
     pub(crate) devoice_enabled: bool,
     pub(crate) kick_enabled: bool,
     pub(crate) ban_enabled: bool,
-    pub(crate) selected_user_id: Option<String>,
-    pub(crate) selected_label: Option<String>,
+    /// The selected members, in nick list order.
+    pub(crate) selected_user_ids: Vec<String>,
+    pub(crate) selected_labels: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4254,8 +4255,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_88() {
-        assert_eq!(PROTOCOL_VERSION, 88);
+    fn protocol_version_is_89() {
+        assert_eq!(PROTOCOL_VERSION, 89);
     }
 
     #[test]
@@ -6296,7 +6297,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":88,
+                    "protocol_version":89,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })

@@ -803,9 +803,9 @@ unsafe fn menu_command_result(
             "Message",
             save_selected_message_attachment(hwnd).map(|_| Some(())),
         ),
-        MENU_ID_MEMBER_QUERY => ("Member", query_selected_member(hwnd).map(|_| Some(()))),
-        MENU_ID_MEMBER_MENTION => ("Member", mention_selected_member(hwnd).map(|_| Some(()))),
-        MENU_ID_MEMBER_WHOIS
+        MENU_ID_MEMBER_QUERY
+        | MENU_ID_MEMBER_MENTION
+        | MENU_ID_MEMBER_WHOIS
         | MENU_ID_MEMBER_DEVICES
         | MENU_ID_MEMBER_VERIFY
         | MENU_ID_MEMBER_ACCEPT_IDENTITY
@@ -818,7 +818,7 @@ unsafe fn menu_command_result(
         | MENU_ID_MEMBER_KICK
         | MENU_ID_MEMBER_BAN => (
             "Member",
-            run_selected_member_command(hwnd, command_id).map(|_| Some(())),
+            run_member_menu_item(hwnd, command_id).map(|_| Some(())),
         ),
         MENU_ID_FILE_CONNECT => (
             "File",

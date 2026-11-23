@@ -64,7 +64,7 @@ use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
 };
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
-use windows_sys::Win32::System::SystemServices::{MK_CONTROL, MK_LBUTTON};
+use windows_sys::Win32::System::SystemServices::{MK_CONTROL, MK_LBUTTON, MK_SHIFT};
 use windows_sys::Win32::UI::Controls::{
     EM_GETSEL, EM_SETSEL, TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED,
 };
@@ -79,14 +79,15 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GW_OWNER, GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect, GetDlgCtrlID, GetDlgItem,
     GetForegroundWindow, GetGUIThreadInfo, GetLastActivePopup, GetScrollInfo, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES,
-    IsIconic, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETCURSEL, LB_GETITEMHEIGHT, LB_GETTEXT,
-    LB_GETTEXTLEN, LB_GETTOPINDEX, LB_SETTOPINDEX, LBS_OWNERDRAWFIXED, PostMessageW,
-    RegisterWindowMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE,
-    SC_RESTORE, SCROLLINFO, SIF_ALL, SMTO_NORMAL, SPI_GETWHEELSCROLLLINES, SWP_NOMOVE,
-    SWP_NOZORDER, SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowPos,
-    SetWindowTextW, SystemParametersInfoW, WM_CHAR, WM_COMMAND, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NULL, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
+    IsIconic, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETITEMRECT,
+    LB_GETSELCOUNT, LB_GETSELITEMS, LB_GETTEXT, LB_GETTEXTLEN, LB_GETTOPINDEX, LB_SETTOPINDEX,
+    LBS_EXTENDEDSEL, LBS_OWNERDRAWFIXED, PostMessageW, RegisterWindowMessageW, SB_BOTTOM,
+    SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE, SC_RESTORE, SCROLLINFO, SIF_ALL,
+    SMTO_NORMAL, SPI_GETWHEELSCROLLLINES, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW,
+    SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, SystemParametersInfoW,
+    WM_CHAR, WM_COMMAND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_PASTE, WM_SETTEXT,
+    WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -3577,7 +3578,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 88);
+    assert_eq!(version.protocol_version, 89);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -9198,6 +9199,8 @@ fn nick_list_is_owner_drawn_in_the_text_font() -> Result<(), Box<dyn std::error:
         unsafe { window_style(members) } & LBS_OWNERDRAWFIXED as u32,
         0
     );
+    // It takes several nicks, as mIRC's.
+    assert_ne!(unsafe { window_style(members) } & LBS_EXTENDEDSEL as u32, 0);
     // Items are a text font line tall, as the stock listbox makes them.
     assert_eq!(item_height(), app.dump_ui_state()?.text_font.line_height);
 
@@ -11232,7 +11235,10 @@ fn launch_member_list_app() -> Result<GuiTestApp, Box<dyn std::error::Error>> {
 fn automation_driver_member_menu_state_tracks_selected_member()
 -> Result<(), Box<dyn std::error::Error>> {
     let app = launch_member_list_app()?;
-    assert_eq!(app.dump_member_menu_state()?.selected_user_id, None);
+    assert_eq!(
+        app.dump_member_menu_state()?.selected_user_ids,
+        Vec::<String>::new()
+    );
     assert!(!app.dump_member_menu_state()?.query_enabled);
     app.select_member("@casey:example")?;
     let state = app.dump_member_menu_state()?;
@@ -11243,16 +11249,13 @@ fn automation_driver_member_menu_state_tracks_selected_member()
     assert!(!state.deop_enabled && !state.devoice_enabled);
     // The fixture has no ignore list.
     assert!(!state.ignore_enabled && !state.unignore_enabled);
-    assert_eq!(state.selected_user_id.as_deref(), Some("@casey:example"));
-    assert_eq!(state.selected_label.as_deref(), Some("Casey"));
+    assert_eq!(state.selected_user_ids, ["@casey:example"]);
+    assert_eq!(state.selected_labels, ["Casey"]);
     app.select_member("@sam-two:example")?;
     let state = app.dump_member_menu_state()?;
-    assert_eq!(state.selected_user_id.as_deref(), Some("@sam-two:example"));
+    assert_eq!(state.selected_user_ids, ["@sam-two:example"]);
     assert!(!state.kick_enabled && !state.ban_enabled);
-    assert_eq!(
-        state.selected_label.as_deref(),
-        Some("Sam (@sam-two:example)")
-    );
+    assert_eq!(state.selected_labels, ["Sam (@sam-two:example)"]);
     Ok(())
 }
 
@@ -11276,13 +11279,9 @@ fn nick_list_keeps_its_selection_and_scroll_while_lines_arrive()
     let list = || unsafe { active_room_member_list_hwnd(&app) };
     let top_index = || unsafe { SendMessageW(list(), LB_GETTOPINDEX, 0, 0) };
     let selected = || -> Result<(Vec<String>, Vec<usize>), Box<dyn std::error::Error>> {
-        Ok((
-            app.dump_member_menu_state()?
-                .selected_user_id
-                .into_iter()
-                .collect(),
-            unsafe { listbox_selected_indices(list()) },
-        ))
+        Ok((app.dump_member_menu_state()?.selected_user_ids, unsafe {
+            listbox_selected_indices(list())
+        }))
     };
     let line = |timestamp_ms, body: &str| -> Result<(), Box<dyn std::error::Error>> {
         app.append_synthetic_events(&serde_json::to_string(&[text_event(
@@ -11340,12 +11339,13 @@ fn nick_list_keeps_its_selection_and_scroll_while_lines_arrive()
     Ok(())
 }
 
-#[test]
-fn member_menu_control_items() -> Result<(), Box<dyn std::error::Error>> {
+/// Beta with Alice (you, op), Vic (voiced), Bob and Carol, signed in.
+fn launch_ranked_members_app(
+    local_app_data: &Path,
+) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
-    let local_app_data = unique_local_app_data_path();
-    let options = launch_options(Some(local_app_data.clone()));
+    let options = launch_options(Some(local_app_data.to_path_buf()));
     let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     let member = |user_id: &str, display_name: &str, rank, is_own_user| RoomMemberSummary {
@@ -11372,6 +11372,7 @@ fn member_menu_control_items() -> Result<(), Box<dyn std::error::Error>> {
                 member("@alice:example", "Alice", RoomMemberRank::Moderator, true),
                 member("@vic:example", "Vic", RoomMemberRank::Voiced, false),
                 member("@bob:example", "Bob", RoomMemberRank::Member, false),
+                member("@carol:example", "Carol", RoomMemberRank::Member, false),
             ],
         }),
         Event::IgnoredUsers(Vec::new()),
@@ -11379,6 +11380,13 @@ fn member_menu_control_items() -> Result<(), Box<dyn std::error::Error>> {
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
     app.select_view(room_identity("!beta:example"))?;
+    Ok(app)
+}
+
+#[test]
+fn member_menu_control_items() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_ranked_members_app(&local_app_data)?;
 
     app.select_member("@bob:example")?;
     let state = app.dump_member_menu_state()?;
@@ -11436,6 +11444,113 @@ fn member_menu_control_items() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn nick_list_ctrl_click_selects_several_and_control_acts_on_all()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_ranked_members_app(&local_app_data)?;
+    let list = unsafe { active_room_member_list_hwnd(&app) };
+    // Alice 0, Vic 1, Bob 2, Carol 3.
+    click_nick_list_item(&app, 2, 0)?;
+    click_nick_list_item(&app, 3, MK_CONTROL)?;
+    click_nick_list_item(&app, 1, MK_CONTROL)?;
+    assert_eq!(unsafe { listbox_selected_indices(list) }, [1, 2, 3]);
+    let state = app.dump_member_menu_state()?;
+    assert_eq!(
+        state.selected_user_ids,
+        ["@vic:example", "@bob:example", "@carol:example"]
+    );
+    assert_eq!(state.selected_labels, ["Vic", "Bob", "Carol"]);
+    assert!(state.op_enabled && state.voice_enabled && state.devoice_enabled);
+    assert!(!state.deop_enabled && !state.verify_enabled);
+    assert!(state.whois_enabled && state.query_enabled && state.mention_enabled);
+
+    // One change of the power levels for all it applies to.
+    app.open_selected_member_context_menu(ContextMenuCommand::OpMember)?;
+    app.open_selected_member_context_menu(ContextMenuCommand::VoiceMember)?;
+    assert_eq!(
+        app.dump_model()?.submitted_room_settings_commands,
+        vec![
+            member_roles_update(
+                "!beta:example",
+                &[
+                    ("@vic:example", MemberPowerRole::Moderator),
+                    ("@bob:example", MemberPowerRole::Moderator),
+                    ("@carol:example", MemberPowerRole::Moderator),
+                ]
+            ),
+            member_roles_update(
+                "!beta:example",
+                &[
+                    ("@bob:example", MemberPowerRole::Voiced),
+                    ("@carol:example", MemberPowerRole::Voiced),
+                ]
+            ),
+        ]
+    );
+    // The others once per member, in list order.
+    app.open_selected_member_context_menu(ContextMenuCommand::WhoisMember)?;
+    assert_eq!(
+        app.dump_model()?.submitted_user_commands,
+        ["@vic:example", "@bob:example", "@carol:example"].map(|user_id| SubmittedUserCommand {
+            action: UserCommandAction::FetchProfile,
+            user_id: user_id.to_owned(),
+        })
+    );
+    app.mention_selected_member_via_menu()?;
+    assert_eq!(app.compose_text()?, "Vic Bob Carol ");
+
+    // Ctrl+click on a selected nick takes it out.
+    click_nick_list_item(&app, 1, MK_CONTROL)?;
+    assert_eq!(unsafe { listbox_selected_indices(list) }, [2, 3]);
+    // Shift+click selects the range from the last clicked nick.
+    click_nick_list_item(&app, 0, 0)?;
+    click_nick_list_item(&app, 2, MK_SHIFT)?;
+    assert_eq!(unsafe { listbox_selected_indices(list) }, [0, 1, 2]);
+    assert_eq!(
+        app.dump_member_menu_state()?.selected_user_ids,
+        ["@alice:example", "@vic:example", "@bob:example"]
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn nick_list_right_click_keeps_a_selection_it_lands_on() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_ranked_members_app(&local_app_data)?;
+    let list = unsafe { active_room_member_list_hwnd(&app) };
+    click_nick_list_item(&app, 2, 0)?;
+    click_nick_list_item(&app, 3, MK_CONTROL)?;
+    let whois = |user_id: &str| SubmittedUserCommand {
+        action: UserCommandAction::FetchProfile,
+        user_id: user_id.to_owned(),
+    };
+    app.open_member_context_menu("@carol:example", ContextMenuCommand::WhoisMember)?;
+    assert_eq!(
+        app.dump_model()?.submitted_user_commands,
+        [whois("@bob:example"), whois("@carol:example")]
+    );
+    assert_eq!(unsafe { listbox_selected_indices(list) }, [2, 3]);
+    // A nick outside the selection becomes the only one.
+    app.open_member_context_menu("@vic:example", ContextMenuCommand::WhoisMember)?;
+    assert_eq!(
+        app.dump_model()?.submitted_user_commands,
+        [
+            whois("@bob:example"),
+            whois("@carol:example"),
+            whois("@vic:example")
+        ]
+    );
+    assert_eq!(unsafe { listbox_selected_indices(list) }, [1]);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn automation_driver_member_menu_moderation_uses_clicked_member()
 -> Result<(), Box<dyn std::error::Error>> {
     let app = launch_member_list_app()?;
@@ -11469,8 +11584,8 @@ fn automation_driver_member_menu_moderation_uses_clicked_member()
         ]
     );
     assert_eq!(
-        app.dump_member_menu_state()?.selected_user_id.as_deref(),
-        Some("@casey:example")
+        app.dump_member_menu_state()?.selected_user_ids,
+        ["@casey:example"]
     );
     Ok(())
 }
@@ -11532,8 +11647,8 @@ fn automation_driver_member_context_menu_query_clicked_member_without_prior_sele
         }]
     );
     assert_eq!(
-        app.dump_member_menu_state()?.selected_user_id.as_deref(),
-        Some("@alice:example")
+        app.dump_member_menu_state()?.selected_user_ids,
+        ["@alice:example"]
     );
     Ok(())
 }
@@ -11690,8 +11805,8 @@ fn automation_driver_member_moderation_uses_current_keyboard_selection_after_cli
     app.open_member_context_menu("@alice:example", ContextMenuCommand::MentionMember)?;
     app.select_member("@casey:example")?;
     assert_eq!(
-        app.dump_member_menu_state()?.selected_user_id.as_deref(),
-        Some("@casey:example")
+        app.dump_member_menu_state()?.selected_user_ids,
+        ["@casey:example"]
     );
     app.open_selected_member_context_menu(ContextMenuCommand::KickMember)?;
     assert_eq!(
@@ -11777,7 +11892,10 @@ fn automation_driver_member_moderation_status_view_has_no_target()
 -> Result<(), Box<dyn std::error::Error>> {
     let app = launch_member_list_app()?;
     app.select_view(ViewIdentity::Status)?;
-    assert_eq!(app.dump_member_menu_state()?.selected_user_id, None);
+    assert_eq!(
+        app.dump_member_menu_state()?.selected_user_ids,
+        Vec::<String>::new()
+    );
     let error = app
         .open_selected_member_context_menu(ContextMenuCommand::KickMember)
         .expect_err("status view must not submit member moderation");
@@ -13569,10 +13687,55 @@ unsafe fn active_room_member_list_hwnd(app: &MirxApp) -> HWND {
     unsafe { child_window_with_class(active_mdi_content_hwnd(app), "ListBox") }
 }
 
-/// The items the nick list control itself selects.
+/// The items the nick list control itself selects, in list order.
 unsafe fn listbox_selected_indices(hwnd: HWND) -> Vec<usize> {
-    let selected = unsafe { SendMessageW(hwnd, LB_GETCURSEL, 0, 0) };
-    usize::try_from(selected).into_iter().collect()
+    let count = unsafe { SendMessageW(hwnd, LB_GETSELCOUNT, 0, 0) };
+    let count = usize::try_from(count).expect("the nick list takes several items");
+    let mut items = vec![0i32; count];
+    let copied = unsafe { SendMessageW(hwnd, LB_GETSELITEMS, count, items.as_mut_ptr() as isize) };
+    assert_eq!(
+        copied, count as isize,
+        "LB_GETSELITEMS must copy every item"
+    );
+    items.into_iter().map(|item| item as usize).collect()
+}
+
+/// The middle of nick list item `index`, in the list's client area.
+unsafe fn nick_list_item_point(list: HWND, index: usize) -> UiPoint {
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    let result =
+        unsafe { SendMessageW(list, LB_GETITEMRECT, index, &mut rect as *mut RECT as isize) };
+    assert_ne!(result, -1, "item {index} is in the list");
+    UiPoint {
+        x: (rect.left + rect.right) / 2,
+        y: (rect.top + rect.bottom) / 2,
+    }
+}
+
+/// Clicks nick list item `index` with the left button and `keys`
+/// (`MK_CONTROL`, `MK_SHIFT`) held, as the listbox reads them from the
+/// message, and waits for the app to handle it.
+fn click_nick_list_item(
+    app: &MirxApp,
+    index: usize,
+    keys: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let list = unsafe { active_room_member_list_hwnd(app) };
+    let lparam = mouse_lparam(&unsafe { nick_list_item_point(list, index) });
+    for (message, buttons) in [(WM_LBUTTONDOWN, MK_LBUTTON | keys), (WM_LBUTTONUP, keys)] {
+        assert_ne!(
+            unsafe { PostMessageW(list, message, buttons as WPARAM, lparam) },
+            0,
+            "posting a mouse message must succeed"
+        );
+    }
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
 }
 
 /// The entries the nick list control itself shows, read back with

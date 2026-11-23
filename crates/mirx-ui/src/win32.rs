@@ -120,9 +120,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetAncestor, GetClassNameW, GetClientRect, GetDlgItem, GetForegroundWindow, GetMenuItemCount,
     GetMenuState, GetMessageW, GetParent, GetQueueStatus, GetScrollInfo, GetSystemMenu,
     GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret, IDC_ARROW, IDYES, IsIconic, IsWindow,
-    IsWindowVisible, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT,
-    LB_GETTEXT, LB_GETTEXTLEN, LB_GETTOPINDEX, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL,
-    LB_SETITEMHEIGHT, LB_SETTOPINDEX, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED,
+    IsWindowVisible, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCARETINDEX, LB_GETITEMRECT,
+    LB_GETSEL, LB_GETSELCOUNT, LB_GETSELITEMS, LB_GETTEXT, LB_GETTEXTLEN, LB_GETTOPINDEX,
+    LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCARETINDEX, LB_SETITEMHEIGHT, LB_SETSEL,
+    LB_SETTOPINDEX, LBS_EXTENDEDSEL, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED,
     LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION, MB_OK, MB_YESNO,
     MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL, MESSAGEBOX_STYLE, MF_BYCOMMAND,
     MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
@@ -429,10 +430,10 @@ use menus::{
     MENU_ID_VERIFY_CANCEL, MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS,
     MENU_ID_VERIFY_THIS_SESSION, MENU_ID_VIEW_SWITCHBAR, MENU_ID_VIEW_TOOLBAR,
     MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE,
-    MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry,
-    ROOM_NOTIFICATIONS_MENU, TOOLBAR_ID_SEND_FILE, TOOLS_MENU, VIEW_MENU, WINDOW_MENU, WindowKey,
-    commands_menu_item, commands_menu_line, commands_menu_title, file_menu_state,
-    member_menu_command, member_menu_item_enabled, member_menu_item_ids, notification_menu_id,
+    MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MemberMenuAction,
+    MemberMenuContext, MenuEntry, ROOM_NOTIFICATIONS_MENU, TOOLBAR_ID_SEND_FILE, TOOLS_MENU,
+    VIEW_MENU, WINDOW_MENU, WindowKey, commands_menu_item, commands_menu_line, commands_menu_title,
+    file_menu_state, member_menu_action, member_menu_item_ids, notification_menu_id,
     notification_menu_mode, notification_mode_label, verification_menu_action_enabled,
     view_menu_bar, view_menu_checks, window_key,
 };
@@ -452,9 +453,9 @@ use nick_completion::NickCompletion;
 use nick_list::{
     ListedMember, active_member_action_state, active_view_members, draw_nick_list_item,
     invoke_member_context_menu_for_automation, invoke_selected_member_context_menu_for_automation,
-    mention_selected_member, nick_list_items, query_selected_member, refresh_member_menu_state,
-    room_member_nick, room_member_view_rows, run_selected_member_command,
-    select_member_for_automation, show_member_context_menu, sync_nick_list, text_font_item_height,
+    nick_list_items, refresh_member_menu_state, room_member_nick, room_member_view_rows,
+    run_member_menu_item, select_member_for_automation, show_member_context_menu, sync_nick_list,
+    text_font_item_height,
 };
 use presence::PresenceBook;
 use replies::ComposeTarget;

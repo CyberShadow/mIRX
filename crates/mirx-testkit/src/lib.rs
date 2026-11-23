@@ -207,8 +207,9 @@ pub struct MemberMenuState {
     pub devoice_enabled: bool,
     pub kick_enabled: bool,
     pub ban_enabled: bool,
-    pub selected_user_id: Option<String>,
-    pub selected_label: Option<String>,
+    /// The selected members, in nick list order.
+    pub selected_user_ids: Vec<String>,
+    pub selected_labels: Vec<String>,
 }
 
 impl FrameSize {

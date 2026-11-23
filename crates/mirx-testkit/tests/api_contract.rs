@@ -559,8 +559,8 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
         devoice_enabled: false,
         kick_enabled: true,
         ban_enabled: false,
-        selected_user_id: Some("@bob:example".to_owned()),
-        selected_label: Some("Bob".to_owned()),
+        selected_user_ids: vec!["@bob:example".to_owned(), "@carol:example".to_owned()],
+        selected_labels: vec!["Bob".to_owned(), "Carol".to_owned()],
     };
     assert_eq!(
         serde_json::from_value::<MemberMenuState>(serde_json::to_value(&member).unwrap()).unwrap(),
@@ -588,8 +588,8 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
         }))
         .is_err()
     );
-    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"whois_enabled": true, "devices_enabled": true, "verify_enabled": true, "accept_identity_enabled": true, "query_enabled": true, "mention_enabled": true, "ignore_enabled": true, "unignore_enabled": false, "op_enabled": true, "deop_enabled": false, "voice_enabled": true, "devoice_enabled": false, "kick_enabled": true, "ban_enabled": false, "selected_user_id": null, "selected_label": null, "unexpected": true})).is_err());
-    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"whois_enabled": true, "devices_enabled": true, "verify_enabled": true, "accept_identity_enabled": true, "query_enabled": true, "mention_enabled": true, "ignore_enabled": true, "unignore_enabled": false, "op_enabled": true, "deop_enabled": false, "voice_enabled": true, "devoice_enabled": false, "ban_enabled": false, "selected_user_id": null, "selected_label": null})).is_err());
+    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"whois_enabled": true, "devices_enabled": true, "verify_enabled": true, "accept_identity_enabled": true, "query_enabled": true, "mention_enabled": true, "ignore_enabled": true, "unignore_enabled": false, "op_enabled": true, "deop_enabled": false, "voice_enabled": true, "devoice_enabled": false, "kick_enabled": true, "ban_enabled": false, "selected_user_ids": [], "selected_labels": [], "unexpected": true})).is_err());
+    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"whois_enabled": true, "devices_enabled": true, "verify_enabled": true, "accept_identity_enabled": true, "query_enabled": true, "mention_enabled": true, "ignore_enabled": true, "unignore_enabled": false, "op_enabled": true, "deop_enabled": false, "voice_enabled": true, "devoice_enabled": false, "ban_enabled": false, "selected_user_ids": [], "selected_labels": []})).is_err());
 }
 
 #[test]

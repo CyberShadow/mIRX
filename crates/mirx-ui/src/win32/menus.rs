@@ -533,81 +533,121 @@ pub(super) const MEMBER_CONTROL_MENU: &[MenuEntry] = &[
     },
 ];
 
-/// The command a member menu item runs, as if typed with the member's
-/// user ID, which names them exactly; `None` for Query and Mention, which
-/// act on the window rather than through a command.
-pub(super) fn member_menu_command(id: usize, user_id: &str) -> Option<SlashCommand> {
-    let nick = user_id.to_owned();
+/// What a member menu item does for the selected members.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum MemberMenuAction {
+    /// Commands to run as if typed, in order, each naming its members by
+    /// user ID, which names them exactly.
+    Commands(Vec<SlashCommand>),
+    /// The users to open queries with, by user ID.
+    Query(Vec<String>),
+    /// The nicks to insert at the compose caret.
+    Mention(Vec<String>),
+}
+
+impl MemberMenuAction {
+    /// Whether it does nothing: the item applies to none of the members,
+    /// and is greyed.
+    pub(super) fn is_empty(&self) -> bool {
+        match self {
+            Self::Commands(commands) => commands.is_empty(),
+            Self::Query(users) | Self::Mention(users) => users.is_empty(),
+        }
+    }
+}
+
+/// What a member menu item's checks read beside the members themselves.
+pub(super) struct MemberMenuContext<'a> {
+    pub(super) ignored_users: Option<&'a [String]>,
+    pub(super) own_user_id: Option<&'a str>,
+    /// The members some room warns about, whose identity changed.
+    pub(super) identity_warned: &'a [&'a str],
+}
+
+/// What a member menu item runs for the selected `members` (in list
+/// order), as mIRC's popups act on all selected nicks: each member it
+/// applies to, by the checks its command makes before asking the server
+/// (the server decides the rest; a refused op prints in the room window).
+/// The others are left out. Op, Deop, Voice and Devoice are one change of
+/// the room's power levels for all of them; Verify takes exactly one
+/// member, as one verification runs at a time.
+pub(super) fn member_menu_action(
+    id: usize,
+    members: &[RoomMemberSummary],
+    context: &MemberMenuContext,
+) -> MemberMenuAction {
+    let no_nick = |_: &str| None;
+    let each = |applies: &dyn Fn(&RoomMemberSummary) -> bool,
+                command: &dyn Fn(String) -> SlashCommand| {
+        MemberMenuAction::Commands(
+            members
+                .iter()
+                .filter(|member| applies(member))
+                .map(|member| command(member.user_id.clone()))
+                .collect(),
+        )
+    };
+    let all = |_: &RoomMemberSummary| true;
     let rank = |change| {
-        Some(SlashCommand::SetRank {
-            nicks: vec![nick.clone()],
-            change,
+        let nicks = members
+            .iter()
+            .filter(|member| rank_change_role(change, member).is_ok())
+            .map(|member| member.user_id.clone())
+            .collect::<Vec<_>>();
+        MemberMenuAction::Commands(if nicks.is_empty() {
+            Vec::new()
+        } else {
+            vec![SlashCommand::SetRank { nicks, change }]
         })
     };
     match id {
-        MENU_ID_MEMBER_QUERY | MENU_ID_MEMBER_MENTION => None,
-        MENU_ID_MEMBER_WHOIS => Some(SlashCommand::Whois { nick: nick.clone() }),
-        MENU_ID_MEMBER_DEVICES => Some(SlashCommand::Devices {
-            target: Some(nick.clone()),
-        }),
-        MENU_ID_MEMBER_VERIFY => Some(SlashCommand::VerifyStart {
-            target: Some(nick.clone()),
+        MENU_ID_MEMBER_QUERY => MemberMenuAction::Query(
+            members
+                .iter()
+                .map(|member| member.user_id.clone())
+                .collect(),
+        ),
+        MENU_ID_MEMBER_MENTION => {
+            MemberMenuAction::Mention(members.iter().map(|member| member.nick.clone()).collect())
+        }
+        MENU_ID_MEMBER_WHOIS => each(&all, &|nick| SlashCommand::Whois { nick }),
+        MENU_ID_MEMBER_DEVICES => each(&all, &|nick| SlashCommand::Devices { target: Some(nick) }),
+        MENU_ID_MEMBER_VERIFY => each(&|_| members.len() == 1, &|nick| SlashCommand::VerifyStart {
+            target: Some(nick),
             device_id: None,
         }),
-        MENU_ID_MEMBER_ACCEPT_IDENTITY => Some(SlashCommand::IdentityAccept {
-            target: nick.clone(),
-        }),
-        MENU_ID_MEMBER_IGNORE => Some(SlashCommand::Ignore {
-            target: Some(nick.clone()),
-        }),
-        MENU_ID_MEMBER_UNIGNORE => Some(SlashCommand::Unignore {
-            target: nick.clone(),
-        }),
+        MENU_ID_MEMBER_ACCEPT_IDENTITY => each(
+            &|member| context.identity_warned.contains(&member.user_id.as_str()),
+            &|target| SlashCommand::IdentityAccept { target },
+        ),
+        MENU_ID_MEMBER_IGNORE => each(
+            &|member| {
+                check_ignore(
+                    context.ignored_users,
+                    context.own_user_id,
+                    &member.user_id,
+                    no_nick,
+                )
+                .is_ok()
+            },
+            &|nick| SlashCommand::Ignore { target: Some(nick) },
+        ),
+        MENU_ID_MEMBER_UNIGNORE => each(
+            &|member| check_unignore(context.ignored_users, &member.user_id, no_nick).is_ok(),
+            &|target| SlashCommand::Unignore { target },
+        ),
         MENU_ID_MEMBER_OP => rank(RankChange::Op),
         MENU_ID_MEMBER_DEOP => rank(RankChange::Deop),
         MENU_ID_MEMBER_VOICE => rank(RankChange::Voice),
         MENU_ID_MEMBER_DEVOICE => rank(RankChange::Devoice),
-        MENU_ID_MEMBER_KICK => Some(SlashCommand::Kick {
-            nick: nick.clone(),
+        MENU_ID_MEMBER_KICK => each(&|member| member.can_kick, &|nick| SlashCommand::Kick {
+            nick,
             reason: None,
         }),
-        MENU_ID_MEMBER_BAN => Some(SlashCommand::Ban {
-            nick: nick.clone(),
+        MENU_ID_MEMBER_BAN => each(&|member| member.can_ban, &|nick| SlashCommand::Ban {
+            nick,
             reason: None,
         }),
-        _ => panic!("{id} is not a member menu item"),
-    }
-}
-
-/// Whether a member menu item applies to the selected member: the checks
-/// its command makes before asking the server. The server decides the
-/// rest; a refused op prints in the room window. `identity_warning` is
-/// whether any room warns that the member's identity changed.
-pub(super) fn member_menu_item_enabled(
-    id: usize,
-    member: &RoomMemberSummary,
-    ignored_users: Option<&[String]>,
-    own_user_id: Option<&str>,
-    identity_warning: bool,
-) -> bool {
-    let no_nick = |_: &str| None;
-    match id {
-        MENU_ID_MEMBER_WHOIS
-        | MENU_ID_MEMBER_DEVICES
-        | MENU_ID_MEMBER_VERIFY
-        | MENU_ID_MEMBER_QUERY
-        | MENU_ID_MEMBER_MENTION => true,
-        MENU_ID_MEMBER_ACCEPT_IDENTITY => identity_warning,
-        MENU_ID_MEMBER_IGNORE => {
-            check_ignore(ignored_users, own_user_id, &member.user_id, no_nick).is_ok()
-        }
-        MENU_ID_MEMBER_UNIGNORE => check_unignore(ignored_users, &member.user_id, no_nick).is_ok(),
-        MENU_ID_MEMBER_OP => rank_change_role(RankChange::Op, member).is_ok(),
-        MENU_ID_MEMBER_DEOP => rank_change_role(RankChange::Deop, member).is_ok(),
-        MENU_ID_MEMBER_VOICE => rank_change_role(RankChange::Voice, member).is_ok(),
-        MENU_ID_MEMBER_DEVOICE => rank_change_role(RankChange::Devoice, member).is_ok(),
-        MENU_ID_MEMBER_KICK => member.can_kick,
-        MENU_ID_MEMBER_BAN => member.can_ban,
         _ => panic!("{id} is not a member menu item"),
     }
 }
@@ -1008,88 +1048,143 @@ mod tests {
         }
     }
 
+    /// The action of item `id` for `members`, with `@me:example` signed in
+    /// ignoring `ignored` and warned about `warned`.
+    fn action(
+        id: usize,
+        members: &[RoomMemberSummary],
+        ignored: &[&str],
+        warned: &[&str],
+    ) -> MemberMenuAction {
+        let ignored = ignored
+            .iter()
+            .map(|user_id| (*user_id).to_owned())
+            .collect::<Vec<_>>();
+        member_menu_action(
+            id,
+            members,
+            &MemberMenuContext {
+                ignored_users: Some(&ignored),
+                own_user_id: Some("@me:example"),
+                identity_warned: warned,
+            },
+        )
+    }
+
     #[test]
     fn member_items_run_the_typed_command_on_the_user_id() {
         let user_id = "@bob:example";
         let nick = || user_id.to_owned();
-        for (id, command) in [
-            (MENU_ID_MEMBER_QUERY, None),
-            (MENU_ID_MEMBER_MENTION, None),
+        let one = |command| MemberMenuAction::Commands(vec![command]);
+        let bob = RoomMemberSummary {
+            can_kick: true,
+            can_ban: true,
+            ..member(user_id, RoomMemberRank::Member)
+        };
+        for (id, expected) in [
+            (MENU_ID_MEMBER_QUERY, MemberMenuAction::Query(vec![nick()])),
+            (
+                MENU_ID_MEMBER_MENTION,
+                MemberMenuAction::Mention(vec!["bob".to_owned()]),
+            ),
             (
                 MENU_ID_MEMBER_WHOIS,
-                Some(SlashCommand::Whois { nick: nick() }),
+                one(SlashCommand::Whois { nick: nick() }),
             ),
             (
                 MENU_ID_MEMBER_DEVICES,
-                Some(SlashCommand::Devices {
+                one(SlashCommand::Devices {
                     target: Some(nick()),
                 }),
             ),
             (
                 MENU_ID_MEMBER_VERIFY,
-                Some(SlashCommand::VerifyStart {
+                one(SlashCommand::VerifyStart {
                     target: Some(nick()),
                     device_id: None,
                 }),
             ),
             (
                 MENU_ID_MEMBER_ACCEPT_IDENTITY,
-                Some(SlashCommand::IdentityAccept { target: nick() }),
+                one(SlashCommand::IdentityAccept { target: nick() }),
             ),
             (
                 MENU_ID_MEMBER_IGNORE,
-                Some(SlashCommand::Ignore {
+                one(SlashCommand::Ignore {
                     target: Some(nick()),
                 }),
             ),
             (
-                MENU_ID_MEMBER_UNIGNORE,
-                Some(SlashCommand::Unignore { target: nick() }),
-            ),
-            (
                 MENU_ID_MEMBER_OP,
-                Some(SlashCommand::SetRank {
+                one(SlashCommand::SetRank {
                     nicks: vec![nick()],
                     change: RankChange::Op,
                 }),
             ),
             (
-                MENU_ID_MEMBER_DEOP,
-                Some(SlashCommand::SetRank {
-                    nicks: vec![nick()],
-                    change: RankChange::Deop,
-                }),
-            ),
-            (
                 MENU_ID_MEMBER_VOICE,
-                Some(SlashCommand::SetRank {
+                one(SlashCommand::SetRank {
                     nicks: vec![nick()],
                     change: RankChange::Voice,
                 }),
             ),
             (
-                MENU_ID_MEMBER_DEVOICE,
-                Some(SlashCommand::SetRank {
-                    nicks: vec![nick()],
-                    change: RankChange::Devoice,
-                }),
-            ),
-            (
                 MENU_ID_MEMBER_KICK,
-                Some(SlashCommand::Kick {
+                one(SlashCommand::Kick {
                     nick: nick(),
                     reason: None,
                 }),
             ),
             (
                 MENU_ID_MEMBER_BAN,
-                Some(SlashCommand::Ban {
+                one(SlashCommand::Ban {
                     nick: nick(),
                     reason: None,
                 }),
             ),
         ] {
-            assert_eq!(member_menu_command(id, user_id), command, "{id}");
+            assert_eq!(
+                action(id, std::slice::from_ref(&bob), &[], &[user_id]),
+                expected,
+                "{id}"
+            );
+        }
+        let voiced_ignored = RoomMemberSummary {
+            rank: RoomMemberRank::Voiced,
+            ..bob.clone()
+        };
+        let operator = RoomMemberSummary {
+            rank: RoomMemberRank::Moderator,
+            ..bob.clone()
+        };
+        for (id, member, expected) in [
+            (
+                MENU_ID_MEMBER_UNIGNORE,
+                &voiced_ignored,
+                SlashCommand::Unignore { target: nick() },
+            ),
+            (
+                MENU_ID_MEMBER_DEVOICE,
+                &voiced_ignored,
+                SlashCommand::SetRank {
+                    nicks: vec![nick()],
+                    change: RankChange::Devoice,
+                },
+            ),
+            (
+                MENU_ID_MEMBER_DEOP,
+                &operator,
+                SlashCommand::SetRank {
+                    nicks: vec![nick()],
+                    change: RankChange::Deop,
+                },
+            ),
+        ] {
+            assert_eq!(
+                action(id, std::slice::from_ref(member), &[user_id], &[]),
+                one(expected),
+                "{id}"
+            );
         }
         assert_eq!(member_menu_item_ids().count(), 14);
     }
@@ -1097,20 +1192,8 @@ mod tests {
     #[test]
     fn member_items_apply_when_their_command_would() {
         let enabled_items = |member: &RoomMemberSummary, ignored: &[&str]| {
-            let ignored = ignored
-                .iter()
-                .map(|user_id| (*user_id).to_owned())
-                .collect::<Vec<_>>();
             member_menu_item_ids()
-                .filter(|id| {
-                    member_menu_item_enabled(
-                        *id,
-                        member,
-                        Some(&ignored),
-                        Some("@me:example"),
-                        false,
-                    )
-                })
+                .filter(|id| !action(*id, std::slice::from_ref(member), ignored, &[]).is_empty())
                 .collect::<Vec<_>>()
         };
         let always = [
@@ -1165,33 +1248,138 @@ mod tests {
         assert_eq!(enabled_items(&me, &[]), always);
 
         // Neither Ignore nor Unignore applies before the list arrives.
-        assert!(!member_menu_item_enabled(
-            MENU_ID_MEMBER_IGNORE,
-            &plain,
-            None,
-            Some("@me:example"),
-            false
-        ));
-        assert!(!member_menu_item_enabled(
-            MENU_ID_MEMBER_UNIGNORE,
-            &plain,
-            None,
-            Some("@me:example"),
-            false
-        ));
+        let before_the_list = |id| {
+            member_menu_action(
+                id,
+                std::slice::from_ref(&plain),
+                &MemberMenuContext {
+                    ignored_users: None,
+                    own_user_id: Some("@me:example"),
+                    identity_warned: &[],
+                },
+            )
+        };
+        assert!(before_the_list(MENU_ID_MEMBER_IGNORE).is_empty());
+        assert!(before_the_list(MENU_ID_MEMBER_UNIGNORE).is_empty());
 
         // Accept Identity applies exactly while a warning stands.
-        for warning in [false, true] {
+        for warned in [&[][..], &["@bob:example"][..]] {
             assert_eq!(
-                member_menu_item_enabled(
+                !action(
                     MENU_ID_MEMBER_ACCEPT_IDENTITY,
-                    &plain,
-                    Some(&[]),
-                    Some("@me:example"),
-                    warning
-                ),
-                warning
+                    std::slice::from_ref(&plain),
+                    &[],
+                    warned
+                )
+                .is_empty(),
+                !warned.is_empty()
             );
+        }
+    }
+
+    #[test]
+    fn member_menu_actions_for_several_members() {
+        let mut bob = member("@bob:example", RoomMemberRank::Member);
+        bob.can_kick = true;
+        let vic = member("@vic:example", RoomMemberRank::Voiced);
+        let mut op = member("@op:example", RoomMemberRank::Moderator);
+        op.can_kick = true;
+        let mut me = member("@me:example", RoomMemberRank::Moderator);
+        me.is_own_user = true;
+        let ids = |users: &[&RoomMemberSummary]| {
+            users
+                .iter()
+                .map(|member| member.user_id.clone())
+                .collect::<Vec<_>>()
+        };
+        let set_rank = |users: &[&RoomMemberSummary], change| {
+            MemberMenuAction::Commands(vec![SlashCommand::SetRank {
+                nicks: ids(users),
+                change,
+            }])
+        };
+        let selection = [bob.clone(), vic.clone(), op.clone()];
+        let act = |id| action(id, &selection, &["@vic:example"], &["@op:example"]);
+
+        // One power-levels write for those it applies to.
+        assert_eq!(
+            act(MENU_ID_MEMBER_OP),
+            set_rank(&[&bob, &vic], RankChange::Op)
+        );
+        assert_eq!(
+            act(MENU_ID_MEMBER_VOICE),
+            set_rank(&[&bob], RankChange::Voice)
+        );
+        assert_eq!(
+            act(MENU_ID_MEMBER_DEVOICE),
+            set_rank(&[&vic], RankChange::Devoice)
+        );
+        assert_eq!(act(MENU_ID_MEMBER_DEOP), set_rank(&[&op], RankChange::Deop));
+        // Deop of yourself is left out.
+        assert_eq!(
+            action(MENU_ID_MEMBER_DEOP, &[op.clone(), me.clone()], &[], &[]),
+            set_rank(&[&op], RankChange::Deop)
+        );
+        // The others once per member they apply to.
+        let commands = |commands: Vec<SlashCommand>| MemberMenuAction::Commands(commands);
+        assert_eq!(
+            act(MENU_ID_MEMBER_KICK),
+            commands(
+                [&bob, &op]
+                    .map(|member| SlashCommand::Kick {
+                        nick: member.user_id.clone(),
+                        reason: None,
+                    })
+                    .into()
+            )
+        );
+        assert_eq!(act(MENU_ID_MEMBER_BAN), commands(Vec::new()));
+        assert_eq!(
+            act(MENU_ID_MEMBER_WHOIS),
+            commands(
+                ids(&[&bob, &vic, &op])
+                    .into_iter()
+                    .map(|nick| SlashCommand::Whois { nick })
+                    .collect()
+            )
+        );
+        assert_eq!(
+            act(MENU_ID_MEMBER_ACCEPT_IDENTITY),
+            commands(vec![SlashCommand::IdentityAccept {
+                target: op.user_id.clone()
+            }])
+        );
+        // Ignore skips yourself and the already ignored.
+        assert_eq!(
+            action(
+                MENU_ID_MEMBER_IGNORE,
+                &[bob.clone(), vic.clone(), me.clone()],
+                &["@vic:example"],
+                &[]
+            ),
+            commands(vec![SlashCommand::Ignore {
+                target: Some(bob.user_id.clone())
+            }])
+        );
+        assert_eq!(
+            act(MENU_ID_MEMBER_UNIGNORE),
+            commands(vec![SlashCommand::Unignore {
+                target: vic.user_id.clone()
+            }])
+        );
+        // One verification at a time.
+        assert!(act(MENU_ID_MEMBER_VERIFY).is_empty());
+        assert_eq!(
+            act(MENU_ID_MEMBER_MENTION),
+            MemberMenuAction::Mention(vec!["bob".into(), "vic".into(), "op".into()])
+        );
+        assert_eq!(
+            act(MENU_ID_MEMBER_QUERY),
+            MemberMenuAction::Query(ids(&[&bob, &vic, &op]))
+        );
+        // Nothing selected: every item is empty.
+        for id in member_menu_item_ids() {
+            assert!(action(id, &[], &[], &[]).is_empty(), "{id}");
         }
     }
 }

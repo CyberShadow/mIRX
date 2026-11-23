@@ -557,7 +557,7 @@ unsafe fn create_room_content_state(hwnd: HWND) -> Result<Box<RoomContentState>,
             | WS_VISIBLE
             | WS_VSCROLL
             | WS_CLIPSIBLINGS
-            | (LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) as u32,
+            | (LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_EXTENDEDSEL) as u32,
         0,
         0,
         0,
