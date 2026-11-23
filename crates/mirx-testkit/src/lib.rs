@@ -1796,7 +1796,7 @@ pub struct UiColorItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UiAddressBook {
-    /// The tab shown: `Notify` or `Control`.
+    /// The tab shown: `Notify`, `Control` or `Colors`.
     pub tab: String,
     /// Where a click selects each tab, in the tab control's client
     /// coordinates.
@@ -1819,6 +1819,16 @@ pub struct UiAddressBook {
     pub control_enabled: bool,
     pub control_delete_enabled: bool,
     pub control_note: String,
+    /// The Colors tab's Enable nick colors.
+    pub colors_active: bool,
+    /// The nick colour list's rows: Nickname, Color and Apply.
+    pub color_rows: Vec<Vec<String>>,
+    /// In the Colors list's client coordinates.
+    pub color_row_click_points: Vec<UiPoint>,
+    pub color_edit_enabled: bool,
+    pub color_delete_enabled: bool,
+    pub color_up_enabled: bool,
+    pub color_down_enabled: bool,
 }
 
 /// The Colors dialog: what it shows, and where to click it.

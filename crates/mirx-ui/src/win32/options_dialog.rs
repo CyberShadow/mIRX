@@ -8,35 +8,34 @@
 
 use std::ptr::{null, null_mut};
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{
-    COLOR_HIGHLIGHT, COLOR_WINDOW, DrawFocusRect, FillRect, GetSysColorBrush, HBRUSH, SetBkMode,
-    TRANSPARENT,
-};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
-    BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, EM_SETSEL, MEASUREITEMSTRUCT, NMHDR, ODS_FOCUS,
-    ODS_SELECTED, ODT_COMBOBOX, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVM_GETNEXTITEM,
-    TVM_SELECTITEM, TVN_SELCHANGEDW, TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT,
-    TVS_SHOWSELALWAYS,
+    BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, EM_SETSEL, MEASUREITEMSTRUCT, NMHDR, TVGN_CARET,
+    TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVM_GETNEXTITEM, TVM_SELECTITEM, TVN_SELCHANGEDW,
+    TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT, TVS_SHOWSELALWAYS,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetFocus, IsWindowEnabled, SetFocus,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON,
-    CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, CBS_OWNERDRAWFIXED, DefWindowProcW,
-    ES_NUMBER, GWL_STYLE, GetDlgCtrlID, GetWindowLongPtrW, IDCANCEL, IDOK, LB_ADDSTRING, LB_ERR,
-    LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT, LBN_SELCHANGE,
-    LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, MB_ICONERROR, MB_OK, MessageBoxW, MoveWindow, SW_HIDE,
-    SW_SHOW, SendMessageW, ShowWindow, WM_COMMAND, WM_DRAWITEM, WM_MEASUREITEM, WM_NCCREATE,
-    WM_NCDESTROY, WM_NOTIFY, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    DefWindowProcW, ES_NUMBER, GWL_STYLE, GetDlgCtrlID, GetWindowLongPtrW, IDCANCEL, IDOK,
+    LB_ADDSTRING, LB_ERR, LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT,
+    LBN_SELCHANGE, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, MB_ICONERROR, MB_OK, MessageBoxW, MoveWindow,
+    SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WM_COMMAND, WM_DRAWITEM, WM_MEASUREITEM,
+    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
 
 use mirx_core::HighlightWord;
 
 use super::automation_dump::dump_activity_colors;
-use super::colors::{PALETTE_COLORS, PaletteIndex, paint_palette_cells};
+use super::color_drop_down::{
+    COLOR_DROP_DOWN_STYLE, COLOR_DROP_DOWN_WIDTH, color_drop_down_height, draw_color_item,
+    fill_color_drop_down, measure_color_item, select_color, selected_color,
+};
+use super::colors::PaletteIndex;
 use super::dialogs::{
     DIALOG_EDIT_EX_STYLE, DIALOG_EDIT_STYLE, DialogMetrics, controls_extent, create_modal_dialog,
     dialog_text_size, end_modal_dialog,
@@ -115,12 +114,6 @@ const NUMBER_FIELD_WIDTH: i32 = 40;
 /// The window buffer's field: up to five digits.
 const WINDOW_BUFFER_FIELD_WIDTH: i32 = 48;
 const HIGHLIGHT_LIST_HEIGHT: i32 = 130;
-/// A closed drop-down's height around its item: its edges, in pixels at
-/// every DPI.
-const DROP_DOWN_EDGES: i32 = 6;
-const COLOR_DROP_DOWN_WIDTH: i32 = 60;
-/// The open list shows half the palette.
-const COLOR_DROPPED_ITEMS: i32 = 8;
 
 /// The form's controls.
 struct Fields {
@@ -605,23 +598,13 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     let color_row = |text: &str, id: u16, row_y: i32| {
         let (row_label, _) = label_beside_field(text, page_x, row_y)?;
         let combo = place(
-            control(
-                COMBOBOX_CLASS_NAME,
-                "",
-                WS_TABSTOP | WS_VSCROLL | (CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED) as u32,
-                0,
-                id,
-            )?,
+            control(COMBOBOX_CLASS_NAME, "", COLOR_DROP_DOWN_STYLE, 0, id)?,
             color_x,
             row_y,
             dpi.px(COLOR_DROP_DOWN_WIDTH),
-            // A drop-down's height includes its open list.
-            edit_height + COLOR_DROPPED_ITEMS * color_item_height(edit_height) + 2,
+            color_drop_down_height(edit_height),
         );
-        // Without CBS_HASSTRINGS an item is its data: the palette index.
-        for index in 0..PALETTE_COLORS {
-            SendMessageW(combo, CB_ADDSTRING, 0, index as LPARAM);
-        }
+        fill_color_drop_down(combo, false);
         Ok::<_, String>((row_label, combo))
     };
     for (row, (text, id)) in color_labels[..3]
@@ -965,7 +948,7 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         .zip([event, message, highlight])
         .chain([(state.fields.marker_color, form.marker.color)])
     {
-        SendMessageW(combo, CB_SETCURSEL, usize::from(index.get()), 0);
+        select_color(combo, false, Some(index));
     }
 
     // Selecting the page's item shows it, through TVN_SELCHANGEDW.
@@ -1035,54 +1018,9 @@ unsafe fn handle_selection(hwnd: HWND) {
     }
 }
 
-/// A colour drop-down's item: a numbered palette box, as tall as the
-/// closed drop-down is with an edit field's `edit_height`.
-fn color_item_height(edit_height: i32) -> i32 {
-    edit_height - DROP_DOWN_EDGES
-}
-
-/// A colour drop-down's pick.
+/// A colour drop-down's pick; the options' have no Auto.
 unsafe fn read_color(combo: HWND) -> PaletteIndex {
-    let index = SendMessageW(combo, CB_GETCURSEL, 0, 0);
-    palette_index(usize::try_from(index).expect("a colour drop-down always has a pick"))
-}
-
-fn palette_index(index: usize) -> PaletteIndex {
-    PaletteIndex::new(u8::try_from(index).expect("a colour drop-down holds the palette"))
-        .expect("a colour drop-down holds the palette")
-}
-
-/// A colour drop-down's item: its numbered palette box on the list's
-/// background, or the selection's.
-unsafe fn draw_color_item(item: &DRAWITEMSTRUCT) {
-    assert_eq!(
-        item.CtlType, ODT_COMBOBOX,
-        "only the colour drop-downs are owner-drawn"
-    );
-    let background = match item.itemState & ODS_SELECTED {
-        0 => COLOR_WINDOW,
-        _ => COLOR_HIGHLIGHT,
-    };
-    FillRect(
-        item.hDC,
-        &item.rcItem,
-        GetSysColorBrush(background) as HBRUSH,
-    );
-    let dpi = Dpi::of_window(item.hwndItem);
-    let (inset_x, inset_y) = (dpi.px(2), dpi.px(1));
-    let cell = RECT {
-        left: item.rcItem.left + inset_x,
-        top: item.rcItem.top + inset_y,
-        right: item.rcItem.right - inset_x,
-        bottom: item.rcItem.bottom - inset_y,
-    };
-    let index = palette_index(item.itemID as usize);
-    let mode = SetBkMode(item.hDC, TRANSPARENT as i32);
-    paint_palette_cells(item.hDC, &[cell], index, None, true);
-    SetBkMode(item.hDC, mode);
-    if item.itemState & ODS_FOCUS != 0 {
-        DrawFocusRect(item.hDC, &item.rcItem);
-    }
+    selected_color(combo).expect("the options' colour drop-downs have no Auto")
 }
 
 unsafe fn show_error(hwnd: HWND, message: &str) {
@@ -1222,13 +1160,8 @@ pub(super) unsafe extern "system" fn window_proc(
             0
         }
         WM_MEASUREITEM => {
-            let item = &mut *(lparam as *mut MEASUREITEMSTRUCT);
-            assert_eq!(
-                item.CtlType, ODT_COMBOBOX,
-                "only the colour drop-downs are owner-drawn"
-            );
             let edit_height = DialogMetrics::of(hwnd).edit_height;
-            item.itemHeight = color_item_height(edit_height) as u32;
+            measure_color_item(&mut *(lparam as *mut MEASUREITEMSTRUCT), edit_height);
             1
         }
         WM_DRAWITEM => {

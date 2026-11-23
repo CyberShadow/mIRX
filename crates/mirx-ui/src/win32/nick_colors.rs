@@ -122,6 +122,20 @@ impl ModeCondition {
         Ok(Self::Ranks(ranks))
     }
 
+    /// The condition `/cnick` and the Address Book's entry take: mode
+    /// glyphs (empty for none), Any mode (`-a`) or No mode (`-n`), one at
+    /// most; none of them is no condition.
+    pub(super) fn from_parts(glyphs: &str, any: bool, none: bool) -> Result<Option<Self>, String> {
+        match (glyphs.is_empty(), any, none) {
+            (true, false, false) => Ok(None),
+            (true, true, false) => Ok(Some(Self::AnyMode)),
+            (true, false, true) => Ok(Some(Self::NoMode)),
+            (_, true, true) => Err("any mode and no mode cannot be combined".to_owned()),
+            (false, false, false) => Self::parse_glyphs(glyphs).map(Some),
+            (false, _, _) => Err("modes cannot be given with any mode or no mode".to_owned()),
+        }
+    }
+
     fn matches(&self, rank: RoomMemberRank) -> bool {
         match self {
             Self::AnyMode => rank != RoomMemberRank::Member,
@@ -140,7 +154,7 @@ const RANKED: [RoomMemberRank; 4] = [
 ];
 
 /// `~&@+` order, highest first.
-fn glyphs(ranks: &BTreeSet<RoomMemberRank>) -> String {
+pub(super) fn glyphs(ranks: &BTreeSet<RoomMemberRank>) -> String {
     ranks.iter().map(|rank| rank_prefix(*rank)).collect()
 }
 

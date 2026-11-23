@@ -238,7 +238,7 @@ pub(super) struct SingleFieldDialogState {
 }
 
 /// Every mirx dialog's class and window procedure.
-const DIALOG_CLASSES: [(&str, WNDPROC); 15] = [
+const DIALOG_CLASSES: [(&str, WNDPROC); 16] = [
     (LOGIN_DIALOG_CLASS_NAME, Some(login_dialog_window_proc)),
     (
         RECOVER_E2EE_DIALOG_CLASS_NAME,
@@ -278,6 +278,7 @@ const DIALOG_CLASSES: [(&str, WNDPROC); 15] = [
     aliases_dialog::DIALOG_CLASS,
     address_book_dialog::DIALOG_CLASSES[0],
     address_book_dialog::DIALOG_CLASSES[1],
+    address_book_dialog::DIALOG_CLASSES[2],
 ];
 
 /// Registers every dialog class on the button face, the colour labels and
@@ -524,6 +525,25 @@ impl DialogColumn {
             (self.metrics.margin, self.width, self.metrics.edit_height),
             self.metrics.gap,
         )
+    }
+
+    /// A combo box `width` wide on an edit field's row: `height` includes
+    /// its open list.
+    pub(super) unsafe fn drop_down(
+        &mut self,
+        id: u16,
+        style: u32,
+        width: i32,
+        height: i32,
+    ) -> Result<HWND, String> {
+        let y = self.y;
+        let control = self.add(
+            (COMBOBOX_CLASS_NAME, "", style, 0, id),
+            (self.metrics.margin, width, self.metrics.edit_height),
+            self.metrics.gap,
+        )?;
+        MoveWindow(control, self.metrics.margin, y, width, height, 0);
+        Ok(control)
     }
 
     pub(super) unsafe fn checkbox(&mut self, id: u16, text: &str) -> Result<HWND, String> {

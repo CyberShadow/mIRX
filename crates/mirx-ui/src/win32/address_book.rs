@@ -1,7 +1,8 @@
 //! mIRC's Address Book (Tools > Address Book..., Alt+B, `/abook`), at the
-//! two tabs Matrix has a counterpart for: Notify, the notify list and its
-//! display option, and Control, the account's ignore list (Matrix rooms
-//! have no auto-op, auto-voice or protect lists).
+//! three tabs Matrix has a counterpart for: Notify, the notify list and its
+//! display option; Control, the account's ignore list (Matrix rooms have
+//! no auto-op, auto-voice or protect lists); and Colors, the nick colour
+//! list `/cnick` edits.
 //!
 //! Pure code: the form the dialog edits, its rows, and the checks its Add
 //! and Edit entries pass. `address_book_dialog` shows it.
@@ -10,6 +11,9 @@ use mirx_core::RoomMemberSummary;
 
 use super::commands::resolve_user;
 use super::ignore::{check_ignore, user_label, user_name};
+use super::nick_colors::{
+    ModeCondition, NickColor, NickColorEntry, NickColorSetting, UserPattern, glyphs,
+};
 use super::notify::{NotifyEntry, NotifySetting};
 
 /// The dialog's tabs, in order.
@@ -17,15 +21,17 @@ use super::notify::{NotifyEntry, NotifySetting};
 pub(super) enum AddressBookTab {
     Notify,
     Control,
+    Colors,
 }
 
 impl AddressBookTab {
-    pub(super) const ALL: [Self; 2] = [Self::Notify, Self::Control];
+    pub(super) const ALL: [Self; 3] = [Self::Notify, Self::Control, Self::Colors];
 
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Notify => "Notify",
             Self::Control => "Control",
+            Self::Colors => "Colors",
         }
     }
 
@@ -56,6 +62,17 @@ impl People {
     /// The user `text` names.
     pub(super) fn resolve(&self, text: &str) -> Result<String, String> {
         Ok(resolve_user(&self.members, text.trim())?.user_id)
+    }
+
+    /// Whom a nick colour entry names, as `/cnick` takes it: a pattern
+    /// with `*` or `?` as typed, else a user.
+    pub(super) fn resolve_pattern(&self, text: &str) -> Result<UserPattern, String> {
+        let text = text.trim();
+        if text.contains(['*', '?']) {
+            UserPattern::new(text)
+        } else {
+            UserPattern::new(&self.resolve(text)?)
+        }
     }
 
     pub(super) fn nick_of(&self, user_id: &str) -> Option<String> {
@@ -140,7 +157,33 @@ pub(super) struct AddressBookForm {
     /// `None` while the server's list is not known: signed out, or before
     /// the first sync. The Control tab is greyed then.
     pub(super) ignore: Option<IgnoreEdit>,
+    pub(super) nick_colors: NickColorSetting,
     pub(super) people: People,
+}
+
+/// A nick colour entry dialog's fields, as typed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ColorEntryFields {
+    pub(super) pattern: String,
+    pub(super) color: NickColor,
+    pub(super) modes: String,
+    pub(super) any_mode: bool,
+    pub(super) no_mode: bool,
+    pub(super) notify: bool,
+}
+
+impl Default for ColorEntryFields {
+    /// Add's: any user in an auto colour.
+    fn default() -> Self {
+        Self {
+            pattern: String::new(),
+            color: NickColor::Auto,
+            modes: String::new(),
+            any_mode: false,
+            no_mode: false,
+            notify: false,
+        }
+    }
 }
 
 /// An entry dialog's fields, as typed.
@@ -212,6 +255,83 @@ impl AddressBookForm {
     }
 }
 
+impl AddressBookForm {
+    /// The Colors tab's rows: whom the entry names, its colour, and its
+    /// other Apply items.
+    pub(super) fn color_rows(&self) -> Vec<[String; 3]> {
+        self.nick_colors
+            .list
+            .entries()
+            .iter()
+            .map(|entry| {
+                [
+                    entry.label(&|user_id: &str| self.people.nick_of(user_id)),
+                    entry.color.text(),
+                    entry.apply_text(),
+                ]
+            })
+            .collect()
+    }
+
+    /// The entry a colour entry dialog's fields make, refused as `/cnick`
+    /// refuses them.
+    pub(super) fn check_color_entry(
+        &self,
+        fields: &ColorEntryFields,
+    ) -> Result<NickColorEntry, String> {
+        Ok(NickColorEntry {
+            pattern: self.people.resolve_pattern(&fields.pattern)?,
+            color: fields.color,
+            modes: ModeCondition::from_parts(fields.modes.trim(), fields.any_mode, fields.no_mode)?,
+            notify: fields.notify,
+        })
+    }
+
+    /// Edit's fields for the entry at `index`: its pattern or user ID as
+    /// it is kept.
+    pub(super) fn color_fields(&self, index: usize) -> ColorEntryFields {
+        let entry = &self.nick_colors.list.entries()[index];
+        let (modes, any_mode, no_mode) = match &entry.modes {
+            None => (String::new(), false, false),
+            Some(ModeCondition::AnyMode) => (String::new(), true, false),
+            Some(ModeCondition::NoMode) => (String::new(), false, true),
+            Some(ModeCondition::Ranks(ranks)) => (glyphs(ranks), false, false),
+        };
+        ColorEntryFields {
+            pattern: entry.pattern.as_str().to_owned(),
+            color: entry.color,
+            modes,
+            any_mode,
+            no_mode,
+            notify: entry.notify,
+        }
+    }
+
+    /// Add appends (`index` `None`); Edit replaces the entry at `index`.
+    pub(super) fn put_color(&mut self, index: Option<usize>, entry: NickColorEntry) {
+        match index {
+            Some(index) => self.nick_colors.list.set(index, entry),
+            None => self.nick_colors.list.push(entry),
+        }
+    }
+
+    pub(super) fn remove_color(&mut self, index: usize) {
+        self.nick_colors.list.remove(index);
+    }
+
+    /// Up and Down: the entry at `index` swaps with its neighbour, and
+    /// keeps its selection at its new place, which this returns.
+    pub(super) fn move_color(&mut self, index: usize, up: bool) -> usize {
+        if up {
+            self.nick_colors.list.move_up(index);
+            index - 1
+        } else {
+            self.nick_colors.list.move_up(index + 1);
+            index + 1
+        }
+    }
+}
+
 /// The entry for `user_id` with the fields' note and whois.
 pub(super) fn notify_entry(user_id: String, fields: &EntryFields) -> NotifyEntry {
     let note = fields.note.trim();
@@ -270,7 +390,18 @@ mod tests {
             notify,
             ignore: ignore
                 .map(|users| IgnoreEdit::new(users.iter().map(|u| (*u).to_owned()).collect())),
+            nick_colors: NickColorSetting::default(),
             people: people(),
+        }
+    }
+
+    fn color_fields(pattern: &str, modes: &str, any_mode: bool, no_mode: bool) -> ColorEntryFields {
+        ColorEntryFields {
+            pattern: pattern.to_owned(),
+            modes: modes.to_owned(),
+            any_mode,
+            no_mode,
+            ..ColorEntryFields::default()
         }
     }
 
@@ -283,12 +414,99 @@ mod tests {
     }
 
     #[test]
-    fn tabs_are_mircs_two_in_order() {
+    fn tabs_are_mircs_three_in_order() {
         assert_eq!(
             AddressBookTab::ALL.map(AddressBookTab::label),
-            ["Notify", "Control"]
+            ["Notify", "Control", "Colors"]
         );
-        assert_eq!(AddressBookTab::Control.index(), 1);
+        assert_eq!(AddressBookTab::Colors.index(), 2);
+    }
+
+    #[test]
+    fn color_entries_are_checked_as_cnick_checks_them() {
+        let form = form(None);
+        let check = |fields: ColorEntryFields| form.check_color_entry(&fields);
+        assert_eq!(
+            check(color_fields("bob", "", false, false)),
+            Err("bob is ambiguous (@bob:example, @bob:other)".to_owned())
+        );
+        assert_eq!(
+            check(color_fields("erin", "", false, false)),
+            Err("no such nick: erin".to_owned())
+        );
+        assert_eq!(
+            check(color_fields("* bot", "", false, false)),
+            Err("* bot is not a user ID or a pattern with * or ?".to_owned())
+        );
+        assert_eq!(
+            check(color_fields("carol", "@x", false, false)),
+            Err("modes must be some of ~&@+, not @x".to_owned())
+        );
+        assert_eq!(
+            check(color_fields("carol", "", true, true)),
+            Err("any mode and no mode cannot be combined".to_owned())
+        );
+        assert_eq!(
+            check(color_fields("carol", "@", true, false)),
+            Err("modes cannot be given with any mode or no mode".to_owned())
+        );
+        // A nick is its user's ID; a pattern stays as typed, trimmed.
+        assert_eq!(
+            check(color_fields(" Carol ", " @+ ", false, false)),
+            Ok(NickColorEntry::parse_ini_value("@carol:example auto modes=@+").unwrap())
+        );
+        assert_eq!(
+            check(color_fields(" *bot* ", "", false, true)),
+            Ok(NickColorEntry::parse_ini_value("*bot* auto none").unwrap())
+        );
+    }
+
+    #[test]
+    fn color_entries_list_edit_move_and_remove_in_order() {
+        let mut form = form(None);
+        for value in [
+            "@carol:example 4 modes=~@",
+            "*bot* auto any notify",
+            "@dave:remote 12 none",
+        ] {
+            form.put_color(None, NickColorEntry::parse_ini_value(value).unwrap());
+        }
+        assert_eq!(
+            form.color_rows(),
+            [
+                ["Carol (@carol:example)", "4", "~@"],
+                ["*bot*", "auto", "any mode, notify"],
+                ["@dave:remote", "12", "no mode"],
+            ]
+            .map(|row| row.map(str::to_owned))
+        );
+        assert_eq!(
+            form.color_fields(0),
+            ColorEntryFields {
+                color: NickColor::parse("4").unwrap(),
+                ..color_fields("@carol:example", "~@", false, false)
+            }
+        );
+        assert_eq!(
+            form.color_fields(1),
+            ColorEntryFields {
+                notify: true,
+                ..color_fields("*bot*", "", true, false)
+            }
+        );
+        assert!(form.color_fields(2).no_mode);
+        assert_eq!(form.move_color(2, true), 1);
+        assert_eq!(form.move_color(0, false), 1);
+        let edited = NickColorEntry::parse_ini_value("@erin:remote 3").unwrap();
+        form.put_color(Some(2), edited);
+        form.remove_color(0);
+        assert_eq!(
+            form.color_rows()
+                .into_iter()
+                .map(|[label, ..]| label)
+                .collect::<Vec<_>>(),
+            ["Carol (@carol:example)", "@erin:remote"]
+        );
     }
 
     #[test]

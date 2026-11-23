@@ -149,7 +149,8 @@ pub(super) enum SlashCommand {
     Notify(NotifyCommand),
     /// `/cnick`: mIRC's nick colour list.
     NickColor(NickColorCommand),
-    /// `/abook [-n|-c]`: the Address Book at its Notify or Control tab.
+    /// `/abook [-n|-c|-l]`: the Address Book at its Notify, Control or
+    /// Colors tab.
     AddressBook {
         tab: AddressBookTab,
     },
@@ -1428,17 +1429,12 @@ fn parse_cnick(argument: &str) -> Result<NickColorCommand, CommandError> {
         }
         [] | [_] => Err(CommandError::insufficient_parameters("cnick")),
         [target, color, modes @ ..] => {
-            let modes = match (modes, any, none) {
-                ([], false, false) => None,
-                ([], true, false) => Some(ModeCondition::AnyMode),
-                ([], false, true) => Some(ModeCondition::NoMode),
-                ([], true, true) => return Err(error("-a and -n cannot be combined".to_owned())),
-                ([modes], false, false) => Some(ModeCondition::parse_glyphs(modes).map_err(error)?),
-                ([_], _, _) => {
-                    return Err(error("modes cannot be given with -a or -n".to_owned()));
-                }
+            let modes = match modes {
+                [] => "",
+                [modes] => modes,
                 _ => return Err(error("too many parameters".to_owned())),
             };
+            let modes = ModeCondition::from_parts(modes, any, none).map_err(error)?;
             Ok(NickColorCommand::Add {
                 target: (*target).to_owned(),
                 color: NickColor::parse(color).map_err(error)?,
@@ -1450,7 +1446,7 @@ fn parse_cnick(argument: &str) -> Result<NickColorCommand, CommandError> {
     }
 }
 
-/// `[-n|-c]`: mIRC's switches for the tabs mirx has (`-wlh` open tabs it
+/// `[-n|-c|-l]`: mIRC's switches for the tabs mirx has (`-wh` open tabs it
 /// has not); no switch opens Notify. mIRC's nickname, which opens the
 /// user's entry, is not mirx's yet.
 fn parse_abook(argument: &str) -> Result<SlashCommand, CommandError> {
@@ -1458,6 +1454,7 @@ fn parse_abook(argument: &str) -> Result<SlashCommand, CommandError> {
     let tab = match first {
         "" | "-n" => AddressBookTab::Notify,
         "-c" => AddressBookTab::Control,
+        "-l" => AddressBookTab::Colors,
         switch if switch.starts_with('-') => {
             return Err(CommandError::new(
                 "abook",
@@ -3192,6 +3189,7 @@ mod tests {
         assert_eq!(parse("/abook"), abook(AddressBookTab::Notify));
         assert_eq!(parse("/ABOOK -n"), abook(AddressBookTab::Notify));
         assert_eq!(parse("/abook -c "), abook(AddressBookTab::Control));
+        assert_eq!(parse("/abook -l"), abook(AddressBookTab::Colors));
         assert_eq!(parse("/abook -w"), error("abook", "unknown switch -w"));
         assert_eq!(parse("/abook bob"), error("abook", "too many parameters"));
         assert_eq!(
@@ -3279,11 +3277,11 @@ mod tests {
         );
         assert_eq!(
             parse("/cnick -an bob 4"),
-            error("cnick", "-a and -n cannot be combined")
+            error("cnick", "any mode and no mode cannot be combined")
         );
         assert_eq!(
             parse("/cnick -a bob 4 @"),
-            error("cnick", "modes cannot be given with -a or -n")
+            error("cnick", "modes cannot be given with any mode or no mode")
         );
         assert_eq!(
             parse("/cnick bob 4 @ +"),

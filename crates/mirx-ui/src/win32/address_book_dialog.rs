@@ -1,13 +1,15 @@
 //! The Address Book window (Tools > Address Book..., Alt+B, `/abook`):
-//! a tab control with mIRC's Notify and Control tabs, OK and Cancel. The
+//! a tab control with mIRC's Notify, Control and Colors tabs, OK and
+//! Cancel. The
 //! form and its checks are `address_book`'s; this module shows them.
 //!
 //! Every page control is a child of the dialog, not of the tab control,
 //! so their notifications come here; the tab control is created first and
 //! clips its siblings, so it never paints over them. A tab shows its
-//! page's controls and hides the other's.
+//! page's controls and hides the others'.
 //!
-//! Add and Edit open an entry dialog over the Address Book, modal to it.
+//! Add and Edit open an entry dialog over the Address Book, modal to it:
+//! the Notify and Control tabs' share one, the Colors tab has its own.
 //! Its OK checks the fields against a copy of the form taken when it
 //! opened, and keeps it open with a message box when they do not do.
 
@@ -16,15 +18,20 @@ use std::ptr::{null, null_mut};
 use std::rc::Rc;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject};
+use windows_sys::Win32::Graphics::Gdi::{
+    COLOR_WINDOWTEXT, DEFAULT_GUI_FONT, GetStockObject, GetSysColor,
+};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
-    BST_CHECKED, BST_UNCHECKED, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_TEXT, LVIR_LABEL, LVITEMW,
-    LVM_DELETEALLITEMS, LVM_GETITEMCOUNT, LVM_GETITEMRECT, LVM_GETITEMTEXTW, LVM_GETNEXTITEM,
-    LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMTEXTW,
-    LVN_ITEMCHANGED, LVNI_SELECTED, LVS_EX_FULLROWSELECT, LVS_NOCOLUMNHEADER, LVS_REPORT,
-    LVS_SHOWSELALWAYS, LVS_SINGLESEL, NM_DBLCLK, NM_RETURN, NMHDR, TCIF_TEXT, TCITEMW,
-    TCM_ADJUSTRECT, TCM_GETCURSEL, TCM_GETITEMRECT, TCM_INSERTITEMW, TCM_SETCURSEL, TCN_SELCHANGE,
+    BST_CHECKED, BST_UNCHECKED, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDDS_SUBITEM, CDRF_NEWFONT,
+    CDRF_NOTIFYITEMDRAW, CDRF_NOTIFYSUBITEMDRAW, DRAWITEMSTRUCT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW,
+    LVIF_STATE, LVIF_TEXT, LVIR_LABEL, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVM_DELETEALLITEMS,
+    LVM_ENSUREVISIBLE, LVM_GETITEMCOUNT, LVM_GETITEMRECT, LVM_GETITEMTEXTW, LVM_GETNEXTITEM,
+    LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE,
+    LVM_SETITEMTEXTW, LVN_ITEMCHANGED, LVNI_SELECTED, LVS_EX_FULLROWSELECT, LVS_NOCOLUMNHEADER,
+    LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, MEASUREITEMSTRUCT, NM_CUSTOMDRAW, NM_DBLCLK,
+    NM_RETURN, NMHDR, NMLVCUSTOMDRAW, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT, TCM_GETCURSEL,
+    TCM_GETITEMRECT, TCM_INSERTITEMW, TCM_SETCURSEL, TCN_SELCHANGE,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled, SetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -32,31 +39,39 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, EN_CHANGE, ES_READONLY, GWL_STYLE, GetDlgCtrlID, GetDlgItem, GetWindowLongPtrW,
     HWND_BOTTOM, IDCANCEL, IDOK, MB_ICONWARNING, MB_OK, MessageBoxW, MoveWindow, SW_HIDE, SW_SHOW,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetWindowPos, ShowWindow, WM_CLOSE,
-    WM_COMMAND, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_SETFONT, WNDPROC, WS_CHILD,
-    WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE,
+    WM_COMMAND, WM_DRAWITEM, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_SETFONT,
+    WNDPROC, WS_CHILD, WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE,
 };
 
 use mirx_core::Command;
 
-use super::address_book::{AddressBookForm, AddressBookTab, EntryFields, IgnoreEdit, People};
+use super::address_book::{
+    AddressBookForm, AddressBookTab, ColorEntryFields, EntryFields, IgnoreEdit, People,
+};
+use super::color_drop_down::{
+    COLOR_DROP_DOWN_STYLE, COLOR_DROP_DOWN_WIDTH, color_drop_down_height, draw_color_item,
+    fill_color_drop_down, measure_color_item, select_color, selected_color,
+};
 use super::dialogs::{
     DialogColumn, DialogMetrics, create_modal_dialog, default_button, dialog_text_size,
     end_modal_dialog,
 };
 use super::dpi::Dpi;
 use super::ignore::user_label;
+use super::nick_colors::{NickColor, NickColorEntry, NickColorSetting};
 use super::notify::NotifySetting;
 use super::room_list_window::{rect_center, wide_buffer_text};
 use super::window_data::{self, WindowData};
 use super::{
     BUTTON_CLASS_NAME, STATIC_CLASS_NAME, announce_notify_changes, create_child_window, echo_view,
     enqueue_command, read_window_text, refresh_view_content, run_modal_dialog,
-    set_local_command_status, state_mut, state_ref, wide_null,
+    set_local_command_status, show_nick_colors, state_mut, state_ref, wide_null,
 };
 use crate::automation::{UiAddressBook, UiPoint};
 
 pub(super) const ADDRESS_BOOK_DIALOG_CLASS_NAME: &str = "mirxWin32AddressBookDialog";
 pub(super) const ADDRESS_ENTRY_DIALOG_CLASS_NAME: &str = "mirxWin32AddressEntryDialog";
+pub(super) const ADDRESS_COLOR_ENTRY_DIALOG_CLASS_NAME: &str = "mirxWin32AddressColorEntryDialog";
 const ADDRESS_BOOK_TITLE: &str = "Address Book";
 const TAB_CONTROL_CLASS_NAME: &str = "SysTabControl32";
 const LIST_VIEW_CLASS_NAME: &str = "SysListView32";
@@ -77,6 +92,21 @@ pub(super) const ADDRESS_ENTRY_NOTE_ID: u16 = 7302;
 pub(super) const ADDRESS_ENTRY_WHOIS_ID: u16 = 7303;
 pub(super) const ADDRESS_ENTRY_OK_ID: usize = 7304;
 pub(super) const ADDRESS_ENTRY_CANCEL_ID: usize = 7305;
+pub(super) const ADDRESS_BOOK_COLORS_ACTIVE_ID: u16 = 7401;
+pub(super) const ADDRESS_BOOK_COLORS_LIST_ID: u16 = 7402;
+pub(super) const ADDRESS_BOOK_COLORS_ADD_ID: u16 = 7403;
+pub(super) const ADDRESS_BOOK_COLORS_EDIT_ID: u16 = 7404;
+pub(super) const ADDRESS_BOOK_COLORS_DELETE_ID: u16 = 7405;
+pub(super) const ADDRESS_BOOK_COLORS_UP_ID: u16 = 7406;
+pub(super) const ADDRESS_BOOK_COLORS_DOWN_ID: u16 = 7407;
+pub(super) const COLOR_ENTRY_PATTERN_ID: u16 = 7501;
+pub(super) const COLOR_ENTRY_COLOR_ID: u16 = 7502;
+pub(super) const COLOR_ENTRY_MODES_ID: u16 = 7503;
+pub(super) const COLOR_ENTRY_ANY_MODE_ID: u16 = 7504;
+pub(super) const COLOR_ENTRY_NO_MODE_ID: u16 = 7505;
+pub(super) const COLOR_ENTRY_NOTIFY_ID: u16 = 7506;
+pub(super) const COLOR_ENTRY_OK_ID: usize = 7507;
+pub(super) const COLOR_ENTRY_CANCEL_ID: usize = 7508;
 
 const CONTROL_LABEL: &str = "Ignore these users:";
 const CONTROL_NOTE: &str = "Your ignore list is kept on your Matrix server and shared with \
@@ -87,6 +117,10 @@ const CONTROL_SIGNED_OUT_NOTE: &str = "Connect to edit the ignore list.";
 const LIST_WIDTH: i32 = 320;
 const LIST_HEIGHT: i32 = 150;
 const NICKNAME_COLUMN_WIDTH: i32 = 200;
+/// The Colors list's: its Nickname column is narrower, for Color and
+/// Apply.
+const COLORS_NICKNAME_COLUMN_WIDTH: i32 = 150;
+const COLORS_COLOR_COLUMN_WIDTH: i32 = 50;
 const ENTRY_WIDTH: i32 = 260;
 /// What `IsDialogMessageW` sends for Esc.
 const ESC_CANCEL_ID: usize = IDCANCEL as usize;
@@ -108,6 +142,16 @@ struct ControlPage {
     note: HWND,
 }
 
+struct ColorsPage {
+    list: HWND,
+    add: HWND,
+    edit: HWND,
+    delete: HWND,
+    up: HWND,
+    down: HWND,
+    active: HWND,
+}
+
 /// The Address Book's state, owned by `run_address_book_dialog` and lent
 /// to the window procedure while the window exists.
 struct DialogState {
@@ -115,12 +159,13 @@ struct DialogState {
     tab_control: HWND,
     notify: NotifyPage,
     control: ControlPage,
+    colors: ColorsPage,
     /// The form OK accepted.
     saved: Option<AddressBookForm>,
 }
 
 impl DialogState {
-    fn page_controls(&self) -> [(AddressBookTab, HWND); 10] {
+    fn page_controls(&self) -> [(AddressBookTab, HWND); 17] {
         let NotifyPage {
             list,
             add,
@@ -137,6 +182,16 @@ impl DialogState {
             note,
         } = self.control;
         let control = AddressBookTab::Control;
+        let ColorsPage {
+            list: colors_list,
+            add: colors_add,
+            edit: colors_edit,
+            delete: colors_delete,
+            up,
+            down,
+            active: colors_active,
+        } = self.colors;
+        let colors = AddressBookTab::Colors;
         [
             (notify, list),
             (notify, add),
@@ -148,6 +203,13 @@ impl DialogState {
             (control, control_add),
             (control, control_delete),
             (control, note),
+            (colors, colors_list),
+            (colors, colors_add),
+            (colors, colors_edit),
+            (colors, colors_delete),
+            (colors, up),
+            (colors, down),
+            (colors, colors_active),
         ]
     }
 }
@@ -156,9 +218,10 @@ unsafe fn dialog_state(hwnd: HWND) -> &'static mut DialogState {
     window_data::get(hwnd).expect("the address book has its state")
 }
 
-/// Tools > Address Book... and `/abook`: shows the notify list and the
-/// ignore list at `tab` until OK or Cancel. OK saves the notify list and
-/// its option at once and sends the ignore list's changes to the server.
+/// Tools > Address Book... and `/abook`: shows the notify list, the
+/// ignore list and the nick colours at `tab` until OK or Cancel. OK saves
+/// the notify list, the nick colours and their options at once and sends
+/// the ignore list's changes to the server.
 pub(super) unsafe fn run_address_book_dialog(
     hwnd: HWND,
     tab: AddressBookTab,
@@ -168,6 +231,7 @@ pub(super) unsafe fn run_address_book_dialog(
     let form = AddressBookForm {
         notify: state.settings.settings().notify.clone(),
         ignore: model.ignored_users.clone().map(IgnoreEdit::new),
+        nick_colors: state.settings.settings().nick_colors.clone(),
         people: People::new(
             model
                 .room_views
@@ -194,6 +258,15 @@ pub(super) unsafe fn run_address_book_dialog(
             delete: null_mut(),
             note: null_mut(),
         },
+        colors: ColorsPage {
+            list: null_mut(),
+            add: null_mut(),
+            edit: null_mut(),
+            delete: null_mut(),
+            up: null_mut(),
+            down: null_mut(),
+            active: null_mut(),
+        },
         saved: None,
     }));
     let dialog = create_modal_dialog(
@@ -213,18 +286,26 @@ pub(super) unsafe fn run_address_book_dialog(
     apply(hwnd, form)
 }
 
-/// What OK does with the form: the notify list and its option are saved,
-/// and a user listed while on is news, as with `/notify`; the ignore
-/// list's changes go to the server, whose echo prints them.
+/// What OK does with the form: the notify list, the nick colours and
+/// their options are saved, and a user listed while on is news, as with
+/// `/notify`; the nicks take their colours; the ignore list's changes go
+/// to the server, whose echo prints them.
 unsafe fn apply(hwnd: HWND, form: AddressBookForm) -> Result<(), String> {
-    let AddressBookForm { notify, ignore, .. } = form;
+    let AddressBookForm {
+        notify,
+        ignore,
+        nick_colors,
+        ..
+    } = form;
     let state = state_mut(hwnd);
-    state
-        .settings
-        .update(|settings| settings.notify = notify.clone())?;
+    state.settings.update(|settings| {
+        settings.notify = notify.clone();
+        settings.nick_colors = nick_colors.clone();
+    })?;
     announce_notify_changes(state)?;
     let view = echo_view(&state.active_view);
     refresh_view_content(hwnd, &view)?;
+    show_nick_colors(hwnd)?;
     let changes = ignore.map(|edit| edit.changes()).unwrap_or_default();
     let commands = changes
         .ignore
@@ -476,6 +557,41 @@ unsafe fn create_controls(dialog: HWND) -> Result<(), String> {
         EnableWindow(control, known.into());
     }
 
+    // Colors: the list, its five buttons beside it, Enable under it.
+    let colors_nickname_width = dpi.px(COLORS_NICKNAME_COLUMN_WIDTH);
+    let colors_color_width = dpi.px(COLORS_COLOR_COLUMN_WIDTH);
+    state.colors.list = list(
+        ADDRESS_BOOK_COLORS_LIST_ID,
+        page_y,
+        &[
+            ("Nickname", colors_nickname_width),
+            ("Color", colors_color_width),
+            (
+                "Apply",
+                inner_width - colors_nickname_width - colors_color_width,
+            ),
+        ],
+        true,
+    )?;
+    state.colors.add = button("Add...", ADDRESS_BOOK_COLORS_ADD_ID, 0, page_y)?;
+    state.colors.edit = button("Edit...", ADDRESS_BOOK_COLORS_EDIT_ID, 1, page_y)?;
+    state.colors.delete = button("Delete", ADDRESS_BOOK_COLORS_DELETE_ID, 2, page_y)?;
+    state.colors.up = button("Up", ADDRESS_BOOK_COLORS_UP_ID, 3, page_y)?;
+    state.colors.down = button("Down", ADDRESS_BOOK_COLORS_DOWN_ID, 4, page_y)?;
+    state.colors.active = place(
+        control(
+            BUTTON_CLASS_NAME,
+            "Enable nick colors",
+            WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+            0,
+            ADDRESS_BOOK_COLORS_ACTIVE_ID,
+        )?,
+        page_x,
+        page_y + list_height + gap,
+        page_width,
+        checkbox_height,
+    );
+
     // OK is `IDOK` and Cancel `IDCANCEL`, which `IsDialogMessageW` sends
     // for Enter and Esc, right-aligned a margin under the tabs.
     let buttons_y = margin + (rect.bottom - rect.top) + margin;
@@ -522,14 +638,11 @@ unsafe fn create_controls(dialog: HWND) -> Result<(), String> {
         );
     }
 
-    let check = if state.form.notify.active {
-        BST_CHECKED
-    } else {
-        BST_UNCHECKED
-    };
-    SendMessageW(state.notify.active, BM_SETCHECK, check as WPARAM, 0);
+    set_check(state.notify.active, state.form.notify.active);
+    set_check(state.colors.active, state.form.nick_colors.active);
     refill_notify_list(state);
     refill_control_list(state);
+    refill_colors_list(state);
     Ok(())
 }
 
@@ -541,6 +654,7 @@ unsafe fn show_tab(dialog: HWND, tab: AddressBookTab) {
     let first = match tab {
         AddressBookTab::Notify => state.notify.list,
         AddressBookTab::Control => state.control.list,
+        AddressBookTab::Colors => state.colors.list,
     };
     SetFocus(first);
 }
@@ -602,6 +716,35 @@ unsafe fn refill_control_list(state: &DialogState) {
     grey_row_buttons(state);
 }
 
+unsafe fn refill_colors_list(state: &DialogState) {
+    let rows = state
+        .form
+        .color_rows()
+        .into_iter()
+        .map(Vec::from)
+        .collect::<Vec<_>>();
+    fill_list(state.colors.list, &rows);
+    grey_row_buttons(state);
+}
+
+/// Selects (and focuses) `row`, as a click on it does.
+unsafe fn select_row(list: HWND, row: usize) {
+    let state = LVIS_SELECTED | LVIS_FOCUSED;
+    let item = LVITEMW {
+        mask: LVIF_STATE,
+        state,
+        stateMask: state,
+        ..LVITEMW::default()
+    };
+    SendMessageW(
+        list,
+        LVM_SETITEMSTATE,
+        row,
+        &item as *const LVITEMW as LPARAM,
+    );
+    SendMessageW(list, LVM_ENSUREVISIBLE, row, 0);
+}
+
 unsafe fn selected_row(list: HWND) -> Option<usize> {
     let row = SendMessageW(list, LVM_GETNEXTITEM, usize::MAX, LVNI_SELECTED as LPARAM);
     usize::try_from(row).ok()
@@ -614,6 +757,27 @@ unsafe fn grey_row_buttons(state: &DialogState) {
     EnableWindow(state.notify.delete, notify_selected.into());
     let control_selected = selected_row(state.control.list).is_some();
     EnableWindow(state.control.delete, control_selected.into());
+    let colors_selected = selected_row(state.colors.list);
+    let last = state.form.nick_colors.list.entries().len().checked_sub(1);
+    EnableWindow(state.colors.edit, colors_selected.is_some().into());
+    EnableWindow(state.colors.delete, colors_selected.is_some().into());
+    EnableWindow(
+        state.colors.up,
+        colors_selected.is_some_and(|row| row > 0).into(),
+    );
+    EnableWindow(
+        state.colors.down,
+        colors_selected.is_some_and(|row| Some(row) != last).into(),
+    );
+}
+
+unsafe fn set_check(checkbox: HWND, checked: bool) {
+    let check = if checked { BST_CHECKED } else { BST_UNCHECKED };
+    SendMessageW(checkbox, BM_SETCHECK, check as WPARAM, 0);
+}
+
+unsafe fn is_checked(checkbox: HWND) -> bool {
+    SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED as LRESULT
 }
 
 unsafe fn handle_notify_add(dialog: HWND) -> Result<(), String> {
@@ -709,12 +873,87 @@ unsafe fn handle_control_delete(dialog: HWND) {
     refill_control_list(state);
 }
 
+unsafe fn handle_colors_add(dialog: HWND) -> Result<(), String> {
+    let form = dialog_state(dialog).form.clone();
+    let entry = run_color_entry_dialog(
+        dialog,
+        "Add Nick Color",
+        ColorEntryFields::default(),
+        move |fields| form.check_color_entry(fields),
+    )?;
+    if let Some(entry) = entry {
+        let state = dialog_state(dialog);
+        state.form.put_color(None, entry);
+        refill_colors_list(state);
+    }
+    Ok(())
+}
+
+unsafe fn handle_colors_edit(dialog: HWND) -> Result<(), String> {
+    let state = dialog_state(dialog);
+    let index = selected_row(state.colors.list).expect("Edit is greyed without a selection");
+    let form = state.form.clone();
+    let entry = run_color_entry_dialog(
+        dialog,
+        "Edit Nick Color",
+        form.color_fields(index),
+        move |fields| form.check_color_entry(fields),
+    )?;
+    if let Some(entry) = entry {
+        let state = dialog_state(dialog);
+        state.form.put_color(Some(index), entry);
+        refill_colors_list(state);
+        select_row(state.colors.list, index);
+    }
+    Ok(())
+}
+
+unsafe fn handle_colors_delete(dialog: HWND) {
+    let state = dialog_state(dialog);
+    let index = selected_row(state.colors.list).expect("Delete is greyed without a selection");
+    state.form.remove_color(index);
+    refill_colors_list(state);
+}
+
+/// Up and Down: the selection moves with its entry.
+unsafe fn handle_colors_move(dialog: HWND, up: bool) {
+    let state = dialog_state(dialog);
+    let index =
+        selected_row(state.colors.list).expect("Up and Down are greyed without a selection");
+    let moved = state.form.move_color(index, up);
+    refill_colors_list(state);
+    select_row(state.colors.list, moved);
+}
+
+/// The Colors list paints each Nickname cell in its entry's colour, and
+/// an auto colour's (which differs per user) in the list's text colour.
+unsafe fn colors_list_custom_draw(state: &DialogState, draw: &mut NMLVCUSTOMDRAW) -> LRESULT {
+    match draw.nmcd.dwDrawStage {
+        CDDS_PREPAINT => CDRF_NOTIFYITEMDRAW as LRESULT,
+        CDDS_ITEMPREPAINT => CDRF_NOTIFYSUBITEMDRAW as LRESULT,
+        stage if stage == CDDS_ITEMPREPAINT | CDDS_SUBITEM => {
+            let entry = &state.form.nick_colors.list.entries()[draw.nmcd.dwItemSpec];
+            draw.clrText = match (draw.iSubItem, entry.color) {
+                (0, NickColor::Palette(index)) => index.colorref(),
+                _ => GetSysColor(COLOR_WINDOWTEXT),
+            };
+            CDRF_NEWFONT as LRESULT
+        }
+        // CDRF_DODEFAULT
+        _ => 0,
+    }
+}
+
 unsafe fn handle_ok(dialog: HWND) {
     let state = dialog_state(dialog);
     let mut form = state.form.clone();
     form.notify = NotifySetting {
-        active: SendMessageW(state.notify.active, BM_GETCHECK, 0, 0) == BST_CHECKED as LRESULT,
+        active: is_checked(state.notify.active),
         ..form.notify
+    };
+    form.nick_colors = NickColorSetting {
+        active: is_checked(state.colors.active),
+        ..form.nick_colors
     };
     state.saved = Some(form);
     end_modal_dialog(dialog);
@@ -759,6 +998,16 @@ unsafe extern "system" fn window_proc(
                 handle_control_delete(hwnd);
                 0
             }
+            ADDRESS_BOOK_COLORS_ADD_ID => handled(handle_colors_add(hwnd)),
+            ADDRESS_BOOK_COLORS_EDIT_ID => handled(handle_colors_edit(hwnd)),
+            ADDRESS_BOOK_COLORS_DELETE_ID => {
+                handle_colors_delete(hwnd);
+                0
+            }
+            ADDRESS_BOOK_COLORS_UP_ID | ADDRESS_BOOK_COLORS_DOWN_ID => {
+                handle_colors_move(hwnd, (wparam & 0xffff) as u16 == ADDRESS_BOOK_COLORS_UP_ID);
+                0
+            }
             _ => DefWindowProcW(hwnd, message, wparam, lparam),
         },
         WM_NOTIFY => {
@@ -769,7 +1018,12 @@ unsafe extern "system" fn window_proc(
                     let state = dialog_state(hwnd);
                     show_page(state, selected_tab(state));
                 }
-                (ADDRESS_BOOK_NOTIFY_LIST_ID | ADDRESS_BOOK_CONTROL_LIST_ID, LVN_ITEMCHANGED) => {
+                (
+                    ADDRESS_BOOK_NOTIFY_LIST_ID
+                    | ADDRESS_BOOK_CONTROL_LIST_ID
+                    | ADDRESS_BOOK_COLORS_LIST_ID,
+                    LVN_ITEMCHANGED,
+                ) => {
                     grey_row_buttons(dialog_state(hwnd));
                 }
                 // A row's double-click or Enter is Edit.
@@ -777,6 +1031,17 @@ unsafe extern "system" fn window_proc(
                     if selected_row(dialog_state(hwnd).notify.list).is_some() =>
                 {
                     return handled(handle_notify_edit(hwnd));
+                }
+                (ADDRESS_BOOK_COLORS_LIST_ID, NM_DBLCLK | NM_RETURN)
+                    if selected_row(dialog_state(hwnd).colors.list).is_some() =>
+                {
+                    return handled(handle_colors_edit(hwnd));
+                }
+                (ADDRESS_BOOK_COLORS_LIST_ID, NM_CUSTOMDRAW) => {
+                    return colors_list_custom_draw(
+                        dialog_state(hwnd),
+                        &mut *(lparam as *mut NMLVCUSTOMDRAW),
+                    );
                 }
                 _ => {}
             }
@@ -824,6 +1089,7 @@ pub(super) unsafe fn dump(dialog: HWND) -> UiAddressBook {
         .collect();
     let (notify_rows, notify_row_click_points) = dump_list(state.notify.list, 2);
     let (control_rows, control_row_click_points) = dump_list(state.control.list, 1);
+    let (color_rows, color_row_click_points) = dump_list(state.colors.list, 3);
     let control_enabled = match [state.control.list, state.control.add]
         .map(|control| IsWindowEnabled(control) != 0)
     {
@@ -838,8 +1104,7 @@ pub(super) unsafe fn dump(dialog: HWND) -> UiAddressBook {
         visible_controls,
         notify_rows,
         notify_row_click_points,
-        notify_active: SendMessageW(state.notify.active, BM_GETCHECK, 0, 0)
-            == BST_CHECKED as LRESULT,
+        notify_active: is_checked(state.notify.active),
         notify_edit_enabled: enabled(state.notify.edit),
         notify_delete_enabled: enabled(state.notify.delete),
         control_rows: control_rows.into_iter().flatten().collect(),
@@ -847,6 +1112,13 @@ pub(super) unsafe fn dump(dialog: HWND) -> UiAddressBook {
         control_enabled,
         control_delete_enabled: enabled(state.control.delete),
         control_note: read_window_text(state.control.note),
+        colors_active: is_checked(state.colors.active),
+        color_rows,
+        color_row_click_points,
+        color_edit_enabled: enabled(state.colors.edit),
+        color_delete_enabled: enabled(state.colors.delete),
+        color_up_enabled: enabled(state.colors.up),
+        color_down_enabled: enabled(state.colors.down),
     }
 }
 
@@ -945,12 +1217,7 @@ unsafe fn run_entry_dialog<T: 'static>(
                 column.label("Note:", 0, 0)?;
                 column.edit(ADDRESS_ENTRY_NOTE_ID, &fields.note, 0)?;
                 let whois = column.checkbox(ADDRESS_ENTRY_WHOIS_ID, "Perform /whois")?;
-                let check = if fields.whois {
-                    BST_CHECKED
-                } else {
-                    BST_UNCHECKED
-                };
-                SendMessageW(whois, BM_SETCHECK, check as WPARAM, 0);
+                set_check(whois, fields.whois);
             }
             column.buttons(&[
                 (ADDRESS_ENTRY_OK_ID, "OK"),
@@ -986,12 +1253,7 @@ unsafe fn entry_accept(dialog: HWND) {
         EntryFields {
             nickname: text(ADDRESS_ENTRY_NICKNAME_ID),
             note: text(ADDRESS_ENTRY_NOTE_ID),
-            whois: SendMessageW(
-                GetDlgItem(dialog, ADDRESS_ENTRY_WHOIS_ID.into()),
-                BM_GETCHECK,
-                0,
-                0,
-            ) == BST_CHECKED as LRESULT,
+            whois: is_checked(GetDlgItem(dialog, ADDRESS_ENTRY_WHOIS_ID.into())),
         }
     } else {
         EntryFields {
@@ -999,7 +1261,13 @@ unsafe fn entry_accept(dialog: HWND) {
             ..EntryFields::default()
         }
     };
-    match (state.accept)(&fields) {
+    accept_or_refuse(dialog, (state.accept)(&fields));
+}
+
+/// An entry dialog's OK: closes it when its check passed, else says why
+/// and stays open.
+unsafe fn accept_or_refuse(dialog: HWND, checked: Result<(), String>) {
+    match checked {
         Ok(()) => end_modal_dialog(dialog),
         Err(reason) => {
             let message = wide_null(&reason);
@@ -1055,10 +1323,157 @@ unsafe extern "system" fn entry_window_proc(
     }
 }
 
+/// The colour entry dialog's OK: checks the fields, and keeps the entry
+/// it accepts.
+type ColorAccept = Box<dyn FnMut(&ColorEntryFields) -> Result<(), String>>;
+
+/// Add Nick Color and Edit Nick Color: whom the entry names (editable in
+/// Edit too: the pattern is what the entry is, not its key), its colour,
+/// and its other Apply items, over the Address Book until OK passes
+/// `check` or Cancel, as `run_entry_dialog`.
+unsafe fn run_color_entry_dialog(
+    owner: HWND,
+    title: &str,
+    fields: ColorEntryFields,
+    check: impl Fn(&ColorEntryFields) -> Result<NickColorEntry, String> + 'static,
+) -> Result<Option<NickColorEntry>, String> {
+    let accepted = Rc::new(RefCell::new(None));
+    let slot = Rc::clone(&accepted);
+    let accept: ColorAccept = Box::new(move |fields| {
+        *slot.borrow_mut() = Some(check(fields)?);
+        Ok(())
+    });
+    let mut state = Box::new(WindowData::new(accept));
+    let dialog = create_modal_dialog(
+        owner,
+        ADDRESS_COLOR_ENTRY_DIALOG_CLASS_NAME,
+        title,
+        (&mut *state as *mut WindowData<ColorAccept>).cast(),
+        |dialog| {
+            let dpi = Dpi::of_window(dialog);
+            let mut column = DialogColumn::new(dialog, dpi.px(ENTRY_WIDTH));
+            column.label("Nick, user ID or pattern (* and ?):", 0, 0)?;
+            column.edit(COLOR_ENTRY_PATTERN_ID, &fields.pattern, 0)?;
+            column.label("Color:", 0, 0)?;
+            let edit_height = column.metrics.edit_height;
+            let color = column.drop_down(
+                COLOR_ENTRY_COLOR_ID,
+                COLOR_DROP_DOWN_STYLE,
+                dpi.px(COLOR_DROP_DOWN_WIDTH),
+                color_drop_down_height(edit_height),
+            )?;
+            fill_color_drop_down(color, true);
+            select_color(
+                color,
+                true,
+                match fields.color {
+                    NickColor::Palette(index) => Some(index),
+                    NickColor::Auto => None,
+                },
+            );
+            column.label("Modes (some of ~&@+; empty for any):", 0, 0)?;
+            column.edit(COLOR_ENTRY_MODES_ID, &fields.modes, 0)?;
+            for (id, text, checked) in [
+                (COLOR_ENTRY_ANY_MODE_ID, "Any mode", fields.any_mode),
+                (COLOR_ENTRY_NO_MODE_ID, "No mode", fields.no_mode),
+                (COLOR_ENTRY_NOTIFY_ID, "On notify list", fields.notify),
+            ] {
+                set_check(column.checkbox(id, text)?, checked);
+            }
+            column.buttons(&[(COLOR_ENTRY_OK_ID, "OK"), (COLOR_ENTRY_CANCEL_ID, "Cancel")])
+        },
+    )?;
+    grey_color_entry_ok(dialog);
+    SetFocus(GetDlgItem(dialog, COLOR_ENTRY_PATTERN_ID.into()));
+    run_modal_dialog(owner, dialog);
+    drop(state);
+    Ok(accepted.take())
+}
+
+/// OK needs whom the entry names.
+unsafe fn grey_color_entry_ok(dialog: HWND) {
+    let pattern = read_window_text(GetDlgItem(dialog, COLOR_ENTRY_PATTERN_ID.into()));
+    EnableWindow(
+        GetDlgItem(dialog, COLOR_ENTRY_OK_ID as i32),
+        (!pattern.trim().is_empty()).into(),
+    );
+}
+
+unsafe fn color_entry_accept(dialog: HWND) {
+    let accept =
+        window_data::get::<ColorAccept>(dialog).expect("the colour entry dialog has its state");
+    let item = |id: u16| GetDlgItem(dialog, id.into());
+    let fields = ColorEntryFields {
+        pattern: read_window_text(item(COLOR_ENTRY_PATTERN_ID)),
+        color: selected_color(item(COLOR_ENTRY_COLOR_ID))
+            .map_or(NickColor::Auto, NickColor::Palette),
+        modes: read_window_text(item(COLOR_ENTRY_MODES_ID)),
+        any_mode: is_checked(item(COLOR_ENTRY_ANY_MODE_ID)),
+        no_mode: is_checked(item(COLOR_ENTRY_NO_MODE_ID)),
+        notify: is_checked(item(COLOR_ENTRY_NOTIFY_ID)),
+    };
+    accept_or_refuse(dialog, accept(&fields));
+}
+
+unsafe extern "system" fn color_entry_window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        WM_NCCREATE => {
+            window_data::borrow_create_param::<ColorAccept>(hwnd, lparam);
+            DefWindowProcW(hwnd, message, wparam, lparam)
+        }
+        WM_COMMAND => match wparam & 0xffff {
+            COLOR_ENTRY_OK_ID => {
+                color_entry_accept(hwnd);
+                0
+            }
+            COLOR_ENTRY_CANCEL_ID | ESC_CANCEL_ID => {
+                end_modal_dialog(hwnd);
+                0
+            }
+            id if id == usize::from(COLOR_ENTRY_PATTERN_ID)
+                && (wparam >> 16) as u32 == EN_CHANGE =>
+            {
+                grey_color_entry_ok(hwnd);
+                0
+            }
+            _ => DefWindowProcW(hwnd, message, wparam, lparam),
+        },
+        // The colour drop-down, while it is created too.
+        WM_MEASUREITEM => {
+            let edit_height = DialogMetrics::of(hwnd).edit_height;
+            measure_color_item(&mut *(lparam as *mut MEASUREITEMSTRUCT), edit_height);
+            1
+        }
+        WM_DRAWITEM => {
+            draw_color_item(&*(lparam as *const DRAWITEMSTRUCT));
+            1
+        }
+        DM_GETDEFID => default_button(COLOR_ENTRY_OK_ID),
+        WM_CLOSE => {
+            end_modal_dialog(hwnd);
+            0
+        }
+        WM_NCDESTROY => {
+            window_data::detach::<ColorAccept>(hwnd);
+            DefWindowProcW(hwnd, message, wparam, lparam)
+        }
+        _ => DefWindowProcW(hwnd, message, wparam, lparam),
+    }
+}
+
 /// The dialogs' classes and procedures, registered with the other dialogs'.
-pub(super) const DIALOG_CLASSES: [(&str, WNDPROC); 2] = [
+pub(super) const DIALOG_CLASSES: [(&str, WNDPROC); 3] = [
     (ADDRESS_BOOK_DIALOG_CLASS_NAME, Some(window_proc)),
     (ADDRESS_ENTRY_DIALOG_CLASS_NAME, Some(entry_window_proc)),
+    (
+        ADDRESS_COLOR_ENTRY_DIALOG_CLASS_NAME,
+        Some(color_entry_window_proc),
+    ),
 ];
 
 #[cfg(test)]
@@ -1070,6 +1485,7 @@ mod tests {
         AddressBookForm {
             notify: NotifySetting::default(),
             ignore,
+            nick_colors: NickColorSetting::default(),
             people: People::new(Vec::new(), Some("@me:example".to_owned())),
         }
     }
@@ -1097,6 +1513,26 @@ mod tests {
                     state.model.status,
                     "address book saved; ignore list sent to the server"
                 );
+            });
+        }
+    }
+
+    #[test]
+    fn ok_saves_the_nick_colors_with_the_notify_list() {
+        unsafe {
+            with_test_frame(800, 600, |hwnd| {
+                let mut form = form(None);
+                form.nick_colors.active = false;
+                form.put_color(
+                    None,
+                    NickColorEntry::parse_ini_value("*:example 4 notify").unwrap(),
+                );
+                form.notify.list.add("@bob:example".to_owned(), None, false);
+                apply(hwnd, form.clone()).unwrap();
+                let state = state_ref(hwnd);
+                assert_eq!(state.settings.settings().nick_colors, form.nick_colors);
+                assert_eq!(state.settings.settings().notify, form.notify);
+                assert_eq!(state.model.status, "address book saved");
             });
         }
     }

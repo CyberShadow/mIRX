@@ -19033,27 +19033,33 @@ fn set_dialog_text(dialog: HWND, id: i32, text: &str) {
     };
 }
 
-/// Opens an Address Book entry dialog with the button `add_or_edit`.
+const ADDRESS_ENTRY_CLASS: &str = "mirxWin32AddressEntryDialog";
+const COLOR_ENTRY_CLASS: &str = "mirxWin32AddressColorEntryDialog";
+
+/// Opens an Address Book entry dialog of `class` with the button
+/// `add_or_edit`.
 fn open_address_entry(
     dialog: HWND,
     add_or_edit: WPARAM,
+    class: &str,
     title: &str,
 ) -> Result<HWND, Box<dyn std::error::Error>> {
     post_dialog_command(dialog, add_or_edit);
-    let entry = wait_for_window(&wide_null("mirxWin32AddressEntryDialog"), title)?;
+    let entry = wait_for_window(&wide_null(class), title)?;
     assert_eq!(unsafe { read_window_text(entry) }, title);
     assert_eq!(unsafe { GetWindow(entry, GW_OWNER) }, dialog);
     Ok(entry)
 }
 
-/// OK in an entry dialog whose fields `refusal` refuses: the message box
-/// says why, and the entry stays open.
+/// OK (`ok`) in an entry dialog whose fields `refusal` refuses: the
+/// message box says why, and the entry stays open.
 fn refused_address_entry(
     app: &MirxApp,
     entry: HWND,
+    ok: WPARAM,
     refusal: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    post_dialog_command(entry, ADDRESS_ENTRY_OK_ID);
+    post_dialog_command(entry, ok);
     let (message_box, text) = wait_for_owned_message_box(entry);
     assert_eq!(text, refusal);
     answer_message_box(app, message_box, IDOK)?;
@@ -19061,8 +19067,12 @@ fn refused_address_entry(
     Ok(())
 }
 
-fn accept_address_entry(app: &MirxApp, entry: HWND) -> Result<(), Box<dyn std::error::Error>> {
-    post_dialog_command(entry, ADDRESS_ENTRY_OK_ID);
+fn accept_address_entry(
+    app: &MirxApp,
+    entry: HWND,
+    ok: WPARAM,
+) -> Result<(), Box<dyn std::error::Error>> {
+    post_dialog_command(entry, ok);
     wait_for_window_gone(entry, "the entry dialog")?;
     app.wait_idle(Duration::from_secs(5))?;
     Ok(())
@@ -19076,10 +19086,9 @@ fn select_address_book_row(
 ) -> Result<(), Box<dyn std::error::Error>> {
     post_left_click(list, point, false);
     app.wait_for_ui_state("a selected row", Duration::from_secs(5), |ui_state| {
-        ui_state
-            .address_book
-            .as_ref()
-            .is_some_and(|book| book.notify_delete_enabled || book.control_delete_enabled)
+        ui_state.address_book.as_ref().is_some_and(|book| {
+            book.notify_delete_enabled || book.control_delete_enabled || book.color_delete_enabled
+        })
     })?;
     Ok(())
 }
@@ -19118,22 +19127,37 @@ fn address_book_edits_the_notify_list() -> Result<(), Box<dyn std::error::Error>
     assert!(!book.notify_edit_enabled && !book.notify_delete_enabled);
     assert!(!book.notify_active);
 
-    let entry = open_address_entry(dialog, ADDRESS_BOOK_NOTIFY_ADD_ID, "Add Notify")?;
+    let entry = open_address_entry(
+        dialog,
+        ADDRESS_BOOK_NOTIFY_ADD_ID,
+        ADDRESS_ENTRY_CLASS,
+        "Add Notify",
+    )?;
     // No nickname, no OK.
     let ok = unsafe { GetDlgItem(entry, ADDRESS_ENTRY_OK_ID as i32) };
     assert_eq!(unsafe { IsWindowEnabled(ok) }, 0);
     set_dialog_text(entry, ADDRESS_ENTRY_NICKNAME_ID, "dave");
     assert_ne!(unsafe { IsWindowEnabled(ok) }, 0);
-    refused_address_entry(&app, entry, "no such nick: dave")?;
+    refused_address_entry(&app, entry, ADDRESS_ENTRY_OK_ID, "no such nick: dave")?;
     set_dialog_text(entry, ADDRESS_ENTRY_NICKNAME_ID, "bob");
     set_dialog_text(entry, ADDRESS_ENTRY_NOTE_ID, "lunch");
     unsafe { SendMessageW(GetDlgItem(entry, ADDRESS_ENTRY_WHOIS_ID), BM_SETCHECK, 1, 0) };
-    accept_address_entry(&app, entry)?;
-    let entry = open_address_entry(dialog, ADDRESS_BOOK_NOTIFY_ADD_ID, "Add Notify")?;
+    accept_address_entry(&app, entry, ADDRESS_ENTRY_OK_ID)?;
+    let entry = open_address_entry(
+        dialog,
+        ADDRESS_BOOK_NOTIFY_ADD_ID,
+        ADDRESS_ENTRY_CLASS,
+        "Add Notify",
+    )?;
     set_dialog_text(entry, ADDRESS_ENTRY_NICKNAME_ID, "Bob");
-    refused_address_entry(&app, entry, "Bob is already on the notify list")?;
+    refused_address_entry(
+        &app,
+        entry,
+        ADDRESS_ENTRY_OK_ID,
+        "Bob is already on the notify list",
+    )?;
     set_dialog_text(entry, ADDRESS_ENTRY_NICKNAME_ID, "@carol:remote");
-    accept_address_entry(&app, entry)?;
+    accept_address_entry(&app, entry, ADDRESS_ENTRY_OK_ID)?;
     let book = address_book(&app)?;
     assert_eq!(
         book.notify_rows,
@@ -19148,7 +19172,12 @@ fn address_book_edits_the_notify_list() -> Result<(), Box<dyn std::error::Error>
     select_address_book_row(&app, list, &book.notify_row_click_points[0])?;
     let book = address_book(&app)?;
     assert!(book.notify_edit_enabled && book.notify_delete_enabled);
-    let entry = open_address_entry(dialog, ADDRESS_BOOK_NOTIFY_EDIT_ID, "Edit Notify")?;
+    let entry = open_address_entry(
+        dialog,
+        ADDRESS_BOOK_NOTIFY_EDIT_ID,
+        ADDRESS_ENTRY_CLASS,
+        "Edit Notify",
+    )?;
     let nickname = unsafe { GetDlgItem(entry, ADDRESS_ENTRY_NICKNAME_ID) };
     assert_eq!(unsafe { read_window_text(nickname) }, "Bob (@bob:example)");
     assert_ne!(
@@ -19156,7 +19185,7 @@ fn address_book_edits_the_notify_list() -> Result<(), Box<dyn std::error::Error>
         0
     );
     set_dialog_text(entry, ADDRESS_ENTRY_NOTE_ID, "lunch box");
-    accept_address_entry(&app, entry)?;
+    accept_address_entry(&app, entry, ADDRESS_ENTRY_OK_ID)?;
     let book = address_book(&app)?;
     select_address_book_row(&app, list, &book.notify_row_click_points[1])?;
     post_dialog_command(dialog, ADDRESS_BOOK_NOTIFY_DELETE_ID);
@@ -19275,16 +19304,31 @@ fn address_book_control_tab_sends_the_changes() -> Result<(), Box<dyn std::error
             .starts_with("Your ignore list is kept on your Matrix server")
     );
 
-    let entry = open_address_entry(dialog, ADDRESS_BOOK_CONTROL_ADD_ID, "Add Ignore")?;
+    let entry = open_address_entry(
+        dialog,
+        ADDRESS_BOOK_CONTROL_ADD_ID,
+        ADDRESS_ENTRY_CLASS,
+        "Add Ignore",
+    )?;
     // Only a nickname.
     assert!(unsafe { GetDlgItem(entry, ADDRESS_ENTRY_NOTE_ID) }.is_null());
     set_dialog_text(entry, ADDRESS_ENTRY_NICKNAME_ID, "Alice");
-    refused_address_entry(&app, entry, "you cannot ignore yourself")?;
+    refused_address_entry(
+        &app,
+        entry,
+        ADDRESS_ENTRY_OK_ID,
+        "you cannot ignore yourself",
+    )?;
     set_dialog_text(entry, ADDRESS_ENTRY_NICKNAME_ID, "Bob");
-    accept_address_entry(&app, entry)?;
-    let entry = open_address_entry(dialog, ADDRESS_BOOK_CONTROL_ADD_ID, "Add Ignore")?;
+    accept_address_entry(&app, entry, ADDRESS_ENTRY_OK_ID)?;
+    let entry = open_address_entry(
+        dialog,
+        ADDRESS_BOOK_CONTROL_ADD_ID,
+        ADDRESS_ENTRY_CLASS,
+        "Add Ignore",
+    )?;
     set_dialog_text(entry, ADDRESS_ENTRY_NICKNAME_ID, "bob");
-    refused_address_entry(&app, entry, "Bob is already ignored")?;
+    refused_address_entry(&app, entry, ADDRESS_ENTRY_OK_ID, "Bob is already ignored")?;
     post_dialog_command(entry, ADDRESS_ENTRY_CANCEL_ID);
     wait_for_window_gone(entry, "the entry dialog")?;
     let book = address_book(&app)?;
@@ -19313,6 +19357,367 @@ fn address_book_control_tab_sends_the_changes() -> Result<(), Box<dyn std::error
             },
         ]
     );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+const ADDRESS_BOOK_COLORS_ACTIVE_ID: i32 = 7401;
+const ADDRESS_BOOK_COLORS_LIST_ID: i32 = 7402;
+const ADDRESS_BOOK_COLORS_ADD_ID: WPARAM = 7403;
+const ADDRESS_BOOK_COLORS_EDIT_ID: WPARAM = 7404;
+const ADDRESS_BOOK_COLORS_DELETE_ID: WPARAM = 7405;
+const ADDRESS_BOOK_COLORS_UP_ID: WPARAM = 7406;
+const COLOR_ENTRY_PATTERN_ID: i32 = 7501;
+const COLOR_ENTRY_COLOR_ID: i32 = 7502;
+const COLOR_ENTRY_MODES_ID: i32 = 7503;
+const COLOR_ENTRY_ANY_MODE_ID: i32 = 7504;
+const COLOR_ENTRY_NO_MODE_ID: i32 = 7505;
+const COLOR_ENTRY_OK_ID: WPARAM = 7507;
+
+/// A text message from `user_id`, whom the line names `nick`.
+fn nick_text_event(
+    room_id: &str,
+    user_id: &str,
+    nick: &str,
+    timestamp_ms: u64,
+    body: &str,
+) -> Event {
+    let Event::RoomActivity(mut activity) = text_event(room_id, user_id, timestamp_ms, body) else {
+        unreachable!("text_event is a room activity")
+    };
+    let CoreRoomActivityKind::Message(message) = &mut activity.kind else {
+        unreachable!("text_event is a message")
+    };
+    message.sender.nick = Some(nick.to_owned());
+    Event::RoomActivity(activity)
+}
+
+/// Beta with Bob, an operator, and Carol, who each said something.
+fn nick_color_events() -> Vec<Event> {
+    vec![
+        Event::RoomMembers(RoomMembers {
+            room_id: "!beta:example".to_owned(),
+            members: vec![
+                ranked_member("@bob:example", "Bob", RoomMemberRank::Moderator, false),
+                ranked_member("@carol:example", "Carol", RoomMemberRank::Member, false),
+            ],
+        }),
+        nick_text_event(
+            "!beta:example",
+            "@bob:example",
+            "Bob",
+            1_700_000_100_000,
+            "hi from Bob",
+        ),
+        nick_text_event(
+            "!beta:example",
+            "@carol:example",
+            "Carol",
+            1_700_000_101_000,
+            "hi from Carol",
+        ),
+    ]
+}
+
+/// Bob's and Carol's nick colours in Beta, as `#rrggbb`: their lines'
+/// (`None` without one) and the nick list's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BetaNickColors {
+    bob_line: Option<String>,
+    carol_line: Option<String>,
+    bob_list: String,
+    carol_list: String,
+}
+
+fn beta_nick_colors(app: &MirxApp) -> Result<BetaNickColors, Box<dyn std::error::Error>> {
+    let ui_state = app.dump_ui_state()?;
+    let timeline = ui_state
+        .active_timeline
+        .as_ref()
+        .expect("Beta has a timeline");
+    let line_color = |nick: &str| {
+        let line = timeline
+            .visible_lines
+            .iter()
+            .find(|line| line.text.ends_with(&format!("<{nick}> hi from {nick}")))
+            .unwrap_or_else(|| panic!("{nick}'s line is on screen: {:?}", timeline.visible_lines));
+        line.nick_color.as_ref().map(|nick_color| {
+            assert_eq!(
+                &line.text[nick_color.start..nick_color.end],
+                nick,
+                "{line:?}"
+            );
+            nick_color.color.clone()
+        })
+    };
+    let members = &find_view(&ui_state, &room_identity("!beta:example")).members;
+    let list_color = |user_id: &str| {
+        members
+            .iter()
+            .find(|member| member.user_id == user_id)
+            .expect("a member")
+            .color
+            .clone()
+    };
+    Ok(BetaNickColors {
+        bob_line: line_color("Bob"),
+        carol_line: line_color("Carol"),
+        bob_list: list_color("@bob:example"),
+        carol_list: list_color("@carol:example"),
+    })
+}
+
+/// mIRC's nick colours (`/cnick`): an entry colours the nick in the lines
+/// its user sent and in the nick list, as its modes allow; the first
+/// matching entry wins, auto picks a colour per user, and the list is
+/// kept in mirx.ini across a restart.
+#[test]
+fn cnick_colours_nicks_in_messages_and_the_nick_list() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    app.append_synthetic_events(&serde_json::to_string(&nick_color_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_view(room_identity("!beta:example"))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let plain = beta_nick_colors(&app)?;
+    assert_eq!((&plain.bob_line, &plain.carol_line), (&None, &None));
+    assert_eq!(plain.bob_list, plain.carol_list);
+    let list_text = plain.carol_list.clone();
+    let cnick = |input: &str| -> Result<BetaNickColors, Box<dyn std::error::Error>> {
+        app.set_compose_text(input)?;
+        app.send_compose_key(ComposeKey::Return)?;
+        app.wait_idle(Duration::from_secs(5))?;
+        assert_eq!(app.compose_text()?, "", "{input}");
+        assert_eq!(
+            app.dump_ui_state()?.status_bar.text,
+            "nick colors saved",
+            "{input}"
+        );
+        beta_nick_colors(&app)
+    };
+
+    // Any mode: Bob, an operator, in red; Carol has no mode.
+    let red = "#ff0000".to_owned();
+    let any_mode = cnick("/cnick -a * 4")?;
+    assert_eq!(
+        any_mode,
+        BetaNickColors {
+            bob_line: Some(red.clone()),
+            carol_line: None,
+            bob_list: red.clone(),
+            carol_list: list_text.clone(),
+        }
+    );
+    // Then anyone in an auto colour: Bob's entry is first.
+    let auto = cnick("/cnick -f * *")?;
+    let carol = auto.carol_line.clone().expect("Carol has an auto colour");
+    let default_auto = [
+        "#00007f", "#009300", "#ff0000", "#7f0000", "#9c009c", "#009393", "#0000fc", "#ff00ff",
+    ];
+    assert!(default_auto.contains(&carol.as_str()), "{carol}");
+    assert_eq!(
+        auto,
+        BetaNickColors {
+            bob_line: Some(red.clone()),
+            carol_line: Some(carol.clone()),
+            bob_list: red.clone(),
+            carol_list: carol.clone(),
+        }
+    );
+    assert_eq!(cnick("/cnick off")?, plain);
+    assert_eq!(cnick("/cnick on")?, auto);
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    assert!(
+        ini.contains("[nickcolors]\r\nactive=on\r\nn0=* 4 any\r\nn1=* auto\r\n[notify]"),
+        "{ini}"
+    );
+    drop(app);
+
+    // The same colours after a restart: auto's is the user's.
+    let (app, local_app_data) = launch_close_lifecycle_app_in(local_app_data)?;
+    app.append_synthetic_events(&serde_json::to_string(&nick_color_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_view(room_identity("!beta:example"))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(beta_nick_colors(&app)?, auto);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The Address Book's Colors tab (`/abook -l`): Add and Edit check an
+/// entry as `/cnick` does, Up and Down reorder the list, and OK saves it
+/// and colours the nicks at once; Cancel drops every edit.
+#[test]
+fn address_book_colors_tab_edits_the_nick_color_list() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    app.append_synthetic_events(&serde_json::to_string(&nick_color_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_view(room_identity("!beta:example"))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let plain = beta_nick_colors(&app)?;
+
+    app.set_compose_text("/abook -l")?;
+    app.open_dialog(AutomationDialog::ComposeReturn)?;
+    let dialog = wait_for_address_book(&app)?;
+    let book = address_book(&app)?;
+    assert_eq!(book.tab, "Colors");
+    assert_eq!(book.tab_click_points.len(), 3);
+    assert_eq!(
+        book.visible_controls,
+        [7402, 7403, 7404, 7405, 7406, 7407, 7401]
+    );
+    assert!(book.color_rows.is_empty() && book.colors_active);
+    assert!(
+        !book.color_edit_enabled
+            && !book.color_delete_enabled
+            && !book.color_up_enabled
+            && !book.color_down_enabled
+    );
+
+    let entry = open_address_entry(
+        dialog,
+        ADDRESS_BOOK_COLORS_ADD_ID,
+        COLOR_ENTRY_CLASS,
+        "Add Nick Color",
+    )?;
+    let ok = unsafe { GetDlgItem(entry, COLOR_ENTRY_OK_ID as i32) };
+    assert_eq!(unsafe { IsWindowEnabled(ok) }, 0);
+    set_dialog_text(entry, COLOR_ENTRY_PATTERN_ID, "dave");
+    assert_ne!(unsafe { IsWindowEnabled(ok) }, 0);
+    refused_address_entry(&app, entry, COLOR_ENTRY_OK_ID, "no such nick: dave")?;
+    set_dialog_text(entry, COLOR_ENTRY_PATTERN_ID, "bob");
+    set_dialog_text(entry, COLOR_ENTRY_MODES_ID, "@x");
+    refused_address_entry(
+        &app,
+        entry,
+        COLOR_ENTRY_OK_ID,
+        "modes must be some of ~&@+, not @x",
+    )?;
+    set_dialog_text(entry, COLOR_ENTRY_MODES_ID, "@");
+    // Auto is first: palette colour 4 is the fifth after it.
+    unsafe { SendMessageW(GetDlgItem(entry, COLOR_ENTRY_COLOR_ID), CB_SETCURSEL, 5, 0) };
+    accept_address_entry(&app, entry, COLOR_ENTRY_OK_ID)?;
+    let entry = open_address_entry(
+        dialog,
+        ADDRESS_BOOK_COLORS_ADD_ID,
+        COLOR_ENTRY_CLASS,
+        "Add Nick Color",
+    )?;
+    set_dialog_text(entry, COLOR_ENTRY_PATTERN_ID, "*:example");
+    for id in [COLOR_ENTRY_ANY_MODE_ID, COLOR_ENTRY_NO_MODE_ID] {
+        unsafe { SendMessageW(GetDlgItem(entry, id), BM_SETCHECK, 1, 0) };
+    }
+    refused_address_entry(
+        &app,
+        entry,
+        COLOR_ENTRY_OK_ID,
+        "any mode and no mode cannot be combined",
+    )?;
+    unsafe { SendMessageW(GetDlgItem(entry, COLOR_ENTRY_NO_MODE_ID), BM_SETCHECK, 0, 0) };
+    accept_address_entry(&app, entry, COLOR_ENTRY_OK_ID)?;
+    let row = |cells: [&str; 3]| cells.map(str::to_owned).to_vec();
+    let book = address_book(&app)?;
+    assert_eq!(
+        book.color_rows,
+        [
+            row(["Bob (@bob:example)", "4", "@"]),
+            row(["*:example", "auto", "any mode"])
+        ]
+    );
+
+    // Up: the second entry first, still selected.
+    let list = unsafe { GetDlgItem(dialog, ADDRESS_BOOK_COLORS_LIST_ID) };
+    select_address_book_row(&app, list, &book.color_row_click_points[1])?;
+    let book = address_book(&app)?;
+    assert!(book.color_edit_enabled && book.color_up_enabled && !book.color_down_enabled);
+    post_dialog_command(dialog, ADDRESS_BOOK_COLORS_UP_ID);
+    app.wait_idle(Duration::from_secs(5))?;
+    let book = address_book(&app)?;
+    assert_eq!(
+        book.color_rows,
+        [
+            row(["*:example", "auto", "any mode"]),
+            row(["Bob (@bob:example)", "4", "@"])
+        ]
+    );
+    assert!(book.color_edit_enabled && !book.color_up_enabled && book.color_down_enabled);
+
+    // Edit opens with the entry's fields; its pattern may change.
+    let entry = open_address_entry(
+        dialog,
+        ADDRESS_BOOK_COLORS_EDIT_ID,
+        COLOR_ENTRY_CLASS,
+        "Edit Nick Color",
+    )?;
+    let field = |id| unsafe { read_window_text(GetDlgItem(entry, id)) };
+    assert_eq!(field(COLOR_ENTRY_PATTERN_ID), "*:example");
+    assert_eq!(field(COLOR_ENTRY_MODES_ID), "");
+    // Palette colour 12.
+    unsafe { SendMessageW(GetDlgItem(entry, COLOR_ENTRY_COLOR_ID), CB_SETCURSEL, 13, 0) };
+    accept_address_entry(&app, entry, COLOR_ENTRY_OK_ID)?;
+    assert_eq!(
+        address_book(&app)?.color_rows,
+        [
+            row(["*:example", "12", "any mode"]),
+            row(["Bob (@bob:example)", "4", "@"])
+        ]
+    );
+    // Nothing applies before OK.
+    assert_eq!(beta_nick_colors(&app)?, plain);
+
+    post_dialog_command(dialog, IDOK as WPARAM);
+    wait_for_window_gone(dialog, "Address Book")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let saved =
+        "[nickcolors]\r\nactive=on\r\nn0=*:example 12 any\r\nn1=@bob:example 4 modes=@\r\n[notify]";
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    assert!(ini.contains(saved), "{ini}");
+    assert_eq!(app.dump_ui_state()?.status_bar.text, "address book saved");
+    // Bob has a mode, so the first entry is his; Carol has none.
+    let blue = "#0000fc".to_owned();
+    let saved_colors = BetaNickColors {
+        bob_line: Some(blue.clone()),
+        carol_line: None,
+        bob_list: blue,
+        carol_list: plain.carol_list.clone(),
+    };
+    assert_eq!(beta_nick_colors(&app)?, saved_colors);
+
+    // Cancel drops the edits: a deleted entry and Enable unchecked.
+    app.open_dialog(AutomationDialog::AddressBook)?;
+    let dialog = wait_for_address_book(&app)?;
+    let book = address_book(&app)?;
+    let tab_control = unsafe { GetDlgItem(dialog, ADDRESS_BOOK_TAB_ID) };
+    post_left_click(tab_control, &book.tab_click_points[2], false);
+    app.wait_for_ui_state("the Colors tab", Duration::from_secs(5), |ui_state| {
+        ui_state
+            .address_book
+            .as_ref()
+            .is_some_and(|book| book.tab == "Colors")
+    })?;
+    let list = unsafe { GetDlgItem(dialog, ADDRESS_BOOK_COLORS_LIST_ID) };
+    select_address_book_row(&app, list, &book.color_row_click_points[0])?;
+    post_dialog_command(dialog, ADDRESS_BOOK_COLORS_DELETE_ID);
+    unsafe {
+        SendMessageW(
+            GetDlgItem(dialog, ADDRESS_BOOK_COLORS_ACTIVE_ID),
+            BM_SETCHECK,
+            0,
+            0,
+        )
+    };
+    app.wait_idle(Duration::from_secs(5))?;
+    let book = address_book(&app)?;
+    assert_eq!(book.color_rows, [row(["Bob (@bob:example)", "4", "@"])]);
+    assert!(!book.colors_active);
+    post_dialog_command(dialog, IDCANCEL as WPARAM);
+    wait_for_window_gone(dialog, "Address Book")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(fs::read_to_string(settings_file_path(&local_app_data))?.contains(saved));
+    assert_eq!(beta_nick_colors(&app)?, saved_colors);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

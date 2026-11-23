@@ -1496,7 +1496,7 @@ pub(crate) struct UiColorsDialog {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UiAddressBook {
-    /// The tab shown: `Notify` or `Control`.
+    /// The tab shown: `Notify`, `Control` or `Colors`.
     pub(crate) tab: String,
     /// Where a click selects each tab, in the tab control's client
     /// coordinates.
@@ -1519,6 +1519,16 @@ pub(crate) struct UiAddressBook {
     pub(crate) control_enabled: bool,
     pub(crate) control_delete_enabled: bool,
     pub(crate) control_note: String,
+    /// The Colors tab's Enable nick colors.
+    pub(crate) colors_active: bool,
+    /// The nick colour list's rows: Nickname, Color and Apply.
+    pub(crate) color_rows: Vec<Vec<String>>,
+    /// In the Colors list's client coordinates.
+    pub(crate) color_row_click_points: Vec<UiPoint>,
+    pub(crate) color_edit_enabled: bool,
+    pub(crate) color_delete_enabled: bool,
+    pub(crate) color_up_enabled: bool,
+    pub(crate) color_down_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -6904,6 +6914,17 @@ mod tests {
                         control_enabled: true,
                         control_delete_enabled: false,
                         control_note: "Connect to edit the ignore list.".to_owned(),
+                        colors_active: true,
+                        color_rows: vec![vec![
+                            "*bot*".to_owned(),
+                            "auto".to_owned(),
+                            "any mode".to_owned()
+                        ]],
+                        color_row_click_points: vec![super::UiPoint { x: 40, y: 30 }],
+                        color_edit_enabled: true,
+                        color_delete_enabled: true,
+                        color_up_enabled: false,
+                        color_down_enabled: false,
                     }),
                     color_index: Some(super::UiColorIndex {
                         part: super::UiColorCodePart::Background,
@@ -7168,7 +7189,14 @@ mod tests {
                         "control_row_click_points":[{"x":40,"y":12}],
                         "control_enabled":true,
                         "control_delete_enabled":false,
-                        "control_note":"Connect to edit the ignore list."
+                        "control_note":"Connect to edit the ignore list.",
+                        "colors_active":true,
+                        "color_rows":[["*bot*","auto","any mode"]],
+                        "color_row_click_points":[{"x":40,"y":30}],
+                        "color_edit_enabled":true,
+                        "color_delete_enabled":true,
+                        "color_up_enabled":false,
+                        "color_down_enabled":false
                     },
                     "color_index":{
                         "part":"background",

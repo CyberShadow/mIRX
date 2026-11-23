@@ -200,6 +200,7 @@ mod automation_dump;
 mod automation_host;
 mod clipboard;
 mod cmap;
+mod color_drop_down;
 mod color_index;
 mod colors;
 mod colors_dialog;
