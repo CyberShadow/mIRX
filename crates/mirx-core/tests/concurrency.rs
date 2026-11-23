@@ -17,8 +17,8 @@ use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CreateDirectRoomRequest,
     EditMessageRequest, Event, HistoryFrom, ListPublicRoomsRequest, LoginMethod, LoginRequest,
     MemberPowerLevelChange, MemberPowerRole, Operation, RestoreSessionRequest,
-    RoomMessagePresentationKind, SendFileRequest, SendMessageRequest, SessionAuth,
-    SetRoomMemberPowerLevelRequest, StoredSession,
+    RoomMessagePresentationKind, SendFileRequest, SendMessageRequest, SessionAuth, StoredSession,
+    UpdateRoomSettingsRequest,
 };
 use serde_json::json;
 use wiremock::matchers::{method, path_regex};
@@ -730,19 +730,6 @@ fn ranking_in(content: serde_json::Value, delay: Duration) -> (Harness, Document
             ]),
         );
     });
-    // The members snapshot after a write asks for them.
-    harness.mount(
-        Mock::given(method("GET"))
-            .and(path_regex(
-                r"^/_matrix/client/v3/rooms/!a:example\.org/members$",
-            ))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "chunk": [
-                member_join(ROOM, "@alice:example.org"),
-                member_join(ROOM, "@bob:example.org"),
-                member_join(ROOM, "@carol:example.org"),
-                member_join(ROOM, "@dave:example.org"),
-            ] }))),
-    );
     let server = DocumentServer::mount(
         &harness,
         r"^/_matrix/client/v3/rooms/!a:example\.org/state/m\.room\.power_levels/?$",
@@ -754,15 +741,22 @@ fn ranking_in(content: serde_json::Value, delay: Duration) -> (Harness, Document
 }
 
 fn rank(changes: &[(&str, MemberPowerRole)]) -> Command {
-    Command::SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest {
+    Command::UpdateRoomSettings(UpdateRoomSettingsRequest {
         room_id: ROOM.to_owned(),
-        changes: changes
+        topic_by_operators: None,
+        moderated: None,
+        member_roles: changes
             .iter()
             .map(|(user_id, role)| MemberPowerLevelChange {
                 user_id: (*user_id).to_owned(),
                 role: *role,
             })
             .collect(),
+        invite_only: None,
+        name: None,
+        topic: None,
+        listed_in_directory: None,
+        unban: Vec::new(),
     })
 }
 

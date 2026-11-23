@@ -488,9 +488,16 @@ pub(super) unsafe fn run_slash_command(
                 .join(", ");
             enqueue_command(
                 state,
-                Command::SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest {
+                Command::UpdateRoomSettings(UpdateRoomSettingsRequest {
                     room_id,
-                    changes,
+                    topic_by_operators: None,
+                    moderated: None,
+                    member_roles: changes,
+                    invite_only: None,
+                    name: None,
+                    topic: None,
+                    listed_in_directory: None,
+                    unban: Vec::new(),
                 }),
             )?;
             Ok(Some(format!("power level change submitted: {user_ids}")))
@@ -1597,6 +1604,27 @@ mod tests {
     use super::super::test_fixtures::*;
     use super::*;
 
+    /// The `UpdateRoomSettings` of `/op` and the like: only member roles.
+    fn member_roles_command(room_id: &str, roles: &[(&str, MemberPowerRole)]) -> Command {
+        Command::UpdateRoomSettings(UpdateRoomSettingsRequest {
+            room_id: room_id.to_owned(),
+            topic_by_operators: None,
+            moderated: None,
+            member_roles: roles
+                .iter()
+                .map(|(user_id, role)| MemberPowerLevelChange {
+                    user_id: (*user_id).to_owned(),
+                    role: *role,
+                })
+                .collect(),
+            invite_only: None,
+            name: None,
+            topic: None,
+            listed_in_directory: None,
+            unban: Vec::new(),
+        })
+    }
+
     /// A channel Ops with Alice and Bob, and a query with Alice; Ops active.
     fn irc_command_state() -> (WindowState, CoreHandle) {
         let (mut state, handle) = test_state_with_command_sender();
@@ -2326,15 +2354,7 @@ mod tests {
                     type_compose_line(hwnd, input);
                 }
                 let room = || "!ops:example".to_owned();
-                let power = |user_id: &str, role| {
-                    Command::SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest {
-                        room_id: room(),
-                        changes: vec![MemberPowerLevelChange {
-                            user_id: user_id.to_owned(),
-                            role,
-                        }],
-                    })
-                };
+                let power = |user_id: &str, role| member_roles_command(&room(), &[(user_id, role)]);
                 assert_eq!(
                     state_ref(hwnd).recorded_commands,
                     vec![
@@ -2411,20 +2431,12 @@ mod tests {
                 }
                 assert_eq!(
                     state_ref(hwnd).recorded_commands,
-                    vec![Command::SetRoomMemberPowerLevel(
-                        SetRoomMemberPowerLevelRequest {
-                            room_id: "!ops:example".to_owned(),
-                            changes: vec![
-                                MemberPowerLevelChange {
-                                    user_id: "@alice:example".to_owned(),
-                                    role: MemberPowerRole::Moderator,
-                                },
-                                MemberPowerLevelChange {
-                                    user_id: "@carol:example".to_owned(),
-                                    role: MemberPowerRole::Moderator,
-                                },
-                            ],
-                        }
+                    vec![member_roles_command(
+                        "!ops:example",
+                        &[
+                            ("@alice:example", MemberPowerRole::Moderator),
+                            ("@carol:example", MemberPowerRole::Moderator),
+                        ]
                     )]
                 );
                 let lines = render_room_lines(state_ref(hwnd), "!ops:example");

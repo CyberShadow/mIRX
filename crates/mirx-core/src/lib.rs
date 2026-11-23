@@ -37,14 +37,14 @@ pub use api::{
     RoomUnableToDecryptCause, RoomUserProfile, RoomVerificationRequestActivity, RoomVideoActivity,
     RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
     SendMessageThreadTarget, SendReactionRequest, SessionAuth, SetDisplayNameRequest,
-    SetReadMarkerRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
-    SetRoomTopicRequest, SetTypingRequest, SetupE2eeRecoveryRequest, SignOutDeviceRequest,
-    SpaceChildSummary, StoredSession, SyncStopReason, TextColor, TextStyle, TextStyleSpan,
-    UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UpdateRoomSettingsRequest, UserDevices,
-    UserIdentityState, UserLinkSpan, UserPresence, UserProfile, VerificationDecimals,
-    VerificationDirection, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, check_text_styles, check_user_links, login_method,
-    login_server, validate_highlight_word,
+    SetReadMarkerRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest, SetTypingRequest,
+    SetupE2eeRecoveryRequest, SignOutDeviceRequest, SpaceChildSummary, StoredSession,
+    SyncStopReason, TextColor, TextStyle, TextStyleSpan, UnbanRoomMemberRequest,
+    UnsupportedRoomMessageActivity, UpdateRoomSettingsRequest, UserDevices, UserIdentityState,
+    UserLinkSpan, UserPresence, UserProfile, VerificationDecimals, VerificationDirection,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, check_text_styles, check_user_links, login_method, login_server,
+    validate_highlight_word,
 };
 pub use matrix_link::{MatrixLink, matrix_link};
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};

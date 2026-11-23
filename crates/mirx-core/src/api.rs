@@ -31,7 +31,6 @@ pub enum Command {
     BanRoomMember(BanRoomMemberRequest),
     UnbanRoomMember(UnbanRoomMemberRequest),
     InviteRoomMember(InviteRoomMemberRequest),
-    SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest),
     SetDisplayName(SetDisplayNameRequest),
     RejectRoomInvite(RejectRoomInviteRequest),
     SetRoomTopic(SetRoomTopicRequest),
@@ -420,15 +419,7 @@ pub enum MemberPowerRole {
     Default,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SetRoomMemberPowerLevelRequest {
-    pub room_id: String,
-    /// Applied together, in one write of the room's power levels.
-    pub changes: Vec<MemberPowerLevelChange>,
-}
-
-/// One member's new role in a `SetRoomMemberPowerLevelRequest`.
+/// One member's new role in an `UpdateRoomSettingsRequest`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MemberPowerLevelChange {
@@ -513,15 +504,21 @@ pub struct RoomSettingsPermissions {
     pub unban: bool,
 }
 
-/// The settings to change; `None` (and no unbans) leaves a part as it is.
-/// The parts are written in field order.
+/// The settings to change; `None` (and no member roles or unbans) leaves a
+/// part as it is. The parts are written in field order.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateRoomSettingsRequest {
     pub room_id: String,
-    /// `topic_by_operators` and `moderated` go in one power-levels write.
+    /// `topic_by_operators` and `moderated` go in one power-levels write
+    /// with `member_roles`.
     pub topic_by_operators: Option<bool>,
     pub moderated: Option<bool>,
+    /// Members' new roles (`/op`, `/mode +v Bob`), in the same power-levels
+    /// write as `topic_by_operators` and `moderated`, applied after them: a
+    /// voice level is the one of the room those leave. In order: a member
+    /// named twice takes the last role.
+    pub member_roles: Vec<MemberPowerLevelChange>,
     /// `true`: join rule `invite`; `false`: `public`.
     pub invite_only: Option<bool>,
     /// `Some("")` removes the name.
@@ -2279,7 +2276,6 @@ pub enum Operation {
     BanRoomMember,
     UnbanRoomMember,
     InviteRoomMember,
-    SetRoomMemberPowerLevel,
     SetDisplayName,
     SetPresence,
     RejectRoomInvite,

@@ -43,16 +43,16 @@ use mirx_testkit::{
     StoredSession, SubmittedAwayCommand, SubmittedDirectRoomCommand, SubmittedEditCommand,
     SubmittedFileCommand, SubmittedHistoryCommand, SubmittedIdentityReset,
     SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedMessageCommand,
-    SubmittedNotificationCommand, SubmittedPowerLevelChange, SubmittedPowerLevelCommand,
-    SubmittedProfileCommand, SubmittedReactionCommand, SubmittedRecoveryCommand,
-    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
-    SubmittedRoomKeyTransfer, SubmittedRoomListRequest, SubmittedRoomSettingsCommand,
-    SubmittedRoomTopicCommand, SubmittedSessionCommand, SubmittedSetupRecoveryCommand,
-    SubmittedTypingCommand, SubmittedUserCommand, SubmittedVerificationAction,
-    SubmittedVerificationRequest, SwitchbarItem, TestkitError, UiActiveTimeline, UiActivityColors,
-    UiAddressBook, UiChannelCentral, UiCheckState, UiColorCodePart, UiColorItem, UiColorsDialog,
-    UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
-    UiFindState, UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
+    SubmittedNotificationCommand, SubmittedPowerLevelChange, SubmittedProfileCommand,
+    SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
+    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomKeyTransfer,
+    SubmittedRoomListRequest, SubmittedRoomSettingsCommand, SubmittedRoomTopicCommand,
+    SubmittedSessionCommand, SubmittedSetupRecoveryCommand, SubmittedTypingCommand,
+    SubmittedUserCommand, SubmittedVerificationAction, SubmittedVerificationRequest, SwitchbarItem,
+    TestkitError, UiActiveTimeline, UiActivityColors, UiAddressBook, UiChannelCentral,
+    UiCheckState, UiColorCodePart, UiColorItem, UiColorsDialog, UiComposeTarget,
+    UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState,
+    UiLoggingOptions, UiMarkerOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
     UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
     UiTimelineLink, UiTimestamp, UiTipsOptions, UiTrayOptions, UnsupportedRoomMessageActivity,
     UserCommandAction, Verification, VerificationActionKind, VerificationState, ViewActivityLevel,
@@ -3578,7 +3578,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 86);
+    assert_eq!(version.protocol_version, 87);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -9929,6 +9929,31 @@ fn ranked_member(
     }
 }
 
+/// The `UpdateRoomSettings` of `/op` and the nick list's Control items:
+/// only member roles.
+fn member_roles_update(
+    room_id: &str,
+    roles: &[(&str, MemberPowerRole)],
+) -> SubmittedRoomSettingsCommand {
+    SubmittedRoomSettingsCommand::Update {
+        room_id: room_id.to_owned(),
+        topic_by_operators: None,
+        moderated: None,
+        member_roles: roles
+            .iter()
+            .map(|(user_id, role)| SubmittedPowerLevelChange {
+                user_id: (*user_id).to_owned(),
+                role: *role,
+            })
+            .collect(),
+        invite_only: None,
+        name: None,
+        topic: None,
+        listed_in_directory: None,
+        unban: Vec::new(),
+    }
+}
+
 #[test]
 fn automation_driver_irc_moderation_commands_submit_core_commands()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -9987,18 +10012,9 @@ fn automation_driver_irc_moderation_commands_submit_core_commands()
             moderation(MemberModerationAction::Invite, "@carol:example", None),
         ]
     );
-    let power = |changes: &[(&str, MemberPowerRole)]| SubmittedPowerLevelCommand {
-        room_id: "!beta:example".to_owned(),
-        changes: changes
-            .iter()
-            .map(|(user_id, role)| SubmittedPowerLevelChange {
-                user_id: (*user_id).to_owned(),
-                role: *role,
-            })
-            .collect(),
-    };
+    let power = |roles: &[(&str, MemberPowerRole)]| member_roles_update("!beta:example", roles);
     assert_eq!(
-        model.submitted_power_level_commands,
+        model.submitted_room_settings_commands,
         vec![
             power(&[("@alice:example", MemberPowerRole::Moderator)]),
             power(&[("@alice:example", MemberPowerRole::Voiced)]),
@@ -10028,7 +10044,7 @@ fn automation_driver_irc_moderation_commands_submit_core_commands()
         (beta, "ban room member"),
         (beta, "unban room member"),
         (beta, "invite room member"),
-        (beta, "set room member power level"),
+        (beta, "update room settings"),
         (status, "set display name"),
     ] {
         assert!(
@@ -10762,14 +10778,11 @@ fn member_menu_control_items() -> Result<(), Box<dyn std::error::Error>> {
     app.open_member_context_menu("@bob:example", ContextMenuCommand::WhoisMember)?;
     let model = app.dump_model()?;
     assert_eq!(
-        model.submitted_power_level_commands,
-        vec![SubmittedPowerLevelCommand {
-            room_id: "!beta:example".to_owned(),
-            changes: vec![SubmittedPowerLevelChange {
-                user_id: "@bob:example".to_owned(),
-                role: MemberPowerRole::Moderator,
-            }],
-        }]
+        model.submitted_room_settings_commands,
+        vec![member_roles_update(
+            "!beta:example",
+            &[("@bob:example", MemberPowerRole::Moderator)]
+        )]
     );
     assert_eq!(
         model.submitted_user_commands,
@@ -23054,14 +23067,14 @@ fn room_error_prints_in_room_window() -> Result<(), Box<dyn std::error::Error>> 
 
     app.append_synthetic_events(&serde_json::to_string(&vec![Event::Error(
         mirx_core::CoreErrorEvent {
-            operation: mirx_core::Operation::SetRoomMemberPowerLevel,
+            operation: mirx_core::Operation::UpdateRoomSettings,
             room_id: Some("!alpha:example".to_owned()),
             message: "not allowed".to_owned(),
         },
     )])?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    let line = "* Error during set room member power level: not allowed";
+    let line = "* Error during change room settings: not allowed";
     let ui_state = app.dump_ui_state()?;
     assert_eq!(ui_state.mdi.active, beta);
     assert!(
@@ -23076,7 +23089,7 @@ fn room_error_prints_in_room_window() -> Result<(), Box<dyn std::error::Error>> 
     ));
     assert_eq!(
         app.dump_model()?.status,
-        "error during set room member power level"
+        "error during change room settings"
     );
 
     drop(app);
@@ -27408,6 +27421,7 @@ fn channel_central_shows_and_changes_the_room_settings() -> Result<(), Box<dyn s
                 room_id: "!beta:example".to_owned(),
                 topic_by_operators: Some(false),
                 moderated: Some(true),
+                member_roles: Vec::new(),
                 invite_only: Some(false),
                 name: None,
                 topic: Some("A new topic".to_owned()),
@@ -27644,6 +27658,7 @@ fn channel_central_keeps_edits_when_a_later_answer_arrives()
                 room_id: "!beta:example".to_owned(),
                 topic_by_operators: None,
                 moderated: None,
+                member_roles: Vec::new(),
                 invite_only: None,
                 name: Some("Mine".to_owned()),
                 topic: None,

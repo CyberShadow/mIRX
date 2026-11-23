@@ -1195,7 +1195,6 @@ pub(super) fn operation_name(operation: Operation) -> &'static str {
         Operation::BanRoomMember => "ban room member",
         Operation::UnbanRoomMember => "unban room member",
         Operation::InviteRoomMember => "invite room member",
-        Operation::SetRoomMemberPowerLevel => "set room member power level",
         Operation::SetDisplayName => "set display name",
         Operation::SetPresence => "set presence",
         Operation::SetRoomTopic => "set room topic",

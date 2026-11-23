@@ -2,16 +2,16 @@
 //! topic, join rule, who may set the topic, whether only voiced members
 //! speak, the room directory listing, and the bans.
 
+use std::collections::BTreeMap;
+
 use matrix_sdk::ruma::api::client::room::Visibility;
-use matrix_sdk::ruma::api::client::state::get_state_events;
+use matrix_sdk::ruma::api::client::state::{get_state_event_for_key, get_state_events};
 use matrix_sdk::ruma::events::room::join_rules::{JoinRule, OriginalSyncRoomJoinRulesEvent};
 use matrix_sdk::ruma::events::room::member::{MembershipState, OriginalSyncRoomMemberEvent};
 use matrix_sdk::ruma::events::room::power_levels::{
     RoomPowerLevels, RoomPowerLevelsEventContent, RoomPowerLevelsSource,
 };
-use matrix_sdk::ruma::events::{
-    AnyStateEvent, MessageLikeEventType, StateEventType, TimelineEventType,
-};
+use matrix_sdk::ruma::events::{AnyStateEvent, StateEventType, TimelineEventType};
 use matrix_sdk::ruma::serde::Raw;
 use matrix_sdk::ruma::{Int, RoomId, UserId};
 use matrix_sdk::{Client, Room};
@@ -19,8 +19,44 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::value::RawValue;
 
-use super::{MatrixCoreError, fetch_power_levels, joined_room_by_id, room_join_rule};
-use crate::api::{RoomBan, RoomSettings, RoomSettingsPermissions, UpdateRoomSettingsRequest};
+use super::{MatrixCoreError, joined_room_by_id, room_join_rule};
+use crate::api::{
+    MemberPowerRole, RoomBan, RoomSettings, RoomSettingsPermissions, UpdateRoomSettingsRequest,
+};
+
+/// Moderator in the IRC sense: the conventional Matrix moderator level.
+const MODERATOR_POWER_LEVEL: u8 = 50;
+
+/// The room modes the power levels carry: only operators set the topic
+/// (`+t`: its level above `users_default`), and moderated (`+m`: both
+/// message types above it). The settings read, the write and the
+/// power-levels line read them alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct LevelModes {
+    pub(super) topic_by_operators: bool,
+    pub(super) moderated: bool,
+}
+
+/// The modes of power levels, from the fields they are made of (an
+/// event's content, original or redacted, and ruma's `RoomPowerLevels`
+/// all have them).
+pub(super) fn level_modes(
+    events: &BTreeMap<TimelineEventType, Int>,
+    events_default: Int,
+    state_default: Int,
+    users_default: Int,
+) -> LevelModes {
+    let level = |event_type, default| events.get(&event_type).copied().unwrap_or(default);
+    LevelModes {
+        topic_by_operators: level(TimelineEventType::RoomTopic, state_default) > users_default,
+        moderated: [
+            TimelineEventType::RoomMessage,
+            TimelineEventType::RoomEncrypted,
+        ]
+        .into_iter()
+        .all(|message_type| level(message_type, events_default) > users_default),
+    }
+}
 
 /// An `m.room.name` content, original or redacted: a redaction keeps no
 /// key of it, and ruma's `RoomNameEventContent` requires the name.
@@ -148,18 +184,20 @@ pub(crate) async fn fetch_room_settings(
         unban: levels.user_can_unban(own),
     };
 
+    let modes = level_modes(
+        &levels.events,
+        levels.events_default,
+        levels.state_default,
+        levels.users_default,
+    );
+
     Ok(RoomSettings {
         room_id: room_id.to_string(),
         name,
         topic,
         join_rule: room_join_rule(&join_rule),
-        topic_by_operators: levels.for_state(StateEventType::RoomTopic) > levels.users_default,
-        moderated: [
-            MessageLikeEventType::RoomMessage,
-            MessageLikeEventType::RoomEncrypted,
-        ]
-        .into_iter()
-        .all(|message_type| levels.for_message(message_type) > levels.users_default),
+        topic_by_operators: modes.topic_by_operators,
+        moderated: modes.moderated,
         listed_in_directory,
         bans,
         allowed,
@@ -170,7 +208,7 @@ pub(crate) async fn fetch_room_settings(
 /// may, the conventional moderator's (as `MODERATOR_POWER_LEVEL`) unless
 /// members already have that.
 fn operator_topic_level(users_default: Int) -> Int {
-    Int::from(super::MODERATOR_POWER_LEVEL).max(users_default + Int::from(1))
+    Int::from(MODERATOR_POWER_LEVEL).max(users_default + Int::from(1))
 }
 
 /// Edits the levels for "only ops set topic" and "moderated". Turning on
@@ -188,20 +226,21 @@ fn edit_power_levels(
 ) {
     let users_default = levels.users_default;
     let above_default = users_default + Int::from(1);
-    if let Some(topic_by_operators) = topic_by_operators {
-        let topic_level = levels
-            .events
-            .get(&TimelineEventType::RoomTopic)
-            .copied()
-            .unwrap_or(levels.state_default);
-        if topic_by_operators != (topic_level > users_default) {
-            let level = if topic_by_operators {
-                operator_topic_level(users_default)
-            } else {
-                users_default
-            };
-            levels.events.insert(TimelineEventType::RoomTopic, level);
-        }
+    let modes = level_modes(
+        &levels.events,
+        levels.events_default,
+        levels.state_default,
+        users_default,
+    );
+    if let Some(topic_by_operators) = topic_by_operators
+        && topic_by_operators != modes.topic_by_operators
+    {
+        let level = if topic_by_operators {
+            operator_topic_level(users_default)
+        } else {
+            users_default
+        };
+        levels.events.insert(TimelineEventType::RoomTopic, level);
     }
     if let Some(moderated) = moderated {
         let message_types = [
@@ -226,28 +265,65 @@ fn edit_power_levels(
     }
 }
 
+/// The power level that gives `role` in a room with `levels`.
+///
+/// Voiced is the lowest level above `users_default` that may send
+/// `m.room.message`; a room where that level reaches moderator has no
+/// distinct voice level.
+fn member_power_role_level(
+    levels: &RoomPowerLevelsEventContent,
+    role: MemberPowerRole,
+) -> Result<Int, String> {
+    let moderator = Int::from(MODERATOR_POWER_LEVEL);
+    match role {
+        MemberPowerRole::Moderator => Ok(moderator),
+        MemberPowerRole::Default => Ok(levels.users_default),
+        MemberPowerRole::Voiced => {
+            let message_level = levels
+                .events
+                .get(&TimelineEventType::RoomMessage)
+                .copied()
+                .unwrap_or(levels.events_default);
+            let level = message_level.max(levels.users_default + Int::from(1));
+            if level >= moderator {
+                return Err(format!(
+                    "room has no voice level below moderator: voice needs power level {level}"
+                ));
+            }
+            Ok(level)
+        }
+    }
+}
+
 /// Writes the request's parts in its field order, stopping at the first
-/// the server refuses: the parts before it stay written. Both power-level
-/// parts are one write of the server's power levels (see
-/// `set_room_member_power_level`), and none when they change nothing.
+/// the server refuses: the parts before it stay written. The modes and
+/// the member roles are one write of the server's power levels (see
+/// `write_power_levels`), and none when they change nothing.
 pub(crate) async fn update_room_settings(
     client: &Client,
     request: &UpdateRoomSettingsRequest,
 ) -> Result<(), MatrixCoreError> {
     let room_id = <&RoomId>::try_from(request.room_id.as_str())
         .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    fn user_id(user_id: &str) -> Result<&UserId, MatrixCoreError> {
+        <&UserId>::try_from(user_id)
+            .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))
+    }
+    let member_roles = request
+        .member_roles
+        .iter()
+        .map(|change| Ok((user_id(&change.user_id)?, change.role)))
+        .collect::<Result<Vec<_>, MatrixCoreError>>()?;
     let unbans = request
         .unban
         .iter()
-        .map(|user_id| {
-            <&UserId>::try_from(user_id.as_str())
-                .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))
-        })
+        .map(|unbanned| user_id(unbanned))
         .collect::<Result<Vec<_>, _>>()?;
     let UpdateRoomSettingsRequest {
         room_id: _,
         topic_by_operators,
         moderated,
+        member_roles: _,
         invite_only,
         name,
         topic,
@@ -256,6 +332,7 @@ pub(crate) async fn update_room_settings(
     } = request;
     if topic_by_operators.is_none()
         && moderated.is_none()
+        && member_roles.is_empty()
         && invite_only.is_none()
         && name.is_none()
         && topic.is_none()
@@ -267,10 +344,16 @@ pub(crate) async fn update_room_settings(
     let room = joined_room_by_id(client, room_id.as_str())?;
     let failed = |part: &str, err: String| MatrixCoreError::new(format!("failed to {part}: {err}"));
 
-    if topic_by_operators.is_some() || moderated.is_some() {
-        write_power_levels(client, &room, *topic_by_operators, *moderated)
-            .await
-            .map_err(|err| failed("set the room's permissions", err))?;
+    if topic_by_operators.is_some() || moderated.is_some() || !member_roles.is_empty() {
+        write_power_levels(
+            client,
+            &room,
+            *topic_by_operators,
+            *moderated,
+            &member_roles,
+        )
+        .await
+        .map_err(|err| failed("set the room's power levels", err))?;
     }
     if let Some(invite_only) = invite_only {
         let rule = if *invite_only {
@@ -312,17 +395,55 @@ pub(crate) async fn update_room_settings(
     Ok(())
 }
 
+/// The room's power levels as the server has them. The store's lag until
+/// a sync echoes the last write.
+async fn fetch_power_levels(
+    client: &Client,
+    room_id: &RoomId,
+) -> Result<RoomPowerLevelsEventContent, String> {
+    let request = get_state_event_for_key::v3::Request::new(
+        room_id.to_owned(),
+        StateEventType::RoomPowerLevels,
+        String::new(),
+    );
+    client
+        .send(request)
+        .await
+        .map_err(|err| err.to_string())?
+        .into_content()
+        .deserialize_as_unchecked::<RoomPowerLevelsEventContent>()
+        .map_err(|err| err.to_string())
+}
+
+/// Edits the room's power levels in one write: the modes, then the
+/// members' roles against the edited levels (`+m+v Bob` voices Bob in the
+/// moderated room). Every change or none: a refused voice sends nothing,
+/// and levels that come out unchanged are not written.
+///
+/// Not the SDK's `Room::update_power_levels`: it edits the store's power
+/// levels, which only learn a write from the sync's echo, so a second
+/// change before the echo reverted the first. This reads the server's;
+/// mirx's own edits of a room's power levels run one at a time (its
+/// `Room` lane), but another client's change between the read and the
+/// write is still lost (state events have no compare-and-swap).
 async fn write_power_levels(
     client: &Client,
     room: &Room,
     topic_by_operators: Option<bool>,
     moderated: Option<bool>,
+    member_roles: &[(&UserId, MemberPowerRole)],
 ) -> Result<(), String> {
-    let mut levels = fetch_power_levels(client, room.room_id())
-        .await
-        .map_err(|err| err.to_string())?;
+    let mut levels = fetch_power_levels(client, room.room_id()).await?;
     let before = serde_json::to_value(&levels).map_err(|err| err.to_string())?;
     edit_power_levels(&mut levels, topic_by_operators, moderated);
+    for &(user_id, role) in member_roles {
+        let level = member_power_role_level(&levels, role)?;
+        if level == levels.users_default {
+            levels.users.remove(user_id);
+        } else {
+            levels.users.insert(user_id.to_owned(), level);
+        }
+    }
     if serde_json::to_value(&levels).map_err(|err| err.to_string())? == before {
         return Ok(());
     }
@@ -342,7 +463,7 @@ mod tests {
     use wiremock::{Mock, ResponseTemplate};
 
     use super::*;
-    use crate::api::RoomJoinRule;
+    use crate::api::{MemberPowerLevelChange, RoomJoinRule};
 
     const ROOM: &str = "!room:example.org";
     /// The room's ID in a request path, whether the SDK encodes it or not.
@@ -751,6 +872,7 @@ mod tests {
             room_id: room_id.to_owned(),
             topic_by_operators: None,
             moderated: None,
+            member_roles: Vec::new(),
             invite_only: None,
             name: None,
             topic: None,
@@ -990,7 +1112,17 @@ mod tests {
                 ),
                 (
                     UpdateRoomSettingsRequest {
-                        name: Some("Ops".to_owned()),
+                        member_roles: roles(&[
+                            ("@carol:example.org", MemberPowerRole::Moderator),
+                            ("carol", MemberPowerRole::Voiced),
+                        ]),
+                        ..request(ROOM)
+                    },
+                    "invalid Matrix user id: leading sigil is incorrect or missing",
+                ),
+                (
+                    UpdateRoomSettingsRequest {
+                        member_roles: roles(&[("@carol:example.org", MemberPowerRole::Voiced)]),
                         ..request("!other:example.org")
                     },
                     "joined room not found: !other:example.org",
@@ -1000,6 +1132,247 @@ mod tests {
                     update_against(serde_json::json!({}), false, request).await;
                 assert_eq!(result.expect_err("refused").to_string(), expected);
                 assert!(requests.is_empty(), "{requests:?}");
+            }
+        });
+    }
+
+    fn roles(roles: &[(&str, MemberPowerRole)]) -> Vec<MemberPowerLevelChange> {
+        roles
+            .iter()
+            .map(|(user_id, role)| MemberPowerLevelChange {
+                user_id: (*user_id).to_owned(),
+                role: *role,
+            })
+            .collect()
+    }
+
+    /// Every power-levels PUT body of `requests`.
+    fn power_levels_puts(
+        requests: &[(String, String, serde_json::Value)],
+    ) -> Vec<serde_json::Value> {
+        requests
+            .iter()
+            .filter(|(method, path, _)| {
+                method == "PUT" && path == "/rooms/ROOM/state/m.room.power_levels/"
+            })
+            .map(|(_, _, body)| body.clone())
+            .collect()
+    }
+
+    #[test]
+    fn update_room_settings_writes_modes_and_member_roles_in_one_power_levels_write() {
+        runtime().block_on(async {
+            let (result, requests) = update_against(
+                serde_json::json!({ "users": { OWN: 100 } }),
+                false,
+                UpdateRoomSettingsRequest {
+                    moderated: Some(true),
+                    member_roles: roles(&[
+                        ("@bob:example.org", MemberPowerRole::Voiced),
+                        ("@carol:example.org", MemberPowerRole::Moderator),
+                    ]),
+                    ..request(ROOM)
+                },
+            )
+            .await;
+            result.expect("update");
+            assert_eq!(
+                requests
+                    .iter()
+                    .map(|(method, path, _)| format!("{method} {path}"))
+                    .collect::<Vec<_>>(),
+                [
+                    "GET /rooms/ROOM/state/m.room.power_levels/",
+                    "PUT /rooms/ROOM/state/m.room.power_levels/",
+                ]
+            );
+            let body = &requests[1].2;
+            assert_eq!(body["events_default"], serde_json::json!(1));
+            assert_eq!(
+                body["users"],
+                serde_json::json!({ OWN: 100, "@bob:example.org": 1, "@carol:example.org": 50 })
+            );
+        });
+    }
+
+    /// The roles take the levels the modes leave: a room where voice is
+    /// impossible (messages need 50) gets one by unmoderating it.
+    #[test]
+    fn unmoderating_and_voicing_together_uses_the_unmoderated_voice_level() {
+        runtime().block_on(async {
+            let (result, requests) = update_against(
+                serde_json::json!({ "users": { OWN: 100 }, "events_default": 50 }),
+                false,
+                UpdateRoomSettingsRequest {
+                    moderated: Some(false),
+                    member_roles: roles(&[("@bob:example.org", MemberPowerRole::Voiced)]),
+                    ..request(ROOM)
+                },
+            )
+            .await;
+            result.expect("update");
+            let puts = power_levels_puts(&requests);
+            assert_eq!(puts.len(), 1, "{requests:?}");
+            // Serializing drops the default 0.
+            assert_eq!(puts[0].get("events_default"), None);
+            assert_eq!(
+                puts[0]["users"],
+                serde_json::json!({ OWN: 100, "@bob:example.org": 1 })
+            );
+        });
+    }
+
+    /// The store's power levels lag behind the server's until a sync
+    /// echoes the last write; an edit starts from the server's (the store
+    /// has none here).
+    #[test]
+    fn member_roles_edit_the_servers_power_levels() {
+        runtime().block_on(async {
+            let (result, requests) = update_against(
+                serde_json::json!({ "users": { OWN: 100, "@bob:example.org": 50 } }),
+                false,
+                UpdateRoomSettingsRequest {
+                    member_roles: roles(&[("@target:example.org", MemberPowerRole::Moderator)]),
+                    ..request(ROOM)
+                },
+            )
+            .await;
+            result.expect("update");
+            assert_eq!(
+                power_levels_puts(&requests)
+                    .iter()
+                    .map(|body| body["users"].clone())
+                    .collect::<Vec<_>>(),
+                [serde_json::json!({
+                    OWN: 100,
+                    "@bob:example.org": 50,
+                    "@target:example.org": 50,
+                })]
+            );
+        });
+    }
+
+    #[test]
+    fn member_roles_map_irc_roles_to_room_levels() {
+        runtime().block_on(async {
+            let base = serde_json::json!({
+                "users_default": 0,
+                "events_default": 0,
+                "users": { OWN: 100, "@target:example.org": 25 },
+            });
+            let with = |extra: serde_json::Value| {
+                let mut content = base.clone();
+                content
+                    .as_object_mut()
+                    .expect("power levels object")
+                    .extend(extra.as_object().expect("extra object").clone());
+                content
+            };
+
+            for (content, role, target_level) in [
+                (base.clone(), MemberPowerRole::Moderator, Some(50)),
+                (base.clone(), MemberPowerRole::Voiced, Some(1)),
+                (
+                    with(serde_json::json!({ "events": { "m.room.message": 10 } })),
+                    MemberPowerRole::Voiced,
+                    Some(10),
+                ),
+                (
+                    with(serde_json::json!({ "events_default": 20 })),
+                    MemberPowerRole::Voiced,
+                    Some(20),
+                ),
+                (
+                    with(serde_json::json!({ "users_default": 5 })),
+                    MemberPowerRole::Voiced,
+                    Some(6),
+                ),
+                (base.clone(), MemberPowerRole::Default, None),
+            ] {
+                let (result, requests) = update_against(
+                    content,
+                    false,
+                    UpdateRoomSettingsRequest {
+                        member_roles: roles(&[("@target:example.org", role)]),
+                        ..request(ROOM)
+                    },
+                )
+                .await;
+                result.expect("update");
+                let mut expected = serde_json::json!({ OWN: 100 });
+                if let Some(level) = target_level {
+                    expected["@target:example.org"] = serde_json::json!(level);
+                }
+                assert_eq!(
+                    power_levels_puts(&requests)
+                        .iter()
+                        .map(|body| body["users"].clone())
+                        .collect::<Vec<_>>(),
+                    [expected],
+                    "{role:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_role_the_server_already_has_writes_nothing() {
+        runtime().block_on(async {
+            let (result, requests) = update_against(
+                serde_json::json!({ "users": { OWN: 100, "@bob:example.org": 1 } }),
+                false,
+                UpdateRoomSettingsRequest {
+                    member_roles: roles(&[("@bob:example.org", MemberPowerRole::Voiced)]),
+                    ..request(ROOM)
+                },
+            )
+            .await;
+            result.expect("update");
+            assert!(power_levels_puts(&requests).is_empty(), "{requests:?}");
+        });
+    }
+
+    #[test]
+    fn member_roles_refuse_voice_when_messages_need_moderator() {
+        runtime().block_on(async {
+            for content in [
+                serde_json::json!({
+                    "events": { "m.room.message": 50 },
+                    "users": { OWN: 100 },
+                }),
+                serde_json::json!({ "users_default": 49, "users": { OWN: 100 } }),
+            ] {
+                // With a change that could be made, and a later part, the
+                // refusal still sends nothing.
+                let (result, requests) = update_against(
+                    content,
+                    false,
+                    UpdateRoomSettingsRequest {
+                        topic_by_operators: Some(false),
+                        member_roles: roles(&[
+                            ("@other:example.org", MemberPowerRole::Moderator),
+                            ("@target:example.org", MemberPowerRole::Voiced),
+                        ]),
+                        name: Some("Ops".to_owned()),
+                        ..request(ROOM)
+                    },
+                )
+                .await;
+                let err = result.expect_err("no voice level below moderator");
+                assert!(
+                    err.to_string().starts_with(
+                        "failed to set the room's power levels: \
+                         room has no voice level below moderator"
+                    ),
+                    "{err}"
+                );
+                assert_eq!(
+                    requests
+                        .iter()
+                        .map(|(method, path, _)| format!("{method} {path}"))
+                        .collect::<Vec<_>>(),
+                    ["GET /rooms/ROOM/state/m.room.power_levels/"]
+                );
             }
         });
     }

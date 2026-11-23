@@ -36,9 +36,9 @@ use mirx_testkit::{
     RoomVerificationRequestActivity, RoomVideoActivity, RoomVideoInfo, SendFileArgs, SessionAuth,
     SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession, SubmittedDirectRoomCommand,
     SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
-    SubmittedMessageCommand, SubmittedPowerLevelChange, SubmittedPowerLevelCommand,
-    SubmittedProfileCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
-    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
+    SubmittedMessageCommand, SubmittedPowerLevelChange, SubmittedProfileCommand,
+    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
+    SubmittedReplyThreadTarget, SubmittedRoomSettingsCommand, SubmittedRoomTopicCommand,
     SubmittedSetupRecoveryCommand, SubmittedUserCommand, SwitchbarItem, SwitchbarState,
     TestkitError, UiActiveTimeline, UiActivityColors, UiColorItem, UiColors, UiComposeTarget,
     UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState,
@@ -705,7 +705,6 @@ fn data_models_round_trip_through_json() {
         }),
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
-        submitted_power_level_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
         submitted_away_commands: Vec::new(),
@@ -4809,7 +4808,6 @@ fn model_last_activity_round_trips_through_json() {
         last_verification: None,
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
-        submitted_power_level_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
         submitted_away_commands: Vec::new(),
@@ -4897,7 +4895,6 @@ fn model_submitted_membership_commands_round_trip_through_json() {
             },
         ],
         submitted_member_moderation_commands: Vec::new(),
-        submitted_power_level_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
         submitted_away_commands: Vec::new(),
@@ -4988,40 +4985,47 @@ fn submitted_power_level_and_profile_commands_have_strict_json_contracts() {
         (MemberPowerRole::Voiced, "voiced"),
         (MemberPowerRole::Default, "default"),
     ] {
-        let command = SubmittedPowerLevelCommand {
+        let command = SubmittedRoomSettingsCommand::Update {
             room_id: "!ops:example.org".to_owned(),
-            changes: vec![SubmittedPowerLevelChange {
+            topic_by_operators: None,
+            moderated: Some(true),
+            member_roles: vec![SubmittedPowerLevelChange {
                 user_id: "@bob:example.org".to_owned(),
                 role,
             }],
+            invite_only: None,
+            name: None,
+            topic: None,
+            listed_in_directory: None,
+            unban: Vec::new(),
         };
         let value = serde_json::json!({
+            "action": "update",
             "room_id": "!ops:example.org",
-            "changes": [{ "user_id": "@bob:example.org", "role": wire }]
+            "topic_by_operators": null,
+            "moderated": true,
+            "member_roles": [{ "user_id": "@bob:example.org", "role": wire }],
+            "invite_only": null,
+            "name": null,
+            "topic": null,
+            "listed_in_directory": null,
+            "unban": [],
         });
         assert_eq!(serde_json::to_value(&command).unwrap(), value);
         assert_eq!(
-            serde_json::from_value::<SubmittedPowerLevelCommand>(value).unwrap(),
+            serde_json::from_value::<SubmittedRoomSettingsCommand>(value).unwrap(),
             command
         );
     }
     assert!(
-        serde_json::from_value::<SubmittedPowerLevelCommand>(serde_json::json!({
-            "room_id": "!ops:example.org",
-            "changes": [{ "user_id": "@bob:example.org", "role": "admin" }]
+        serde_json::from_value::<SubmittedPowerLevelChange>(serde_json::json!({
+            "user_id": "@bob:example.org", "role": "admin"
         }))
         .is_err()
     );
     assert!(
-        serde_json::from_value::<SubmittedPowerLevelCommand>(serde_json::json!({
-            "room_id": "!ops:example.org",
-            "changes": [{ "user_id": "@bob:example.org", "role": "voiced", "extra": 1 }]
-        }))
-        .is_err()
-    );
-    assert!(
-        serde_json::from_value::<SubmittedPowerLevelCommand>(serde_json::json!({
-            "room_id": "!ops:example.org", "changes": [], "extra": 1
+        serde_json::from_value::<SubmittedPowerLevelChange>(serde_json::json!({
+            "user_id": "@bob:example.org", "role": "voiced", "extra": 1
         }))
         .is_err()
     );
@@ -5144,7 +5148,6 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
             target: "#ops:example.org".to_owned(),
         }],
         submitted_member_moderation_commands: Vec::new(),
-        submitted_power_level_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
         submitted_away_commands: Vec::new(),
@@ -5249,7 +5252,6 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
             target: "#ops:example.org".to_owned(),
         }],
         submitted_member_moderation_commands: Vec::new(),
-        submitted_power_level_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
         submitted_away_commands: Vec::new(),
@@ -5366,7 +5368,6 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
         last_verification: None,
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
-        submitted_power_level_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
         submitted_away_commands: Vec::new(),
@@ -5462,7 +5463,6 @@ fn model_submitted_message_commands_round_trip_with_their_styles() {
         last_verification: None,
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
-        submitted_power_level_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
         submitted_away_commands: Vec::new(),
@@ -5560,7 +5560,6 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
         last_verification: None,
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
-        submitted_power_level_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
         submitted_away_commands: Vec::new(),
@@ -5663,7 +5662,6 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
         last_verification: None,
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
-        submitted_power_level_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
         submitted_away_commands: Vec::new(),
@@ -5777,7 +5775,6 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
         last_verification: None,
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
-        submitted_power_level_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
         submitted_away_commands: Vec::new(),
@@ -5918,7 +5915,6 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
             last_verification: None,
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
-            submitted_power_level_commands: Vec::new(),
             submitted_room_settings_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),
@@ -6023,7 +6019,6 @@ fn model_submitted_history_commands_round_trip_through_json() {
         last_verification: None,
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
-        submitted_power_level_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
         submitted_away_commands: Vec::new(),
@@ -6154,7 +6149,6 @@ fn model_submitted_history_commands_default_to_empty_when_omitted() {
             last_verification: None,
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
-            submitted_power_level_commands: Vec::new(),
             submitted_room_settings_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
             submitted_away_commands: Vec::new(),

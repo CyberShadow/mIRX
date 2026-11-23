@@ -25,8 +25,8 @@ use crate::api::{
     RenameDeviceRequest, RequestVerificationRequest, ResetE2eeIdentityRequest,
     RestoreSessionRequest, RetryDecryptionRequest, RoomJoined, SendFileRequest, SendMessageRequest,
     SendReactionRequest, SetDisplayNameRequest, SetReadMarkerRequest,
-    SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
-    SetTypingRequest, SetupE2eeRecoveryRequest, SignOutDeviceRequest, UnbanRoomMemberRequest,
+    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetTypingRequest,
+    SetupE2eeRecoveryRequest, SignOutDeviceRequest, UnbanRoomMemberRequest,
     UpdateRoomSettingsRequest, VerificationFlowId,
 };
 use crate::matrix::{self, AwayFlag, BackupServerStatusMode};
@@ -181,8 +181,8 @@ pub(super) fn route(command: Command) -> Route {
             "fetch room settings requires an authenticated session",
             |ctx| fetch_room_settings(ctx, room_id),
         ),
-        // Read-modify-write of `m.room.power_levels`, like
-        // `SetRoomMemberPowerLevel`.
+        // Read-modify-write of `m.room.power_levels` (modes and ranks):
+        // the room's lane runs mirx's own writes one at a time.
         Command::UpdateRoomSettings(request) => in_room(
             Op::UpdateRoomSettings,
             request.room_id.clone(),
@@ -218,13 +218,6 @@ pub(super) fn route(command: Command) -> Route {
             request.room_id.clone(),
             "invite room member requires an authenticated session",
             |ctx| invite_room_member(ctx, request),
-        ),
-        // Read-modify-write of `m.room.power_levels`.
-        Command::SetRoomMemberPowerLevel(request) => in_room(
-            Op::SetRoomMemberPowerLevel,
-            request.room_id.clone(),
-            "set room member power level requires an authenticated session",
-            |ctx| set_room_member_power_level(ctx, request),
         ),
         // After the room's queued sends and writes.
         Command::LeaveRoom(request) => in_room(
@@ -686,35 +679,6 @@ async fn invite_room_member(ctx: JobCtx, request: InviteRoomMemberRequest) -> Fo
         matrix::emit_joined_room_members_snapshot(client, events, &request.room_id).await
     {
         emit_room_matrix_error(events, Operation::InviteRoomMember, &request.room_id, err);
-    }
-
-    Followup::Done
-}
-
-async fn set_room_member_power_level(
-    ctx: JobCtx,
-    request: SetRoomMemberPowerLevelRequest,
-) -> Followup {
-    let JobCtx { client, events, .. } = &ctx;
-    if let Err(err) = matrix::set_room_member_power_level(client, &request).await {
-        emit_room_matrix_error(
-            events,
-            Operation::SetRoomMemberPowerLevel,
-            &request.room_id,
-            err,
-        );
-        return Followup::Done;
-    }
-
-    if let Err(err) =
-        matrix::emit_joined_room_members_snapshot(client, events, &request.room_id).await
-    {
-        emit_room_matrix_error(
-            events,
-            Operation::SetRoomMemberPowerLevel,
-            &request.room_id,
-            err,
-        );
     }
 
     Followup::Done

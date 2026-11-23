@@ -32,7 +32,6 @@ pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> 
         | Operation::BanRoomMember
         | Operation::UnbanRoomMember
         | Operation::InviteRoomMember
-        | Operation::SetRoomMemberPowerLevel
         | Operation::SetRoomTopic
         | Operation::UpdateRoomSettings
         | Operation::SetRoomNotificationMode
@@ -112,7 +111,7 @@ mod tests {
         }
     }
 
-    const ROOM_OPERATIONS: [Operation; 17] = [
+    const ROOM_OPERATIONS: [Operation; 16] = [
         Operation::AcceptRoomInvite,
         Operation::RejectRoomInvite,
         Operation::LeaveRoom,
@@ -120,7 +119,6 @@ mod tests {
         Operation::BanRoomMember,
         Operation::UnbanRoomMember,
         Operation::InviteRoomMember,
-        Operation::SetRoomMemberPowerLevel,
         Operation::SetRoomTopic,
         Operation::UpdateRoomSettings,
         Operation::SetRoomNotificationMode,

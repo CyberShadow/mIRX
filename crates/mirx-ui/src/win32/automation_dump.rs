@@ -798,33 +798,6 @@ fn dump_submitted_member_moderation_command(
     }
 }
 
-fn submitted_power_level_commands_from_state(
-    state: &WindowState,
-) -> Vec<DumpSubmittedPowerLevelCommand> {
-    state
-        .recorded_commands
-        .iter()
-        .filter_map(|command| match command {
-            Command::SetRoomMemberPowerLevel(request) => Some(DumpSubmittedPowerLevelCommand {
-                room_id: request.room_id.clone(),
-                changes: request
-                    .changes
-                    .iter()
-                    .map(|change| DumpPowerLevelChange {
-                        user_id: change.user_id.clone(),
-                        role: match change.role {
-                            MemberPowerRole::Moderator => DumpMemberPowerRole::Moderator,
-                            MemberPowerRole::Voiced => DumpMemberPowerRole::Voiced,
-                            MemberPowerRole::Default => DumpMemberPowerRole::Default,
-                        },
-                    })
-                    .collect(),
-            }),
-            _ => None,
-        })
-        .collect()
-}
-
 fn submitted_room_settings_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedRoomSettingsCommand> {
@@ -840,6 +813,7 @@ fn submitted_room_settings_commands_from_state(
                     room_id,
                     topic_by_operators,
                     moderated,
+                    member_roles,
                     invite_only,
                     name,
                     topic,
@@ -850,6 +824,17 @@ fn submitted_room_settings_commands_from_state(
                     room_id,
                     topic_by_operators,
                     moderated,
+                    member_roles: member_roles
+                        .into_iter()
+                        .map(|change| DumpPowerLevelChange {
+                            user_id: change.user_id,
+                            role: match change.role {
+                                MemberPowerRole::Moderator => DumpMemberPowerRole::Moderator,
+                                MemberPowerRole::Voiced => DumpMemberPowerRole::Voiced,
+                                MemberPowerRole::Default => DumpMemberPowerRole::Default,
+                            },
+                        })
+                        .collect(),
                     invite_only,
                     name,
                     topic,
@@ -1350,7 +1335,6 @@ pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_member_moderation_commands: submitted_member_moderation_commands_from_state(
             state,
         ),
-        submitted_power_level_commands: submitted_power_level_commands_from_state(state),
         submitted_room_settings_commands: submitted_room_settings_commands_from_state(state),
         submitted_profile_commands: submitted_profile_commands_from_state(state),
         submitted_away_commands: submitted_away_commands_from_state(state),

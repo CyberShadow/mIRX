@@ -406,9 +406,8 @@ pub struct Model {
     pub submitted_membership_commands: Vec<SubmittedMembershipCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_member_moderation_commands: Vec<SubmittedMemberModerationCommand>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub submitted_power_level_commands: Vec<SubmittedPowerLevelCommand>,
-    /// Channel Central's reads and changes, in order.
+    /// Channel Central's reads and changes, `/mode` and the rank changes
+    /// (`/op` etc.), in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_room_settings_commands: Vec<SubmittedRoomSettingsCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -511,20 +510,13 @@ pub enum SubmittedRoomSettingsCommand {
         room_id: String,
         topic_by_operators: Option<bool>,
         moderated: Option<bool>,
+        member_roles: Vec<SubmittedPowerLevelChange>,
         invite_only: Option<bool>,
         name: Option<String>,
         topic: Option<String>,
         listed_in_directory: Option<bool>,
         unban: Vec<String>,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SubmittedPowerLevelCommand {
-    pub room_id: String,
-    /// Made together, in one write.
-    pub changes: Vec<SubmittedPowerLevelChange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

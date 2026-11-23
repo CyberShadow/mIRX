@@ -22,9 +22,9 @@ use mirx_core::{
     RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
     RoomSummary, RoomTagSummary, RoomTyping, RoomUserProfile, SendFileRequest, SendMessageRequest,
     SendReactionRequest, SessionAuth, SetDisplayNameRequest, SetReadMarkerRequest,
-    SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
-    SetTypingRequest, SetupE2eeRecoveryRequest, SignOutDeviceRequest, SpaceChildSummary,
-    StoredSession, SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity,
+    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetTypingRequest,
+    SetupE2eeRecoveryRequest, SignOutDeviceRequest, SpaceChildSummary, StoredSession,
+    SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity,
     UpdateRoomSettingsRequest, UserDevices, UserIdentityState, UserPresence, UserProfile,
     VerificationDecimals, VerificationDirection, VerificationEmoji, VerificationFlowId,
     VerificationRequest, VerificationState, VerificationStateEvent, start, validate_highlight_word,
@@ -131,7 +131,6 @@ fn error_room_id(command: &Command) -> Option<&str> {
         Command::BanRoomMember(request) => Some(&request.room_id),
         Command::UnbanRoomMember(request) => Some(&request.room_id),
         Command::InviteRoomMember(request) => Some(&request.room_id),
-        Command::SetRoomMemberPowerLevel(request) => Some(&request.room_id),
         Command::RejectRoomInvite(request) => Some(&request.room_id),
         Command::SetRoomTopic(request) => Some(&request.room_id),
         Command::FetchRoomSettings(room_id) => Some(room_id),
@@ -545,21 +544,6 @@ fn invite_room_member_before_login_emits_invite_room_member_error() {
 }
 
 #[test]
-fn set_room_member_power_level_before_login_emits_power_level_error() {
-    assert_invalid_authenticated_command(
-        Command::SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest {
-            room_id: "!ops:example.org".to_owned(),
-            changes: vec![MemberPowerLevelChange {
-                user_id: "@bob:example.org".to_owned(),
-                role: MemberPowerRole::Moderator,
-            }],
-        }),
-        Operation::SetRoomMemberPowerLevel,
-        "set room member power level requires an authenticated session",
-    );
-}
-
-#[test]
 fn set_display_name_before_login_emits_set_display_name_error() {
     assert_invalid_authenticated_command(
         Command::SetDisplayName(SetDisplayNameRequest {
@@ -869,7 +853,11 @@ fn room_settings_before_login_emit_their_errors() {
         Command::UpdateRoomSettings(UpdateRoomSettingsRequest {
             room_id: "!ops:example.org".to_owned(),
             topic_by_operators: None,
-            moderated: Some(true),
+            moderated: None,
+            member_roles: vec![MemberPowerLevelChange {
+                user_id: "@bob:example.org".to_owned(),
+                role: MemberPowerRole::Moderator,
+            }],
             invite_only: None,
             name: None,
             topic: None,
@@ -1436,44 +1424,45 @@ fn unban_and_invite_requests_round_trip_through_serde() {
 }
 
 #[test]
-fn set_room_member_power_level_requests_round_trip_every_role() {
+fn member_roles_in_room_settings_requests_round_trip_every_role() {
     for (role, json) in [
-        (
-            MemberPowerRole::Moderator,
-            r#"{"room_id":"!ops:example.org","changes":[{"user_id":"@bob:example.org","role":"moderator"}]}"#,
-        ),
-        (
-            MemberPowerRole::Voiced,
-            r#"{"room_id":"!ops:example.org","changes":[{"user_id":"@bob:example.org","role":"voiced"}]}"#,
-        ),
-        (
-            MemberPowerRole::Default,
-            r#"{"room_id":"!ops:example.org","changes":[{"user_id":"@bob:example.org","role":"default"}]}"#,
-        ),
+        (MemberPowerRole::Moderator, "moderator"),
+        (MemberPowerRole::Voiced, "voiced"),
+        (MemberPowerRole::Default, "default"),
     ] {
-        let request = SetRoomMemberPowerLevelRequest {
+        let json = format!(
+            r#"{{"room_id":"!ops:example.org","topic_by_operators":null,"moderated":null,"member_roles":[{{"user_id":"@bob:example.org","role":"{json}"}}],"invite_only":null,"name":null,"topic":null,"listed_in_directory":null,"unban":[]}}"#
+        );
+        let request = UpdateRoomSettingsRequest {
             room_id: "!ops:example.org".to_owned(),
-            changes: vec![MemberPowerLevelChange {
+            topic_by_operators: None,
+            moderated: None,
+            member_roles: vec![MemberPowerLevelChange {
                 user_id: "@bob:example.org".to_owned(),
                 role,
             }],
+            invite_only: None,
+            name: None,
+            topic: None,
+            listed_in_directory: None,
+            unban: Vec::new(),
         };
         assert_eq!(
-            serde_json::to_string(&request).expect("serialize power level request"),
+            serde_json::to_string(&request).expect("serialize room settings request"),
             json
         );
         assert_eq!(
-            serde_json::from_str::<SetRoomMemberPowerLevelRequest>(json)
-                .expect("deserialize power level request"),
+            serde_json::from_str::<UpdateRoomSettingsRequest>(&json)
+                .expect("deserialize room settings request"),
             request
         );
     }
     assert!(
-        serde_json::from_str::<SetRoomMemberPowerLevelRequest>(
-            r#"{"room_id":"!ops:example.org","changes":[{"user_id":"@bob:example.org","role":"admin"}]}"#
+        serde_json::from_str::<MemberPowerLevelChange>(
+            r#"{"user_id":"@bob:example.org","role":"admin"}"#
         )
         .is_err(),
-        "power level request must reject unknown roles"
+        "a member role change must reject unknown roles"
     );
 }
 
@@ -1525,15 +1514,8 @@ fn member_moderation_requests_reject_unknown_fields() {
         "invite request carries no reason"
     );
     assert!(
-        serde_json::from_str::<SetRoomMemberPowerLevelRequest>(
-            r#"{"room_id":"!ops:example.org","changes":[],"level":1}"#
-        )
-        .is_err(),
-        "power level request must reject unknown fields"
-    );
-    assert!(
-        serde_json::from_str::<SetRoomMemberPowerLevelRequest>(
-            r#"{"room_id":"!ops:example.org","changes":[{"user_id":"@alice:example.org","role":"voiced","level":1}]}"#
+        serde_json::from_str::<MemberPowerLevelChange>(
+            r#"{"user_id":"@alice:example.org","role":"voiced","level":1}"#
         )
         .is_err(),
         "power level change must reject unknown fields"
@@ -1554,10 +1536,6 @@ fn member_moderation_operations_round_trip_through_serde() {
         (Operation::BanRoomMember, r#""BanRoomMember""#),
         (Operation::UnbanRoomMember, r#""UnbanRoomMember""#),
         (Operation::InviteRoomMember, r#""InviteRoomMember""#),
-        (
-            Operation::SetRoomMemberPowerLevel,
-            r#""SetRoomMemberPowerLevel""#,
-        ),
         (Operation::SetDisplayName, r#""SetDisplayName""#),
     ] {
         assert_eq!(
