@@ -22118,7 +22118,7 @@ fn automation_driver_invited_rooms_render_in_navigation_model_and_ui_state()
     assert_eq!(invite_view.title, "Lobby [invite]");
     assert!(view_contains(
         invite_view,
-        "* You are invited to join Lobby"
+        "* Bob (@bob:example) invites you to join Lobby"
     ));
     assert!(view_contains(
         invite_view,
@@ -22270,7 +22270,7 @@ fn automation_driver_invited_room_list_fixture_renders_expected_invite_state()
     assert_eq!(invite_view.title, "Lobby [invite]");
     assert!(view_contains(
         invite_view,
-        "* You are invited to join Lobby"
+        "* Bob (@bob:example) invites you to join Lobby"
     ));
     assert!(view_contains(
         invite_view,
@@ -22332,7 +22332,7 @@ fn automation_driver_invited_direct_room_fixture_renders_expected_direct_invite_
     assert!(invite_view.title.contains("Daria [invite]"));
     assert!(view_contains(
         invite_view,
-        "* You are invited to join Daria"
+        "* Daria (@daria:example) invites you to a query"
     ));
     assert!(view_contains(
         invite_view,

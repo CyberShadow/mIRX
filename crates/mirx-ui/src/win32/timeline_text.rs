@@ -9,7 +9,7 @@
 use std::ops::Range;
 
 use mirx_core::{
-    RoomJoinRule, RoomMemberChange, RoomMemberRank, RoomMessagePresentationKind,
+    RoomInviteSummary, RoomJoinRule, RoomMemberChange, RoomMemberRank, RoomMessagePresentationKind,
     RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomUserProfile,
 };
 
@@ -127,8 +127,15 @@ pub(super) fn topic_is_text(topic: &str) -> String {
 
 pub(super) const ENCRYPTED_ROOM_TEXT: &str = "Messages in this room are end-to-end encrypted";
 
-pub(super) fn invited_text(display_name: &str) -> String {
-    format!("You are invited to join {display_name}")
+/// mIRC's `nick (user@host) invites you to join #chan`; a direct room's
+/// invite is to a query, whatever the room is called.
+pub(super) fn invited_text(invite: &RoomInviteSummary, display_name: &str) -> String {
+    let inviter = nick_with_user_id(&invite.inviter);
+    if invite.direct {
+        format!("{inviter} invites you to a query")
+    } else {
+        format!("{inviter} invites you to join {display_name}")
+    }
 }
 
 pub(super) const INVITE_RESPONSE_TEXT: &str = "Use /accept or /reject to respond.";
@@ -405,9 +412,26 @@ mod tests {
             context_line(&topic_is_text("it's release day")),
             "* Topic is 'it's release day'"
         );
+    }
+
+    #[test]
+    fn an_invite_line_names_its_inviter_as_mirc_does() {
+        let invite = |nick: Option<&str>, direct| RoomInviteSummary {
+            inviter: profile("@bob:example.org", nick, false),
+            direct,
+        };
         assert_eq!(
-            context_line(&invited_text("Lobby")),
-            "* You are invited to join Lobby"
+            context_line(&invited_text(&invite(Some("Bob"), false), "Lobby")),
+            "* Bob (@bob:example.org) invites you to join Lobby"
+        );
+        assert_eq!(
+            context_line(&invited_text(&invite(Some("Bob"), true), "Bob")),
+            "* Bob (@bob:example.org) invites you to a query"
+        );
+        // The invite carries no member event for its sender.
+        assert_eq!(
+            context_line(&invited_text(&invite(None, false), "Lobby")),
+            "* @bob:example.org invites you to join Lobby"
         );
     }
 

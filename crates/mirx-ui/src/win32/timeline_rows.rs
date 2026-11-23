@@ -365,7 +365,12 @@ fn build_invite_timeline_rows(room: &RoomSummary) -> Vec<TimelineRow> {
         room_context_row(
             invite.clone(),
             TimelineSyntheticRowLabel::Invite,
-            &invited_text(&room.display_name),
+            &invited_text(
+                room.invite
+                    .as_ref()
+                    .expect("an invite's summary names its invite"),
+                &room.display_name,
+            ),
         ),
         room_context_row(
             invite,

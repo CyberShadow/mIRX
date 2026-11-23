@@ -601,7 +601,7 @@ configure_case_expectations() {
         --expect-room-membership '!invite:example::invite'
       )
       room_view_expect_args=(
-        --expect-room-view '!invite:example::* You are invited to join Lobby'
+        --expect-room-view '!invite:example::* Bob (@bob:example) invites you to join Lobby'
         --expect-room-view '!invite:example::Use /accept or /reject to respond.'
       )
       status_bar_expect_args=(
@@ -639,7 +639,7 @@ configure_case_expectations() {
         --expect-direct-room '!invite-direct:example'
       )
       room_view_expect_args=(
-        --expect-room-view '!invite-direct:example::* You are invited to join Daria'
+        --expect-room-view '!invite-direct:example::* Daria (@daria:example) invites you to a query'
         --expect-room-view '!invite-direct:example::Use /accept or /reject to respond.'
       )
       status_bar_expect_args=(
