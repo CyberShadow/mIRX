@@ -1722,6 +1722,10 @@ pub struct PublicRoom {
 #[serde(deny_unknown_fields)]
 pub struct RoomJoined {
     pub room_id: String,
+    /// The alias the join named, as given; `None` when it named the room
+    /// ID, or the room was created or an invite accepted. The room answers
+    /// to it before its first sync brings its published aliases.
+    pub alias: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -298,12 +298,12 @@ async fn mock_join(mock_server: &MatrixMockServer, target: &str, room_id: &str) 
 }
 
 /// Runs `command` against a ready client and asserts that the room
-/// snapshot listing `room_id` comes first, then `RoomJoined`.
+/// snapshot listing the joined room comes first, then `joined`.
 async fn assert_join_emits_snapshot_then_room_joined(
     mock_server: &MatrixMockServer,
     client: matrix_sdk::Client,
     command: Command,
-    room_id: &str,
+    joined: RoomJoined,
 ) {
     // The snapshot reads each room's encryption state.
     mock_server
@@ -317,17 +317,12 @@ async fn assert_join_emits_snapshot_then_room_joined(
 
     let events = drain_events(&event_rx);
     match events.as_slice() {
-        [Event::SyncedRooms(rooms), Event::RoomJoined(joined)] => {
+        [Event::SyncedRooms(rooms), Event::RoomJoined(event)] => {
             assert!(
-                rooms.iter().any(|room| room.room_id == room_id),
+                rooms.iter().any(|room| room.room_id == joined.room_id),
                 "the snapshot must list the joined room: {rooms:?}"
             );
-            assert_eq!(
-                joined,
-                &RoomJoined {
-                    room_id: room_id.to_owned()
-                }
-            );
+            assert_eq!(event, &joined);
         }
         other => panic!("expected SyncedRooms then RoomJoined, got {other:?}"),
     }
@@ -336,7 +331,10 @@ async fn assert_join_emits_snapshot_then_room_joined(
 }
 
 #[test]
-fn join_room_emits_snapshot_then_room_joined_with_the_alias_room_id() {
+/// The room answers to the alias the join named before its first sync
+/// brings its published aliases; a join by room ID, a created room and an
+/// accepted invite name none (below).
+fn a_join_by_alias_says_the_alias() {
     run_local(async {
         let mock_server = MatrixMockServer::new().await;
         let client = mock_server.client_builder().build().await;
@@ -349,7 +347,10 @@ fn join_room_emits_snapshot_then_room_joined_with_the_alias_room_id() {
                 room_or_alias: "#ops:example.org".to_owned(),
                 via: Vec::new(),
             }),
-            "!ops:example.org",
+            RoomJoined {
+                room_id: "!ops:example.org".to_owned(),
+                alias: Some("#ops:example.org".to_owned()),
+            },
         )
         .await;
     });
@@ -380,7 +381,10 @@ fn join_room_passes_via_servers() {
                 room_or_alias: "!ops:other.example".to_owned(),
                 via: vec!["other.example".to_owned()],
             }),
-            "!ops:other.example",
+            RoomJoined {
+                room_id: "!ops:other.example".to_owned(),
+                alias: None,
+            },
         )
         .await;
     });
@@ -507,7 +511,10 @@ fn create_direct_room_emits_snapshot_then_room_joined() {
             Command::CreateDirectRoom(CreateDirectRoomRequest {
                 user_id: "@friend:example.org".to_owned(),
             }),
-            "!room:example.org",
+            RoomJoined {
+                room_id: "!room:example.org".to_owned(),
+                alias: None,
+            },
         )
         .await;
     });
@@ -527,7 +534,10 @@ fn create_room_emits_snapshot_then_room_joined() {
                 name: "Team room".to_owned(),
                 visibility: CreateRoomVisibility::Private,
             }),
-            "!room:example.org",
+            RoomJoined {
+                room_id: "!room:example.org".to_owned(),
+                alias: None,
+            },
         )
         .await;
     });
@@ -554,7 +564,10 @@ fn accept_room_invite_emits_snapshot_then_room_joined() {
             Command::AcceptRoomInvite(AcceptRoomInviteRequest {
                 room_id: room_id().to_string(),
             }),
-            room_id().as_str(),
+            RoomJoined {
+                room_id: room_id().to_string(),
+                alias: None,
+            },
         )
         .await;
     });

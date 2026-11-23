@@ -81,16 +81,21 @@ pub(super) unsafe fn run_slash_command(
             Ok(None)
         }
         SlashCommand::Window { target } => {
-            let room_id =
-                match resolve_room(&state_ref(hwnd).model.rooms, is_navigable_room, &target) {
-                    Ok(room) => room.room_id.clone(),
-                    Err(RoomTargetError::Unknown) => {
-                        return Err(format!("unknown window target: {target}"));
-                    }
-                    Err(RoomTargetError::Ambiguous) => {
-                        return Err(format!("ambiguous window target: {target}"));
-                    }
-                };
+            let model = &state_ref(hwnd).model;
+            let room_id = match resolve_room(
+                &model.rooms,
+                &model.joined_aliases,
+                is_navigable_room,
+                &target,
+            ) {
+                Ok(room) => room.room_id.clone(),
+                Err(RoomTargetError::Unknown) => {
+                    return Err(format!("unknown window target: {target}"));
+                }
+                Err(RoomTargetError::Ambiguous) => {
+                    return Err(format!("ambiguous window target: {target}"));
+                }
+            };
             activate_view(hwnd, &ViewId::Room(room_id), None)?;
             Ok(Some(format!("window active: {target}")))
         }
@@ -861,7 +866,12 @@ unsafe fn print_echo(hwnd: HWND, window: &ViewId, echo: EchoCommand) -> Result<(
         EchoPlace::Active => echo_view(window),
         EchoPlace::Status => ViewId::Status,
         EchoPlace::Window(target) => {
-            let view = match resolve_room(&state.model.rooms, is_navigable_room, &target) {
+            let view = match resolve_room(
+                &state.model.rooms,
+                &state.model.joined_aliases,
+                is_navigable_room,
+                &target,
+            ) {
                 Ok(room) => ViewId::Room(room.room_id.clone()),
                 Err(RoomTargetError::Unknown) => return Err(format!("no such window: {target}")),
                 Err(RoomTargetError::Ambiguous) => {
@@ -908,7 +918,12 @@ fn log_command_view(
     let Some(target) = target else {
         return log_view(window);
     };
-    let view_id = match resolve_room(&state.model.rooms, is_navigable_room, target) {
+    let view_id = match resolve_room(
+        &state.model.rooms,
+        &state.model.joined_aliases,
+        is_navigable_room,
+        target,
+    ) {
         Ok(room) => ViewId::Room(room.room_id.clone()),
         Err(RoomTargetError::Unknown) => return Err(format!("unknown room: {target}")),
         Err(RoomTargetError::Ambiguous) => return Err(format!("ambiguous room: {target}")),
@@ -1158,7 +1173,12 @@ fn clearall_views(model: &UiModel, switches: commands::ClearAll) -> Vec<ViewId> 
 }
 
 fn msg_target_room_id(model: &UiModel, target: &str) -> Result<String, String> {
-    match resolve_room(&model.rooms, is_navigable_room, target) {
+    match resolve_room(
+        &model.rooms,
+        &model.joined_aliases,
+        is_navigable_room,
+        target,
+    ) {
         Ok(room) => return Ok(room.room_id.clone()),
         Err(RoomTargetError::Ambiguous) => return Err(format!("ambiguous target: {target}")),
         Err(RoomTargetError::Unknown) => {}
@@ -1225,7 +1245,12 @@ pub(super) fn resolve_joined_room_target(
         };
     };
 
-    match resolve_room(&state.model.rooms, is_navigable_room, target) {
+    match resolve_room(
+        &state.model.rooms,
+        &state.model.joined_aliases,
+        is_navigable_room,
+        target,
+    ) {
         Ok(room) if is_sendable_room(room) => Ok(room.room_id.clone()),
         Ok(_) => Err(format!("room is not joined: {target}")),
         Err(RoomTargetError::Unknown) => Err(format!("unknown room: {target}")),
@@ -1269,14 +1294,14 @@ pub(super) fn resolve_invite_command_room_id(
         };
     };
 
-    let rooms = &state.model.rooms;
-    match resolve_room(rooms, is_invite_command_target, target) {
+    let (rooms, joined_aliases) = (&state.model.rooms, &state.model.joined_aliases);
+    match resolve_room(rooms, joined_aliases, is_invite_command_target, target) {
         Ok(room) => Ok(room.room_id.clone()),
         Err(RoomTargetError::Ambiguous) => Err(format!(
             "{action} failed: ambiguous invited room target: {target}"
         )),
         Err(RoomTargetError::Unknown) => {
-            match resolve_room(rooms, is_joined_message_room, target) {
+            match resolve_room(rooms, joined_aliases, is_joined_message_room, target) {
                 Ok(_) | Err(RoomTargetError::Ambiguous) => {
                     Err(format!("{action} failed: room is not invited: {target}"))
                 }
@@ -1372,11 +1397,13 @@ pub(super) unsafe fn open_room_link(
     target: String,
     via: Vec<String>,
 ) -> Result<String, String> {
-    let room_id = state_ref(hwnd)
-        .model
+    let model = &state_ref(hwnd).model;
+    let room_id = model
         .rooms
         .iter()
-        .find(|room| is_navigable_room(room) && room_answers_to(room, &target))
+        .find(|room| {
+            is_navigable_room(room) && room_answers_to(room, &model.joined_aliases, &target)
+        })
         .map(|room| room.room_id.clone());
     match room_id {
         Some(room_id) => {
@@ -1387,12 +1414,16 @@ pub(super) unsafe fn open_room_link(
     }
 }
 
-/// Whether `target` is `room`'s ID or one of its published aliases, exactly:
-/// display names, which `/window` also takes, name no room to join.
-fn room_answers_to(room: &RoomSummary, target: &str) -> bool {
+/// Whether `target` is `room`'s ID or one of its aliases (published, or
+/// joined by: `room_targets::aliases`), exactly: display names, which
+/// `/window` also takes, name no room to join.
+fn room_answers_to(
+    room: &RoomSummary,
+    joined_aliases: &BTreeMap<String, String>,
+    target: &str,
+) -> bool {
     room.room_id == target
-        || room.canonical_alias.as_deref() == Some(target)
-        || room.alt_aliases.iter().any(|alias| alias == target)
+        || room_targets::aliases(room, joined_aliases).any(|alias| alias == target)
 }
 
 pub(super) fn submit_join_room(

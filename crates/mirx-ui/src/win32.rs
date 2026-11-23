@@ -736,6 +736,10 @@ struct UiModel {
     ignored_users: Option<Vec<String>>,
     /// Other users' presence, as the session's sync reported it.
     presence: PresenceBook,
+    /// Alias -> room ID: the aliases the session joined rooms by
+    /// (`RoomJoined.alias`), which the rooms answer to (`room_targets`)
+    /// before their first sync brings their published aliases.
+    joined_aliases: BTreeMap<String, String>,
 }
 
 /// Who is signed in, and how the session authenticates: a reset of the

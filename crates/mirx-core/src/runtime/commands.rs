@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use futures_util::future::LocalBoxFuture;
 use matrix_sdk::authentication::AuthApi;
+use matrix_sdk::ruma::RoomOrAliasId;
 
 use super::jobs::{Lane, Start, Work};
 use super::session::{Followup, IdentityResetEnd, JobCtx, Session, StartedReset};
@@ -543,7 +544,11 @@ async fn join_room(ctx: JobCtx, request: JoinRoomRequest) -> Followup {
     let JobCtx { client, events, .. } = &ctx;
     match matrix::join_room(client, &request).await {
         Ok(room_id) => {
-            emit_snapshot_then_room_joined(&ctx, Operation::JoinRoom, room_id.into()).await
+            let alias = <&RoomOrAliasId>::try_from(request.room_or_alias.as_str())
+                .expect("the join parsed it")
+                .is_room_alias_id()
+                .then_some(request.room_or_alias);
+            emit_snapshot_then_room_joined(&ctx, Operation::JoinRoom, room_id.into(), alias).await
         }
         Err(err) => emit_matrix_error(events, Operation::JoinRoom, err),
     }
@@ -555,7 +560,8 @@ async fn accept_room_invite(ctx: JobCtx, request: AcceptRoomInviteRequest) -> Fo
     let JobCtx { client, events, .. } = &ctx;
     match matrix::accept_room_invite(client, &request.room_id).await {
         Ok(()) => {
-            emit_snapshot_then_room_joined(&ctx, Operation::AcceptRoomInvite, request.room_id).await
+            emit_snapshot_then_room_joined(&ctx, Operation::AcceptRoomInvite, request.room_id, None)
+                .await
         }
         Err(err) => {
             emit_room_matrix_error(events, Operation::AcceptRoomInvite, &request.room_id, err)
@@ -569,7 +575,8 @@ async fn create_direct_room(ctx: JobCtx, request: CreateDirectRoomRequest) -> Fo
     let JobCtx { client, events, .. } = &ctx;
     match matrix::create_direct_room(client, &request.user_id).await {
         Ok(room_id) => {
-            emit_snapshot_then_room_joined(&ctx, Operation::CreateDirectRoom, room_id.into()).await
+            emit_snapshot_then_room_joined(&ctx, Operation::CreateDirectRoom, room_id.into(), None)
+                .await
         }
         Err(err) => emit_matrix_error(events, Operation::CreateDirectRoom, err),
     }
@@ -581,7 +588,7 @@ async fn create_room(ctx: JobCtx, request: CreateRoomRequest) -> Followup {
     let JobCtx { client, events, .. } = &ctx;
     match matrix::create_room(client, &request).await {
         Ok(room_id) => {
-            emit_snapshot_then_room_joined(&ctx, Operation::CreateRoom, room_id.into()).await
+            emit_snapshot_then_room_joined(&ctx, Operation::CreateRoom, room_id.into(), None).await
         }
         Err(err) => emit_matrix_error(events, Operation::CreateRoom, err),
     }
@@ -592,8 +599,13 @@ async fn create_room(ctx: JobCtx, request: CreateRoomRequest) -> Followup {
 /// Emits the room snapshot that lists a room just joined, then
 /// `RoomJoined`, so the UI knows the room by the time it opens its window.
 /// A failed snapshot is the operation's error about the room, and no
-/// `RoomJoined` follows.
-async fn emit_snapshot_then_room_joined(ctx: &JobCtx, operation: Operation, room_id: String) {
+/// `RoomJoined` follows. `alias`: the alias the join named.
+async fn emit_snapshot_then_room_joined(
+    ctx: &JobCtx,
+    operation: Operation,
+    room_id: String,
+    alias: Option<String>,
+) {
     let JobCtx {
         client,
         events,
@@ -601,7 +613,7 @@ async fn emit_snapshot_then_room_joined(ctx: &JobCtx, operation: Operation, room
         ..
     } = ctx;
     match matrix::emit_room_snapshot(client, snapshots, events).await {
-        Ok(()) => emit_event(events, Event::RoomJoined(RoomJoined { room_id })),
+        Ok(()) => emit_event(events, Event::RoomJoined(RoomJoined { room_id, alias })),
         Err(err) => emit_room_matrix_error(events, operation, &room_id, err),
     }
 }

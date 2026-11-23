@@ -19110,6 +19110,7 @@ fn a_commands_menu_prompt_acts_in_the_window_it_was_opened_from()
     app.append_synthetic_events(&serde_json::to_string(&vec![Event::RoomJoined(
         RoomJoined {
             room_id: "!beta:example".to_owned(),
+            alias: None,
         },
     )])?)?;
     app.wait_idle(Duration::from_secs(5))?;

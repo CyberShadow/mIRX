@@ -2456,6 +2456,7 @@ mod tests {
                         Event::SyncedRooms(rooms),
                         Event::RoomJoined(mirx_core::RoomJoined {
                             room_id: "!new:example".to_owned(),
+                            alias: None,
                         }),
                     ],
                 )
@@ -2493,6 +2494,7 @@ mod tests {
                         Event::SyncedRooms(rooms),
                         Event::RoomJoined(mirx_core::RoomJoined {
                             room_id: "!x:example".to_owned(),
+                            alias: None,
                         }),
                         Event::SyncedRooms(ops_bob_dev()),
                     ],

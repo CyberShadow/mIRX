@@ -2,8 +2,10 @@
 //!
 //! A target names a room by, in this order:
 //! 1. its room ID (`!abc:example.org`);
-//! 2. one of its aliases (`#ops:example.org`), canonical or alternative.
-//!    Aliases are case-sensitive in Matrix, so they are compared exactly;
+//! 2. one of its aliases (`#ops:example.org`): canonical, alternative, or
+//!    one it was joined by this session (`joined_aliases`: the room answers
+//!    to it before its first sync brings its published ones). Aliases are
+//!    case-sensitive in Matrix, so they are compared exactly;
 //! 3. a short alias (`#ops`, no server): the localpart of one of its
 //!    aliases. A room whose aliases share the localpart counts once;
 //! 4. its display name, exactly. A `#name` is tried here too, after the
@@ -15,6 +17,8 @@
 //!
 //! Pure code over the core's room summaries.
 
+use std::collections::BTreeMap;
+
 use mirx_core::RoomSummary;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,8 +28,11 @@ pub(super) enum RoomTargetError {
 }
 
 /// The room among the `eligible` ones that `target` names.
+/// `joined_aliases`: alias -> room ID, the aliases rooms were joined by
+/// (`UiModel::joined_aliases`).
 pub(super) fn resolve_room<'r>(
     rooms: &'r [RoomSummary],
+    joined_aliases: &BTreeMap<String, String>,
     eligible: impl Fn(&RoomSummary) -> bool,
     target: &str,
 ) -> Result<&'r RoomSummary, RoomTargetError> {
@@ -34,10 +41,10 @@ pub(super) fn resolve_room<'r>(
         .filter(|localpart| !localpart.contains(':'));
     let steps: [&dyn Fn(&RoomSummary) -> bool; 4] = [
         &|room| room.room_id == target,
-        &|room| aliases(room).any(|alias| alias == target),
+        &|room| aliases(room, joined_aliases).any(|alias| alias == target),
         &|room| {
             short_alias.is_some_and(|localpart| {
-                aliases(room).any(|alias| alias_localpart(alias) == localpart)
+                aliases(room, joined_aliases).any(|alias| alias_localpart(alias) == localpart)
             })
         },
         &|room| room.display_name == target,
@@ -57,11 +64,23 @@ pub(super) fn resolve_room<'r>(
     Err(RoomTargetError::Unknown)
 }
 
-fn aliases(room: &RoomSummary) -> impl Iterator<Item = &str> {
+/// `room`'s aliases: its published ones, then the ones it was joined by.
+/// A joined alias of a room no longer listed, or left, stays in the map
+/// and names nothing: only listed, eligible rooms are asked.
+pub(super) fn aliases<'r>(
+    room: &'r RoomSummary,
+    joined_aliases: &'r BTreeMap<String, String>,
+) -> impl Iterator<Item = &'r str> {
     room.canonical_alias
         .iter()
         .chain(&room.alt_aliases)
         .map(String::as_str)
+        .chain(
+            joined_aliases
+                .iter()
+                .filter(|(_, room_id)| **room_id == room.room_id)
+                .map(|(alias, _)| alias.as_str()),
+        )
 }
 
 /// `ops` for `#ops:example.org`.
@@ -75,6 +94,8 @@ fn alias_localpart(alias: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use mirx_core::{RoomMembership, RoomNotificationMode, RoomSummary};
 
     use super::{RoomTargetError, resolve_room};
@@ -106,7 +127,7 @@ mod tests {
     }
 
     fn resolved<'r>(rooms: &'r [RoomSummary], target: &str) -> Result<&'r str, RoomTargetError> {
-        resolve_room(rooms, not_space, target).map(|room| room.room_id.as_str())
+        resolve_room(rooms, &BTreeMap::new(), not_space, target).map(|room| room.room_id.as_str())
     }
 
     fn rooms() -> Vec<RoomSummary> {
@@ -187,6 +208,34 @@ mod tests {
                 "{target}"
             );
         }
+    }
+
+    #[test]
+    fn a_room_answers_to_the_alias_it_was_joined_by() {
+        let mut rooms = rooms();
+        // Joined, not synced yet: no published alias.
+        rooms.push(room("!new:example", "!new:example", &[]));
+        let joined_aliases = BTreeMap::from(
+            [
+                ("#new:example", "!new:example"),
+                // Joined, then gone from the list (left, forgotten).
+                ("#gone:example", "!gone:example"),
+                // Equals another room's published alias.
+                ("#hall:example", "!new:example"),
+            ]
+            .map(|(alias, room_id)| (alias.to_owned(), room_id.to_owned())),
+        );
+        let resolved = |target| {
+            resolve_room(&rooms, &joined_aliases, not_space, target)
+                .map(|room| room.room_id.as_str())
+        };
+        assert_eq!(resolved("#new:example"), Ok("!new:example"));
+        assert_eq!(resolved("#new"), Ok("!new:example"));
+        assert_eq!(resolved("#gone:example"), Err(RoomTargetError::Unknown));
+        assert_eq!(resolved("#gone"), Err(RoomTargetError::Unknown));
+        // A joined alias counts as a published one: both rooms match.
+        assert_eq!(resolved("#hall:example"), Err(RoomTargetError::Ambiguous));
+        assert_eq!(resolved("#hall"), Err(RoomTargetError::Ambiguous));
     }
 
     #[test]

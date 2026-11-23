@@ -560,7 +560,7 @@ pub(super) fn apply_core_event(
         Event::RoomMedia(media) => apply_room_media_event(state, media),
         Event::RoomEvent(fetch) => apply_room_event_fetch(state, fetch),
         Event::PublicRooms(page) => apply_public_rooms_page(state, page)?,
-        Event::RoomJoined(joined) => apply_room_joined_event(state, &joined.room_id)?,
+        Event::RoomJoined(joined) => apply_room_joined_event(state, joined)?,
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
         Event::RoomMembers(members) => apply_room_members_event(state, members),
         Event::RoomReadState(read_state) => apply_room_read_state_event(state, read_state),
@@ -748,6 +748,7 @@ pub(super) fn apply_core_event(
             state.model.highlight_words = None;
             state.model.ignored_users = None;
             state.model.presence.clear();
+            state.model.joined_aliases.clear();
             state.notify_watch.disconnected();
             state.room_activity.clear();
             state.sent_receipts.clear();
@@ -882,8 +883,16 @@ fn session_server(state: &WindowState) -> &str {
 /// A join the user asked for opens the room's window and makes it active,
 /// as `/join` does in mIRC: the next view sync creates the window and
 /// activates it (`pending_activation`). A space has no window, so the
-/// Status window notes the join instead.
-fn apply_room_joined_event(state: &mut WindowState, room_id: &str) -> Result<(), String> {
+/// Status window notes the join instead. The alias the join named, if
+/// any, names the room from now on (`UiModel::joined_aliases`).
+fn apply_room_joined_event(
+    state: &mut WindowState,
+    joined: mirx_core::RoomJoined,
+) -> Result<(), String> {
+    let mirx_core::RoomJoined { room_id, alias } = joined;
+    if let Some(alias) = alias {
+        state.model.joined_aliases.insert(alias, room_id.clone());
+    }
     // The core sends the snapshot listing the room right before.
     let room = state
         .model
@@ -896,8 +905,8 @@ fn apply_room_joined_event(state: &mut WindowState, room_id: &str) -> Result<(),
         log_status(state, StatusLineKind::Info, line);
         return Ok(());
     }
-    state.closed_queries.remove(room_id);
-    state.pending_activation = Some(ViewId::Room(room_id.to_owned()));
+    state.closed_queries.remove(&room_id);
+    state.pending_activation = Some(ViewId::Room(room_id));
     Ok(())
 }
 
@@ -3486,6 +3495,7 @@ mod tests {
     fn room_joined(room_id: &str) -> Event {
         Event::RoomJoined(mirx_core::RoomJoined {
             room_id: room_id.to_owned(),
+            alias: None,
         })
     }
 
@@ -3505,6 +3515,29 @@ mod tests {
         assert_eq!(state.pending_activation, Some(room_view_id("!new:example")));
         assert_eq!(state.active_view, room_view_id("!ops:example"));
         assert_eq!(state.model.selected_room.as_deref(), Some("!ops:example"));
+    }
+
+    #[test]
+    fn apply_room_joined_records_the_alias() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!new:example", "!new:example", false)];
+
+        apply_core_event(
+            &mut state,
+            Event::RoomJoined(mirx_core::RoomJoined {
+                room_id: "!new:example".to_owned(),
+                alias: Some("#new:example".to_owned()),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state.model.joined_aliases,
+            BTreeMap::from([("#new:example".to_owned(), "!new:example".to_owned())])
+        );
+        // The session's: a log out forgets it.
+        apply_core_event(&mut state, Event::LoggedOut).unwrap();
+        assert!(state.model.joined_aliases.is_empty());
     }
 
     #[test]
