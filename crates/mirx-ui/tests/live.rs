@@ -40,11 +40,13 @@ use matrix_sdk::ruma::events::ignored_user_list::IgnoredUserListEventContent;
 use matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent;
 use matrix_sdk::ruma::events::room::member::MembershipState;
 use matrix_sdk::ruma::events::room::message::{
-    OriginalSyncRoomMessageEvent, RoomMessageEventContent,
+    OriginalSyncRoomMessageEvent, Relation, RoomMessageEventContent,
 };
 use matrix_sdk::ruma::events::room::power_levels::RoomPowerLevelsEventContent;
 use matrix_sdk::ruma::events::{InitialStateEvent, StateEventType};
-use matrix_sdk::ruma::{DeviceId, OwnedDeviceId, OwnedRoomId, OwnedUserId, RoomId, UserId};
+use matrix_sdk::ruma::{
+    DeviceId, OwnedDeviceId, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, UserId,
+};
 use mirx_core::{E2eeRecoveryState, E2eeStatus, RoomMemberRank, RoomMembership};
 use mirx_testkit::{
     AutomationDialog, ComposeKey, ContextMenuCommand, MirxApp, UiChannelCentral, UiCheckState,
@@ -150,8 +152,10 @@ impl Homeserver {
             async move {
                 texts.lock().unwrap().push(Text {
                     room_id: room.room_id().to_owned(),
+                    event_id: event.event_id,
                     sender: event.sender,
                     body: event.content.body().to_owned(),
+                    content: event.content,
                 });
             }
         });
@@ -167,11 +171,13 @@ impl Homeserver {
 }
 
 /// A message a peer received.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Text {
     room_id: OwnedRoomId,
+    event_id: OwnedEventId,
     sender: OwnedUserId,
     body: String,
+    content: RoomMessageEventContent,
 }
 
 /// A device of a user, played by matrix-sdk.
@@ -316,6 +322,24 @@ impl Peer<'_> {
             } else {
                 Err(format!("{texts:?}"))
             }
+        })
+    }
+
+    /// Waits for a message in the room whose content `matches` and returns
+    /// the first.
+    fn wait_for_message(
+        &self,
+        room_id: &RoomId,
+        what: &str,
+        matches: impl Fn(&RoomMessageEventContent) -> bool,
+    ) -> Text {
+        self.sync_until(&format!("{what} in {room_id}"), async || {
+            let texts = self.texts.lock().unwrap();
+            texts
+                .iter()
+                .find(|text| text.room_id == room_id && matches(&text.content))
+                .cloned()
+                .ok_or_else(|| format!("{texts:?}"))
         })
     }
 
@@ -651,6 +675,71 @@ fn messages_go_both_ways_in_a_room_joined_by_address() -> Result<(), Box<dyn Err
     app.select_view(room)?;
     type_commands(&app, &["hi from mirx"])?;
     assert_eq!(bob.wait_for_text(&room_id, "hi from mirx"), alice.user_id());
+
+    finish(app, &local_app_data)
+}
+
+/// Markdown typed in mirx reaches other clients as Matrix HTML, with the
+/// typed text as its `body`, a pill and a mention for the nick it names;
+/// so does an edit of it.
+#[test]
+fn markdown_is_sent_as_matrix_html() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let bob = homeserver.register("bob", "Bob");
+    let alice = homeserver.register("alice", "Alice");
+    let alias_localpart = unique_name("markdown");
+    let room_id = bob.create_public_room("Markdown", &alias_localpart);
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_live_app(&local_app_data)?;
+    sign_in(&app, &homeserver, &alice)?;
+    join_by_address(&app, &format!("#{alias_localpart}:localhost"), &room_id)?;
+    // mirx pills only the members it knows.
+    wait_for_nick_list(
+        &app,
+        &room_id,
+        &BTreeMap::from([
+            (alice.user_id().to_string(), RoomMemberRank::Member),
+            (bob.user_id().to_string(), RoomMemberRank::Creator),
+        ]),
+    )?;
+    let pill = format!("<a href=\"{}\">Bob</a>", bob.user_id().matrix_to_uri());
+    let mentions = serde_json::json!({ "user_ids": [bob.user_id()] });
+
+    app.select_view(room_identity(room_id.as_str()))?;
+    let typed = "**bold** and ~~gone~~ hi Bob";
+    type_commands(&app, &[typed])?;
+    let message = bob.wait_for_message(&room_id, typed, |content| content.body() == typed);
+    assert_eq!(message.sender, alice.user_id());
+    assert_eq!(
+        serde_json::to_value(&message.content)?,
+        serde_json::json!({
+            "msgtype": "m.text",
+            "body": typed,
+            "format": "org.matrix.custom.html",
+            "formatted_body": format!("<strong>bold</strong> and <del>gone</del> hi {pill}"),
+            "m.mentions": mentions,
+        })
+    );
+
+    let edited = "**bolder** and `gone` hi Bob";
+    type_commands(&app, &[&format!("/edit {} {edited}", message.event_id)])?;
+    let edit = bob.wait_for_message(&room_id, "the edit", |content| {
+        matches!(&content.relates_to, Some(Relation::Replacement(_)))
+    });
+    let Some(Relation::Replacement(replacement)) = &edit.content.relates_to else {
+        unreachable!("the edit was found by its relation")
+    };
+    assert_eq!(replacement.event_id, message.event_id);
+    assert_eq!(
+        serde_json::to_value(&replacement.new_content)?,
+        serde_json::json!({
+            "msgtype": "m.text",
+            "body": edited,
+            "format": "org.matrix.custom.html",
+            "formatted_body": format!("<strong>bolder</strong> and <code>gone</code> hi {pill}"),
+            "m.mentions": mentions,
+        })
+    );
 
     finish(app, &local_app_data)
 }
