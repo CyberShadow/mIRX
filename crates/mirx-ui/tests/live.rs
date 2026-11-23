@@ -293,14 +293,34 @@ impl Peer<'_> {
 
     /// Waits for a message saying `body` in the room and returns its sender.
     fn wait_for_text(&self, room_id: &RoomId, body: &str) -> OwnedUserId {
-        self.sync_until(&format!("{body:?} in {room_id}"), async || {
+        self.wait_for_texts(room_id, body, 1).remove(0)
+    }
+
+    /// Waits for `count` messages saying `body` in the room and returns
+    /// their senders.
+    fn wait_for_texts(&self, room_id: &RoomId, body: &str, count: usize) -> Vec<OwnedUserId> {
+        self.sync_until(&format!("{count} {body:?} in {room_id}"), async || {
             let texts = self.texts.lock().unwrap();
-            texts
+            let senders = texts
                 .iter()
-                .find(|text| text.room_id == room_id && text.body == body)
+                .filter(|text| text.room_id == room_id && text.body == body)
                 .map(|text| text.sender.clone())
-                .ok_or_else(|| format!("{texts:?}"))
+                .collect::<Vec<_>>();
+            if senders.len() >= count {
+                Ok(senders)
+            } else {
+                Err(format!("{texts:?}"))
+            }
         })
+    }
+
+    /// Whether this device received a message saying `body` in the room.
+    fn received_text(&self, room_id: &RoomId, body: &str) -> bool {
+        self.texts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|text| text.room_id == room_id && text.body == body)
     }
 
     /// The user's ignore list as the server has it, sorted.
@@ -1862,9 +1882,10 @@ fn sessions_dialog_renames_and_signs_out_another_session() -> Result<(), Box<dyn
     finish(app, &local_app_data)
 }
 
-/// mIRC's Perform on connect on a real server: the first connect joins
-/// the room (its message fails there, before the join lands, and says so
-/// in Status), and a reconnect, with the room known, sends the message.
+/// mIRC's Perform on connect on a real server: each line runs once the
+/// server answered the one before, so the first connect joins the room
+/// and sends the message into it, before the room's first sync; a
+/// reconnect does both again (the join only activates the window).
 #[test]
 fn perform_joins_and_messages_on_connect() -> Result<(), Box<dyn Error>> {
     let homeserver = homeserver();
@@ -1883,37 +1904,86 @@ fn perform_joins_and_messages_on_connect() -> Result<(), Box<dyn Error>> {
     )?;
     let app = launch_live_app(&local_app_data)?;
     sign_in(&app, &homeserver, &alice)?;
-    bob.wait_for_member(&room_id, alice.user_id());
+    assert_eq!(
+        bob.wait_for_text(&room_id, "hello from perform"),
+        alice.user_id()
+    );
     let room = room_identity(room_id.as_str());
     wait_for_view_line(&app, &room, "* Now talking in ")?;
-    wait_for_status_line(&app, "* /msg: ", TIMEOUT)?;
-    let refused = status_texts(&app)?
-        .into_iter()
-        .filter(|line| line.starts_with("* /msg: "))
-        .collect::<Vec<_>>();
-    assert_eq!(refused.len(), 1, "{refused:?}");
-    assert!(refused[0].ends_with(" (in perform)"), "{refused:?}");
 
     invoke_account_menu_command(&app, MENU_ID_FILE_DISCONNECT)?;
     wait_for_status_line(&app, "* Disconnected", TIMEOUT)?;
     outlast_the_abandoned_long_poll();
     invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
     assert_eq!(
-        bob.wait_for_text(&room_id, "hello from perform"),
-        alice.user_id()
+        bob.wait_for_texts(&room_id, "hello from perform", 2),
+        [alice.user_id(), alice.user_id()]
     );
     let_background_tasks_settle(&app)?;
     let ui_state = app.dump_ui_state()?;
     let lines = &find_view(&ui_state, &room).lines;
+    let status = status_texts(&app)?;
     assert!(
-        !lines.iter().any(|line| line.contains("(in perform)")),
+        !lines
+            .iter()
+            .chain(&status)
+            .any(|line| line.contains("(in perform)")),
+        "{lines:?} {status:?}"
+    );
+
+    finish(app, &local_app_data)
+}
+
+/// An alias whose `/query` makes a direct room greets in that room: its
+/// `say` runs once the server made it, and the query window it opened is
+/// in front. The shared room, in front when the alias was typed, never
+/// gets the line.
+#[test]
+fn an_alias_greets_in_the_query_it_opens() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let bob = homeserver.register("bob", "Bob");
+    let alice = homeserver.register("alice", "Alice");
+    let alias_localpart = unique_name("shared");
+    let shared = bob.create_public_room("Shared", &alias_localpart);
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_live_app(&local_app_data)?;
+    sign_in(&app, &homeserver, &alice)?;
+    join_by_address(&app, &format!("#{alias_localpart}:localhost"), &shared)?;
+    // `/query Bob` resolves him in the nick list.
+    let bob_id = bob.user_id().to_string();
+    let deadline = Instant::now() + TIMEOUT;
+    while !nick_list_ranks(&app, &shared)?.contains_key(&bob_id) {
+        assert!(Instant::now() < deadline, "Bob never in the nick list");
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    let shared_view = room_identity(shared.as_str());
+    app.select_view(shared_view.clone())?;
+    type_commands(&app, &["/alias greet /query $$1 | say hi $1", "/greet Bob"])?;
+    let ui_state = app.wait_for_ui_state("the query with Bob", TIMEOUT, |ui_state| {
+        ui_state.rooms.iter().any(|room| {
+            room.membership == RoomMembership::Join && room.direct_user_ids == [bob_id.clone()]
+        })
+    })?;
+    let direct = ui_state
+        .rooms
+        .iter()
+        .find(|room| room.direct_user_ids == [bob_id.clone()])
+        .map(|room| OwnedRoomId::try_from(room.room_id.as_str()))
+        .expect("waited for above")?;
+    let query = room_identity(direct.as_str());
+    wait_for_view_line(&app, &query, "<Alice> hi Bob")?;
+    assert_eq!(app.dump_ui_state()?.mdi.active, query);
+
+    bob.join(&direct);
+    assert_eq!(bob.wait_for_text(&direct, "hi Bob"), alice.user_id());
+    assert!(!bob.received_text(&shared, "hi Bob"));
+    let ui_state = app.dump_ui_state()?;
+    let lines = &find_view(&ui_state, &shared_view).lines;
+    assert!(
+        !lines.iter().any(|line| line.contains("hi Bob")),
         "{lines:?}"
     );
-    let refused = status_texts(&app)?
-        .into_iter()
-        .filter(|line| line.contains("(in perform)"))
-        .count();
-    assert_eq!(refused, 1);
 
     finish(app, &local_app_data)
 }
