@@ -1072,6 +1072,7 @@ pub(super) unsafe fn with_test_compose_window<T>(
             }),
             log: ViewLog::Off,
             rows_key: None,
+            nick_list: Vec::new(),
         },
     );
 
@@ -1151,6 +1152,7 @@ pub(super) fn tracked_view(hwnd_value: isize) -> MdiViewState {
         }),
         log: ViewLog::Off,
         rows_key: None,
+        nick_list: Vec::new(),
     }
 }
 

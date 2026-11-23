@@ -121,26 +121,27 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetMenuState, GetMessageW, GetParent, GetQueueStatus, GetScrollInfo, GetSystemMenu,
     GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret, IDC_ARROW, IDYES, IsIconic, IsWindow,
     IsWindowVisible, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT,
-    LB_GETTEXT, LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL, LB_SETITEMHEIGHT,
-    LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED, LoadCursorW, MB_ICONERROR,
-    MB_ICONINFORMATION, MB_ICONQUESTION, MB_OK, MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL,
-    MDITILE_VERTICAL, MESSAGEBOX_STYLE, MF_BYCOMMAND, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, MessageBoxW, MoveWindow, PM_QS_POSTMESSAGE,
-    PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, QS_ALLPOSTMESSAGE, RegisterClassExW,
-    SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK,
-    SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE, SCROLLINFO, SHOW_WINDOW_CMD, SIF_ALL, SIF_PAGE,
-    SIF_POS, SIF_RANGE, SIF_TRACKPOS, SIZE_MINIMIZED, SW_HIDE, SW_MINIMIZE, SW_SHOW,
-    SW_SHOWMINNOACTIVE, SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW,
-    ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel,
-    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATEAPP, WM_APP, WM_CHAR, WM_CLOSE,
-    WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETFONT,
-    WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE,
-    WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY,
-    WM_NOTIFY, WM_PAINT, WM_PASTE, WM_QUIT, WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE,
-    WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU,
-    WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    LB_GETTEXT, LB_GETTEXTLEN, LB_GETTOPINDEX, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL,
+    LB_SETITEMHEIGHT, LB_SETTOPINDEX, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED,
+    LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION, MB_OK, MB_YESNO,
+    MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL, MESSAGEBOX_STYLE, MF_BYCOMMAND,
+    MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
+    MessageBoxW, MoveWindow, PM_QS_POSTMESSAGE, PM_REMOVE, PeekMessageW, PostMessageW,
+    PostQuitMessage, QS_ALLPOSTMESSAGE, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
+    SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE,
+    SC_MINIMIZE, SCROLLINFO, SHOW_WINDOW_CMD, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
+    SIZE_MINIMIZED, SW_HIDE, SW_MINIMIZE, SW_SHOW, SW_SHOWMINNOACTIVE, SendMessageW,
+    SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_ACTIVATEAPP, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
+    WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
+    WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE,
+    WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE,
+    WM_MDITILE, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_QUIT,
+    WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTEXT, WM_SIZE, WM_SYSCOMMAND, WM_TIMER,
+    WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE, WS_VSCROLL,
 };
 
 use self::app_icon::{IconSize, app_icon};
@@ -449,11 +450,11 @@ use navigation::{
 };
 use nick_completion::NickCompletion;
 use nick_list::{
-    active_member_action_state, active_view_members, draw_nick_list_item,
+    ListedMember, active_member_action_state, active_view_members, draw_nick_list_item,
     invoke_member_context_menu_for_automation, invoke_selected_member_context_menu_for_automation,
-    mention_selected_member, query_selected_member, refresh_member_menu_state, room_member_nick,
-    room_member_view_rows, run_selected_member_command, select_member_for_automation,
-    set_room_member_list, show_member_context_menu, text_font_item_height,
+    mention_selected_member, nick_list_items, query_selected_member, refresh_member_menu_state,
+    room_member_nick, room_member_view_rows, run_selected_member_command,
+    select_member_for_automation, show_member_context_menu, sync_nick_list, text_font_item_height,
 };
 use presence::PresenceBook;
 use replies::ComposeTarget;
@@ -664,6 +665,10 @@ struct MdiViewState {
     /// The inputs its rows were last built from; `None` before the first
     /// build, and for the Rooms List, which has no rows to gate.
     rows_key: Option<ViewRowsKey>,
+    /// What the window's nick list lists, item by item: the one map from
+    /// an item to its member. Empty for Status and the Rooms List, which
+    /// have none, and before the first build.
+    nick_list: Vec<ListedMember>,
 }
 
 /// A window's editbox and what it remembers.

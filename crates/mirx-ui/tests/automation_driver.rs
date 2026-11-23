@@ -79,14 +79,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GW_OWNER, GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect, GetDlgCtrlID, GetDlgItem,
     GetForegroundWindow, GetGUIThreadInfo, GetLastActivePopup, GetScrollInfo, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES,
-    IsIconic, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN,
-    LBS_OWNERDRAWFIXED, PostMessageW, RegisterWindowMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP,
-    SB_VERT, SC_CLOSE, SC_MINIMIZE, SC_RESTORE, SCROLLINFO, SIF_ALL, SMTO_NORMAL,
-    SPI_GETWHEELSCROLLLINES, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW, SendMessageW,
-    SetForegroundWindow, SetWindowPos, SetWindowTextW, SystemParametersInfoW, WM_CHAR, WM_COMMAND,
-    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL,
-    WS_VSCROLL,
+    IsIconic, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETCURSEL, LB_GETITEMHEIGHT, LB_GETTEXT,
+    LB_GETTEXTLEN, LB_GETTOPINDEX, LB_SETTOPINDEX, LBS_OWNERDRAWFIXED, PostMessageW,
+    RegisterWindowMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE,
+    SC_RESTORE, SCROLLINFO, SIF_ALL, SMTO_NORMAL, SPI_GETWHEELSCROLLLINES, SWP_NOMOVE,
+    SWP_NOZORDER, SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowPos,
+    SetWindowTextW, SystemParametersInfoW, WM_CHAR, WM_COMMAND, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NULL, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -11256,6 +11256,90 @@ fn automation_driver_member_menu_state_tracks_selected_member()
     Ok(())
 }
 
+/// A plain member of `!members:example`, as its fixture lists them.
+fn listed_member(user_id: &str, nick: &str) -> RoomMemberSummary {
+    RoomMemberSummary {
+        user_id: user_id.to_owned(),
+        nick: nick.to_owned(),
+        nick_ambiguous: false,
+        is_own_user: false,
+        rank: RoomMemberRank::Member,
+        can_kick: false,
+        can_ban: false,
+    }
+}
+
+#[test]
+fn nick_list_keeps_its_selection_and_scroll_while_lines_arrive()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_member_list_app()?;
+    let list = || unsafe { active_room_member_list_hwnd(&app) };
+    let top_index = || unsafe { SendMessageW(list(), LB_GETTOPINDEX, 0, 0) };
+    let selected = || -> Result<(Vec<String>, Vec<usize>), Box<dyn std::error::Error>> {
+        Ok((
+            app.dump_member_menu_state()?
+                .selected_user_id
+                .into_iter()
+                .collect(),
+            unsafe { listbox_selected_indices(list()) },
+        ))
+    };
+    let line = |timestamp_ms, body: &str| -> Result<(), Box<dyn std::error::Error>> {
+        app.append_synthetic_events(&serde_json::to_string(&[text_event(
+            "!members:example",
+            "@zoe:example",
+            timestamp_ms,
+            body,
+        )])?)?;
+        app.wait_idle(Duration::from_secs(5))?;
+        Ok(())
+    };
+    let members = |members: Vec<RoomMemberSummary>| -> Result<(), Box<dyn std::error::Error>> {
+        app.append_synthetic_events(&serde_json::to_string(&[Event::RoomMembers(
+            RoomMembers {
+                room_id: "!members:example".to_owned(),
+                members,
+            },
+        )])?)?;
+        app.wait_idle(Duration::from_secs(5))?;
+        Ok(())
+    };
+
+    // Casey is the fixture's third member.
+    app.select_member("@casey:example")?;
+    line(1_700_000_200_000, "a line arrives")?;
+    assert_eq!(selected()?, (vec!["@casey:example".to_owned()], vec![2]));
+
+    // A list longer than its window, scrolled, keeps its place as lines
+    // arrive.
+    let crowd = |skip: &str, extra: Option<&str>| {
+        (0..60)
+            .map(|index| format!("@user{index:02}:example"))
+            .chain(extra.map(str::to_owned))
+            .filter(|user_id| user_id != skip)
+            .map(|user_id| {
+                let nick = user_id[1..user_id.find(':').unwrap()].to_owned();
+                listed_member(&user_id, &nick)
+            })
+            .collect::<Vec<_>>()
+    };
+    members(crowd("", None))?;
+    app.select_member("@user55:example")?;
+    unsafe { SendMessageW(list(), LB_SETTOPINDEX, 30, 0) };
+    let scrolled = top_index();
+    assert!(scrolled > 0, "the list scrolls: top index {scrolled}");
+    line(1_700_000_260_000, "another line")?;
+    assert_eq!(top_index(), scrolled);
+    assert_eq!(selected()?, (vec!["@user55:example".to_owned()], vec![55]));
+
+    // Someone above the selection leaves and someone joins at the end: the
+    // selection follows its member, the list keeps its top.
+    members(crowd("@user10:example", Some("@user99:example")))?;
+    assert_eq!(top_index(), scrolled);
+    assert_eq!(selected()?, (vec!["@user55:example".to_owned()], vec![54]));
+    Ok(())
+}
+
 #[test]
 fn member_menu_control_items() -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
@@ -13483,6 +13567,12 @@ unsafe fn active_mdi_content_hwnd(app: &MirxApp) -> HWND {
 
 unsafe fn active_room_member_list_hwnd(app: &MirxApp) -> HWND {
     unsafe { child_window_with_class(active_mdi_content_hwnd(app), "ListBox") }
+}
+
+/// The items the nick list control itself selects.
+unsafe fn listbox_selected_indices(hwnd: HWND) -> Vec<usize> {
+    let selected = unsafe { SendMessageW(hwnd, LB_GETCURSEL, 0, 0) };
+    usize::try_from(selected).into_iter().collect()
 }
 
 /// The entries the nick list control itself shows, read back with

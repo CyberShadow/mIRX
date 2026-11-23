@@ -53,14 +53,27 @@ pub(super) fn nick_list_color(
     }
 }
 
-/// The member a room content window's nick list shows at `index`: the
-/// list holds its room's members in order (`set_room_member_list`).
+/// The member a room content window's nick list shows at `index`, looked
+/// up by user ID in its room's members: the window's listing
+/// (`MdiViewState::nick_list`) maps an item to its member.
 fn listed_member(state: &WindowState, content: HWND, index: u32) -> &RoomMemberSummary {
-    let (view_id, _) = state
+    let (view_id, view) = state
         .views
         .iter()
         .find(|(_, view)| view.content == content)
         .expect("a nick list's window is a view's");
+    let user_id = &view.nick_list[index as usize].user_id;
+    room_member(state, view_id, user_id)
+}
+
+/// A member of the room of `view_id`, a window with a nick list. The
+/// listing is synced in the same pass that changes the members, so a
+/// listed member is always one of them.
+fn room_member<'a>(
+    state: &'a WindowState,
+    view_id: &ViewId,
+    user_id: &str,
+) -> &'a RoomMemberSummary {
     let room_id = view_id
         .room_id()
         .expect("a window with a nick list has a room");
@@ -68,8 +81,13 @@ fn listed_member(state: &WindowState, content: HWND, index: u32) -> &RoomMemberS
         .model
         .room_views
         .get(room_id)
-        .and_then(|room_view| room_view.members.get(index as usize))
-        .expect("a nick list item is one of its room's members")
+        .and_then(|room_view| {
+            room_view
+                .members
+                .iter()
+                .find(|member| member.user_id == user_id)
+        })
+        .unwrap_or_else(|| panic!("listed member {user_id} is one of its room's members"))
 }
 
 /// A nick list item's height: a line of the frame's text font, as the
@@ -244,10 +262,7 @@ unsafe fn member_context_lparam_for_automation(
     list: HWND,
     user_id: &str,
 ) -> Result<LPARAM, String> {
-    let index = active_member_rows(hwnd)
-        .iter()
-        .position(|member| member.user_id == user_id)
-        .ok_or_else(|| format!("unknown_member: {user_id}"))?;
+    let index = active_listed_index(hwnd, user_id)?;
     let mut rect = RECT::default();
     if SendMessageW(
         list,
@@ -268,13 +283,79 @@ unsafe fn member_context_lparam_for_automation(
     Ok(((point.y as u32 as usize) << 16 | (point.x as u16 as usize)) as LPARAM)
 }
 
-/// Fills the nick list in `rows` order: rows are looked up by list index, so
-/// the list must not sort itself.
-pub(super) unsafe fn set_room_member_list(hwnd: HWND, rows: &[RoomMemberView]) {
-    SendMessageW(hwnd, LB_RESETCONTENT, 0, 0);
-    for row in rows {
-        let label = wide_null(&format!("{}{}", rank_prefix(row.rank), row.label));
-        SendMessageW(hwnd, LB_ADDSTRING, 0, label.as_ptr() as LPARAM);
+/// One item of a nick list: its member, and the text it shows (the rank
+/// prefix and the label). Colours and presence are not here: they are
+/// drawn from the model, so a change of them only repaints the list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ListedMember {
+    user_id: String,
+    text: String,
+}
+
+/// What a nick list lists for `members`, in their order.
+pub(super) fn nick_list_items(members: &[RoomMemberSummary]) -> Vec<ListedMember> {
+    members
+        .iter()
+        .map(|member| ListedMember {
+            user_id: member.user_id.clone(),
+            text: format!("{}{}", rank_prefix(member.rank), room_member_nick(member)),
+        })
+        .collect()
+}
+
+/// The items of `items` whose members `user_ids` names, in list order.
+fn restored_selection(items: &[ListedMember], user_ids: &[&str]) -> Vec<usize> {
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| user_ids.contains(&item.user_id.as_str()))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Brings the nick list `list`, which lists `shown`, to list `items`. It
+/// is rebuilt only if they differ, keeping its selected members (by user
+/// ID) and its scroll position; else it is left as it is. The caller
+/// repaints it: colours and presence may have changed.
+pub(super) unsafe fn sync_nick_list(
+    list: HWND,
+    shown: &mut Vec<ListedMember>,
+    items: Vec<ListedMember>,
+) {
+    if *shown == items {
+        return;
+    }
+    let selected = list_selection(list)
+        .into_iter()
+        .map(|index| shown[index].user_id.clone())
+        .collect::<Vec<_>>();
+    let top_index = SendMessageW(list, LB_GETTOPINDEX, 0, 0);
+    SendMessageW(list, WM_SETREDRAW, 0, 0);
+    SendMessageW(list, LB_RESETCONTENT, 0, 0);
+    for item in &items {
+        // In `items` order: items map to members by index, so the list
+        // must not sort itself.
+        let text = wide_null(&item.text);
+        SendMessageW(list, LB_ADDSTRING, 0, text.as_ptr() as LPARAM);
+    }
+    let selected = selected.iter().map(String::as_str).collect::<Vec<_>>();
+    select_list_items(list, &restored_selection(&items, &selected));
+    SendMessageW(list, LB_SETTOPINDEX, top_index as WPARAM, 0);
+    SendMessageW(list, WM_SETREDRAW, 1, 0);
+    *shown = items;
+}
+
+/// The items a nick list selects.
+unsafe fn list_selection(list: HWND) -> Vec<usize> {
+    let selected = SendMessageW(list, LB_GETCURSEL, 0, 0);
+    usize::try_from(selected).into_iter().collect()
+}
+
+/// Selects `items` of a nick list that selects nothing.
+unsafe fn select_list_items(list: HWND, items: &[usize]) {
+    for &item in items {
+        let selected = SendMessageW(list, LB_SETCURSEL, item, 0);
+        assert_ne!(selected, LB_ERR as isize, "item {item} is in the list");
     }
 }
 
@@ -311,13 +392,14 @@ pub(super) fn active_view_members(state: &WindowState) -> &[RoomMemberSummary] {
         .unwrap_or_default()
 }
 
-unsafe fn active_member_rows(hwnd: HWND) -> Vec<RoomMemberView> {
+/// The index of `user_id`'s item in the active window's nick list.
+unsafe fn active_listed_index(hwnd: HWND, user_id: &str) -> Result<usize, String> {
     let state = state_ref(hwnd);
-    room_member_view_rows(
-        active_view_members(state),
-        &state.model.presence,
-        state.settings.settings(),
-    )
+    state.views[&state.active_view]
+        .nick_list
+        .iter()
+        .position(|item| item.user_id == user_id)
+        .ok_or_else(|| format!("unknown_member: {user_id}"))
 }
 
 unsafe fn active_member_list(hwnd: HWND) -> Option<HWND> {
@@ -330,17 +412,16 @@ unsafe fn active_member_list(hwnd: HWND) -> Option<HWND> {
     }
 }
 
-/// The nick list's selected member: the list shows the active view's
-/// members in order.
+/// The active window's selected member, through its listing.
 unsafe fn selected_member(hwnd: HWND) -> Option<RoomMemberSummary> {
     let list = active_member_list(hwnd)?;
-    let selected = SendMessageW(list, LB_GETCURSEL, 0, 0);
-    if selected == LB_ERR as isize {
-        return None;
-    }
-    active_view_members(state_ref(hwnd))
-        .get(selected as usize)
-        .cloned()
+    let state = state_ref(hwnd);
+    let view_id = &state.active_view;
+    let listing = &state.views[view_id].nick_list;
+    list_selection(list)
+        .into_iter()
+        .next()
+        .map(|index| room_member(state, view_id, &listing[index].user_id).clone())
 }
 
 pub(super) unsafe fn active_member_action_state(hwnd: HWND) -> MemberMenuActionState {
@@ -381,10 +462,7 @@ pub(super) unsafe fn refresh_member_menu_state(
 }
 
 pub(super) unsafe fn select_member_for_automation(hwnd: HWND, user_id: &str) -> Result<(), String> {
-    let index = active_member_rows(hwnd)
-        .iter()
-        .position(|member| member.user_id == user_id)
-        .ok_or_else(|| format!("unknown_member: {user_id}"))?;
+    let index = active_listed_index(hwnd, user_id)?;
     let list = active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
     let selected = SendMessageW(list, LB_GETCURSEL, 0, 0);
     if selected == LB_ERR as isize {
@@ -410,6 +488,63 @@ mod tests {
 
     use super::super::test_fixtures::*;
     use super::*;
+
+    #[test]
+    fn the_nick_list_is_rebuilt_only_when_what_it_lists_changes() {
+        let bob = member_summary("@bob:example", "Bob", false);
+        let carol = member_summary("@carol:example", "Carol", false);
+        let listed = nick_list_items(&[bob.clone(), carol.clone()]);
+        // What it does not show: rights and whether it is you. Presence
+        // and colours are not inputs at all: they are drawn.
+        let unshown = RoomMemberSummary {
+            can_kick: true,
+            can_ban: true,
+            is_own_user: true,
+            ..bob.clone()
+        };
+        assert_eq!(nick_list_items(&[unshown, carol.clone()]), listed);
+        let changes = [
+            vec![
+                RoomMemberSummary {
+                    rank: RoomMemberRank::Voiced,
+                    ..bob.clone()
+                },
+                carol.clone(),
+            ],
+            vec![
+                member_summary("@bob:example", "Bobby", false),
+                carol.clone(),
+            ],
+            // A nick shared with someone gains the user ID.
+            vec![member_summary("@bob:example", "Bob", true), carol.clone()],
+            vec![member_summary("@bob2:example", "Bob", false), carol.clone()],
+            vec![carol.clone(), bob.clone()],
+            vec![bob.clone()],
+            vec![
+                bob.clone(),
+                carol.clone(),
+                member_summary("@dan:example", "Dan", false),
+            ],
+        ];
+        for members in changes {
+            assert_ne!(nick_list_items(&members), listed, "{members:?}");
+        }
+    }
+
+    #[test]
+    fn a_rebuilt_nick_list_reselects_its_members_by_user_id() {
+        let items = nick_list_items(&[
+            member_summary("@amy:example", "Amy", false),
+            member_summary("@bob:example", "Bob", false),
+            member_summary("@carol:example", "Carol", false),
+        ]);
+        // Kept, moved (Carol was first), and gone (Dan left).
+        assert_eq!(
+            restored_selection(&items, &["@carol:example", "@dan:example", "@amy:example"]),
+            vec![0, 2]
+        );
+        assert_eq!(restored_selection(&items, &[]), Vec::<usize>::new());
+    }
 
     #[test]
     fn member_view_rows_disambiguate_by_the_core_ambiguity_flag() {

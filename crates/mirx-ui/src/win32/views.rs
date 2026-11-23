@@ -1099,6 +1099,7 @@ pub(super) unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, St
         }),
         log: ViewLog::for_new_view(&view_id),
         rows_key: None,
+        nick_list: Vec::new(),
     };
 
     let state = state_mut(hwnd);
@@ -1356,25 +1357,31 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
     recompute_find_for_view(state_mut(hwnd), view_id, &rows);
     apply_find_to_active_view(hwnd, view_id)?;
     if let Some(room_id) = view_id.room_id() {
-        let member_rows = {
+        let items = {
             let state = state_ref(hwnd);
             let room = room_by_id(&state.model.rooms, room_id)
                 .expect("a room or thread window's room exists");
-            let members = state
-                .model
-                .room_views
-                .get(room_id)
-                .map(|room_view| room_view.members.as_slice())
-                .unwrap_or_default();
             // An invite's window lists nobody: its room is not joined yet.
             if is_sendable_room(room) {
-                room_member_view_rows(members, &state.model.presence, state.settings.settings())
+                let members = state
+                    .model
+                    .room_views
+                    .get(room_id)
+                    .map(|room_view| room_view.members.as_slice())
+                    .unwrap_or_default();
+                nick_list_items(members)
             } else {
                 Vec::new()
             }
         };
-        set_room_member_list(room_content_member_list(content), &member_rows);
-        InvalidateRect(room_content_member_list(content), null(), 1);
+        let list = room_content_member_list(content);
+        let view = state_mut(hwnd)
+            .views
+            .get_mut(view_id)
+            .expect("a refreshed view has a window");
+        sync_nick_list(list, &mut view.nick_list, items);
+        // Colours and presence draw from the model.
+        InvalidateRect(list, null(), 1);
     }
     InvalidateRect(content, null(), 1);
     InvalidateRect(timeline, null(), 1);
