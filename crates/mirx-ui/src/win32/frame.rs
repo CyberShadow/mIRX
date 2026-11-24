@@ -322,7 +322,6 @@ unsafe extern "system" fn window_proc(
         }
         WM_NCDESTROY => {
             if let Some(state) = window_data::get::<WindowState>(hwnd) {
-                destroy_automation_state(state);
                 // The bars went with the other children.
                 app_icon::destroy_image_list(state.controls.toolbar_images);
                 app_icon::destroy_image_list(state.controls.window_icons);

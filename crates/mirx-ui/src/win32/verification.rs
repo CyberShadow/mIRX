@@ -217,7 +217,7 @@ fn submit_verification_command(
             format!("failed to enqueue {action_name} verification command: {err}")
         })?;
     }
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     Ok(())
 }
 
@@ -521,7 +521,7 @@ mod tests {
 
         assert_eq!(state.model.last_verification, last_verification);
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![
                 Command::AcceptVerification(VerificationFlowId {
                     flow_id: "flow-verify-123".to_owned(),
@@ -563,7 +563,7 @@ mod tests {
             Err("verification action is not available in the current state".to_owned())
         );
         assert_eq!(state.model.last_verification, last_verification);
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
 
         handle
             .command_sender()
@@ -586,7 +586,7 @@ mod tests {
 
         assert_eq!(state.model.last_verification, last_verification);
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![
                 Command::AcceptVerification(VerificationFlowId {
                     flow_id: "flow-current".to_owned(),
@@ -622,7 +622,7 @@ mod tests {
 
         assert_eq!(state.model.last_verification, last_verification);
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![
                 Command::ConfirmVerificationSas(VerificationFlowId {
                     flow_id: "flow-current".to_owned(),
@@ -659,7 +659,7 @@ mod tests {
 
         assert_eq!(state.model.last_verification, last_verification);
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::AcceptVerification(VerificationFlowId {
                 flow_id: "flow-current".to_owned(),
                 user_id: "@alice:example".to_owned(),
@@ -712,7 +712,7 @@ mod tests {
 
         assert_eq!(state.model.last_verification, last_verification);
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![
                 Command::AcceptVerification(VerificationFlowId {
                     flow_id: "flow-current".to_owned(),
@@ -774,7 +774,7 @@ mod tests {
 
         assert_eq!(state.model.last_verification, last_verification);
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::AcceptVerification(VerificationFlowId {
                 flow_id: "flow-explicit".to_owned(),
                 user_id: "@bob:example".to_owned(),
@@ -802,7 +802,7 @@ mod tests {
             serde_json::to_value(error).unwrap()["err"]["code"],
             json!("invalid_args")
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]

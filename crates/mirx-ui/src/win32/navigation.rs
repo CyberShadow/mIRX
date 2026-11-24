@@ -324,7 +324,7 @@ unsafe fn sync_tree(hwnd: HWND) {
         (node, occurrence)
     });
     SendMessageW(tree, TVM_DELETEITEM, 0, TVI_ROOT as LPARAM);
-    state.refresh_counters.count_treebar_rebuild();
+    state.harness.count_treebar_rebuild();
     state.tree_items.clear();
     state.primary_tree_items.clear();
 
@@ -841,7 +841,7 @@ unsafe fn rebuild_switchbar(
         return Err("switchbar control was not created".to_owned());
     }
 
-    state_mut(hwnd).refresh_counters.count_switchbar_rebuild();
+    state_mut(hwnd).harness.count_switchbar_rebuild();
     loop {
         let count = SendMessageW(switchbar, TB_BUTTONCOUNT, 0, 0);
         if count < 0 {
@@ -1384,7 +1384,7 @@ mod tests {
 
     /// The treebar and switchbar rebuilds so far.
     unsafe fn chrome_rebuilds(hwnd: HWND) -> (u64, u64) {
-        let counters = &state_ref(hwnd).refresh_counters;
+        let counters = &state_ref(hwnd).harness.refresh_counters;
         (counters.treebar_rebuilds(), counters.switchbar_rebuilds())
     }
 

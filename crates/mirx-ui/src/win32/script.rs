@@ -591,14 +591,14 @@ mod tests {
 
     /// A frame with the channel Ops (`#ops:example`, active) and a query
     /// with Alice, signed in as Mee; `extra` adds alias lines to the
-    /// defaults. What the UI sends waits in `inert_command_receiver`
+    /// defaults. What the UI sends waits in `harness.inert_commands`
     /// until `ack_sent` answers it.
     unsafe fn with_alias_frame(extra: &[&str], test: impl FnOnce(HWND)) {
         with_test_frame(600, 400, |hwnd| {
             let (sender, commands) = inert_command_sender();
             let state = state_mut(hwnd);
             state.command_sender = Some(sender);
-            state.inert_command_receiver = Some(commands);
+            state.harness.inert_commands = Some(commands);
             state.model = context_model();
             state.model.rooms.remove(1);
             state
@@ -621,7 +621,8 @@ mod tests {
     /// The IDs of the commands sent since the last call.
     unsafe fn take_sent_ids(hwnd: HWND) -> Vec<CommandId> {
         let receiver = state_mut(hwnd)
-            .inert_command_receiver
+            .harness
+            .inert_commands
             .as_mut()
             .expect("an alias frame keeps its receiver");
         std::iter::from_fn(|| receiver.try_recv().ok())
@@ -675,7 +676,8 @@ mod tests {
 
     fn sent(state: &WindowState) -> Vec<(String, RoomMessagePresentationKind, String)> {
         state
-            .recorded_commands
+            .harness
+            .commands
             .iter()
             .filter_map(|command| match command {
                 Command::SendMessage(request) => Some((
@@ -690,7 +692,8 @@ mod tests {
 
     fn joins(state: &WindowState) -> Vec<String> {
         state
-            .recorded_commands
+            .harness
+            .commands
             .iter()
             .filter_map(|command| match command {
                 Command::JoinRoom(request) => Some(request.room_or_alias.clone()),
@@ -722,7 +725,7 @@ mod tests {
                 // `$$1` without a parameter: nothing at all.
                 type_compose_line(hwnd, "/w");
                 type_compose_line(hwnd, "/j");
-                assert_eq!(state_ref(hwnd).recorded_commands.len(), 2);
+                assert_eq!(state_ref(hwnd).harness.commands.len(), 2);
                 assert_eq!(ops_lines(hwnd), lines_before);
                 type_compose_line(hwnd, "/!j x");
                 assert_eq!(
@@ -1023,7 +1026,7 @@ mod tests {
 
                 set(false);
                 run_perform(hwnd).unwrap();
-                assert!(state_ref(hwnd).recorded_commands.is_empty());
+                assert!(state_ref(hwnd).harness.commands.is_empty());
                 assert_eq!(status_log_lines(state_ref(hwnd)).len(), status_before);
 
                 set(true);
@@ -1057,7 +1060,7 @@ mod tests {
     }
 
     fn commands_sent(state: &WindowState) -> Vec<&Command> {
-        state.recorded_commands.iter().collect()
+        state.harness.commands.iter().collect()
     }
 
     fn status_tail(hwnd: HWND, from: usize) -> Vec<String> {
@@ -1135,7 +1138,7 @@ mod tests {
                         [Command::CreateDirectRoom(request)] if request.user_id == "@bob:example"
                     ),
                     "{:?}",
-                    state_ref(hwnd).recorded_commands
+                    state_ref(hwnd).harness.commands
                 );
                 assert!(sent(state_ref(hwnd)).is_empty());
 

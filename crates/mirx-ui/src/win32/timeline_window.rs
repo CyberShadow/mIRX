@@ -1196,7 +1196,7 @@ pub(super) fn submit_backfill_room_history_for_room(
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue backfill room history command: {err}"))?;
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     Ok(true)
 }
 
@@ -1392,7 +1392,7 @@ mod tests {
             Ok(true)
         );
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
                 room_id: "!room:example".to_owned(),
                 from: HistoryFrom::Latest,
@@ -1426,7 +1426,7 @@ mod tests {
             submit_backfill_room_history_for_room(&mut state, "!room:example"),
             Ok(false)
         );
-        assert_eq!(state.recorded_commands.len(), 1);
+        assert_eq!(state.harness.commands.len(), 1);
         assert_eq!(
             state
                 .model
@@ -1481,7 +1481,7 @@ mod tests {
             Ok(true)
         );
         assert_eq!(
-            state.recorded_commands.last(),
+            state.harness.commands.last(),
             Some(&Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
                 room_id: "!room:example".to_owned(),
                 from: HistoryFrom::Token {
@@ -1528,7 +1528,7 @@ mod tests {
             submit_backfill_room_history_for_room(&mut state, "!room:example"),
             Ok(false)
         );
-        assert_eq!(state.recorded_commands.len(), 1);
+        assert_eq!(state.harness.commands.len(), 1);
 
         stop_test_core(handle);
     }
@@ -1580,7 +1580,7 @@ mod tests {
             Ok(true)
         );
         assert_eq!(
-            state.recorded_commands.last(),
+            state.harness.commands.last(),
             Some(&Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
                 room_id: "!room:example".to_owned(),
                 from: HistoryFrom::Token {
@@ -1652,7 +1652,8 @@ mod tests {
 
     fn backfill_requests(state: &WindowState) -> usize {
         state
-            .recorded_commands
+            .harness
+            .commands
             .iter()
             .filter(|command| matches!(command, Command::BackfillRoomHistory(_)))
             .count()
@@ -1927,7 +1928,7 @@ mod tests {
         unsafe {
             with_original_jump_frame("$q", |hwnd| {
                 let timeline = ops_timeline(hwnd, &room_view_id("!ops:example"));
-                let wrapped = || state_ref(hwnd).refresh_counters.rows_wrapped();
+                let wrapped = || state_ref(hwnd).harness.refresh_counters.rows_wrapped();
                 let rows = timeline_state_ref(timeline).source_rows.clone();
                 let log_rows = rows
                     .iter()

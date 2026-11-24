@@ -683,8 +683,7 @@ pub(super) unsafe fn run_slash_command(
                     .map_err(|err| {
                         format!("failed to enqueue refresh e2ee status command: {err}")
                     })?;
-                #[cfg(test)]
-                state.recorded_commands.push(command);
+                state.harness.record_command(command);
                 Ok(Some("e2ee refresh submitted".to_owned()))
             }
             E2eeSlashCommand::RecoverDialog => {
@@ -1098,7 +1097,7 @@ pub(super) fn enqueue_command(state: &mut WindowState, command: Command) -> Resu
         .ok_or_else(|| "core command sender is not available".to_owned())?
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue command: {err}"))?;
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     Ok(())
 }
 
@@ -1441,7 +1440,7 @@ pub(super) fn submit_join_room(
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue join room command: {err}"))?;
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     Ok(format!("join submitted: {target}"))
 }
 
@@ -1473,7 +1472,7 @@ pub(super) fn submit_accept_room_invite(
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue accept room invite command: {err}"))?;
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     Ok(format!("accept submitted: {room_id}"))
 }
 
@@ -1493,7 +1492,7 @@ pub(super) fn submit_reject_slash_command(
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue reject room invite command: {err}"))?;
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     Ok(format!("reject submitted: {room_id}"))
 }
 
@@ -1513,7 +1512,7 @@ pub(super) fn submit_part_slash_command(
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue leave room command: {err}"))?;
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     Ok(format!("part submitted: {room_id}"))
 }
 
@@ -1559,7 +1558,7 @@ fn submit_react_slash_command(
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue send reaction command: {err}"))?;
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     Ok(format!("Reaction queued for {target_event_id}"))
 }
 
@@ -1650,7 +1649,7 @@ fn submit_redact_event_command(
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue redact event command: {err}"))?;
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     Ok(())
 }
 
@@ -1686,7 +1685,7 @@ pub(super) fn submit_query_slash_command(
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue create direct room command: {err}"))?;
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     Ok(format!("direct messages requested: {user_id}"))
 }
 
@@ -1720,7 +1719,7 @@ fn submit_topic_slash_command(
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue set room topic command: {err}"))?;
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     Ok(format!("topic change submitted for {room_id}"))
 }
 
@@ -1808,7 +1807,7 @@ mod tests {
                 type_compose_line(hwnd, "/msg Bob hi");
                 type_compose_line(hwnd, "/msg Nobody hi");
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![
                         sent_message("!dm:example", RoomMessagePresentationKind::Text, "hi there"),
                         sent_message(
@@ -1911,7 +1910,7 @@ mod tests {
                 type_compose_line(hwnd, "/describe alice nods");
                 type_compose_line(hwnd, "/describe #Dev");
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![
                         sent_message("!ops:example", RoomMessagePresentationKind::Text, "hi all"),
                         sent_message("!dev:example", RoomMessagePresentationKind::Text, "hi all"),
@@ -1943,7 +1942,7 @@ mod tests {
             with_test_compose_window(state, |hwnd| {
                 install_test_view_content(hwnd);
                 type_compose_line(hwnd, "/amsg hi");
-                assert!(state_ref(hwnd).recorded_commands.is_empty());
+                assert!(state_ref(hwnd).harness.commands.is_empty());
                 let lines = render_room_lines(state_ref(hwnd), "!dm:example");
                 assert_eq!(lines.last().unwrap(), "[22:12] * /amsg: not in any room");
             });
@@ -1959,7 +1958,7 @@ mod tests {
                 install_test_view_content(hwnd);
                 type_compose_line(hwnd, "/msg alice **red** alert");
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![Command::SendMessage(SendMessageRequest {
                         room_id: "!dm:example".to_owned(),
                         presentation: RoomMessagePresentationKind::Text,
@@ -2012,7 +2011,7 @@ mod tests {
                 type_compose_line(hwnd, "/whois alice");
                 type_compose_line(hwnd, "/whois @stranger:remote");
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![
                         Command::FetchUserProfile("@alice:example".to_owned()),
                         Command::FetchUserProfile("@stranger:remote".to_owned()),
@@ -2070,7 +2069,7 @@ mod tests {
                 type_compose_line(hwnd, "/devices Nobody");
                 type_compose_line(hwnd, "/devices Bob");
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![
                         Command::ListUserDevices("@me:example".to_owned()),
                         Command::ListUserDevices("@bob:example".to_owned()),
@@ -2147,7 +2146,7 @@ mod tests {
                     type_compose_line(hwnd, input);
                 }
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![
                         Command::AcceptUserIdentity("@bob:example".to_owned()),
                         Command::ListUserDevices("@bob:example".to_owned()),
@@ -2207,7 +2206,7 @@ mod tests {
                     type_compose_line(hwnd, input);
                 }
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![
                         Command::IgnoreUser("@alice:example".to_owned()),
                         Command::UnignoreUser("@spam:remote".to_owned()),
@@ -2251,7 +2250,7 @@ mod tests {
                 ] {
                     type_compose_line(hwnd, input);
                 }
-                assert_eq!(state_ref(hwnd).recorded_commands, vec![]);
+                assert_eq!(state_ref(hwnd).harness.commands, vec![]);
                 assert_eq!(state_ref(hwnd).model.status, "notify list saved");
                 let mut list = NotifyList::default();
                 list.add("@bob:example".to_owned(), None, true);
@@ -2325,7 +2324,7 @@ mod tests {
                     type_compose_line(hwnd, input);
                     assert_eq!(alice_color(), color, "after {input}");
                 }
-                assert_eq!(state_ref(hwnd).recorded_commands, vec![]);
+                assert_eq!(state_ref(hwnd).harness.commands, vec![]);
                 let entry = |line: &str| NickColorEntry::parse_ini_value(line).unwrap();
                 let mut list = NickColorList::default();
                 list.push(entry("*:example 9 notify"));
@@ -2418,7 +2417,7 @@ mod tests {
                 install_test_view_content(hwnd);
                 type_compose_line(hwnd, "/query bob hello");
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![Command::CreateDirectRoom(CreateDirectRoomRequest {
                         user_id: "@bob:example".to_owned(),
                     })]
@@ -2473,7 +2472,7 @@ mod tests {
                 let room = || "!ops:example".to_owned();
                 let power = |user_id: &str, role| member_roles_command(&room(), &[(user_id, role)]);
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![
                         Command::KickRoomMember(KickRoomMemberRequest {
                             room_id: room(),
@@ -2547,7 +2546,7 @@ mod tests {
                     type_compose_line(hwnd, input);
                 }
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![member_roles_command(
                         "!ops:example",
                         &[
@@ -2819,7 +2818,8 @@ mod tests {
 
     fn joins(state: &WindowState) -> Vec<&Command> {
         state
-            .recorded_commands
+            .harness
+            .commands
             .iter()
             .filter(|command| matches!(command, Command::JoinRoom(_)))
             .collect()
@@ -2919,7 +2919,7 @@ mod tests {
 
         assert_eq!(status, "join submitted: #ops:example.org");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::JoinRoom(JoinRoomRequest {
                 room_or_alias: "#ops:example.org".to_owned(),
                 via: Vec::new(),
@@ -2969,7 +2969,7 @@ mod tests {
             })
         };
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![
                 Command::CreateRoom(CreateRoomRequest {
                     name: "Team room".to_owned(),
@@ -2996,7 +2996,7 @@ mod tests {
             ),
             Err("not connected to server".to_owned())
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -3010,7 +3010,7 @@ mod tests {
 
         assert_eq!(status, "accept submitted: !invite:example");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::AcceptRoomInvite(AcceptRoomInviteRequest {
                 room_id: "!invite:example".to_owned(),
             })]
@@ -3037,7 +3037,7 @@ mod tests {
 
         assert_eq!(status, "reject submitted: !invite:example");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::RejectRoomInvite(RejectRoomInviteRequest {
                 room_id: "!invite:example".to_owned(),
             })]
@@ -3062,7 +3062,7 @@ mod tests {
 
         assert_eq!(status, "direct messages requested: @alice:example.org");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::CreateDirectRoom(CreateDirectRoomRequest {
                 user_id: "@alice:example.org".to_owned(),
             })]
@@ -3082,7 +3082,7 @@ mod tests {
 
         assert_eq!(status, "part submitted: !room:example");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::LeaveRoom(LeaveRoomRequest {
                 room_id: "!room:example".to_owned(),
             })]
@@ -3101,7 +3101,7 @@ mod tests {
 
         assert_eq!(status, "part submitted: !room:example");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::LeaveRoom(LeaveRoomRequest {
                 room_id: "!room:example".to_owned(),
             })]
@@ -3122,7 +3122,7 @@ mod tests {
             Ok("notifications for Room: Mute".to_owned())
         );
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::SetRoomNotificationMode(
                 SetRoomNotificationModeRequest {
                     room_id: "!room:example".to_owned(),
@@ -3148,7 +3148,7 @@ mod tests {
             submit_part_slash_command(&mut state, &window, None),
             Err("no room selected".to_owned())
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -3164,7 +3164,7 @@ mod tests {
 
         assert_eq!(status, "part submitted: !beta:example");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::LeaveRoom(LeaveRoomRequest {
                 room_id: "!beta:example".to_owned(),
             })]
@@ -3186,7 +3186,7 @@ mod tests {
             submit_part_slash_command(&mut state, &window, Some("Shared")),
             Err("ambiguous room: Shared".to_owned())
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -3206,7 +3206,7 @@ mod tests {
 
         assert_eq!(status, "Reaction queued for $react-normal");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::SendReaction(SendReactionRequest {
                 room_id: "!room:example".to_owned(),
                 target_event_id: "$react-normal".to_owned(),
@@ -3241,7 +3241,7 @@ mod tests {
 
         assert_eq!(status, "Reaction queued for $react-normal");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::SendReaction(SendReactionRequest {
                 room_id: "!room:example".to_owned(),
                 target_event_id: "$react-normal".to_owned(),
@@ -3266,7 +3266,7 @@ mod tests {
             ),
             Err("no room selected".to_owned())
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -3285,7 +3285,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![reply_command(
                 RoomMessagePresentationKind::Text,
                 "hello there"
@@ -3352,7 +3352,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::SendMessage(SendMessageRequest {
                 room_id: "!ops:example".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
@@ -3415,7 +3415,7 @@ mod tests {
             ),
             Err("no such message in this window".to_owned())
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -3446,7 +3446,7 @@ mod tests {
                 Err("core command sender is not available".to_owned())
             );
         }
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -3465,7 +3465,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::EditMessage(EditMessageRequest {
                 room_id: "!ops:example".to_owned(),
                 target_event_id: "$mine".to_owned(),
@@ -3516,7 +3516,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::EditMessage(EditMessageRequest {
                 room_id: "!ops:example".to_owned(),
                 target_event_id: "$mine-in-thread".to_owned(),
@@ -3540,7 +3540,7 @@ mod tests {
 
         assert_eq!(status, "Redaction queued for $event-to-redact");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::RedactEvent(RedactEventRequest {
                 room_id: "!room:example".to_owned(),
                 event_id: "$event-to-redact".to_owned(),
@@ -3569,7 +3569,7 @@ mod tests {
 
         assert_eq!(status, "Redaction queued for $event-to-redact");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::RedactEvent(RedactEventRequest {
                 room_id: "!room:example".to_owned(),
                 event_id: "$event-to-redact".to_owned(),
@@ -3598,7 +3598,7 @@ mod tests {
             "Reaction redaction queued for $reaction-alice-plus-one"
         );
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::RedactEvent(RedactEventRequest {
                 room_id: "!room:example".to_owned(),
                 event_id: "$reaction-alice-plus-one".to_owned(),
@@ -3633,7 +3633,7 @@ mod tests {
             "Reaction redaction queued for $reaction-alice-plus-one"
         );
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::RedactEvent(RedactEventRequest {
                 room_id: "!room:example".to_owned(),
                 event_id: "$reaction-alice-plus-one".to_owned(),
@@ -3656,7 +3656,7 @@ mod tests {
             ),
             Err("no room selected".to_owned())
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -3672,7 +3672,7 @@ mod tests {
 
         assert_eq!(status, "topic change submitted for !room:example");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::SetRoomTopic(SetRoomTopicRequest {
                 room_id: "!room:example".to_owned(),
                 topic: "incident review".to_owned(),
@@ -3701,7 +3701,7 @@ mod tests {
 
         assert_eq!(status, "topic change submitted for !room:example");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::SetRoomTopic(SetRoomTopicRequest {
                 room_id: "!room:example".to_owned(),
                 topic: "incident review".to_owned(),
@@ -3720,7 +3720,7 @@ mod tests {
             submit_topic_slash_command(&mut state, &window, None, "incident review".to_owned()),
             Err("no room selected".to_owned())
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     fn aliased_rooms() -> Vec<RoomSummary> {
@@ -3748,7 +3748,7 @@ mod tests {
 
         assert_eq!(status, "topic change submitted for !lobby:example");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::SetRoomTopic(SetRoomTopicRequest {
                 room_id: "!lobby:example".to_owned(),
                 topic: "new".to_owned(),
@@ -3784,7 +3784,7 @@ mod tests {
             room_topic_line(&state, &state.active_view, Some("#lobby:example")),
             Ok("* No topic is set".to_owned())
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -3921,7 +3921,8 @@ mod tests {
     /// The rooms the recorded commands act on, in order.
     fn command_rooms(state: &WindowState) -> Vec<&str> {
         state
-            .recorded_commands
+            .harness
+            .commands
             .iter()
             .map(|command| match command {
                 Command::InviteRoomMember(request) => request.room_id.as_str(),

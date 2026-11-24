@@ -367,7 +367,7 @@ pub(super) fn collect_lazy_room_preview_media_requests<'a>(
 /// Whether a refresh may ask the core for preview media: not while a
 /// synthetic load replays its events.
 pub(super) fn can_fetch_room_media(state: &WindowState) -> bool {
-    !state.synthetic_load_in_progress
+    !state.harness.synthetic_load()
 }
 
 pub(super) fn dispatch_lazy_room_preview_media_requests(
@@ -430,8 +430,7 @@ pub(super) fn dispatch_lazy_room_preview_media_requests(
                 "failed to enqueue fetch room image media command: {err}"
             ));
         }
-        #[cfg(test)]
-        state.recorded_commands.push(command);
+        state.harness.record_command(command);
     }
 
     Ok(())
@@ -671,7 +670,7 @@ mod tests {
         };
         dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
         assert_eq!(
-            state.recorded_commands[0],
+            state.harness.commands[0],
             Command::FetchRoomMedia(FetchRoomMediaRequest {
                 room_id: "!ops:example".to_owned(),
                 activity_id: "event:$video1:example.org".to_owned(),
@@ -988,7 +987,7 @@ mod tests {
         };
         dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::FetchRoomMedia(FetchRoomMediaRequest {
                 room_id: "!ops:example".to_owned(),
                 activity_id: "event:$image1:example.org".to_owned(),
@@ -1053,7 +1052,7 @@ mod tests {
                 format: timeline_thumbnail_format(),
             })
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -1086,7 +1085,7 @@ mod tests {
             )
         };
         dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
-        assert_eq!(state.recorded_commands.len(), 1);
+        assert_eq!(state.harness.commands.len(), 1);
 
         let room_requests = {
             let room_view = state
@@ -1127,7 +1126,7 @@ mod tests {
         };
         dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::FetchRoomMedia(FetchRoomMediaRequest {
                 room_id: "!ops:example".to_owned(),
                 activity_id: "event:$thread-video:example.org".to_owned(),
@@ -1199,7 +1198,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(state.recorded_commands.len(), 1);
+        assert_eq!(state.harness.commands.len(), 1);
 
         stop_test_core(handle);
     }
@@ -1301,7 +1300,7 @@ mod tests {
         dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
 
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::FetchRoomMedia(FetchRoomMediaRequest {
                 room_id: "!ops:example".to_owned(),
                 activity_id: "event:$image1:example.org".to_owned(),
@@ -1377,7 +1376,7 @@ mod tests {
         dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
 
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::FetchRoomMedia(FetchRoomMediaRequest {
                 room_id: "!ops:example".to_owned(),
                 activity_id: "event:$image1:example.org".to_owned(),
@@ -1430,7 +1429,7 @@ mod tests {
         dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
 
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::FetchRoomMedia(FetchRoomMediaRequest {
                 room_id: "!ops:example".to_owned(),
                 activity_id: "event:$image1:example.org".to_owned(),

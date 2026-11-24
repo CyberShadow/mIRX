@@ -25,7 +25,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use super::settings::TraySetting;
 use super::*;
-use crate::automation::{DumpShownTip, UiTray, UiTrayMenuItem};
+use crate::automation::{UiTray, UiTrayMenuItem};
 
 /// The icon's id among the frame's: it has one.
 const TRAY_ICON_ID: u32 = 1;
@@ -40,8 +40,6 @@ pub(super) struct TrayState {
     icon_added: bool,
     /// The window the tip on the icon is about, while it shows.
     tip: Option<ViewId>,
-    /// Every tip the shell took, in order, for the automation dump.
-    shown_tips: Vec<ShownTip>,
 }
 
 /// A line that may show a tip, found while the batch applies; the tip is
@@ -51,13 +49,6 @@ pub(super) struct TipCandidate {
     /// The window the line is in: its room's or its thread's.
     pub(super) view: ViewId,
     pub(super) activity_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ShownTip {
-    view: ViewId,
-    title: String,
-    text: String,
 }
 
 /// Whether the icon should be in the tray: always, while the frame is
@@ -422,15 +413,11 @@ pub(super) unsafe fn show_tip(hwnd: HWND, candidate: TipCandidate) -> Result<(),
     let text = utf16_prefix(&line, data.szInfo.len() - 1);
     fill_utf16(&mut data.szInfoTitle, title);
     fill_utf16(&mut data.szInfo, text);
-    let tray = &mut state_mut(hwnd).tray;
     match notify_icon(NIM_MODIFY, &data) {
         Ok(()) => {
-            tray.tip = Some(candidate.view.clone());
-            tray.shown_tips.push(ShownTip {
-                view: candidate.view,
-                title: title.to_owned(),
-                text: text.to_owned(),
-            });
+            let state = state_mut(hwnd);
+            state.harness.record_shown_tip(&candidate.view, title, text);
+            state.tray.tip = Some(candidate.view);
             Ok(())
         }
         Err(error) => {
@@ -459,19 +446,6 @@ pub(super) unsafe fn choose_tray_menu_item(hwnd: HWND, label: &str) -> Result<()
         .ok_or_else(|| format!("the tray popup has no item {label}"))?
         .view;
     choose_tray_view(hwnd, &view)
-}
-
-pub(super) fn dump_shown_tips(state: &WindowState) -> Vec<DumpShownTip> {
-    state
-        .tray
-        .shown_tips
-        .iter()
-        .map(|tip| DumpShownTip {
-            view: view_identity_from_view_id(&tip.view),
-            title: tip.title.clone(),
-            text: tip.text.clone(),
-        })
-        .collect()
 }
 
 pub(super) unsafe fn dump_tray(hwnd: HWND) -> UiTray {

@@ -51,7 +51,7 @@ fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) ->
                 .map(|room| (room.is_direct, joined_room_notification_mode(room)))
     {
         // A replayed event load is not news.
-        if !state.synthetic_load_in_progress {
+        if !state.harness.synthetic_load() {
             attention.flash = notifications::activity_wants_attention(level, room_is_direct, mode);
             attention.tip = notifications::activity_wants_tip(
                 level,
@@ -420,7 +420,7 @@ pub(super) fn apply_core_event(
                 ));
             }
             // A replayed event load must not overwrite the saved session.
-            if !state.synthetic_load_in_progress {
+            if !state.harness.synthetic_load() {
                 save_session(&homeserver_url, &session)?;
                 state.current_session_homeserver_url = Some(homeserver_url);
             }
@@ -1074,15 +1074,15 @@ pub(super) unsafe fn apply_events_and_refresh(
             Event::SignInUrl { url }
             | Event::E2eeIdentityResetApproval { url }
             | Event::DeviceSignOutApproval { url, .. }
-                if !state.synthetic_load_in_progress =>
+                if !state.harness.synthetic_load =>
             {
                 Some(url.clone())
             }
             _ => None,
         };
-        let connection_lost = !state.synthetic_load_in_progress
+        let connection_lost = !state.harness.synthetic_load()
             && matches!(event, Event::SyncStopped(SyncStopReason::Lost(_)));
-        connected |= !state.synthetic_load_in_progress && matches!(event, Event::SyncConnected);
+        connected |= !state.harness.synthetic_load() && matches!(event, Event::SyncConnected);
         attention = attention.then(apply_core_event(state, event)?);
         state.event_generation += 1;
         if let Some(url) = browser_url {
@@ -1145,9 +1145,9 @@ unsafe fn request_frame_attention(hwnd: HWND) {
 }
 
 unsafe fn apply_synthetic_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(), String> {
-    state_mut(hwnd).synthetic_load_in_progress = true;
+    state_mut(hwnd).harness.synthetic_load = true;
     let result = apply_events_and_refresh(hwnd, events);
-    state_mut(hwnd).synthetic_load_in_progress = false;
+    state_mut(hwnd).harness.synthetic_load = false;
     result
 }
 
@@ -1217,8 +1217,7 @@ pub(super) fn submit_mark_room_read(
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue mark room read command: {err}"))?;
     state.sent_receipts.record(room_id, &event_id);
-    #[cfg(test)]
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     Ok(())
 }
 
@@ -1239,8 +1238,7 @@ pub(super) fn submit_set_read_marker(
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue set read marker command: {err}"))?;
-    #[cfg(test)]
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     Ok(())
 }
 
@@ -1458,7 +1456,7 @@ mod tests {
                 .unwrap();
                 let state = state_ref(hwnd);
                 assert_eq!(state.model.connection, ConnectionState::WaitingForBrowser);
-                assert_eq!(state.opened_links, Vec::<String>::new());
+                assert_eq!(state.harness.opened_links, Vec::<String>::new());
             });
         }
     }
@@ -1556,7 +1554,10 @@ mod tests {
                 )
                 .unwrap();
                 let state = state_ref(hwnd);
-                assert_eq!(state.opened_links, vec![RESET_APPROVAL_URL.to_owned()]);
+                assert_eq!(
+                    state.harness.opened_links,
+                    vec![RESET_APPROVAL_URL.to_owned()]
+                );
                 let lines = status_lines_with_kinds(state);
                 assert_eq!(
                     lines[..2],
@@ -1595,7 +1596,7 @@ mod tests {
                 )
                 .unwrap();
                 // A replayed load opens nothing.
-                assert_eq!(state_ref(hwnd).opened_links, Vec::<String>::new());
+                assert_eq!(state_ref(hwnd).harness.opened_links, Vec::<String>::new());
                 assert_eq!(state_ref(hwnd).model.status, "waiting for session sign-out");
 
                 apply_events_and_refresh(
@@ -1615,7 +1616,7 @@ mod tests {
                 .unwrap();
                 let state = state_ref(hwnd);
                 assert_eq!(state.active_view, ViewId::Status);
-                assert_eq!(state.opened_links, vec![ACCOUNT_URL.to_owned()]);
+                assert_eq!(state.harness.opened_links, vec![ACCOUNT_URL.to_owned()]);
                 let approval = [
                     "* To sign out PH0NE, confirm on the page your browser opened; /devices \
                      lists your sessions afterwards"
@@ -1666,7 +1667,7 @@ mod tests {
                 )
                 .unwrap();
                 let state = state_ref(hwnd);
-                assert_eq!(state.opened_links, Vec::<String>::new());
+                assert_eq!(state.harness.opened_links, Vec::<String>::new());
                 assert_eq!(state.model.status, "waiting for identity reset approval");
             });
         }
@@ -3652,7 +3653,7 @@ mod tests {
             )]
         );
         // Nothing was accepted: auto-join is off.
-        assert_eq!(state.recorded_commands, []);
+        assert_eq!(state.harness.commands, []);
 
         // A new session's first list is no news either.
         with_local_app_data(|_| apply_core_event(&mut state, Event::LoggedOut).unwrap());
@@ -3675,7 +3676,7 @@ mod tests {
         let ops = room("!ops:example", "Ops", false);
         state.active_view = room_view_id("!ops:example");
         apply_core_event(&mut state, Event::SyncedRooms(vec![ops.clone()])).unwrap();
-        assert_eq!(state.recorded_commands, []);
+        assert_eq!(state.harness.commands, []);
 
         let y = invited_room("!y:example", "Yankee");
         let z = invite_of("!z:example", "Zulu", true, false);
@@ -3690,7 +3691,7 @@ mod tests {
                 room_id: room_id.to_owned(),
             })
         };
-        assert_eq!(state.recorded_commands, [accept("!y:example")]);
+        assert_eq!(state.harness.commands, [accept("!y:example")]);
         // The lines print first, all three.
         assert_eq!(ops_invite_lines(&state).len(), 3);
 
@@ -4077,7 +4078,7 @@ mod tests {
                 .contains_key(&room_view_id("!query:example"))
         );
 
-        state.synthetic_load_in_progress = true;
+        state.harness.synthetic_load = true;
         assert_eq!(apply_core_event(&mut state, ping()).unwrap(), quiet);
         assert_eq!(
             apply_core_event(&mut state, timeline("!query:example", "loaded")).unwrap(),
@@ -4376,7 +4377,7 @@ mod tests {
             room("!inactive:example", "Inactive", false),
         ];
         state.active_view = ViewId::Room("!active:example".to_owned());
-        state.synthetic_load_in_progress = true;
+        state.harness.synthetic_load = true;
 
         apply_core_event(&mut state, timeline("!inactive:example", "hello")).unwrap();
 
@@ -4718,7 +4719,7 @@ mod tests {
                 num_mentions: 0,
             })
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -5056,7 +5057,7 @@ mod tests {
             Ok(true)
         );
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::MarkRoomRead(MarkRoomReadRequest {
                 room_id: "!room:example".to_owned(),
                 event_id: "$b".to_owned(),
@@ -5088,7 +5089,7 @@ mod tests {
         ] {
             assert_eq!(handle_view_activation(&mut state, &view_id), Ok(true));
         }
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -5112,7 +5113,7 @@ mod tests {
             handle_view_activation(&mut state, &room_view_id("!room:example")),
             Ok(false)
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -5141,7 +5142,7 @@ mod tests {
                 .room_activity
                 .contains_key(&room_view_id("!room:example"))
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -5176,17 +5177,17 @@ mod tests {
                 .contains_key(&thread_view_id("!room:example", "$thread-root"))
         );
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::MarkRoomRead(MarkRoomReadRequest {
                 room_id: "!room:example".to_owned(),
                 event_id: "$thread-1".to_owned(),
             })]
         );
         // Again, without activity since: nothing.
-        state.recorded_commands.clear();
+        state.harness.commands.clear();
         handle_view_activation(&mut state, &thread_view_id("!room:example", "$thread-root"))
             .unwrap();
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -5217,7 +5218,7 @@ mod tests {
                 .room_activity
                 .contains_key(&thread_view_id("!room:example", "$thread-root"))
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
 
         handle
             .command_sender()
@@ -5497,7 +5498,7 @@ mod tests {
                 changes.map(|text| format!("[22:12] {text}"))
             );
             assert_eq!(
-                state.recorded_commands,
+                state.harness.commands,
                 [Command::FetchUserProfile("@bob:example".to_owned())]
             );
 
@@ -5509,7 +5510,7 @@ mod tests {
                 status_lines_since(&state, start),
                 [(StatusLineKind::Notify, "* @bob:example is on Matrix")]
             );
-            assert_eq!(state.recorded_commands.len(), 2);
+            assert_eq!(state.harness.commands.len(), 2);
             drop(commands);
         });
     }
@@ -5730,7 +5731,7 @@ mod tests {
     fn connection_events_are_logged_to_status_and_survive_logout() {
         with_local_app_data(|_| {
             let mut state = test_state();
-            state.synthetic_load_in_progress = true;
+            state.harness.synthetic_load = true;
 
             apply_core_event(&mut state, Event::Started).unwrap();
             apply_core_event(
@@ -5792,7 +5793,7 @@ mod tests {
     fn a_connection_that_comes_back_says_so_and_ends_the_retries() {
         with_local_app_data(|_| {
             let mut state = test_state();
-            state.synthetic_load_in_progress = true;
+            state.harness.synthetic_load = true;
             apply_core_event(
                 &mut state,
                 Event::LoggedIn {
@@ -5861,7 +5862,7 @@ mod tests {
     fn synced_rooms_is_logged_once_per_session() {
         with_local_app_data(|_| {
             let mut state = test_state();
-            state.synthetic_load_in_progress = true;
+            state.harness.synthetic_load = true;
             let rooms = || vec![room("!room:example", "Room", false)];
             let counted = |state: &WindowState| {
                 status_log_lines(state)
@@ -5908,7 +5909,7 @@ mod tests {
     fn connecting_clears_an_error_from_before_but_not_one_after() {
         with_local_app_data(|_| {
             let mut state = test_state();
-            state.synthetic_load_in_progress = true;
+            state.harness.synthetic_load = true;
             apply_core_event(
                 &mut state,
                 Event::LoggedIn {
@@ -5978,7 +5979,7 @@ mod tests {
     #[test]
     fn logged_in_event_for_another_account_is_rejected() {
         let mut state = test_state();
-        state.synthetic_load_in_progress = true;
+        state.harness.synthetic_load = true;
         state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
 
         assert_eq!(
@@ -5998,7 +5999,7 @@ mod tests {
     fn synthetic_logged_in_event_updates_model_without_persisting_session() {
         with_local_app_data(|root| {
             let mut state = test_state();
-            state.synthetic_load_in_progress = true;
+            state.harness.synthetic_load = true;
 
             apply_core_event(
                 &mut state,
@@ -7079,12 +7080,12 @@ mod tests {
         apply_core_event(&mut state, Event::RoomActivity(no_session)).unwrap();
 
         apply_core_event(&mut state, Event::DecryptionRetryWanted).unwrap();
-        assert!(state.recorded_commands.is_empty(), "no session to ask");
+        assert!(state.harness.commands.is_empty(), "no session to ask");
 
         state.model.connection = ConnectionState::Syncing;
         apply_core_event(&mut state, Event::DecryptionRetryWanted).unwrap();
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::RetryDecryption(RetryDecryptionRequest {
                 room_id: "!ops:example".to_owned(),
                 event_ids: vec!["$again".to_owned(), "$olm".to_owned(), "$secret".to_owned()],
@@ -7117,9 +7118,9 @@ mod tests {
             event_ids: vec!["$secret".to_owned()],
         });
         let status_then = |state: &mut WindowState, status: &E2eeStatus| {
-            state.recorded_commands.clear();
+            state.harness.commands.clear();
             apply_core_event(state, Event::E2eeStatus(status.clone())).unwrap();
-            std::mem::take(&mut state.recorded_commands)
+            std::mem::take(&mut state.harness.commands)
         };
 
         assert_eq!(status_then(&mut state, &unverified), [], "the first");

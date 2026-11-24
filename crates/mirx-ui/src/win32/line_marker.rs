@@ -247,7 +247,8 @@ mod tests {
 
     fn read_marker_moves(state: &WindowState) -> Vec<(String, String)> {
         state
-            .recorded_commands
+            .harness
+            .commands
             .iter()
             .filter_map(|command| match command {
                 Command::SetReadMarker(request) => {
@@ -352,7 +353,8 @@ mod tests {
 
     fn backfill_requests(state: &WindowState) -> usize {
         state
-            .recorded_commands
+            .harness
+            .commands
             .iter()
             .filter(|command| matches!(command, Command::BackfillRoomHistory(_)))
             .count()
@@ -467,7 +469,7 @@ mod tests {
             with_marker_frame(None, |hwnd| {
                 let bob = room_view_id("!bob:example");
                 activate_view(hwnd, &bob, None).unwrap();
-                state_mut(hwnd).recorded_commands.clear();
+                state_mut(hwnd).harness.commands.clear();
                 let child = state_ref(hwnd).views[&bob].child;
                 SendMessageW(child, WM_CLOSE, 0, 0);
                 assert!(!state_ref(hwnd).views.contains_key(&bob));
@@ -533,7 +535,7 @@ mod tests {
                 // Made the active one without being entered, as when the
                 // active window closes and mirx guesses the next one, and
                 // then left for the window MDI activates.
-                state_mut(hwnd).recorded_commands.clear();
+                state_mut(hwnd).harness.commands.clear();
                 state_mut(hwnd).active_view = ops;
                 activate_view(hwnd, &ViewId::Status, None).unwrap();
                 assert_eq!(read_marker_moves(state_ref(hwnd)), Vec::new());

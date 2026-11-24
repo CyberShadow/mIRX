@@ -459,7 +459,7 @@ pub(super) unsafe fn timeline_row_paint_lines(
     );
     ReleaseDC(hwnd, hdc);
     state_mut(frame_window_for(hwnd))
-        .refresh_counters
+        .harness
         .count_rows_wrapped(wrapped);
     paint_lines
 }

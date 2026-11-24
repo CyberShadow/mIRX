@@ -922,7 +922,7 @@ mod tests {
 
         assert_eq!(find_state.history_search, RoomFindHistorySearch::LocalOnly);
         assert_eq!(find_state.feedback, "find: 1/1 \"needle\"");
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
         stop_test_core(handle);
     }
 
@@ -947,7 +947,7 @@ mod tests {
             "find: loading older history for \"needle\""
         );
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
                 room_id: "!room:example".to_owned(),
                 from: HistoryFrom::Latest,
@@ -984,7 +984,7 @@ mod tests {
             find_state.feedback,
             "find: loading older history for \"needle\""
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
         stop_test_core(handle);
     }
 
@@ -1011,7 +1011,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(find_state.history_search, RoomFindHistorySearch::Loading);
-        assert_eq!(state.recorded_commands.len(), 1);
+        assert_eq!(state.harness.commands.len(), 1);
         state.find_states.insert(view_id.clone(), find_state);
         assert_eq!(
             pending_timeline_find_history_views(&state),
@@ -1028,9 +1028,9 @@ mod tests {
                 .unwrap()
         );
 
-        assert_eq!(state.recorded_commands.len(), 2);
+        assert_eq!(state.harness.commands.len(), 2);
         assert_eq!(
-            state.recorded_commands.last(),
+            state.harness.commands.last(),
             Some(&Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
                 room_id: "!room-b:example".to_owned(),
                 from: HistoryFrom::Latest,
@@ -1206,7 +1206,7 @@ mod tests {
 
         assert_eq!(find_state.history_search, RoomFindHistorySearch::Loading);
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
                 room_id: "!room:example".to_owned(),
                 from: HistoryFrom::Latest,
@@ -1235,7 +1235,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(find_state.history_search, RoomFindHistorySearch::LocalOnly);
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
         stop_test_core(handle);
     }
 

@@ -146,7 +146,7 @@ fn read_active_room(state: &mut WindowState, in_front: bool) -> Result<(), Strin
     };
     if !in_front
         || state.model.connection != ConnectionState::Syncing
-        || state.synthetic_load_in_progress
+        || state.harness.synthetic_load()
     {
         return Ok(());
     }
@@ -436,7 +436,8 @@ mod tests {
 
     fn receipts(state: &WindowState) -> Vec<&str> {
         state
-            .recorded_commands
+            .harness
+            .commands
             .iter()
             .filter_map(|command| match command {
                 Command::MarkRoomRead(request) => Some(request.event_id.as_str()),
@@ -615,7 +616,7 @@ mod tests {
 
         let mut state = active_ops_state();
         unread(&mut state);
-        state.synthetic_load_in_progress = true;
+        state.harness.synthetic_load = true;
         read_active_room(&mut state, true).unwrap();
         assert_eq!(receipts(&state), Vec::<&str>::new());
 

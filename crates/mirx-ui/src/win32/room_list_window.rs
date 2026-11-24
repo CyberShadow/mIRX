@@ -371,7 +371,7 @@ mod tests {
 
         assert_eq!(state.model.room_list.as_ref().unwrap().len(), 2);
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::ListPublicRooms(ListPublicRoomsRequest {
                 server: None,
                 filter: Some("rust".to_owned()),
@@ -404,7 +404,7 @@ mod tests {
         .unwrap();
 
         assert!(state.model.room_list.is_none());
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     #[test]
@@ -425,7 +425,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
         assert_eq!(
             state
                 .model

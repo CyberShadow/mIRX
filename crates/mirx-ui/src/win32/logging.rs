@@ -286,7 +286,7 @@ fn log_rows(state: &WindowState, view_id: &ViewId) -> Vec<TimelineRow> {
 /// Starts logging Status or a room window, from the line that arrives as
 /// `from` on.
 fn start_view_log(state: &mut WindowState, view_id: &ViewId, from: u64) -> Result<(), String> {
-    if state.render_state_mode {
+    if state.harness.render_state() {
         return Err("logging is unavailable in render-state mode".to_owned());
     }
     let path = logs_dir()?.join(format!("{}.log", log_file_stem(&state.model, view_id)));

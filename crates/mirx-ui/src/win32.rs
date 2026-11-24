@@ -44,7 +44,7 @@ use mirx_core::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+use tokio::sync::mpsc::unbounded_channel;
 use windows_sys::Win32::Foundation::S_OK;
 use windows_sys::Win32::Foundation::{
     CloseHandle, FILETIME, GetLastError, GlobalFree, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM,
@@ -150,6 +150,7 @@ use self::app_icon::{IconSize, app_icon};
 use self::command_acks::AnsweredCommands;
 use self::dpi::Dpi;
 use self::glyph_fonts::GlyphFonts;
+use self::harness::Harness;
 use self::script::ScriptRuns;
 use crate::shared::{
     ConnectionState, LifecycleState, MdiArrangement, ReactionSummary, ViewActivityLevel,
@@ -163,33 +164,30 @@ use crate::{
         DumpE2eeRecoverySetupResult, DumpIdentityWarning, DumpIdentityWarningKind,
         DumpMemberMenuState, DumpMemberModerationAction, DumpMemberPowerRole,
         DumpMembershipCommandAction, DumpMessageMenuState, DumpModel, DumpPowerLevelChange,
-        DumpRoomActivity, DumpRoomActivityKind, DumpRoomActivityResponse,
-        DumpRoomKeyTransferDirection, DumpRoomMenuState, DumpRoomMessageActivityLine,
-        DumpRoomPreviewMediaState, DumpSubmittedAwayCommand, DumpSubmittedDirectRoomCommand,
-        DumpSubmittedEditCommand, DumpSubmittedFileCommand, DumpSubmittedHistoryCommand,
-        DumpSubmittedIdentityReset, DumpSubmittedMemberModerationCommand,
+        DumpRoomActivity, DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMenuState,
+        DumpRoomMessageActivityLine, DumpRoomPreviewMediaState, DumpSubmittedAwayCommand,
+        DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand, DumpSubmittedFileCommand,
+        DumpSubmittedHistoryCommand, DumpSubmittedMemberModerationCommand,
         DumpSubmittedMembershipCommand, DumpSubmittedMessageCommand,
         DumpSubmittedNotificationCommand, DumpSubmittedProfileCommand,
         DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand,
-        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomKeyTransfer,
-        DumpSubmittedRoomListRequest, DumpSubmittedRoomSettingsCommand,
-        DumpSubmittedRoomTopicCommand, DumpSubmittedSessionCommand,
-        DumpSubmittedSetupRecoveryCommand, DumpSubmittedTypingCommand, DumpSubmittedUserCommand,
-        DumpSubmittedVerificationAction, DumpSubmittedVerificationRequest, DumpUserCommandAction,
-        DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
-        FindActiveViewResponse, GetVersionResponse, IdleProbe, ListRoomsResponse,
-        LoadEventsResponse, MdiState, MdiView, MdiWindowPlacement, MdiWindowState, NavigationNode,
-        NavigationNodeKey, NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope,
-        RoomMemberView, SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse,
-        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiActiveTimeline,
-        UiComposeTarget, UiComposeTargetKind, UiFindHistorySearchState, UiFindState, UiFrameLayout,
-        UiMenu, UiMenuItem, UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomState,
-        UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
-        UiToolbarButton, VerificationActionArgs, ViewIdentity, WaitIdleResponse,
-        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
-        dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
-        dump_verification_from_state_event, failure_response, parse_command_request,
-        success_response,
+        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomListRequest,
+        DumpSubmittedRoomSettingsCommand, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedTypingCommand, DumpSubmittedUserCommand, DumpSubmittedVerificationAction,
+        DumpSubmittedVerificationRequest, DumpUserCommandAction, DumpVerificationActionKind,
+        DumpVerificationMenuState, FailureEnvelope, FindActiveViewResponse, GetVersionResponse,
+        IdleProbe, ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, MdiWindowPlacement,
+        MdiWindowState, NavigationNode, NavigationNodeKey, NavigationPathSegment, ParsedCommand,
+        PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
+        SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
+        SwitchbarState, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind,
+        UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiPoint, UiRect,
+        UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState, UiTextFont, UiTimelineLine,
+        UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiToolbarButton, VerificationActionArgs,
+        ViewIdentity, WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
+        dump_room_from_summary, dump_room_message_send_state_from_core,
+        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
+        parse_command_request, success_response,
     },
 };
 
@@ -229,6 +227,7 @@ mod frame;
 mod frame_menus;
 mod glyph_fonts;
 mod glyph_runs;
+mod harness;
 mod hotlinks;
 mod identity;
 mod ignore;
@@ -287,9 +286,8 @@ mod window_data;
 mod window_icons;
 
 use account::{
-    CRASH_LOG_FILE_NAME, PROFILE_SUBDIR, SubmittedIdentityReset, SubmittedRoomKeyTransfer,
-    SubmittedSessionCommand, delete_saved_session, load_or_create_store_passphrase, profile_dir,
-    save_session, session_path, submit_cancel_identity_reset, submit_device_rename,
+    CRASH_LOG_FILE_NAME, PROFILE_SUBDIR, delete_saved_session, load_or_create_store_passphrase,
+    profile_dir, save_session, session_path, submit_cancel_identity_reset, submit_device_rename,
     submit_device_sign_out, submit_identity_reset, submit_login, submit_logout,
     submit_recover_e2ee, submit_restore_saved_session, submit_restore_session,
     submit_room_key_transfer, submit_setup_e2ee_recovery, submit_start_sync,
@@ -299,8 +297,7 @@ use account::{SAVED_SESSION_VERSION, SESSION_FILE_NAME, SavedSession, load_saved
 use address_book::AddressBookTab;
 use aliases::{ALIASES_FILE_NAME, AliasStore};
 use attachments::{
-    AttachmentSaveResult, PendingAttachmentSave, apply_attachment_save_media_event,
-    save_selected_message_attachment,
+    PendingAttachmentSave, apply_attachment_save_media_event, save_selected_message_attachment,
 };
 use automation_dump::{
     active_view_identity, dump_member_menu_state, dump_message_menu_state, dump_model_from_state,
@@ -309,10 +306,7 @@ use automation_dump::{
 };
 #[cfg(test)]
 use automation_dump::{dump_frame_layout, ui_rect};
-use automation_host::{
-    AutomationState, destroy_automation_state, enable_automation, handle_copydata,
-    send_automation_request,
-};
+use automation_host::{enable_automation, handle_copydata, send_automation_request};
 use colors::{ColorItem, ColorScheme, EventItem, SchemeBrushes};
 use command_runner::clear_window;
 #[cfg(test)]
@@ -356,11 +350,11 @@ use dialogs::{
     ABOUT_DIALOG_OK_ID, SINGLE_FIELD_DIALOG_CLASS_NAME, SingleFieldDialogState, create_about_dialog,
 };
 use dialogs::{
-    SubmittedSetupE2eeRecovery, create_child_window, pack_size_lparam, register_dialog_classes,
-    room_keys_dialog_title, run_colors_dialog, run_modal_dialog, run_options_dialog,
-    show_about_dialog, show_e2ee_recovery_key, show_log_out_dialog, show_login_dialog,
-    show_recover_e2ee_dialog, show_reset_e2ee_dialog, show_room_keys_dialog,
-    show_setup_e2ee_dialog, show_sign_out_session_dialog, show_single_field_dialog,
+    create_child_window, pack_size_lparam, register_dialog_classes, room_keys_dialog_title,
+    run_colors_dialog, run_modal_dialog, run_options_dialog, show_about_dialog,
+    show_e2ee_recovery_key, show_log_out_dialog, show_login_dialog, show_recover_e2ee_dialog,
+    show_reset_e2ee_dialog, show_room_keys_dialog, show_setup_e2ee_dialog,
+    show_sign_out_session_dialog, show_single_field_dialog,
 };
 use echo::{EchoLine, EchoLog};
 use errors::{ErrorDestination, error_destination};
@@ -521,9 +515,9 @@ use timeline_window::{
 };
 use timestamp::{LocalTime, LocalTimeFn, TimestampSetting, TimestampStyle};
 use tray::{
-    TipCandidate, TrayState, choose_tray_menu_item, dump_shown_tips, dump_tray, hide_to_tray,
-    minimize_frame, mirx_is_foreground, on_taskbar_created, on_tray_icon, remove_tray_icon,
-    show_tip, sync_tray_icon, taskbar_created_message,
+    TipCandidate, TrayState, choose_tray_menu_item, dump_tray, hide_to_tray, minimize_frame,
+    mirx_is_foreground, on_taskbar_created, on_tray_icon, remove_tray_icon, show_tip,
+    sync_tray_icon, taskbar_created_message,
 };
 use verification::{
     apply_verification_event, apply_verification_request, e2ee_backup_health_summary,
@@ -535,13 +529,12 @@ use verification::{
     verification_state_event_from_request, verification_state_label,
 };
 use views::{
-    CloseAction, RefreshCounters, ViewRowsKey, activate_view, cached_view_is_alive,
-    check_window_menu_logging, close_action, destroy_stale_room_views, ensure_room_view,
-    ensure_status_view, ensure_view, layout_mdi_child, mdi_child_content, mdi_child_edit,
-    mdi_window_placement, refresh_every_view_content, refresh_view_content,
-    register_mdi_child_class, register_room_content_class, room_content_member_list,
-    room_content_timeline, set_view_window_state, show_view, sync_view_content, timeline_view,
-    view_timeline,
+    CloseAction, ViewRowsKey, activate_view, cached_view_is_alive, check_window_menu_logging,
+    close_action, destroy_stale_room_views, ensure_room_view, ensure_status_view, ensure_view,
+    layout_mdi_child, mdi_child_content, mdi_child_edit, mdi_window_placement,
+    refresh_every_view_content, refresh_view_content, register_mdi_child_class,
+    register_room_content_class, room_content_member_list, room_content_timeline,
+    set_view_window_state, show_view, sync_view_content, timeline_view, view_timeline,
 };
 #[cfg(test)]
 use views::{ROOM_CONTENT_CLASS_NAME, take_stale_room_views};
@@ -786,12 +779,8 @@ struct WindowState {
     controls: Controls,
     event_queue: Arc<Mutex<VecDeque<Event>>>,
     command_sender: Option<CommandSender>,
-    /// The inert core of a `--render-state` run: commands go here and are
-    /// never answered. WAIT_IDLE drops them and counts them handled, as no
-    /// core will ack them.
-    inert_command_receiver: Option<UnboundedReceiver<(CommandId, Command)>>,
-    automation: Option<AutomationState>,
-    render_state_mode: bool,
+    /// The automation harness's transport, switches and record.
+    harness: Harness,
     clock: UiClock,
     settings: SettingsStore,
     aliases: AliasStore,
@@ -808,8 +797,6 @@ struct WindowState {
     core_answers: AnsweredCommands,
     /// The alias calls, `//lines` and perform runs waiting for the core.
     script_runs: ScriptRuns,
-    last_idle_probe_generation: Option<u64>,
-    synthetic_load_in_progress: bool,
     current_session_homeserver_url: Option<String>,
     tree_items: BTreeMap<isize, TreeItem>,
     primary_tree_items: BTreeMap<ViewId, isize>,
@@ -855,23 +842,9 @@ struct WindowState {
     decoded_images: BTreeMap<String, GdiplusImage>,
     gdiplus_session: Option<GdiplusSession>,
     gdiplus_startup_error: Option<String>,
-    recorded_commands: Vec<Command>,
     /// The typing notices said live, by room.
     typing_notices: typing::TypingNotices,
-    /// The web links handed to the shell, in order.
-    opened_links: Vec<String>,
-    submitted_setup_e2ee_recovery: Vec<SubmittedSetupE2eeRecovery>,
-    submitted_identity_resets: Vec<SubmittedIdentityReset>,
-    submitted_room_key_transfers: Vec<SubmittedRoomKeyTransfer>,
-    submitted_session_commands: Vec<SubmittedSessionCommand>,
     pending_attachment_saves: BTreeMap<String, PendingAttachmentSave>,
-    last_attachment_save: Option<AttachmentSaveResult>,
-    /// The Options dialog while it is open, for the automation dump.
-    options_dialog: Option<HWND>,
-    /// The Colors dialog while it is open, for the automation dump.
-    colors_dialog: Option<HWND>,
-    /// The Address Book while it is open, for the automation dump.
-    address_book_dialog: Option<HWND>,
     /// Channel Central while it is open: the core's answer to its read
     /// goes to it, and the automation dump reads it.
     channel_central_dialog: Option<HWND>,
@@ -889,8 +862,6 @@ struct WindowState {
     /// The core's refusal to log out, waiting for its Log Out dialog: only
     /// the posted open (`WM_LOG_OUT_WARNING`) takes it.
     log_out_warning: Option<RoomKeysAtRisk>,
-    /// How often the refresh path rebuilt, wrapped and redrew, for tests.
-    refresh_counters: RefreshCounters,
     /// The `model.presence` revision the nick lists were last painted at;
     /// they draw presence at paint time, so a change only repaints them.
     painted_presence_revision: u64,
@@ -1085,9 +1056,10 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         controls: Controls::default(),
         event_queue: Arc::clone(&event_queue),
         command_sender: None,
-        inert_command_receiver: None,
-        automation: None,
-        render_state_mode,
+        harness: Harness {
+            render_state: render_state_mode,
+            ..Harness::default()
+        },
         clock: if render_state_mode {
             UiClock::Fixed(RENDER_STATE_CLOCK_MS)
         } else {
@@ -1102,8 +1074,6 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         event_generation: 0,
         core_answers: AnsweredCommands::default(),
         script_runs: ScriptRuns::default(),
-        last_idle_probe_generation: None,
-        synthetic_load_in_progress: false,
         current_session_homeserver_url: None,
         tree_items: BTreeMap::new(),
         primary_tree_items: BTreeMap::new(),
@@ -1127,18 +1097,8 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         decoded_images: BTreeMap::new(),
         gdiplus_session,
         gdiplus_startup_error,
-        recorded_commands: Vec::new(),
         typing_notices: typing::TypingNotices::default(),
-        opened_links: Vec::new(),
-        submitted_setup_e2ee_recovery: Vec::new(),
-        submitted_identity_resets: Vec::new(),
-        submitted_room_key_transfers: Vec::new(),
-        submitted_session_commands: Vec::new(),
         pending_attachment_saves: BTreeMap::new(),
-        last_attachment_save: None,
-        options_dialog: None,
-        colors_dialog: None,
-        address_book_dialog: None,
         channel_central_dialog: None,
         sessions_dialog: None,
         tray: TrayState::default(),
@@ -1146,7 +1106,6 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         notify_watch: notify::NotifyWatch::default(),
         room_count_due: false,
         log_out_warning: None,
-        refresh_counters: RefreshCounters::default(),
         painted_presence_revision: 0,
         treebar_drag: None,
     });
@@ -1332,7 +1291,7 @@ fn should_install_inert_command_sender(command: &AppCommand) -> bool {
 fn install_inert_command_sender(state: &mut WindowState) {
     let (sender, receiver) = unbounded_channel();
     state.command_sender = Some(CommandSender::new(sender));
-    state.inert_command_receiver = Some(receiver);
+    state.harness.inert_commands = Some(receiver);
 }
 
 /// The frame's size: `--frame-size`, an exact geometry in physical pixels,

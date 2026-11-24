@@ -627,7 +627,7 @@ pub(super) fn enqueue_send_message(
         .ok_or_else(|| "core command sender is not available".to_owned())?
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue send message command: {err}"))?;
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     Ok(())
 }
 
@@ -832,7 +832,7 @@ unsafe extern "system" fn edit_window_proc(
 
     if message == WM_SETFOCUS {
         let result = CallWindowProcW(original, hwnd, message, wparam, lparam);
-        if state_ref(parent).render_state_mode {
+        if state_ref(parent).harness.render_state() {
             // Snapshots must not depend on where the blinking caret is.
             HideCaret(hwnd);
         }
@@ -1234,7 +1234,7 @@ mod tests {
             Ok("File queued for !ops:example".to_owned())
         );
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             [Command::SendFile(SendFileRequest {
                 room_id: "!ops:example".to_owned(),
                 path: PathBuf::from("C:\\shot.png"),
@@ -1260,7 +1260,7 @@ mod tests {
             send_file_room_id(&state.active_view),
             Err("no room selected".to_owned())
         );
-        assert_eq!(state.recorded_commands.len(), 1);
+        assert_eq!(state.harness.commands.len(), 1);
     }
 
     fn reply_to(event_id: &str) -> ComposeTarget {
@@ -1292,7 +1292,7 @@ mod tests {
                 .unwrap();
                 assert_eq!(active_compose_target(hwnd), Some(reply_to("$q")));
                 assert_eq!(dump_compose_text(hwnd).unwrap(), "half typed");
-                assert!(state_ref(hwnd).recorded_commands.is_empty());
+                assert!(state_ref(hwnd).harness.commands.is_empty());
                 assert_eq!(
                     active_timeline_lines(hwnd).last().unwrap(),
                     "* Replying to <@alice:example> are we deploying today? (Esc cancels)"
@@ -1300,7 +1300,7 @@ mod tests {
 
                 type_compose_line(hwnd, "sure");
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![reply_command(RoomMessagePresentationKind::Text, "sure")]
                 );
                 assert_eq!(active_compose_target(hwnd), None);
@@ -1324,7 +1324,7 @@ mod tests {
                 assert_eq!(active_compose_target(hwnd), Some(reply_to("$q")));
                 type_compose_line(hwnd, "/me nods");
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![reply_command(RoomMessagePresentationKind::Emote, "nods")]
                 );
                 assert_eq!(active_compose_target(hwnd), None);
@@ -1356,7 +1356,7 @@ mod tests {
 
                 type_compose_line(hwnd, "/me waves back");
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![Command::EditMessage(EditMessageRequest {
                         room_id: "!ops:example".to_owned(),
                         target_event_id: "$wave".to_owned(),
@@ -1377,7 +1377,7 @@ mod tests {
                 type_compose_line(hwnd, "/edit $mine");
                 assert_eq!(dump_compose_text(hwnd).unwrap(), "deploy at 14:00");
                 submit_compose_from_edit(hwnd).unwrap();
-                assert!(state_ref(hwnd).recorded_commands.is_empty());
+                assert!(state_ref(hwnd).harness.commands.is_empty());
                 assert_eq!(active_compose_target(hwnd), None);
                 assert_eq!(dump_compose_text(hwnd).unwrap(), "");
             });
@@ -1390,7 +1390,7 @@ mod tests {
             with_compose_target_window(|hwnd| {
                 type_compose_line(hwnd, "/edit $wave waves twice");
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![Command::EditMessage(EditMessageRequest {
                         room_id: "!ops:example".to_owned(),
                         target_event_id: "$wave".to_owned(),
@@ -1410,7 +1410,7 @@ mod tests {
             with_compose_target_window(|hwnd| {
                 type_compose_line(hwnd, "**hi** there ");
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![Command::SendMessage(SendMessageRequest {
                         room_id: "!ops:example".to_owned(),
                         presentation: RoomMessagePresentationKind::Text,
@@ -1451,7 +1451,7 @@ mod tests {
                     other => panic!("unexpected command {other:?}"),
                 };
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands[1..]
+                    state_ref(hwnd).harness.commands[1..]
                         .iter()
                         .map(sent)
                         .collect::<Vec<_>>(),
@@ -1520,7 +1520,7 @@ mod tests {
                 assert_eq!(dump_compose_text(hwnd).unwrap(), "deploy **now**");
                 // The source as it was is the same message.
                 submit_compose_from_edit(hwnd).unwrap();
-                assert!(state_ref(hwnd).recorded_commands.is_empty());
+                assert!(state_ref(hwnd).harness.commands.is_empty());
 
                 // Its shown text is another: the bold goes.
                 type_compose_line(hwnd, "/edit $styled");
@@ -1528,7 +1528,7 @@ mod tests {
                 submit_compose_from_edit(hwnd).unwrap();
                 type_compose_line(hwnd, "/edit $styled deploy *now*");
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     ["deploy now", "deploy *now*"]
                         .map(|body| Command::EditMessage(EditMessageRequest {
                             room_id: "!ops:example".to_owned(),
@@ -1658,7 +1658,7 @@ mod tests {
                 cancel_compose_target(hwnd).unwrap();
                 assert_eq!(active_compose_target(hwnd), None);
                 assert_eq!(dump_compose_text(hwnd).unwrap(), "draft");
-                assert!(state_ref(hwnd).recorded_commands.is_empty());
+                assert!(state_ref(hwnd).harness.commands.is_empty());
             });
         }
     }
@@ -1693,7 +1693,7 @@ mod tests {
                 install_test_active_timeline_event(hwnd, "$event-id");
                 prefill_react_to_selected_message(hwnd).unwrap();
                 assert_eq!(dump_compose_text(hwnd).unwrap(), "/react $event-id ");
-                assert!(state_ref(hwnd).recorded_commands.is_empty());
+                assert!(state_ref(hwnd).harness.commands.is_empty());
             });
         }
     }
@@ -1717,7 +1717,7 @@ mod tests {
                     "Redaction queued for $event-id"
                 );
                 assert_eq!(
-                    state_ref(hwnd).recorded_commands,
+                    state_ref(hwnd).harness.commands,
                     vec![Command::RedactEvent(RedactEventRequest {
                         room_id: "!room:example".to_owned(),
                         event_id: "$event-id".to_owned(),
@@ -1759,7 +1759,7 @@ mod tests {
         .unwrap();
         assert_eq!(emote_room_id, "!selected:example");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![
                 Command::SendMessage(SendMessageRequest {
                     room_id: "!selected:example".to_owned(),
@@ -1856,7 +1856,7 @@ mod tests {
             .unwrap();
         }
         assert_eq!(echo(&state, "!bob:example"), ["* Bob is away: lunch"]);
-        assert_eq!(state.recorded_commands.len(), 3);
+        assert_eq!(state.harness.commands.len(), 3);
 
         stop_test_core(handle);
     }
@@ -1899,7 +1899,7 @@ mod tests {
         .unwrap();
         assert_eq!(room_id, "!beta:example");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::SendMessage(SendMessageRequest {
                 room_id: "!beta:example".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
@@ -1983,7 +1983,7 @@ mod tests {
         .unwrap();
         assert_eq!(emote_room_id, "!ops:example");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![
                 Command::SendMessage(SendMessageRequest {
                     room_id: "!ops:example".to_owned(),
@@ -2053,7 +2053,7 @@ mod tests {
         .unwrap();
         assert_eq!(room_id, "!ops:example");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::SendMessage(SendMessageRequest {
                 room_id: "!ops:example".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
@@ -2137,7 +2137,7 @@ mod tests {
             ),
             Err("no room selected".to_owned())
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
     }
 
     /// A line from Status goes nowhere, whatever window is in front.
@@ -2158,7 +2158,7 @@ mod tests {
             ),
             Err("no room selected".to_owned())
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
 
         stop_test_core(handle);
     }

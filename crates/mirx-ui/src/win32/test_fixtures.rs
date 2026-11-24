@@ -7,6 +7,7 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use mirx_core::{RoomInviteSummary, RoomMemberRank, RoomStateNoticeActivity, RoomUserProfile};
+use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::*;
 
@@ -954,9 +955,7 @@ pub(super) fn test_state() -> WindowState {
         controls: Controls::default(),
         event_queue: Arc::new(Mutex::new(VecDeque::new())),
         command_sender: None,
-        inert_command_receiver: None,
-        automation: None,
-        render_state_mode: false,
+        harness: Harness::default(),
         clock: UiClock::Fixed(RENDER_STATE_CLOCK_MS),
         settings: SettingsStore::in_memory(),
         aliases: AliasStore::in_memory(),
@@ -967,8 +966,6 @@ pub(super) fn test_state() -> WindowState {
         event_generation: 0,
         core_answers: AnsweredCommands::default(),
         script_runs: ScriptRuns::default(),
-        last_idle_probe_generation: None,
-        synthetic_load_in_progress: false,
         current_session_homeserver_url: None,
         tree_items: BTreeMap::new(),
         primary_tree_items: BTreeMap::new(),
@@ -992,20 +989,8 @@ pub(super) fn test_state() -> WindowState {
         decoded_images: BTreeMap::new(),
         gdiplus_session,
         gdiplus_startup_error,
-        #[cfg(test)]
-        recorded_commands: Vec::new(),
         typing_notices: super::typing::TypingNotices::default(),
-        opened_links: Vec::new(),
-        #[cfg(test)]
-        submitted_setup_e2ee_recovery: Vec::new(),
-        submitted_identity_resets: Vec::new(),
-        submitted_room_key_transfers: Vec::new(),
-        submitted_session_commands: Vec::new(),
         pending_attachment_saves: BTreeMap::new(),
-        last_attachment_save: None,
-        options_dialog: None,
-        colors_dialog: None,
-        address_book_dialog: None,
         channel_central_dialog: None,
         sessions_dialog: None,
         tray: TrayState::default(),
@@ -1013,7 +998,6 @@ pub(super) fn test_state() -> WindowState {
         notify_watch: notify::NotifyWatch::default(),
         room_count_due: false,
         log_out_warning: None,
-        refresh_counters: RefreshCounters::default(),
         painted_presence_revision: 0,
         treebar_drag: None,
     }

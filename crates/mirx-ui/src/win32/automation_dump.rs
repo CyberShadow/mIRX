@@ -615,13 +615,16 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             .get(&ViewId::RoomList)
             .map(|view| dump_room_list(view.content)),
         options_dialog: state
+            .harness
             .options_dialog
             .map(|dialog| options_dialog::dump(dialog))
             .transpose()?,
         colors_dialog: state
+            .harness
             .colors_dialog
             .map(|dialog| colors_dialog::dump(dialog)),
         address_book: state
+            .harness
             .address_book_dialog
             .map(|dialog| address_book_dialog::dump(dialog)),
         channel_central: state
@@ -634,10 +637,10 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         ignored_users: state.model.ignored_users.clone(),
         aliases: state.aliases.aliases().source().to_vec(),
         refresh_counters: UiRefreshCounters {
-            timeline_row_builds: state.refresh_counters.timeline_row_builds(),
-            rows_wrapped: state.refresh_counters.rows_wrapped(),
-            treebar_rebuilds: state.refresh_counters.treebar_rebuilds(),
-            switchbar_rebuilds: state.refresh_counters.switchbar_rebuilds(),
+            timeline_row_builds: state.harness.refresh_counters.timeline_row_builds(),
+            rows_wrapped: state.harness.refresh_counters.rows_wrapped(),
+            treebar_rebuilds: state.harness.refresh_counters.treebar_rebuilds(),
+            switchbar_rebuilds: state.harness.refresh_counters.switchbar_rebuilds(),
         },
         active_timeline: match &state.active_view {
             ViewId::RoomList => None,
@@ -659,7 +662,10 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             .rooms
             .iter()
             .map(|room| UiRoomState {
-                timeline_row_builds: state.refresh_counters.room_row_builds(&room.room_id),
+                timeline_row_builds: state
+                    .harness
+                    .refresh_counters
+                    .room_row_builds(&room.room_id),
                 buffer_lines: state
                     .model
                     .room_views
@@ -792,7 +798,8 @@ fn submitted_room_settings_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedRoomSettingsCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(|command| match command {
             Command::FetchRoomSettings(room_id) => Some(DumpSubmittedRoomSettingsCommand::Fetch {
@@ -839,7 +846,8 @@ fn submitted_room_settings_commands_from_state(
 
 fn submitted_profile_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedProfileCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(|command| match command {
             Command::SetDisplayName(request) => Some(DumpSubmittedProfileCommand {
@@ -852,7 +860,8 @@ fn submitted_profile_commands_from_state(state: &WindowState) -> Vec<DumpSubmitt
 
 fn submitted_away_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedAwayCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(|command| match command {
             Command::SetAway(message) => Some(DumpSubmittedAwayCommand {
@@ -865,7 +874,8 @@ fn submitted_away_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedA
 
 fn submitted_typing_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedTypingCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(|command| match command {
             Command::SetTyping(request) => Some(DumpSubmittedTypingCommand {
@@ -879,7 +889,8 @@ fn submitted_typing_commands_from_state(state: &WindowState) -> Vec<DumpSubmitte
 
 fn submitted_user_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedUserCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(|command| {
             let (action, user_id) = match command {
@@ -906,7 +917,8 @@ fn submitted_member_moderation_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedMemberModerationCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(dump_submitted_member_moderation_command)
         .collect()
@@ -1036,7 +1048,8 @@ fn submitted_membership_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedMembershipCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(dump_submitted_membership_command)
         .collect()
@@ -1046,7 +1059,8 @@ fn submitted_room_list_requests_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedRoomListRequest> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(|command| match command {
             Command::ListPublicRooms(request) => Some(DumpSubmittedRoomListRequest {
@@ -1064,7 +1078,8 @@ fn submitted_direct_room_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedDirectRoomCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(dump_submitted_direct_room_command)
         .collect()
@@ -1074,7 +1089,8 @@ fn submitted_room_topic_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedRoomTopicCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(dump_submitted_room_topic_command)
         .collect()
@@ -1084,7 +1100,8 @@ fn submitted_reaction_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedReactionCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(dump_submitted_reaction_command)
         .collect()
@@ -1092,7 +1109,8 @@ fn submitted_reaction_commands_from_state(
 
 fn submitted_edit_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedEditCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(dump_submitted_edit_command)
         .collect()
@@ -1100,7 +1118,8 @@ fn submitted_edit_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedE
 
 fn submitted_reply_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedReplyCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(dump_submitted_reply_command)
         .collect()
@@ -1108,7 +1127,8 @@ fn submitted_reply_commands_from_state(state: &WindowState) -> Vec<DumpSubmitted
 
 fn submitted_message_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedMessageCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(dump_submitted_message_command)
         .collect()
@@ -1138,7 +1158,8 @@ fn submitted_notification_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedNotificationCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(dump_submitted_notification_command)
         .collect()
@@ -1146,7 +1167,8 @@ fn submitted_notification_commands_from_state(
 
 fn submitted_file_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedFileCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(dump_submitted_file_command)
         .collect()
@@ -1156,7 +1178,8 @@ fn submitted_redaction_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedRedactionCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(dump_submitted_redaction_command)
         .collect()
@@ -1164,7 +1187,8 @@ fn submitted_redaction_commands_from_state(
 
 fn submitted_history_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedHistoryCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(dump_submitted_history_command)
         .collect()
@@ -1191,7 +1215,8 @@ fn submitted_verification_actions_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedVerificationAction> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(dump_submitted_verification_action)
         .collect()
@@ -1201,7 +1226,8 @@ fn submitted_verification_requests_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedVerificationRequest> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(|command| match command {
             Command::RequestVerification(request) => Some(DumpSubmittedVerificationRequest {
@@ -1226,53 +1252,10 @@ fn submitted_recovery_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedRecoveryCommand> {
     state
-        .recorded_commands
+        .harness
+        .commands
         .iter()
         .filter_map(dump_submitted_recovery_command)
-        .collect()
-}
-
-fn submitted_setup_recovery_commands_from_state(
-    state: &WindowState,
-) -> Vec<DumpSubmittedSetupRecoveryCommand> {
-    state
-        .submitted_setup_e2ee_recovery
-        .iter()
-        .map(|command| DumpSubmittedSetupRecoveryCommand {
-            passphrase_redacted: command.passphrase_redacted,
-            wait_for_backups_to_upload: command.wait_for_backups_to_upload,
-        })
-        .collect()
-}
-
-fn submitted_identity_reset_commands_from_state(
-    state: &WindowState,
-) -> Vec<DumpSubmittedIdentityReset> {
-    state
-        .submitted_identity_resets
-        .iter()
-        .map(|command| match *command {
-            SubmittedIdentityReset::Reset { password_redacted } => {
-                DumpSubmittedIdentityReset::Reset { password_redacted }
-            }
-            SubmittedIdentityReset::Cancel => DumpSubmittedIdentityReset::Cancel,
-        })
-        .collect()
-}
-
-fn submitted_room_key_transfers_from_state(
-    state: &WindowState,
-) -> Vec<DumpSubmittedRoomKeyTransfer> {
-    state
-        .submitted_room_key_transfers
-        .iter()
-        .map(|submitted| DumpSubmittedRoomKeyTransfer {
-            direction: match submitted.transfer {
-                RoomKeyTransfer::Export => DumpRoomKeyTransferDirection::Export,
-                RoomKeyTransfer::Import => DumpRoomKeyTransferDirection::Import,
-            },
-            path: submitted.path.clone(),
-        })
         .collect()
 }
 
@@ -1343,32 +1326,13 @@ pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_verification_actions: submitted_verification_actions_from_state(state),
         submitted_verification_requests: submitted_verification_requests_from_state(state),
         submitted_recovery_commands: submitted_recovery_commands_from_state(state),
-        submitted_setup_recovery_commands: submitted_setup_recovery_commands_from_state(state),
-        submitted_identity_reset_commands: submitted_identity_reset_commands_from_state(state),
-        submitted_room_key_transfers: submitted_room_key_transfers_from_state(state),
-        submitted_session_commands: state
-            .submitted_session_commands
-            .iter()
-            .map(|command| match command.clone() {
-                SubmittedSessionCommand::SignOut {
-                    device_id,
-                    password_redacted,
-                } => DumpSubmittedSessionCommand::SignOut {
-                    device_id,
-                    password_redacted,
-                },
-                SubmittedSessionCommand::Rename {
-                    device_id,
-                    display_name,
-                } => DumpSubmittedSessionCommand::Rename {
-                    device_id,
-                    display_name,
-                },
-            })
-            .collect(),
+        submitted_setup_recovery_commands: state.harness.setup_e2ee_recoveries.clone(),
+        submitted_identity_reset_commands: state.harness.identity_resets.clone(),
+        submitted_room_key_transfers: state.harness.room_key_transfers.clone(),
+        submitted_session_commands: state.harness.session_commands.clone(),
         submitted_room_list_requests: submitted_room_list_requests_from_state(state),
-        opened_links: state.opened_links.clone(),
-        shown_tips: dump_shown_tips(state),
+        opened_links: state.harness.opened_links.clone(),
+        shown_tips: state.harness.shown_tips.clone(),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
     }

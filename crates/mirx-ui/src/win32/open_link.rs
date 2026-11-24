@@ -56,7 +56,7 @@ pub(super) unsafe fn open_web_link(
     window: &ViewId,
     url: String,
 ) -> Result<(), String> {
-    state_mut(frame).opened_links.push(url.clone());
+    state_mut(frame).harness.record_opened_link(&url);
     match open_in_browser(frame, &url) {
         Ok(()) => Ok(()),
         Err(error) => report_error_line(frame, window, format!("* Unable to open {url}: {error}")),

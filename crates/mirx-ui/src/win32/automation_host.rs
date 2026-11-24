@@ -44,7 +44,7 @@ pub(super) unsafe fn enable_automation(hwnd: HWND) -> Result<(), String> {
     // blocks their WM_COPYDATA. Adding the filter would only let lower-integrity
     // processes reach the automation surface.
     (view.Value as *mut u32).write_unaligned(0);
-    state_mut(hwnd).automation = Some(AutomationState {
+    state_mut(hwnd).harness.transport = Some(AutomationState {
         response_name,
         response_mapping: mapping,
         response_view: view.Value.cast(),
@@ -61,25 +61,19 @@ fn automation_response_name(hwnd: HWND) -> String {
     )
 }
 
-pub(super) fn destroy_automation_state(state: &mut WindowState) {
-    let Some(automation) = state.automation.take() else {
-        return;
-    };
-
-    unsafe {
-        if !automation.response_view.is_null() {
+impl Drop for AutomationState {
+    fn drop(&mut self) {
+        unsafe {
             UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
-                Value: automation.response_view.cast(),
+                Value: self.response_view.cast(),
             });
-        }
-        if !automation.response_mapping.is_null() {
-            CloseHandle(automation.response_mapping);
+            CloseHandle(self.response_mapping);
         }
     }
 }
 
 pub(super) unsafe fn handle_copydata(hwnd: HWND, lparam: LPARAM) -> LRESULT {
-    if state_ref(hwnd).automation.is_none() {
+    if state_ref(hwnd).harness.transport.is_none() {
         return 0;
     }
 
@@ -177,6 +171,7 @@ unsafe fn probe_idle(hwnd: HWND) -> IdleProbe {
         .expect("core event queue poisoned")
         .len() as u64;
     let previous_generation = state
+        .harness
         .last_idle_probe_generation
         .replace(state.event_generation);
     IdleProbe {
@@ -187,7 +182,7 @@ unsafe fn probe_idle(hwnd: HWND) -> IdleProbe {
         // thread handles before any posted message: whatever the driver
         // (or a handler) posted before asking still waits in the queue.
         posted_messages_pending: GetQueueStatus(QS_ALLPOSTMESSAGE) >> 16 != 0,
-        synthetic_load_in_progress: state.synthetic_load_in_progress,
+        synthetic_load_in_progress: state.harness.synthetic_load(),
         previous_generation,
     }
 }
@@ -198,7 +193,7 @@ unsafe fn pending_core_commands(hwnd: HWND) -> u64 {
     let state = state_mut(hwnd);
     // The inert core of a render-state run answers nothing: its commands
     // are handled once dropped, and a script waiting for them goes on.
-    if let Some(receiver) = &mut state.inert_command_receiver {
+    if let Some(receiver) = &mut state.harness.inert_commands {
         while let Ok((id, _)) = receiver.try_recv() {
             state.core_answers.answer(id);
         }
@@ -507,7 +502,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
         ParsedCommand::SelectOptionsPage { id, args } => {
-            let dialog = state_ref(hwnd).options_dialog.ok_or_else(|| {
+            let dialog = state_ref(hwnd).harness.options_dialog.ok_or_else(|| {
                 failure_response(
                     Some(id.clone()),
                     "no_options_dialog",
@@ -611,8 +606,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                         format!("failed to enqueue send file command: {err}"),
                     )
                 })?;
-            #[cfg(test)]
-            state.recorded_commands.push(command);
+            state.harness.record_command(command);
             serialize_success_json(
                 &id,
                 SendTextResponse {
@@ -869,7 +863,7 @@ unsafe fn write_response_bytes(
     response_id: Option<&str>,
     response_bytes: &[u8],
 ) -> bool {
-    let Some(automation) = state_ref(hwnd).automation.as_ref() else {
+    let Some(automation) = state_ref(hwnd).harness.transport.as_ref() else {
         return false;
     };
 
@@ -947,7 +941,8 @@ pub(super) unsafe fn send_automation_request(
 
 unsafe fn read_automation_response(hwnd: HWND) -> Result<Value, String> {
     let automation = state_ref(hwnd)
-        .automation
+        .harness
+        .transport
         .as_ref()
         .ok_or_else(|| "automation shared memory is not enabled".to_owned())?;
     if automation.response_view.is_null() || automation.response_capacity < size_of::<u32>() {

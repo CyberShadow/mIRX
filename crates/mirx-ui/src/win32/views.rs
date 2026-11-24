@@ -12,60 +12,6 @@ use super::*;
 
 const MDI_CHILD_CLASS_NAME: &str = "mirxWin32MdiChild";
 
-/// How often the refresh path did its costly work since the frame started:
-/// rows built for a window, log rows wrapped (measured), and treebar and
-/// switchbar rebuilds. They only count up, so tests read deltas from the
-/// automation dump; they assert work, never time.
-#[derive(Debug, Default)]
-pub(super) struct RefreshCounters {
-    timeline_row_builds: u64,
-    rows_wrapped: u64,
-    treebar_rebuilds: u64,
-    switchbar_rebuilds: u64,
-    /// `timeline_row_builds` of room windows, by room.
-    row_builds_by_room: BTreeMap<String, u64>,
-}
-
-impl RefreshCounters {
-    fn count_row_build(&mut self, view_id: &ViewId) {
-        self.timeline_row_builds += 1;
-        if let ViewId::Room(room_id) = view_id {
-            *self.row_builds_by_room.entry(room_id.clone()).or_default() += 1;
-        }
-    }
-
-    pub(super) fn count_rows_wrapped(&mut self, rows: usize) {
-        self.rows_wrapped += rows as u64;
-    }
-
-    pub(super) fn count_treebar_rebuild(&mut self) {
-        self.treebar_rebuilds += 1;
-    }
-
-    pub(super) fn count_switchbar_rebuild(&mut self) {
-        self.switchbar_rebuilds += 1;
-    }
-
-    pub(super) fn timeline_row_builds(&self) -> u64 {
-        self.timeline_row_builds
-    }
-
-    pub(super) fn rows_wrapped(&self) -> u64 {
-        self.rows_wrapped
-    }
-
-    pub(super) fn treebar_rebuilds(&self) -> u64 {
-        self.treebar_rebuilds
-    }
-
-    pub(super) fn switchbar_rebuilds(&self) -> u64 {
-        self.switchbar_rebuilds
-    }
-
-    pub(super) fn room_row_builds(&self, room_id: &str) -> u64 {
-        self.row_builds_by_room.get(room_id).copied().unwrap_or(0)
-    }
-}
 pub(super) const ROOM_CONTENT_CLASS_NAME: &str = "mirxWin32RoomContent";
 /// `WC_LISTVIEWW`, the common controls' list view.
 const ROOM_LIST_CLASS_NAME: &str = "SysListView32";
@@ -1436,7 +1382,7 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
         .get_mut(view_id)
         .expect("a refreshed view has a window")
         .rows_key = Some(key);
-    state.refresh_counters.count_row_build(view_id);
+    state.harness.count_row_build(view_id);
     Ok(())
 }
 
@@ -1695,7 +1641,7 @@ mod tests {
             ),
             (
                 "a synthetic load",
-                |state| state.synthetic_load_in_progress = true,
+                |state| state.harness.synthetic_load = true,
                 true,
                 true,
             ),
@@ -1917,14 +1863,25 @@ mod tests {
                     room("!b:example", "B", false),
                 ];
                 sync_views_and_tree(hwnd).unwrap();
-                let builds = |room_id| state_ref(hwnd).refresh_counters.room_row_builds(room_id);
+                let builds = |room_id| {
+                    state_ref(hwnd)
+                        .harness
+                        .refresh_counters
+                        .room_row_builds(room_id)
+                };
                 let (a, b) = (builds("!a:example"), builds("!b:example"));
                 assert!(a > 0 && b > 0, "every window is built once");
-                let total = state_ref(hwnd).refresh_counters.timeline_row_builds();
+                let total = state_ref(hwnd)
+                    .harness
+                    .refresh_counters
+                    .timeline_row_builds();
 
                 sync_views_and_tree(hwnd).unwrap();
                 assert_eq!(
-                    state_ref(hwnd).refresh_counters.timeline_row_builds(),
+                    state_ref(hwnd)
+                        .harness
+                        .refresh_counters
+                        .timeline_row_builds(),
                     total
                 );
 
@@ -1933,7 +1890,10 @@ mod tests {
                 assert_eq!(builds("!a:example"), a);
                 assert_eq!(builds("!b:example"), b + 1);
                 assert_eq!(
-                    state_ref(hwnd).refresh_counters.timeline_row_builds(),
+                    state_ref(hwnd)
+                        .harness
+                        .refresh_counters
+                        .timeline_row_builds(),
                     total + 1
                 );
             });
@@ -1947,7 +1907,7 @@ mod tests {
                 state_mut(hwnd).model.rooms = vec![room("!a:example", "A", false)];
                 sync_views_and_tree(hwnd).unwrap();
                 let counters = |hwnd| {
-                    let counters = &state_ref(hwnd).refresh_counters;
+                    let counters = &state_ref(hwnd).harness.refresh_counters;
                     (
                         counters.timeline_row_builds(),
                         counters.rows_wrapped(),
@@ -2332,14 +2292,15 @@ mod tests {
             apply_events_and_refresh(hwnd, events).unwrap();
             activate_view(hwnd, &room_view_id("!ops:example"), None).unwrap();
             activate_view(hwnd, &room_view_id("!dev:example"), None).unwrap();
-            state_mut(hwnd).recorded_commands.clear();
+            state_mut(hwnd).harness.commands.clear();
             test(hwnd);
         });
     }
 
     fn recorded_read_commands(state: &WindowState) -> Vec<String> {
         state
-            .recorded_commands
+            .harness
+            .commands
             .iter()
             .filter_map(|command| match command {
                 Command::MarkRoomRead(request) => {
@@ -2436,7 +2397,7 @@ mod tests {
                 .unwrap();
                 // MDI's next child after the thread window is Dev.
                 activate_view(hwnd, &thread, None).unwrap();
-                state_mut(hwnd).recorded_commands.clear();
+                state_mut(hwnd).harness.commands.clear();
 
                 state_mut(hwnd)
                     .model
@@ -2465,7 +2426,7 @@ mod tests {
                 let ops = room_view_id("!ops:example");
                 let new = room_view_id("!new:example");
                 activate_view(hwnd, &ops, None).unwrap();
-                state_mut(hwnd).recorded_commands.clear();
+                state_mut(hwnd).harness.commands.clear();
 
                 let mut rooms = ops_bob_dev();
                 rooms.push(room("!new:example", "New", false));

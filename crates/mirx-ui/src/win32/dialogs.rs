@@ -251,12 +251,6 @@ const RESET_E2EE_WARNING: &str = "Reset only if you have lost all your other ses
      cannot read now stay unreadable; people who verified you will see your identity change \
      and must verify you again.";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct SubmittedSetupE2eeRecovery {
-    pub(super) passphrase_redacted: bool,
-    pub(super) wait_for_backups_to_upload: bool,
-}
-
 /// What an exported key file gives whoever holds it, which the export
 /// dialog says.
 const EXPORT_ROOM_KEYS_WARNING: &str =
@@ -1552,9 +1546,11 @@ pub(super) unsafe fn run_options_dialog(hwnd: HWND) -> Result<(), String> {
         state.settings.settings(),
         state.model.highlight_words.as_deref(),
     )?;
-    state_mut(hwnd).options_dialog = Some(dialog.hwnd());
+    state_mut(hwnd)
+        .harness
+        .options_dialog_open(Some(dialog.hwnd()));
     let saved = dialog.run();
-    state_mut(hwnd).options_dialog = None;
+    state_mut(hwnd).harness.options_dialog_open(None);
     let Some(options_dialog::OptionsResult {
         settings: new,
         highlight_changes,
@@ -1621,9 +1617,11 @@ pub(super) unsafe fn run_options_dialog(hwnd: HWND) -> Result<(), String> {
 pub(super) unsafe fn run_colors_dialog(hwnd: HWND) -> Result<(), String> {
     let current = state_ref(hwnd).settings.settings().colors.clone();
     let dialog = colors_dialog::ColorsDialog::open(hwnd, &current)?;
-    state_mut(hwnd).colors_dialog = Some(dialog.hwnd());
+    state_mut(hwnd)
+        .harness
+        .colors_dialog_open(Some(dialog.hwnd()));
     let saved = dialog.run();
-    state_mut(hwnd).colors_dialog = None;
+    state_mut(hwnd).harness.colors_dialog_open(None);
     match saved {
         Some(scheme) if scheme != current => {
             apply_color_scheme(hwnd, scheme)?;

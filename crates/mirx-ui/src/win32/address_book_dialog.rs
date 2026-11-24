@@ -275,9 +275,11 @@ pub(super) unsafe fn run_address_book_dialog(
         |dialog| create_controls(dialog),
     )?;
     show_tab(dialog, tab);
-    state_mut(hwnd).address_book_dialog = Some(dialog);
+    state_mut(hwnd)
+        .harness
+        .address_book_dialog_open(Some(dialog));
     run_modal_dialog(hwnd, dialog);
-    state_mut(hwnd).address_book_dialog = None;
+    state_mut(hwnd).harness.address_book_dialog_open(None);
     let Some(form) = dialog_state.saved.take() else {
         return Ok(());
     };
@@ -1388,7 +1390,7 @@ mod tests {
                 apply(hwnd, form(Some(edit))).unwrap();
                 let state = state_ref(hwnd);
                 assert_eq!(
-                    state.recorded_commands,
+                    state.harness.commands,
                     [
                         Command::IgnoreUser("@bob:example".to_owned()),
                         Command::UnignoreUser("@spam:remote".to_owned()),
@@ -1432,7 +1434,7 @@ mod tests {
                 let edit = IgnoreEdit::new(vec!["@spam:remote".to_owned()]);
                 apply(hwnd, form(Some(edit))).unwrap();
                 let state = state_ref(hwnd);
-                assert!(state.recorded_commands.is_empty());
+                assert!(state.harness.commands.is_empty());
                 assert_eq!(state.model.status, "address book saved");
             });
         }

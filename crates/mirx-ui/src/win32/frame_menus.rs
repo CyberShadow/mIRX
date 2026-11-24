@@ -1814,7 +1814,7 @@ mod tests {
                     ]
                 );
                 assert_eq!(active_compose_target(hwnd), None);
-                assert!(state_ref(hwnd).recorded_commands.is_empty());
+                assert!(state_ref(hwnd).harness.commands.is_empty());
             });
         }
     }

@@ -427,7 +427,7 @@ pub(super) fn submit_recover_e2ee(
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue recover e2ee command: {err}"))?;
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     state.model.status = "e2ee recovery submitted".to_owned();
     Ok(())
 }
@@ -450,21 +450,10 @@ pub(super) fn submit_setup_e2ee_recovery(
         .send(command)
         .map_err(|err| format!("failed to enqueue setup e2ee recovery command: {err}"))?;
     state
-        .submitted_setup_e2ee_recovery
-        .push(SubmittedSetupE2eeRecovery {
-            passphrase_redacted,
-            wait_for_backups_to_upload,
-        });
+        .harness
+        .record_setup_e2ee_recovery(passphrase_redacted, wait_for_backups_to_upload);
     state.model.status = "e2ee recovery setup submitted".to_owned();
     Ok(())
-}
-
-/// An identity reset the UI handed the core, for the automation dump. It
-/// keeps whether a password went with it, never the password.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SubmittedIdentityReset {
-    Reset { password_redacted: bool },
-    Cancel,
 }
 
 pub(super) fn submit_identity_reset(
@@ -472,46 +461,23 @@ pub(super) fn submit_identity_reset(
     password: Option<String>,
 ) -> Result<(), String> {
     let password_redacted = password.is_some();
-    send_identity_reset_command(
+    send_unrecorded_command(
         state,
         Command::ResetE2eeIdentity(ResetE2eeIdentityRequest { password }),
-        SubmittedIdentityReset::Reset { password_redacted },
     )?;
+    state.harness.record_identity_reset(password_redacted);
     state.model.status = "e2ee identity reset submitted".to_owned();
     Ok(())
 }
 
 pub(super) fn submit_cancel_identity_reset(state: &mut WindowState) -> Result<(), String> {
-    send_identity_reset_command(
-        state,
-        Command::CancelE2eeIdentityReset,
-        SubmittedIdentityReset::Cancel,
-    )?;
+    send_unrecorded_command(state, Command::CancelE2eeIdentityReset)?;
+    state.harness.record_identity_reset_cancel();
     state.model.status = "e2ee identity reset cancel submitted".to_owned();
     Ok(())
 }
 
-/// Sends a reset command past `recorded_commands`, which would keep the
-/// password.
-fn send_identity_reset_command(
-    state: &mut WindowState,
-    command: Command,
-    submitted: SubmittedIdentityReset,
-) -> Result<(), String> {
-    send_unrecorded_command(state, command)?;
-    state.submitted_identity_resets.push(submitted);
-    Ok(())
-}
-
-/// A room key file the UI asked the core to write or read, for the
-/// automation dump; never its passphrase.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SubmittedRoomKeyTransfer {
-    pub(super) transfer: RoomKeyTransfer,
-    pub(super) path: String,
-}
-
-/// Sends a room key file's export or import past `recorded_commands`,
+/// Sends a room key file's export or import past the harness's record,
 /// which would keep the passphrase, and says so in Status: deriving the
 /// file's key takes a moment.
 pub(super) fn submit_room_key_transfer(
@@ -538,24 +504,8 @@ pub(super) fn submit_room_key_transfer(
     };
     send_unrecorded_command(state, command)?;
     log_status(state, StatusLineKind::Info, line);
-    state
-        .submitted_room_key_transfers
-        .push(SubmittedRoomKeyTransfer { transfer, path });
+    state.harness.record_room_key_transfer(transfer, &path);
     Ok(())
-}
-
-/// What `/devices delete` and `/devices rename` asked the core; never the
-/// password.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum SubmittedSessionCommand {
-    SignOut {
-        device_id: String,
-        password_redacted: bool,
-    },
-    Rename {
-        device_id: String,
-        display_name: String,
-    },
 }
 
 pub(super) fn submit_device_sign_out(
@@ -563,18 +513,17 @@ pub(super) fn submit_device_sign_out(
     device_id: String,
     password: Option<String>,
 ) -> Result<(), String> {
-    let submitted = SubmittedSessionCommand::SignOut {
-        device_id: device_id.clone(),
-        password_redacted: password.is_some(),
-    };
+    let password_redacted = password.is_some();
     send_unrecorded_command(
         state,
         Command::SignOutDevice(SignOutDeviceRequest {
-            device_id,
+            device_id: device_id.clone(),
             password,
         }),
     )?;
-    state.submitted_session_commands.push(submitted);
+    state
+        .harness
+        .record_device_sign_out(&device_id, password_redacted);
     Ok(())
 }
 
@@ -583,23 +532,21 @@ pub(super) fn submit_device_rename(
     device_id: String,
     display_name: String,
 ) -> Result<(), String> {
-    let submitted = SubmittedSessionCommand::Rename {
-        device_id: device_id.clone(),
-        display_name: display_name.clone(),
-    };
     enqueue_command(
         state,
         Command::RenameDevice(RenameDeviceRequest {
-            device_id,
-            display_name,
+            device_id: device_id.clone(),
+            display_name: display_name.clone(),
         }),
     )?;
-    state.submitted_session_commands.push(submitted);
+    state
+        .harness
+        .record_device_rename(&device_id, &display_name);
     Ok(())
 }
 
-/// Sends a command that may carry the account password past
-/// `recorded_commands`, which would keep it.
+/// Sends a command that carries a secret (a password, a passphrase) without
+/// recording it: the harness's record would keep the secret.
 fn send_unrecorded_command(state: &mut WindowState, command: Command) -> Result<(), String> {
     state
         .command_sender
@@ -616,6 +563,10 @@ mod tests {
 
     use super::super::test_fixtures::*;
     use super::*;
+    use crate::automation::{
+        DumpRoomKeyTransferDirection, DumpSubmittedIdentityReset, DumpSubmittedRoomKeyTransfer,
+        DumpSubmittedSessionCommand, DumpSubmittedSetupRecoveryCommand,
+    };
 
     fn protected_saved_session_bytes(saved: &SavedSession) -> Vec<u8> {
         let serialized = serde_json::to_vec(saved).expect("saved session must serialize");
@@ -653,7 +604,7 @@ mod tests {
 
         assert_eq!(state.model.status, "e2ee recovery submitted");
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::RecoverE2ee(RecoverE2eeRequest {
                 recovery_secret: "secret phrase".to_owned(),
             })]
@@ -686,14 +637,14 @@ mod tests {
 
         assert_eq!(state.model.status, "e2ee recovery setup submitted");
         assert_eq!(
-            state.submitted_setup_e2ee_recovery,
-            vec![SubmittedSetupE2eeRecovery {
+            state.harness.setup_e2ee_recoveries,
+            vec![DumpSubmittedSetupRecoveryCommand {
                 passphrase_redacted: true,
                 wait_for_backups_to_upload: true,
             }]
         );
-        assert!(!format!("{:?}", state.submitted_setup_e2ee_recovery).contains("secret phrase"));
-        assert!(state.recorded_commands.is_empty());
+        assert!(!format!("{:?}", state.harness.setup_e2ee_recoveries).contains("secret phrase"));
+        assert!(state.harness.commands.is_empty());
 
         handle
             .command_sender()
@@ -724,20 +675,20 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            state.submitted_room_key_transfers,
+            state.harness.room_key_transfers,
             vec![
-                SubmittedRoomKeyTransfer {
-                    transfer: RoomKeyTransfer::Export,
+                DumpSubmittedRoomKeyTransfer {
+                    direction: DumpRoomKeyTransferDirection::Export,
                     path: "C:\\keys.txt".to_owned(),
                 },
-                SubmittedRoomKeyTransfer {
-                    transfer: RoomKeyTransfer::Import,
+                DumpSubmittedRoomKeyTransfer {
+                    direction: DumpRoomKeyTransferDirection::Import,
                     path: "D:\\keys.txt".to_owned(),
                 },
             ]
         );
         assert!(
-            state.recorded_commands.is_empty(),
+            state.harness.commands.is_empty(),
             "they hold the passphrase"
         );
         assert_eq!(
@@ -780,18 +731,18 @@ mod tests {
         assert_eq!(state.model.status, "e2ee identity reset cancel submitted");
 
         assert_eq!(
-            state.submitted_identity_resets,
+            state.harness.identity_resets,
             vec![
-                SubmittedIdentityReset::Reset {
+                DumpSubmittedIdentityReset::Reset {
                     password_redacted: true
                 },
-                SubmittedIdentityReset::Reset {
+                DumpSubmittedIdentityReset::Reset {
                     password_redacted: false
                 },
-                SubmittedIdentityReset::Cancel,
+                DumpSubmittedIdentityReset::Cancel,
             ]
         );
-        assert!(state.recorded_commands.is_empty());
+        assert!(state.harness.commands.is_empty());
 
         handle
             .command_sender()
@@ -811,17 +762,17 @@ mod tests {
         submit_device_rename(&mut state, "PH0NE".to_owned(), "Work phone".to_owned()).unwrap();
 
         assert_eq!(
-            state.submitted_session_commands,
+            state.harness.session_commands,
             vec![
-                SubmittedSessionCommand::SignOut {
+                DumpSubmittedSessionCommand::SignOut {
                     device_id: "PH0NE".to_owned(),
                     password_redacted: true
                 },
-                SubmittedSessionCommand::SignOut {
+                DumpSubmittedSessionCommand::SignOut {
                     device_id: "L4PT0P".to_owned(),
                     password_redacted: false
                 },
-                SubmittedSessionCommand::Rename {
+                DumpSubmittedSessionCommand::Rename {
                     device_id: "PH0NE".to_owned(),
                     display_name: "Work phone".to_owned(),
                 },
@@ -829,7 +780,7 @@ mod tests {
         );
         // Only the rename, which carries no password.
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::RenameDevice(RenameDeviceRequest {
                 device_id: "PH0NE".to_owned(),
                 display_name: "Work phone".to_owned(),

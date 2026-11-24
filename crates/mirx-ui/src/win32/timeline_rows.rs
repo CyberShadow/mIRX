@@ -1336,7 +1336,7 @@ pub(super) fn collect_reply_target_requests<'a>(
 /// Whether a refresh may ask the core for events (reply targets): only
 /// for a session, and not while a synthetic load replays its events.
 pub(super) fn can_fetch_room_events(state: &WindowState) -> bool {
-    !state.synthetic_load_in_progress
+    !state.harness.synthetic_load()
         && matches!(
             state.model.connection,
             ConnectionState::SignedIn
@@ -1683,13 +1683,13 @@ mod tests {
         state.command_sender = Some(sender);
 
         fetch_reply_targets(&mut state);
-        assert!(state.recorded_commands.is_empty(), "no session to ask");
+        assert!(state.harness.commands.is_empty(), "no session to ask");
 
         state.model.connection = ConnectionState::Syncing;
         fetch_reply_targets(&mut state);
         fetch_reply_targets(&mut state);
         assert_eq!(
-            state.recorded_commands,
+            state.harness.commands,
             vec![Command::FetchRoomEvent(FetchRoomEventRequest {
                 room_id: "!ops:example".to_owned(),
                 event_id: "$elsewhere".to_owned(),

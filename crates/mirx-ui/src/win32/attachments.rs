@@ -10,24 +10,6 @@ pub(super) struct PendingAttachmentSave {
     filename: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum AttachmentSaveResult {
-    Saved {
-        room_id: String,
-        activity_id: String,
-        event_id: String,
-        filename: String,
-        path: PathBuf,
-    },
-    Failed {
-        room_id: String,
-        activity_id: String,
-        event_id: String,
-        filename: Option<String>,
-        message: String,
-    },
-}
-
 fn attachments_dir() -> Result<PathBuf, String> {
     Ok(profile_dir()?.join("attachments"))
 }
@@ -124,38 +106,17 @@ pub(super) fn apply_attachment_save_media_event(
             .and_then(|filename| {
                 attachment_save_path(&room_id, &event_id, filename).and_then(|path| {
                     write_attachment_file(&path, &bytes)?;
-                    Ok((filename.to_owned(), path))
+                    Ok(path)
                 })
             }) {
-            Ok((filename, path)) => {
-                state.last_attachment_save = Some(AttachmentSaveResult::Saved {
-                    room_id,
-                    activity_id,
-                    event_id,
-                    filename,
-                    path: path.clone(),
-                });
+            Ok(path) => {
                 state.model.status = format!("attachment saved: {}", path.display());
             }
             Err(message) => {
-                state.last_attachment_save = Some(AttachmentSaveResult::Failed {
-                    room_id,
-                    activity_id,
-                    event_id,
-                    filename: pending.filename,
-                    message: message.clone(),
-                });
                 state.model.status = format!("attachment save failed: {message}");
             }
         },
         RoomMediaKind::Failed { message, .. } => {
-            state.last_attachment_save = Some(AttachmentSaveResult::Failed {
-                room_id,
-                activity_id,
-                event_id,
-                filename: pending.filename,
-                message: message.clone(),
-            });
             state.model.status = format!("attachment save failed: {message}");
         }
     }
@@ -200,8 +161,7 @@ pub(super) unsafe fn save_selected_message_attachment(hwnd: HWND) -> Result<(), 
         state.pending_attachment_saves.remove(&key);
         return Err(format!("failed to enqueue fetch room media command: {err}"));
     }
-    #[cfg(test)]
-    state.recorded_commands.push(command);
+    state.harness.record_command(command);
     state.model.status = format!("saving attachment: {filename}");
     Ok(())
 }
