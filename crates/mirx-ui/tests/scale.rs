@@ -224,6 +224,7 @@ const NOTHING: UiRefreshCounters = UiRefreshCounters {
     rows_wrapped: 0,
     treebar_rebuilds: 0,
     switchbar_rebuilds: 0,
+    mdi_activations: 0,
 };
 
 /// The counts between two dumps.
@@ -234,6 +235,7 @@ fn delta(before: &UiState, after: &UiState) -> UiRefreshCounters {
         rows_wrapped: after.rows_wrapped - before.rows_wrapped,
         treebar_rebuilds: after.treebar_rebuilds - before.treebar_rebuilds,
         switchbar_rebuilds: after.switchbar_rebuilds - before.switchbar_rebuilds,
+        mdi_activations: after.mdi_activations - before.mdi_activations,
     }
 }
 
@@ -386,6 +388,7 @@ mod with_two_hundred_rooms {
                 rows_wrapped: 1,
                 treebar_rebuilds: 1,
                 switchbar_rebuilds: 1,
+                ..NOTHING
             }
         );
         assert!(

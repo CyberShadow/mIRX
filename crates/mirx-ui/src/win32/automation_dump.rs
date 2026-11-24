@@ -636,6 +636,7 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             rows_wrapped: state.harness.refresh_counters.rows_wrapped(),
             treebar_rebuilds: state.harness.refresh_counters.treebar_rebuilds(),
             switchbar_rebuilds: state.harness.refresh_counters.switchbar_rebuilds(),
+            mdi_activations: state.harness.refresh_counters.mdi_activations(),
         },
         active_timeline: match &state.active_view {
             ViewId::RoomList => None,

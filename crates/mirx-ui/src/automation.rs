@@ -21,7 +21,7 @@ use crate::shared::{
     ConnectionState, FormatKey, LifecycleState, MdiArrangement, ReactionSummary, ViewActivityLevel,
 };
 
-pub(crate) const PROTOCOL_VERSION: u32 = 95;
+pub(crate) const PROTOCOL_VERSION: u32 = 96;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1080,6 +1080,8 @@ pub(crate) struct UiRefreshCounters {
     pub(crate) rows_wrapped: u64,
     pub(crate) treebar_rebuilds: u64,
     pub(crate) switchbar_rebuilds: u64,
+    /// Windows MDI activated.
+    pub(crate) mdi_activations: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4088,8 +4090,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_95() {
-        assert_eq!(PROTOCOL_VERSION, 95);
+    fn protocol_version_is_96() {
+        assert_eq!(PROTOCOL_VERSION, 96);
     }
 
     #[test]
@@ -5111,7 +5113,7 @@ mod tests {
             "menu_bar":[],
             "tray":{"icon":false,"hidden":false,"menu":[]},
             "aliases":[],
-            "refresh_counters":{"timeline_row_builds":0,"rows_wrapped":0,"treebar_rebuilds":0,"switchbar_rebuilds":0}
+            "refresh_counters":{"timeline_row_builds":0,"rows_wrapped":0,"treebar_rebuilds":0,"switchbar_rebuilds":0,"mdi_activations":0}
         }))
         .unwrap();
         assert_eq!(without_find.active_find, None);
@@ -5143,7 +5145,7 @@ mod tests {
             "menu_bar":[],
             "tray":{"icon":false,"hidden":false,"menu":[]},
             "aliases":[],
-            "refresh_counters":{"timeline_row_builds":0,"rows_wrapped":0,"treebar_rebuilds":0,"switchbar_rebuilds":0}
+            "refresh_counters":{"timeline_row_builds":0,"rows_wrapped":0,"treebar_rebuilds":0,"switchbar_rebuilds":0,"mdi_activations":0}
         }))
         .unwrap();
         assert_eq!(
@@ -6133,7 +6135,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":95,
+                    "protocol_version":96,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6991,6 +6993,7 @@ mod tests {
                         rows_wrapped: 6,
                         treebar_rebuilds: 7,
                         switchbar_rebuilds: 8,
+                        mdi_activations: 9,
                     },
                 },
             ))
@@ -7263,7 +7266,8 @@ mod tests {
                         "timeline_row_builds":5,
                         "rows_wrapped":6,
                         "treebar_rebuilds":7,
-                        "switchbar_rebuilds":8
+                        "switchbar_rebuilds":8,
+                        "mdi_activations":9
                     }
                 }
             })

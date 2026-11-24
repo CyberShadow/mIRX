@@ -1499,6 +1499,8 @@ pub struct UiRefreshCounters {
     pub rows_wrapped: u64,
     pub treebar_rebuilds: u64,
     pub switchbar_rebuilds: u64,
+    /// Windows MDI activated (`WM_MDIACTIVATE` to the child it activates).
+    pub mdi_activations: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

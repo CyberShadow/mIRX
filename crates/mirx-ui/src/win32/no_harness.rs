@@ -56,6 +56,8 @@ impl Harness {
 
     pub(super) fn count_switchbar_rebuild(&mut self) {}
 
+    pub(super) fn count_mdi_activation(&mut self) {}
+
     pub(super) fn options_dialog_open(&mut self, _dialog: Option<HWND>) {}
 
     pub(super) fn colors_dialog_open(&mut self, _dialog: Option<HWND>) {}

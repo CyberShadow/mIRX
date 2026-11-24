@@ -176,6 +176,10 @@ impl Harness {
         self.refresh_counters.switchbar_rebuilds += 1;
     }
 
+    pub(super) fn count_mdi_activation(&mut self) {
+        self.refresh_counters.mdi_activations += 1;
+    }
+
     pub(super) fn options_dialog_open(&mut self, dialog: Option<HWND>) {
         self.options_dialog = dialog;
     }
@@ -231,8 +235,8 @@ fn read_render_state(path: &Path) -> Result<Vec<Event>, String> {
 }
 
 /// How often the refresh path did its costly work since the frame started:
-/// rows built for a window, log rows wrapped (measured), and treebar and
-/// switchbar rebuilds. They only count up, so tests read deltas from the
+/// rows built for a window, log rows wrapped (measured), treebar and
+/// switchbar rebuilds, and windows MDI activated. They only count up, so tests read deltas from the
 /// automation dump; they assert work, never time.
 #[derive(Debug, Default)]
 pub(super) struct RefreshCounters {
@@ -240,6 +244,9 @@ pub(super) struct RefreshCounters {
     rows_wrapped: u64,
     treebar_rebuilds: u64,
     switchbar_rebuilds: u64,
+    /// Windows MDI activated (`WM_MDIACTIVATE` to the child it activates):
+    /// each one moves the frame menu's window buttons and repaints.
+    mdi_activations: u64,
     /// `timeline_row_builds` of room windows, by room.
     row_builds_by_room: BTreeMap<String, u64>,
 }
@@ -259,6 +266,10 @@ impl RefreshCounters {
 
     pub(super) fn switchbar_rebuilds(&self) -> u64 {
         self.switchbar_rebuilds
+    }
+
+    pub(super) fn mdi_activations(&self) -> u64 {
+        self.mdi_activations
     }
 
     pub(super) fn room_row_builds(&self, room_id: &str) -> u64 {

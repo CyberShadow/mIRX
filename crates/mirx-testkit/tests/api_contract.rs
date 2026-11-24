@@ -1126,6 +1126,7 @@ fn data_models_round_trip_through_json() {
             rows_wrapped: 6,
             treebar_rebuilds: 7,
             switchbar_rebuilds: 8,
+            mdi_activations: 9,
         },
     };
     let navigation_path = vec![
@@ -1459,6 +1460,7 @@ fn data_models_round_trip_through_json() {
                 "rows_wrapped": 6u64,
                 "treebar_rebuilds": 7u64,
                 "switchbar_rebuilds": 8u64,
+                "mdi_activations": 9u64,
             },
             "rooms": [
                 {
@@ -7442,6 +7444,7 @@ fn switchbar_helpers_find_items_and_active_item() {
             rows_wrapped: 0,
             treebar_rebuilds: 0,
             switchbar_rebuilds: 0,
+            mdi_activations: 0,
         },
     };
 

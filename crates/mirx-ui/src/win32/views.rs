@@ -169,6 +169,9 @@ unsafe extern "system" fn mdi_child_window_proc(
         }
         WM_MDIACTIVATE => {
             if lparam as HWND == hwnd {
+                state_mut(frame_window_for(hwnd))
+                    .harness
+                    .count_mdi_activation();
                 if let Err(message) = handle_native_mdi_child_activation(hwnd) {
                     eprintln!("{message}");
                 }
