@@ -852,14 +852,16 @@ async fn read_rooms(client: &Client) -> Result<Option<Vec<RoomSummary>>, MatrixC
     for room in joined_rooms {
         let display_name = room.display_name().await.map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to read room display name: {}",
+                "failed to read the display name of {}: {}",
+                room.room_id(),
                 ErrorChain(&err)
             ))
         })?;
         let topic = room.topic();
         let encrypted = room.latest_encryption_state().await.map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to read room encryption state: {}",
+                "failed to read the encryption state of {}: {}",
+                room.room_id(),
                 ErrorChain(&err)
             ))
         })?;
@@ -873,12 +875,20 @@ async fn read_rooms(client: &Client) -> Result<Option<Vec<RoomSummary>>, MatrixC
             .account_data_static::<TagEventContent>()
             .await
             .map_err(|err| {
-                MatrixCoreError::new(format!("failed to read room tags: {}", ErrorChain(&err)))
+                MatrixCoreError::new(format!(
+                    "failed to read the tags of {}: {}",
+                    room.room_id(),
+                    ErrorChain(&err)
+                ))
             })?
             .map(|event| event.deserialize().map(|event| event.content.tags))
             .transpose()
             .map_err(|err| {
-                MatrixCoreError::new(format!("failed to decode room tags: {}", ErrorChain(&err)))
+                MatrixCoreError::new(format!(
+                    "failed to decode the tags of {}: {}",
+                    room.room_id(),
+                    ErrorChain(&err)
+                ))
             })?;
         let direct_user_ids = direct_user_ids_by_room
             .get(room.room_id().as_str())
@@ -910,7 +920,8 @@ async fn read_rooms(client: &Client) -> Result<Option<Vec<RoomSummary>>, MatrixC
     for room in invited_rooms {
         let display_name = room.display_name().await.map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to read room display name: {}",
+                "failed to read the display name of {}: {}",
+                room.room_id(),
                 ErrorChain(&err)
             ))
         })?;
@@ -2887,7 +2898,8 @@ async fn summarize_space_children(
         .await
         .map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to read space child state: {}",
+                "failed to read the children of space {}: {}",
+                room.room_id(),
                 ErrorChain(&err)
             ))
         })?;
@@ -5024,7 +5036,12 @@ fn presence_status(status_msg: Option<String>) -> Option<String> {
 /// does not know (MSC3026's `busy`) is an error naming the user.
 fn presence_change(raw: &Raw<PresenceEvent>) -> Result<PresenceChange, MatrixCoreError> {
     let event = raw.deserialize().map_err(|err| {
-        MatrixCoreError::new(format!("invalid presence event: {}", ErrorChain(&err)))
+        let sender = raw.get_field::<String>("sender").ok().flatten();
+        MatrixCoreError::new(format!(
+            "invalid presence event of {}: {}",
+            sender.as_deref().unwrap_or("an unnamed user"),
+            ErrorChain(&err)
+        ))
     })?;
     let kind = presence_kind(&event.content.presence)
         .map_err(|err| MatrixCoreError::new(format!("{err} of {}", event.sender)))?;
@@ -16294,7 +16311,10 @@ mod tests {
         );
         let invalid = change(serde_json::json!({ "status_msg": "no state" }))
             .expect_err("a presence event without a state");
-        assert!(invalid.starts_with("invalid presence event: "), "{invalid}");
+        assert!(
+            invalid.starts_with("invalid presence event of @bob:example.org: "),
+            "{invalid}"
+        );
     }
 
     #[test]
