@@ -720,7 +720,7 @@ fn sign_in(app: &MirxApp, homeserver: &Homeserver, user: &Peer) -> Result<String
             )
         },
     )?;
-    let logged_in = format!("* Logged in as {} (device ", user.user_id());
+    let logged_in = format!("* Logged in as {} (session ", user.user_id());
     wait_for_status_line(app, &logged_in, TIMEOUT)?;
     let lines = status_view_lines(app)?;
     let line = lines
@@ -1287,7 +1287,7 @@ fn a_restart_connects_at_once_and_status_says_each_thing_once() -> Result<(), Bo
         [
             "* Not connected. Use File > Select Server... (Alt+E) or /server to connect to a Matrix homeserver".to_owned(),
             format!("* Connecting to {} as {}", homeserver.url, alice.localpart),
-            format!("* Logged in as {} (device {device})", alice.user_id()),
+            format!("* Logged in as {} (session {device})", alice.user_id()),
             "* Synced rooms: 0 joined, 0 invited".to_owned(),
             e2ee.to_owned(),
             setup_hint.to_owned(),

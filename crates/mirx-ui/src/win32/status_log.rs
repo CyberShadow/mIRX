@@ -128,7 +128,7 @@ pub(super) fn sign_in_address(url: &str) -> String {
 pub(super) const SIGN_IN_CANCELLED: &str = "Sign-in cancelled";
 
 pub(super) fn logged_in(user_id: &str, device_id: &str) -> String {
-    format!("Logged in as {user_id} (device {device_id})")
+    format!("Logged in as {user_id} (session {device_id})")
 }
 
 /// Logged at startup without a saved session.
@@ -499,7 +499,7 @@ mod tests {
         );
         assert_eq!(
             logged_in("@alice:example", "DEVICE"),
-            "Logged in as @alice:example (device DEVICE)"
+            "Logged in as @alice:example (session DEVICE)"
         );
         assert_eq!(synced(3, 1), "Synced rooms: 3 joined, 1 invited");
         assert_eq!(

@@ -1155,7 +1155,7 @@ configure_case_expectations() {
       expect_active_view='status'
       select_views=('status')
       status_view_expect_args=(
-        --expect-status-view '[22:12] * Logged in as @me:example (device MIRXDEVICE)'
+        --expect-status-view '[22:12] * Logged in as @me:example (session MIRXDEVICE)'
         --expect-status-view '[22:12] * Syncing with the homeserver'
         --expect-status-view '[22:12] * Synced rooms: 1 joined, 0 invited'
         --expect-status-view '[22:12] * Logging out; File > Disconnect stops it'
@@ -1208,7 +1208,7 @@ configure_case_expectations() {
       ordered_actions=(arrange:tile_vertical)
       expect_error='message send failed'
       status_view_expect_args=(
-        --expect-status-view '[22:12] * Logged in as @me:example (device MIRXDEVICE)'
+        --expect-status-view '[22:12] * Logged in as @me:example (session MIRXDEVICE)'
         --expect-status-view '[22:12] * Syncing with the homeserver'
         --expect-status-view '[22:12] * Synced rooms: 1 joined, 0 invited'
         --expect-status-view '[22:12] * E2EE: recovery enabled, local backup enabled, server backup not checked, cross-signing complete, this session verified'

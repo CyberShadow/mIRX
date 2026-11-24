@@ -5924,7 +5924,7 @@ mod tests {
             assert_eq!(
                 status_log_lines(&state),
                 vec![
-                    "[22:12] * Logged in as @alice:example (device DEVICE)".to_owned(),
+                    "[22:12] * Logged in as @alice:example (session DEVICE)".to_owned(),
                     "[22:12] * Syncing with the homeserver".to_owned(),
                     "[22:12] * Synced rooms: 1 joined, 1 invited".to_owned(),
                     "[22:12] * Disconnected".to_owned(),
@@ -5986,7 +5986,7 @@ mod tests {
             assert_eq!(
                 status_log_lines(&state),
                 vec![
-                    "[22:12] * Logged in as @alice:example (device DEVICE)".to_owned(),
+                    "[22:12] * Logged in as @alice:example (session DEVICE)".to_owned(),
                     "[22:12] * Syncing with the homeserver".to_owned(),
                     // The reconnect's and the retry's own lines (the
                     // frame's) say it syncs again.

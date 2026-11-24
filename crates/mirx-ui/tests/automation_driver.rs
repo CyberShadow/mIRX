@@ -5792,7 +5792,7 @@ fn logging_out_and_signing_in_again_works() -> Result<(), Box<dyn std::error::Er
     sign_in_with_select_server(&app, &server.base_url, "alice", "secret")?;
     wait_for_status_line(
         &app,
-        "* Logged in as @alice:example (device DEVICE2)",
+        "* Logged in as @alice:example (session DEVICE2)",
         Duration::from_secs(10),
     )?;
     assert_eq!(app.dump_model()?.last_error, None);
