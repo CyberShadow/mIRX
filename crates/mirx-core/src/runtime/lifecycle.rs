@@ -240,9 +240,11 @@ pub(super) async fn restore(
 /// not (a sign-in, a restore whose store was lost) has nothing to show:
 /// the session syncs once first. Each update task is made (and so
 /// subscribes) at the point where it must start listening; the session
-/// spawns them. A failed initial sync is an error of `operation`; the
-/// session stands either way, and the first sync task response emits the
-/// snapshot instead. A store that cannot be read fails the sign-in.
+/// spawns them. A failed initial sync is an error of the room list
+/// (`RoomList`, not `operation`: the sign-in succeeded); the session
+/// stands either way, and the first sync task response emits the snapshot
+/// instead. A store that cannot be read fails the sign-in, an error of
+/// `operation`.
 async fn read_session(
     client: Client,
     signed_in: Event,
@@ -341,7 +343,6 @@ async fn read_session(
     SignInEnd::Entered(Box::new(EnteredSession {
         client,
         signed_in,
-        operation,
         snapshot: entry.into_snapshot(),
         e2ee_status,
         e2ee_status_watch,

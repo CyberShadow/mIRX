@@ -2253,8 +2253,18 @@ fn a_session_that_starts_offline_gets_its_rooms_at_the_first_sync_that_connects(
         let mut core = Core::new(config.clone(), event_tx.clone());
         run(&mut core, Command::Login(login_request(&mock_server, true))).await;
         let events = settled_events(&event_rx).await;
+        // The sign-in succeeded; its first room list did not come.
         assert!(
             events.iter().any(|event| matches!(
+                event,
+                Event::Error(error)
+                    if error.operation == Operation::RoomList
+                        && error.message.starts_with("initial Matrix sync failed: ")
+            )),
+            "{events:?}"
+        );
+        assert!(
+            !events.iter().any(|event| matches!(
                 event,
                 Event::Error(error) if error.operation == Operation::Login
             )),

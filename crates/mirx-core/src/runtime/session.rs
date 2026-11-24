@@ -50,8 +50,6 @@ pub(super) struct EnteredSession {
     pub(super) client: Client,
     /// `LoggedIn{..}` or `RestoredSession`.
     pub(super) signed_in: Event,
-    /// `Login` or `RestoreSession`: the operation of the snapshot's error.
-    pub(super) operation: Operation,
     /// An error if the initial sync failed (offline, or the server is
     /// down) or the snapshot could not be read: the first sync that gets
     /// through emits the snapshot.
@@ -121,7 +119,6 @@ impl Session {
         let EnteredSession {
             client,
             signed_in,
-            operation,
             snapshot,
             e2ee_status,
             e2ee_status_watch,
@@ -137,8 +134,11 @@ impl Session {
                 snapshot.emit(&snapshots, events);
                 false
             }
+            // The sign-in succeeded: what failed is its first room list,
+            // as when the first contact cannot read it. The session's
+            // first sync that gets through emits it.
             Err(err) => {
-                emit_matrix_error(events, operation, err);
+                emit_matrix_error(events, Operation::RoomList, err);
                 true
             }
         };

@@ -30,10 +30,10 @@ pub(super) fn after_event(connection: ConnectionState, event: &Event) -> Connect
         Event::LogoutRefused { .. } if connection == ConnectionState::LoggingOut => {
             ConnectionState::SignedIn
         }
-        // After LoggedIn or RestoredSession (SignedIn already) this is the
-        // session entry's error: the initial room sync of a store that had
-        // never synced failed, or the first room snapshot could not be
-        // read. The session stands.
+        // A sign-in's error ends it. Once signed in, a `Login` error is a
+        // refused command (`CancelLogin` with no sign-in to cancel): the
+        // session stands. (The session entry's failed first sync is a
+        // `RoomList` error.)
         Event::Error(error)
             if matches!(
                 error.operation,

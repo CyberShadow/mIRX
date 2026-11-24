@@ -1755,7 +1755,7 @@ mod tests {
                 (Event::RestoredSession, ConnectionState::SignedIn),
                 (
                     Event::Error(CoreErrorEvent {
-                        operation: Operation::RestoreSession,
+                        operation: Operation::RoomList,
                         room_id: None,
                         message: "initial Matrix sync failed".to_owned(),
                     }),
