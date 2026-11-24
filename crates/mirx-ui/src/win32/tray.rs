@@ -3,6 +3,12 @@
 //! Tips), shown as the icon's balloons, which Windows 10+ shows as
 //! notifications.
 //!
+//! Tips are paced: at most one shows every `TIP_INTERVAL_MS`, and the
+//! latest line that wanted one meanwhile shows when the interval ends. A
+//! burst of lines is then two balloons, not one recreated per batch (each
+//! one a Windows 10 notification of its own; under Wine a balloon that
+//! shows only once the updates stop).
+//!
 //! The shell holds the icon; mirx only asks. `sync_tray_icon` is the one
 //! place that adds or removes it, from what the options, the frame and the
 //! tips want. Whether the frame is in the tray is the frame's visibility:
@@ -31,6 +37,11 @@ const TRAY_ICON_ID: u32 = 1;
 /// `NIN_KEYSELECT`: the icon chosen with the keyboard (Enter or Space).
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 
+/// How long after a tip the next one may show: Wine's shortest balloon
+/// (`BALLOON_SHOW_MIN_TIMEOUT`), twice a Windows notification's default 5
+/// seconds. A timer of mirx's own: Wine never tells when a balloon ends.
+const TIP_INTERVAL_MS: u32 = 10_000;
+
 /// What mirx asked the shell for.
 #[derive(Debug, Default)]
 pub(super) struct TrayState {
@@ -39,6 +50,46 @@ pub(super) struct TrayState {
     icon_added: bool,
     /// The window the tip on the icon is about, while it shows.
     tip: Option<ViewId>,
+    pace: TipPace,
+}
+
+/// Whether a tip may show now.
+#[derive(Debug, Default, PartialEq, Eq)]
+enum TipPace {
+    /// No tip showed in the last interval.
+    #[default]
+    Free,
+    /// A tip showed less than an interval ago, and `TIP_TIMER_ID` runs:
+    /// the latest line that wanted a tip since then waits for its end.
+    Waiting(Option<TipCandidate>),
+}
+
+impl TipPace {
+    /// A line wants a tip: returned to show now, or kept to wait (in
+    /// place of an earlier one that waited).
+    fn offer(&mut self, candidate: TipCandidate) -> Option<TipCandidate> {
+        match self {
+            Self::Free => Some(candidate),
+            Self::Waiting(waiting) => {
+                *waiting = Some(candidate);
+                None
+            }
+        }
+    }
+
+    /// A tip showed: the interval starts.
+    fn shown(&mut self) {
+        assert_eq!(*self, Self::Free, "a tip shows only between intervals");
+        *self = Self::Waiting(None);
+    }
+
+    /// The interval ended: the line that waited, to offer again.
+    fn interval_ended(&mut self) -> Option<TipCandidate> {
+        match std::mem::take(self) {
+            Self::Waiting(waiting) => waiting,
+            Self::Free => unreachable!("the interval's timer runs only after a tip"),
+        }
+    }
 }
 
 /// A line that may show a tip, found while the batch applies; the tip is
@@ -384,10 +435,29 @@ fn tip_line(state: &WindowState, candidate: &TipCandidate) -> Option<String> {
         .map(|row| row.logical_text)
 }
 
+/// A line wants a tip: it shows now, or when the interval since the last
+/// one ends, unless a later line's tip takes its place.
+pub(super) unsafe fn offer_tip(hwnd: HWND, candidate: TipCandidate) -> Result<(), String> {
+    match state_mut(hwnd).tray.pace.offer(candidate) {
+        Some(candidate) => show_tip(hwnd, candidate),
+        None => Ok(()),
+    }
+}
+
+/// `TIP_TIMER_ID`: the interval since the last tip ended. The line that
+/// waited shows now, and starts the next one.
+pub(super) unsafe fn on_tip_timer(hwnd: HWND) -> Result<(), String> {
+    KillTimer(hwnd, TIP_TIMER_ID);
+    match state_mut(hwnd).tray.pace.interval_ended() {
+        Some(candidate) => show_tip(hwnd, candidate),
+        None => Ok(()),
+    }
+}
+
 /// Shows a tip about a line, while the user works in another application:
 /// the window's name over the line, as a balloon on the icon (added for
-/// it if need be).
-pub(super) unsafe fn show_tip(hwnd: HWND, candidate: TipCandidate) -> Result<(), String> {
+/// it if need be). A tip shown starts the interval before the next.
+unsafe fn show_tip(hwnd: HWND, candidate: TipCandidate) -> Result<(), String> {
     if mirx_is_foreground() {
         return Ok(());
     }
@@ -417,6 +487,10 @@ pub(super) unsafe fn show_tip(hwnd: HWND, candidate: TipCandidate) -> Result<(),
             let state = state_mut(hwnd);
             state.harness.record_shown_tip(&candidate.view, title, text);
             state.tray.tip = Some(candidate.view);
+            state.tray.pace.shown();
+            if SetTimer(hwnd, TIP_TIMER_ID, TIP_INTERVAL_MS, None) == 0 {
+                return Err(last_os_error("SetTimer tips"));
+            }
             Ok(())
         }
         Err(error) => {
@@ -477,6 +551,30 @@ pub(super) mod automation {
 mod tests {
     use super::super::test_fixtures::*;
     use super::*;
+
+    fn candidate(activity_id: &str) -> TipCandidate {
+        TipCandidate {
+            view: ViewId::Room("!room:example".to_owned()),
+            activity_id: activity_id.to_owned(),
+        }
+    }
+
+    #[test]
+    fn tips_are_paced_one_per_interval_with_the_latest_waiting() {
+        let mut pace = TipPace::default();
+        assert_eq!(pace.offer(candidate("first")), Some(candidate("first")));
+        // Not shown (mirx was in front): the next line may still show.
+        assert_eq!(pace.offer(candidate("first")), Some(candidate("first")));
+        pace.shown();
+        assert_eq!(pace.offer(candidate("second")), None);
+        assert_eq!(pace.offer(candidate("third")), None);
+        assert_eq!(pace.interval_ended(), Some(candidate("third")));
+        assert_eq!(pace, TipPace::Free);
+        // The waiting one showed: another interval, which nothing waits for.
+        pace.shown();
+        assert_eq!(pace.interval_ended(), None);
+        assert_eq!(pace.offer(candidate("later")), Some(candidate("later")));
+    }
 
     #[test]
     fn the_icon_is_wanted_always_in_the_tray_or_under_a_tip() {

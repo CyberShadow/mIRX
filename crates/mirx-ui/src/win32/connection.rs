@@ -100,6 +100,12 @@ impl Reconnect {
         self.connected = false;
     }
 
+    /// A `SyncConnected` came since the last `SyncStarted`: the sync's first
+    /// response is in.
+    pub(super) fn connected(&self) -> bool {
+        self.connected
+    }
+
     /// Returns whether the connection came back after it was lost.
     pub(super) fn sync_connected(&mut self) -> bool {
         self.connected = true;

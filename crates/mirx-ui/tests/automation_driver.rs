@@ -10667,6 +10667,76 @@ fn tips_follow_the_options_and_the_rooms_mode() -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+/// What a connect's first response brings, the catch-up after a time
+/// away, shows no tip, however many batches it takes, and flashes the
+/// taskbar once, at the connect. Live lines tip again, one tip per
+/// interval: the latest line that wanted one meanwhile shows when it ends.
+#[test]
+fn a_catch_up_shows_no_tip_and_flashes_once_and_live_tips_are_paced()
+-> Result<(), Box<dyn std::error::Error>> {
+    let beta = room_identity("!beta:example");
+    let (app, local_app_data) = launch_hidden_in_tray("")?;
+    let ping =
+        |body: &str| highlighted(text_event("!beta:example", "@bob:example", now_ms(), body));
+    let flashes = |app: &MirxApp| -> Result<u64, Box<dyn std::error::Error>> {
+        Ok(app.dump_model()?.frame_flashes)
+    };
+    append_events(
+        &app,
+        vec![
+            Event::LoggedIn {
+                session: CoreStoredSession {
+                    user_id: "@me:example".to_owned(),
+                    ..core_stored_session()
+                },
+                homeserver_url: "https://matrix.example/".to_owned(),
+            },
+            Event::SyncStarted,
+        ],
+    )?;
+    append_events(
+        &app,
+        vec![
+            ping("me: while you were away"),
+            text_event("!alpha:example", "@alice:example", now_ms(), "a query"),
+        ],
+    )?;
+    append_events(&app, vec![ping("me: and again")])?;
+    assert_eq!(shown_tips(&app)?, []);
+    assert_eq!(flashes(&app)?, 0);
+    append_events(&app, vec![Event::SyncConnected])?;
+    assert_eq!(shown_tips(&app)?, []);
+    assert_eq!(flashes(&app)?, 1, "the connect flashes for its catch-up");
+
+    append_events(&app, vec![ping("me: live")])?;
+    let live = tip(&beta, "Beta", "<@bob:example> me: live");
+    assert_eq!(shown_tips(&app)?, std::slice::from_ref(&live));
+    assert_eq!(flashes(&app)?, 2);
+    append_events(&app, vec![ping("me: soon after")])?;
+    append_events(&app, vec![ping("me: the latest")])?;
+    assert_eq!(
+        shown_tips(&app)?,
+        std::slice::from_ref(&live),
+        "within the interval"
+    );
+    assert_eq!(flashes(&app)?, 4);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let tips = loop {
+        let tips = shown_tips(&app)?;
+        if tips.len() > 1 || Instant::now() >= deadline {
+            break tips;
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    };
+    assert_eq!(
+        tips,
+        [live, tip(&beta, "Beta", "<@bob:example> me: the latest")]
+    );
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 #[test]
 fn no_tip_while_mirx_is_active() -> Result<(), Box<dyn std::error::Error>> {
     let (app, local_app_data) = launch_close_lifecycle_app()?;

@@ -308,6 +308,12 @@ unsafe extern "system" fn window_proc(
             }
             0
         }
+        WM_TIMER if wparam == TIP_TIMER_ID => {
+            if let Err(message) = on_tip_timer(hwnd) {
+                show_error_message(hwnd, "Tray", &message);
+            }
+            0
+        }
         WM_TIMER if wparam == AUTO_CLOSE_TIMER_ID => {
             KillTimer(hwnd, AUTO_CLOSE_TIMER_ID);
             DestroyWindow(hwnd);

@@ -9,7 +9,7 @@
 use mirx_core::RoomNotificationMode;
 
 use super::settings::TipsSetting;
-use crate::shared::ViewActivityLevel;
+use crate::shared::{ConnectionState, ViewActivityLevel};
 
 /// The colour a room's activity may reach: a muted room only ever shows that
 /// something happened, whatever the line or the server's counts say.
@@ -20,6 +20,24 @@ pub(super) fn room_activity_level(
     match mode {
         RoomNotificationMode::Mute => level.min(ViewActivityLevel::Event),
         RoomNotificationMode::AllMessages | RoomNotificationMode::MentionsAndKeywordsOnly => level,
+    }
+}
+
+/// Whether the lines arriving now were on the server before mirx
+/// connected: a sign-in's first sync, or the first response of a sync
+/// (`connected`: its `SyncConnected` came), which brings what happened
+/// while mirx was away. They are history, not news: they colour their
+/// windows, but ask for no tip, and for no flash one by one.
+pub(super) fn catching_up(connection: ConnectionState, connected: bool) -> bool {
+    match connection {
+        ConnectionState::SigningIn => true,
+        ConnectionState::Syncing => !connected,
+        // No sync runs: what comes is the user's own (echoes, answers).
+        ConnectionState::SignedOut
+        | ConnectionState::WaitingForBrowser
+        | ConnectionState::SignedIn
+        | ConnectionState::WaitingToReconnect
+        | ConnectionState::LoggingOut => false,
     }
 }
 
@@ -69,8 +87,32 @@ mod tests {
     use mirx_core::RoomNotificationMode::{AllMessages, MentionsAndKeywordsOnly, Mute};
 
     use super::super::settings::TipsSetting;
-    use super::{activity_wants_attention, activity_wants_tip, room_activity_level};
+    use super::{activity_wants_attention, activity_wants_tip, catching_up, room_activity_level};
+    use crate::shared::ConnectionState::{
+        LoggingOut, SignedIn, SignedOut, SigningIn, Syncing, WaitingForBrowser, WaitingToReconnect,
+    };
     use crate::shared::ViewActivityLevel::{Event, Highlight, Message};
+
+    #[test]
+    fn catching_up_is_a_sign_in_or_a_sync_before_it_connected() {
+        for (connection, connected, expected) in [
+            (SigningIn, false, true),
+            (Syncing, false, true),
+            (Syncing, true, false),
+            (SignedOut, false, false),
+            (WaitingForBrowser, false, false),
+            (SignedIn, false, false),
+            (SignedIn, true, false),
+            (WaitingToReconnect, false, false),
+            (LoggingOut, true, false),
+        ] {
+            assert_eq!(
+                catching_up(connection, connected),
+                expected,
+                "{connection:?} connected={connected}"
+            );
+        }
+    }
 
     #[test]
     fn mute_caps_activity_at_event_and_other_modes_keep_it() {

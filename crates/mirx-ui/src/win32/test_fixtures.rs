@@ -996,6 +996,7 @@ pub(super) fn test_state() -> WindowState {
         sessions_dialog: None,
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
+        catch_up_flash: false,
         notify_watch: notify::NotifyWatch::default(),
         room_count_due: false,
         log_out_warning: None,

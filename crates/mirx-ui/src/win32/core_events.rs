@@ -38,9 +38,10 @@ fn apply_room_event_fetch(state: &mut WindowState, fetch: RoomEventFetch) {
     }
 }
 
-/// Returns whether the activity should flash the frame. The active view gets
-/// no activity colour, but it can still want attention while mIRC is in the
-/// background.
+/// Returns what a live line asks of the user's attention. The active view
+/// gets no activity colour, but it can still want attention while mIRC is
+/// in the background. A line of the catch-up asks for none: it can only
+/// make its connect flash.
 fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) -> ActivityAttention {
     let clears_last_activity = matches!(activity.kind, RoomActivityKind::Redacted(_));
     let target_view_id = room_activity_target_view_id(&activity);
@@ -52,17 +53,22 @@ fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) ->
     {
         // A replayed event load is not news.
         if !state.harness.synthetic_load() {
-            attention.flash = notifications::activity_wants_attention(level, room_is_direct, mode);
-            attention.tip = notifications::activity_wants_tip(
-                level,
-                room_is_direct,
-                mode,
-                &state.settings.settings().tips,
-            )
-            .then(|| TipCandidate {
-                view: target_view_id.clone(),
-                activity_id: activity.activity_id.clone(),
-            });
+            let flash = notifications::activity_wants_attention(level, room_is_direct, mode);
+            if notifications::catching_up(state.model.connection, state.reconnect.connected()) {
+                state.catch_up_flash |= flash;
+            } else {
+                attention.flash = flash;
+                attention.tip = notifications::activity_wants_tip(
+                    level,
+                    room_is_direct,
+                    mode,
+                    &state.settings.settings().tips,
+                )
+                .then(|| TipCandidate {
+                    view: target_view_id.clone(),
+                    activity_id: activity.activity_id.clone(),
+                });
+            }
         }
         // A closed query pops up again when the other side talks, as in
         // mIRC, muted or not; the next view sync recreates its window.
@@ -382,7 +388,8 @@ pub(super) unsafe fn handle_core_events(hwnd: HWND) {
     }
 }
 
-/// Returns whether the event should flash the frame.
+/// Returns what the event asks of the user's attention: a live line's
+/// flash and tip, or the connect's one flash for its catch-up.
 pub(super) fn apply_core_event(
     state: &mut WindowState,
     event: Event,
@@ -757,6 +764,8 @@ pub(super) fn apply_core_event(
                 }
             };
             state.reconnect.reset();
+            // What the session's catch-up asked of the user is gone with it.
+            state.catch_up_flash = false;
             // A warning not shown yet was about this session.
             state.log_out_warning = None;
             delete_saved_session()?;
@@ -819,6 +828,11 @@ pub(super) fn apply_core_event(
             // mIRC's notify on connect: who on the list is on.
             state.notify_watch.connected();
             announce_notify_changes(state)?;
+            // The catch-up's one flash.
+            return Ok(ActivityAttention {
+                flash: std::mem::take(&mut state.catch_up_flash),
+                tip: None,
+            });
         }
         Event::SyncStopped(reason) => {
             let (kind, line) = match reason {
@@ -1115,7 +1129,7 @@ pub(super) unsafe fn apply_events_and_refresh(
     }
     // The rows exist now, so the tip can show the line as the window does.
     if let Some(tip) = attention.tip {
-        show_tip(hwnd, tip)?;
+        offer_tip(hwnd, tip)?;
     }
     if let Some(anchor) = history_backfill_anchor {
         restore_room_history_backfill_anchor(hwnd, anchor);
@@ -4355,6 +4369,79 @@ mod tests {
         ));
         let attention = apply_core_event(&mut state, Event::RoomActivity(Box::new(ping))).unwrap();
         assert!(attention.flash && attention.tip.is_some(), "{attention:?}");
+    }
+
+    /// What a connect's first response brings (the catch-up after a time
+    /// away, before `SyncConnected`) colours its windows but asks for no
+    /// tip, and no flash line by line: the connect flashes once if any of
+    /// its lines would have.
+    #[test]
+    fn a_catch_up_colours_its_windows_and_its_connect_flashes_once() {
+        with_local_app_data(|_| {
+            let mut state = test_state();
+            state.model.rooms = vec![
+                room("!active:example", "Active", false),
+                room("!room:example", "Room", false),
+                query("!dm:example", "Casey", "@casey:example"),
+            ];
+            state.active_view = room_view_id("!active:example");
+            let ping = |event_id: &str| {
+                Event::RoomActivity(Box::new(highlighted(sent_message_activity(
+                    "!room:example",
+                    event_id,
+                    None,
+                    "Alice: ping",
+                    1,
+                ))))
+            };
+            let quiet = ActivityAttention::default();
+            let mut apply = |event| apply_core_event(&mut state, event).unwrap();
+            // Not Alice, who says everything here.
+            apply(Event::LoggedIn {
+                session: StoredSession {
+                    user_id: "@me:example".to_owned(),
+                    ..stored_session()
+                },
+                homeserver_url: "https://matrix.example".to_owned(),
+            });
+            assert_eq!(apply(Event::SyncStarted), quiet);
+            assert_eq!(apply(ping("$old-ping")), quiet);
+            assert_eq!(apply(timeline("!dm:example", "while you were away")), quiet);
+            assert_eq!(
+                apply(Event::SyncConnected),
+                ActivityAttention {
+                    flash: true,
+                    tip: None,
+                }
+            );
+            assert_eq!(
+                state.room_activity.get(&room_view_id("!room:example")),
+                Some(&ViewActivityLevel::Highlight)
+            );
+            assert_eq!(
+                state.room_activity.get(&room_view_id("!dm:example")),
+                Some(&ViewActivityLevel::Message)
+            );
+
+            // Live now.
+            assert_eq!(
+                apply_core_event(&mut state, ping("$live-ping")).unwrap(),
+                ActivityAttention {
+                    flash: true,
+                    tip: Some(TipCandidate {
+                        view: room_view_id("!room:example"),
+                        activity_id: "event:$live-ping".to_owned(),
+                    }),
+                }
+            );
+
+            // A reconnect whose catch-up wants nothing connects quietly.
+            let mut apply = |event| apply_core_event(&mut state, event).unwrap();
+            apply(Event::SyncStopped(SyncStopReason::Lost("gone".to_owned())));
+            assert_eq!(apply(Event::SyncStarted), quiet);
+            assert_eq!(apply(timeline("!room:example", "chatter")), quiet);
+            assert_eq!(apply(Event::SyncConnected), quiet);
+        });
     }
 
     #[test]

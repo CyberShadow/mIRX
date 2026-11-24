@@ -580,8 +580,9 @@ use timestamp::{LocalTime, LocalTimeFn, TimestampSetting, TimestampStyle};
 #[cfg(any(test, feature = "automation"))]
 use tray::automation::{choose_tray_menu_item, dump_tray};
 use tray::{
-    TipCandidate, TrayState, hide_to_tray, minimize_frame, mirx_is_foreground, on_taskbar_created,
-    on_tray_icon, remove_tray_icon, show_tip, sync_tray_icon, taskbar_created_message,
+    TipCandidate, TrayState, hide_to_tray, minimize_frame, mirx_is_foreground, offer_tip,
+    on_taskbar_created, on_tip_timer, on_tray_icon, remove_tray_icon, sync_tray_icon,
+    taskbar_created_message,
 };
 #[cfg(any(test, feature = "automation"))]
 use verification::automation::submit_automation_verification_action;
@@ -674,6 +675,8 @@ const RECONNECT_TIMER_ID: usize = 2;
 const CORE_EVENTS_TIMER_ID: usize = 3;
 /// `USER_TIMER_MINIMUM`: the timer is due as soon as Windows allows.
 const CORE_EVENTS_DELAY_MS: u32 = 10;
+/// A tip's interval ended: the tip that waited may show (`tray`).
+const TIP_TIMER_ID: usize = 4;
 // The timeline's lengths at 96 dpi; `TimelineMetrics` scales them.
 const TIMELINE_LEFT_PADDING: i32 = 8;
 const TIMELINE_RIGHT_PADDING: i32 = 8;
@@ -944,6 +947,10 @@ struct WindowState {
     tray: TrayState,
     /// The retry bookkeeping; `reconnect` and the sync events move it.
     reconnect: connection::Reconnect,
+    /// A line of the catch-up (`notifications::catching_up`) would have
+    /// flashed the frame: the connect (`SyncConnected`) flashes it, once
+    /// for them all.
+    catch_up_flash: bool,
     /// Which notify list users Status said are on, while connected.
     notify_watch: notify::NotifyWatch,
     /// The session's first room list is still to come: Status counts it
@@ -1188,6 +1195,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         sessions_dialog: None,
         tray: TrayState::default(),
         reconnect: connection::Reconnect::default(),
+        catch_up_flash: false,
         notify_watch: notify::NotifyWatch::default(),
         room_count_due: false,
         log_out_warning: None,
