@@ -28271,7 +28271,14 @@ fn buffer_clear_on_the_window_menu_clears_that_window() -> Result<(), Box<dyn st
     let ui_state = app.dump_ui_state()?;
     assert_eq!(beta_buffer_lines(&ui_state), 0);
     assert!(beta_history_rows(&ui_state).is_empty());
-    assert_eq!(ui_state.status_bar.text, "cleared window: !beta:example");
+    // The notice leads; the restored session's E2EE status, which the core
+    // reports at no fixed moment, may follow it.
+    assert_eq!(
+        ui_state.status_bar.text.split(" | ").next(),
+        Some("cleared window: !beta:example"),
+        "{}",
+        ui_state.status_bar.text
+    );
     assert_eq!(
         find_view(&ui_state, &ViewIdentity::Status).lines,
         status_lines
