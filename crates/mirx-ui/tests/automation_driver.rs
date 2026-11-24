@@ -11792,8 +11792,10 @@ fn nick_list_ctrl_click_selects_several_and_control_acts_on_all()
     );
     assert_eq!(state.selected_labels, ["Vic", "Bob", "Carol"]);
     assert!(state.op_enabled && state.voice_enabled && state.devoice_enabled);
-    assert!(!state.deop_enabled && !state.verify_enabled);
+    assert!(!state.deop_enabled);
+    // Verifications with different users can run at once: Verify asks each.
     assert!(state.whois_enabled && state.query_enabled && state.mention_enabled);
+    assert!(state.verify_enabled);
 
     // One change of the power levels for all it applies to.
     app.open_selected_member_context_menu(ContextMenuCommand::OpMember)?;
