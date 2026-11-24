@@ -651,6 +651,15 @@ pub(super) unsafe fn layout_controls(hwnd: HWND) {
     } else {
         0
     };
+    // A status bar sizes and places itself at the bottom of its parent, so
+    // the controls above it are laid out against its real height. Sizing it
+    // to a guessed height instead left it overlapping them by a few pixels,
+    // and which one painted last decided the snapshot.
+    SendMessageW(state.controls.status_bar, WM_SIZE, 0, 0);
+    let mut status_bar_rect = RECT::default();
+    GetWindowRect(state.controls.status_bar, &mut status_bar_rect);
+    let status_bar_height =
+        (status_bar_rect.bottom - status_bar_rect.top).min((height - toolbar_height).max(0));
     let switchbar_height = if show_switchbar {
         // The switchbar wraps its buttons on its own WM_SIZE, so it gets
         // the frame's width first and its height from the rows that gives.
@@ -668,7 +677,13 @@ pub(super) unsafe fn layout_controls(hwnd: HWND) {
             .expect("a toolbar's row count is positive");
         let button_height =
             (SendMessageW(state.controls.switchbar, TB_GETBUTTONSIZE, 0, 0) as u32 >> 16) as i32;
-        switchbar::switchbar_height(rows, button_height, dpi).min(height - toolbar_height)
+        switchbar::switchbar_height(
+            rows,
+            button_height,
+            height - toolbar_height - status_bar_height,
+            dpi,
+        )
+        .min(height - toolbar_height)
     } else {
         0
     };
@@ -681,15 +696,6 @@ pub(super) unsafe fn layout_controls(hwnd: HWND) {
         1,
     );
     let bars_height = toolbar_height + switchbar_height;
-    // A status bar sizes and places itself at the bottom of its parent, so
-    // the controls above it are laid out against its real height. Sizing it
-    // to a guessed height instead left it overlapping them by a few pixels,
-    // and which one painted last decided the snapshot.
-    SendMessageW(state.controls.status_bar, WM_SIZE, 0, 0);
-    let mut status_bar_rect = RECT::default();
-    GetWindowRect(state.controls.status_bar, &mut status_bar_rect);
-    let status_bar_height =
-        (status_bar_rect.bottom - status_bar_rect.top).min((height - bars_height).max(0));
     let mdi_width = (width - mdi_x).max(0);
     let mdi_height = (height - bars_height - status_bar_height).max(0);
 
@@ -1074,6 +1080,17 @@ mod tests {
         (SendMessageW(switchbar, TB_GETBUTTONSIZE, 0, 0) as u32 >> 16) as i32
     }
 
+    /// The height the switchbar and the windows share: the frame's client
+    /// less the toolbar and the status bar.
+    unsafe fn switchbar_and_windows_height(hwnd: HWND) -> i32 {
+        let controls = &state_ref(hwnd).controls;
+        let mut client = RECT::default();
+        GetClientRect(hwnd, &mut client);
+        client.bottom
+            - frame_child_layout(hwnd, controls.toolbar).height
+            - frame_child_layout(hwnd, controls.status_bar).height
+    }
+
     #[test]
     fn the_switchbar_wraps_onto_rows_that_the_frame_lays_out() {
         unsafe {
@@ -1100,6 +1117,7 @@ mod tests {
                     switchbar::switchbar_height(
                         rows,
                         switchbar_button_height(switchbar),
+                        switchbar_and_windows_height(hwnd),
                         Dpi::of_window(hwnd)
                     )
                 );
@@ -1158,6 +1176,7 @@ mod tests {
                     switchbar::switchbar_height(
                         1,
                         switchbar_button_height(switchbar),
+                        switchbar_and_windows_height(hwnd),
                         Dpi::of_window(hwnd)
                     )
                 );
