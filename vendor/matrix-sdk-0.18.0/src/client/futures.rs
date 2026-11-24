@@ -92,6 +92,8 @@ where
         let Self { client, request, config, send_progress } = self;
 
         Box::pin(async move {
+            // The token `send_inner` sends: it reads it before its first await.
+            let access_token = client.access_token();
             let res =
                 Box::pin(client.send_inner(request.clone(), config, send_progress.clone())).await;
 
@@ -106,6 +108,14 @@ where
                     trace!("Token refresh: Automatic refresh disabled.");
                     client.broadcast_unknown_token(unknown_token_data);
                     return res;
+                }
+
+                // A refresh finished while the request was under way: the
+                // refused token is no longer the client's, so the new one is
+                // tried, not refreshed again.
+                if client.access_token() != access_token {
+                    trace!("Token refresh: Already refreshed, retrying request.");
+                    return Box::pin(client.send_inner(request, config, send_progress)).await;
                 }
 
                 // Try to refresh the token and retry the request.

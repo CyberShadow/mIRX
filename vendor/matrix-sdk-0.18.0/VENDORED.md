@@ -122,10 +122,29 @@ mirx's own: `SyncSettings::request_timeout`, the bound of the whole
 (`src/config/sync.rs`, `src/client/mod.rs` `sync_once`). Unset, nothing
 changes.
 
+## 6. A request refused with a token already refreshed refreshes again
+
+### Why
+
+`SendRequest::into_future` refreshes the access token on every
+`M_UNKNOWN_TOKEN`. `refresh_token_lock` makes requests refused *while* a
+refresh is under way wait for it, but a request sent with the old token
+and refused *after* that refresh finished (a long-poll sync answers last)
+starts another one: the tokens rotate again seconds after they were
+issued, and every rotation is one more save the application must not
+lose (Synapse's refresh tokens are single-use). Upstream `main` (as of
+2025-09) has the same code.
+
+### The fix
+
+mirx's own: the request remembers the access token it was sent with;
+refused, it retries with the client's token if a refresh has replaced
+that one, and refreshes only otherwise (`src/client/futures.rs`).
+
 ## When to remove
 
-When upgrading to a matrix-sdk release that contains all five fixes
-(check the second to the fifth against upstream; they are not
+When upgrading to a matrix-sdk release that contains all six fixes
+(check the second to the sixth against upstream; they are not
 reported there yet): delete this directory and its line in `[patch.crates-io]` (and,
 with the last vendored crate, the section and the workspace's
 `exclude = ["vendor"]`).
