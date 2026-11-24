@@ -53,6 +53,13 @@ impl Lane {
             | Self::Verification => 1,
         }
     }
+
+    /// Whether shutting down waits for this lane's work (for a while):
+    /// what the user read, which their other clients and mirx's next start
+    /// go by, and which nothing would send again.
+    pub(super) fn outlasts_shutdown(&self) -> bool {
+        matches!(self, Self::Receipts(_))
+    }
 }
 
 /// Whether a piece of work answers a command, which is acked when it ends.
@@ -182,6 +189,23 @@ impl<S, F: 'static> Jobs<S, F> {
         if queue.taken == 0 {
             self.lanes.remove(lane);
         }
+    }
+
+    /// Whether a lane that `picks` has work running or queued.
+    pub(super) fn has_work(&self, picks: impl Fn(&Lane) -> bool) -> bool {
+        self.lanes.keys().any(picks)
+    }
+
+    /// Drops the work queued, not started, on the lanes that `picks`: it
+    /// never starts. Returns the commands among it, which are owed their
+    /// acks. Their running jobs go on, and the lanes stay taken by them.
+    pub(super) fn drop_queued(&mut self, picks: impl Fn(&Lane) -> bool) -> Vec<CommandId> {
+        self.lanes
+            .iter_mut()
+            .filter(|(lane, _)| picks(lane))
+            .flat_map(|(_, queue)| queue.queued.drain(..))
+            .filter_map(|work| work.owes.command())
+            .collect()
     }
 
     /// Aborts every job and waits until each is gone, and drops the queued
@@ -358,6 +382,44 @@ mod tests {
             }
             assert_eq!(started.len(), 100);
             assert_eq!(jobs.abort_all().await.len(), 100);
+        });
+    }
+
+    #[test]
+    fn dropping_queued_work_keeps_the_running_jobs_and_the_other_lanes() {
+        run_local(async {
+            let mut jobs = Jobs::new();
+            let mut started = Started::new();
+            let room = Lane::Room("!a".to_owned());
+            let receipts = Lane::Receipts("!a".to_owned());
+            let mut gates = Vec::new();
+            for (lane, name) in [
+                (room.clone(), "send"),
+                (room.clone(), "queued send"),
+                (receipts.clone(), "receipt"),
+                (receipts.clone(), "queued receipt"),
+            ] {
+                let (work, open) = gated(name);
+                gates.push(open);
+                jobs.enqueue(lane, work, &mut started);
+            }
+            let is_room = |lane: &Lane| matches!(lane, Lane::Room(_));
+
+            assert_eq!(jobs.drop_queued(is_room), [CommandId(1)]);
+            assert!(jobs.has_work(is_room), "the send still runs");
+            gates.remove(0).send(()).expect("the send runs");
+            let finished = next(&mut jobs).await;
+            assert_eq!(finished.output, "send");
+            jobs.release(&finished.lane, &mut started);
+            assert!(!jobs.has_work(is_room));
+            assert!(jobs.has_work(Lane::outlasts_shutdown));
+            // The receipt lane's queue is whole.
+            gates.remove(1).send(()).expect("the receipt runs");
+            let finished = next(&mut jobs).await;
+            jobs.release(&finished.lane, &mut started);
+            assert_eq!(started, ["send", "receipt", "queued receipt"]);
+            assert_eq!(jobs.abort_all().await.len(), 1);
+            assert!(!jobs.has_work(Lane::outlasts_shutdown));
         });
     }
 

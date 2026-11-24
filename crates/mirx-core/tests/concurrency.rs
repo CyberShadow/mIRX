@@ -1004,6 +1004,116 @@ fn every_command_is_acked_once_by_stopped() {
     harness.join_stopped();
 }
 
+fn read_marker(event_id: &str) -> Command {
+    Command::SetReadMarker(mirx_core::SetReadMarkerRequest {
+        room_id: ROOM.to_owned(),
+        event_id: event_id.to_owned(),
+    })
+}
+
+/// Sends `Shutdown`, reads every event up to `Stopped`, and says how long
+/// that took.
+fn timed_shut_down(seen: Seen) -> (Vec<Event>, Duration) {
+    let start = Instant::now();
+    let events = seen.shut_down();
+    (events, start.elapsed())
+}
+
+/// What the user read reaches the server at exit: the read marker that
+/// leaving the active window sends just before `Shutdown` is sent, and
+/// its answer waited for. Work queued on the other lanes never starts.
+#[test]
+fn shutdown_sends_the_read_marker_sent_before_it() {
+    let harness = Harness::restored_in_rooms(&[ROOM], &[]);
+    harness.runtime.block_on(async {
+        harness
+            .server
+            .mock_authenticated_media_config()
+            .expect_any_access_token()
+            .ok_default()
+            .mount()
+            .await;
+    });
+    harness.hang("POST", r"^/_matrix/media/v3/upload");
+    mount_sends(&harness);
+    let answer_delay = Duration::from_millis(300);
+    harness.mount(
+        Mock::given(method("POST"))
+            .and(path_regex(r"^/_matrix/client/v3/rooms/.*/read_markers$"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({}))
+                    .set_delay(answer_delay),
+            ),
+    );
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("report.txt");
+    std::fs::write(&path, b"report").expect("write the file to send");
+    let seen = Seen::new(&harness);
+
+    harness.send(Command::SendFile(SendFileRequest {
+        room_id: ROOM.to_owned(),
+        path,
+        filename: None,
+        content_type: None,
+    }));
+    harness.wait_for_requests("POST", "/upload", 1);
+    // Queued behind the file in its room's lane.
+    harness.send(line(ROOM, "after"));
+    harness.send(read_marker("$alice-join"));
+    let (events, took) = timed_shut_down(seen);
+
+    let markers = harness.requests("POST", "/read_markers");
+    assert_eq!(markers.len(), 1, "{events:#?}");
+    assert_eq!(body(&markers[0]), json!({ "m.fully_read": "$alice-join" }));
+    assert!(took >= answer_delay, "Stopped after {took:?}");
+    assert!(
+        !events.iter().any(|event| matches!(event, Event::Error(_))),
+        "{events:#?}"
+    );
+    assert_eq!(acks(&events), 4, "{events:#?}");
+    assert!(harness.requests("PUT", "/send/").is_empty());
+    harness.join_stopped();
+}
+
+/// The exit waits for the server's answer for a few seconds, no longer.
+#[test]
+fn shutdown_waits_for_a_hung_read_marker_only_so_long() {
+    let harness = Harness::restored_in_rooms(&[ROOM], &[]);
+    harness.hang("POST", r"^/_matrix/client/v3/rooms/.*/read_markers$");
+    let seen = Seen::new(&harness);
+
+    harness.send(read_marker("$alice-join"));
+    harness.wait_for_requests("POST", "/read_markers", 1);
+    harness.send(read_marker("$later"));
+    let (events, took) = timed_shut_down(seen);
+
+    assert!(
+        (Duration::from_secs(3)..Duration::from_secs(6)).contains(&took),
+        "Stopped after {took:?}"
+    );
+    // The second one waited behind the first, and never went.
+    assert_eq!(harness.requests("POST", "/read_markers").len(), 1);
+    assert_eq!(acks(&events), 3, "{events:#?}");
+    harness.join_stopped();
+}
+
+/// Nothing else holds up the exit.
+#[test]
+fn shutdown_never_waits_for_other_hung_work() {
+    let harness = Harness::restored_in_rooms(&[ROOM], &[]);
+    harness.hang("GET", r"^/_matrix/client/v3/rooms/.*/messages");
+    let seen = Seen::new(&harness);
+
+    harness.send(backfill(ROOM));
+    harness.wait_for_requests("GET", "/messages", 1);
+    let (events, took) = timed_shut_down(seen);
+
+    assert!(took < Duration::from_secs(1), "Stopped after {took:?}");
+    assert_eq!(acks(&events), 2, "{events:#?}");
+    harness.join_stopped();
+}
+
 fn is_error_of(event: &Event, operation: Operation) -> bool {
     matches!(event, Event::Error(error) if error.operation == operation)
 }

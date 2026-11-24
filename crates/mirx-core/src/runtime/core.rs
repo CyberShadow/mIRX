@@ -18,11 +18,13 @@
 //!
 //! The actor awaits only in its `select!` and in teardowns that end
 //! without the server (aborting and joining tasks): it never waits for
-//! the network.
+//! the network, but at shutdown for the read receipts and markers, which
+//! get `SHUTDOWN_GRACE`.
 
 use std::collections::VecDeque;
 use std::io;
 use std::ops::ControlFlow;
+use std::time::Duration;
 
 use futures_util::future::LocalBoxFuture;
 use matrix_sdk::Client;
@@ -42,6 +44,12 @@ use crate::api::{
 };
 use crate::loopback::LoopbackRedirect;
 use crate::matrix::{self, BrowserFlow, MatrixCoreError};
+
+/// How long shutting down lets the read receipts and markers already sent
+/// go on (`Lane::outlasts_shutdown`). The UI has gone by then (the window
+/// is hidden at once), so this is how long at most the process outlives
+/// it; under Windows' allowance for a program at the session's end.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
 pub(super) struct Core {
     config: CoreConfig,
@@ -580,9 +588,13 @@ impl Core {
 
     /// Stops every job, the transition under way and the session's tasks,
     /// and waits until each is gone, inside the runtime (see
-    /// `Session::shut_down`); then acks the commands dropped.
+    /// `Session::shut_down`); then acks the commands dropped. The read
+    /// receipts and markers go first, for `SHUTDOWN_GRACE` at most; the
+    /// other queued work never starts.
     async fn shut_down(&mut self) {
-        let mut dropped = self.jobs.abort_all().await;
+        let mut dropped = self.jobs.drop_queued(|lane| !lane.outlasts_shutdown());
+        self.finish_receipts().await;
+        dropped.extend(self.jobs.abort_all().await);
         dropped.extend(self.deferred.drain(..).map(|(id, _)| id));
         match std::mem::replace(&mut self.state, Lifecycle::Idle) {
             Lifecycle::Idle => {}
@@ -608,6 +620,21 @@ impl Core {
             }
         }
         acks(&self.events, dropped);
+    }
+
+    /// Lets the receipts' lanes run until they are done, or for
+    /// `SHUTDOWN_GRACE`: what is left then is aborted with the rest. The
+    /// other jobs that end meanwhile are applied and acked as usual.
+    async fn finish_receipts(&mut self) {
+        let receipts = async {
+            while self.jobs.has_work(Lane::outlasts_shutdown) {
+                let finished = self.jobs.next().await.expect("a receipt job runs");
+                self.finish_job(finished);
+            }
+        };
+        // Past the grace the server's answer no longer matters: the
+        // process ends.
+        let _past_the_grace = tokio::time::timeout(SHUTDOWN_GRACE, receipts).await;
     }
 
     /// Handles `command` and drives the actor until no job or transition
