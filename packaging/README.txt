@@ -32,6 +32,12 @@ this computer. With encryption, set up recovery first (/e2ee setup) or
 export your room keys (Tools > Export Room Keys...), or a new session cannot
 read the encrypted history.
 
+If your server cannot be reached (or answers with an error) when you log
+out, Log Out offers to remove the session from this computer only. Your
+server then still lists the session until you sign it out from another
+one: Tools > Sessions... in mirx there, or the session list of another
+Matrix app.
+
 Your data
 ---------
 
