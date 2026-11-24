@@ -605,12 +605,30 @@ pub(crate) async fn initial_room_sync(client: &Client) -> Result<(), MatrixCoreE
     // No `emit_member_snapshots_after_sync`: the snapshot has every joined
     // room's members.
     client
-        .sync_once(SyncSettings::default())
+        .sync_once(sync_settings(SYNC_LONG_POLL))
         .await
         .map_err(|err| {
             MatrixCoreError::new(format!("initial Matrix sync failed: {}", ErrorChain(&err)))
         })?;
     Ok(())
+}
+
+/// How long a sync waits for news on the server: the SDK's default.
+const SYNC_LONG_POLL: Duration = Duration::from_secs(30);
+
+/// How long a sync waits for the server's answer beyond the long poll: the
+/// time the server may take to compute it. A big account's first sync, or
+/// the catching up after a long time away, takes a server minutes (Synapse
+/// keeps computing after the client hangs up, and answers a later attempt
+/// from its cache); the SDK's bound was its request timeout, 30 s. A dead
+/// connection is still noticed sooner, by the TCP keepalive.
+const SYNC_RESPONSE_TIME: Duration = Duration::from_secs(5 * 60);
+
+/// A sync's settings when the server may wait `long_poll` for news.
+fn sync_settings(long_poll: Duration) -> SyncSettings {
+    SyncSettings::default()
+        .timeout(long_poll)
+        .request_timeout(long_poll + SYNC_RESPONSE_TIME)
 }
 
 pub(crate) fn map_e2ee_recovery_state(state: RecoveryState) -> E2eeRecoveryState {
@@ -4871,17 +4889,17 @@ pub(crate) async fn sync_task(
     let mut token = SyncToken::ReusePrevious;
     let mut last_sync: Option<tokio::time::Instant> = None;
     let err = loop {
-        let settings = SyncSettings::default()
-            .token(token)
-            .set_presence(away.sync_presence());
         // The first request of a connect asks the server not to wait for
         // news: with a token and nothing new it would hold it for the long
         // poll's 30 s, and the session would not count as connected.
-        let settings = if connected {
-            settings
+        let long_poll = if connected {
+            SYNC_LONG_POLL
         } else {
-            settings.timeout(Duration::ZERO)
+            Duration::ZERO
         };
+        let settings = sync_settings(long_poll)
+            .token(token)
+            .set_presence(away.sync_presence());
         let response = match client.sync_once(settings).await {
             Ok(response) => response,
             Err(err) => break err,
