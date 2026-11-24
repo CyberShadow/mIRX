@@ -3060,7 +3060,6 @@ fn room_activity_from_sync_message(
         // its msgtype.
         MessageType::Location(_)
         | MessageType::ServerNotice(_)
-        | MessageType::Gallery(_)
         | MessageType::_Custom(_) => unsupported(),
         // ruma marks MessageType as non_exhaustive.
         _ => unsupported(),
@@ -3457,7 +3456,6 @@ fn room_message_presentation_and_text_from_message_type(
         | MessageType::Video(_)
         | MessageType::Location(_)
         | MessageType::ServerNotice(_)
-        | MessageType::Gallery(_)
         | MessageType::VerificationRequest(_)
         | MessageType::_Custom(_) => return None,
         // ruma marks MessageType as non_exhaustive, so a final fallback is required.
