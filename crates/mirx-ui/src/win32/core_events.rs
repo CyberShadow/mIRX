@@ -1384,6 +1384,7 @@ mod tests {
 
     use super::super::connection::AfterSyncLost;
     use super::super::test_fixtures::*;
+    use super::super::verification::verification_state_label;
     use super::*;
 
     #[test]

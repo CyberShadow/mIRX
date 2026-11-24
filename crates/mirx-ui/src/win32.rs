@@ -588,7 +588,7 @@ use verification::{
     e2ee_backup_health_summary, e2ee_cross_signing_label, e2ee_local_backup_label,
     e2ee_recovery_state_label, e2ee_server_backup_label, e2ee_session_label,
     format_verification_emojis, refuse_second_verification, submit_menu_verification_action,
-    submit_verification_answer, verification_action_label, verification_state_label,
+    submit_verification_answer, verification_action_label,
 };
 #[cfg(any(test, feature = "automation"))]
 use views::automation::{mdi_window_placement, set_view_window_state};
