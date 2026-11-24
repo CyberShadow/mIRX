@@ -14,6 +14,11 @@ matrix-sdk = { version = "=0.18.0", features = ["bundled-sqlite"] }
 matrix-sdk-base = "=0.18.0"
 matrix-sdk-crypto = "=0.18.0"
 mime = "0.3"
+# Only for a feature: the matrix-sdk 0.18 ruma reads an empty string as
+# none where a server sends `""` for an absent alias or avatar (a public
+# room's `canonical_alias`, a member's `avatar_url`), instead of failing
+# the whole response or event.
+ruma = { version = "=0.16.0", default-features = false, features = ["compat-empty-string-null"] }
 # The Matrix HTML parser and sanitizer, the version matrix-sdk 0.18 locks.
 ruma-html = "=0.8.0"
 # Compose is Markdown, as in Element; the version ruma-events 0.34 asks for.

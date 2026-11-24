@@ -2215,6 +2215,7 @@ dependencies = [
  "matrix-sdk-test",
  "mime",
  "pulldown-cmark",
+ "ruma",
  "ruma-html",
  "serde",
  "serde_json",

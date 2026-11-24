@@ -13519,6 +13519,55 @@ mod tests {
         });
     }
 
+    /// A directory lists rooms of many servers; one whose alias or avatar
+    /// a server answers as `""` is a room without one, not a failed page
+    /// (ruma's `compat-empty-string-null`).
+    #[test]
+    fn list_public_rooms_reads_an_empty_alias_as_none() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_public_rooms()
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({
+                        "chunk": [{
+                            "room_id": "!old:other.example",
+                            "canonical_alias": "",
+                            "avatar_url": "",
+                            "name": "Old",
+                            "num_joined_members": 7,
+                            "world_readable": false,
+                            "guest_can_join": false
+                        }]
+                    }),
+                ))
+                .mount()
+                .await;
+
+            let page = list_public_rooms(&client, list_request(None, None, None)).await;
+            assert_eq!(
+                page.result,
+                PublicRoomsResult::Loaded {
+                    rooms: vec![PublicRoom {
+                        room_id: "!old:other.example".to_owned(),
+                        canonical_alias: None,
+                        name: Some("Old".to_owned()),
+                        topic: None,
+                        joined_members: 7,
+                    }],
+                    next_batch: None,
+                    total_estimate: None,
+                }
+            );
+        });
+    }
+
     #[test]
     fn list_public_rooms_of_the_home_server_sends_no_server_filter_or_since() {
         let runtime = tokio::runtime::Builder::new_current_thread()
