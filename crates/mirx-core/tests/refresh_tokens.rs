@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use matrix_sdk::test_utils::mocks::MatrixMockServer;
 use mirx_core::{
     Command, CommandId, CoreConfig, CoreHandle, Event, RestoreSessionRequest, SessionAuth,
-    StoredSession, SyncStopReason, start,
+    SetDisplayNameRequest, StoredSession, SyncStopReason, start,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -241,6 +241,17 @@ impl Synapse {
         self.ledger.0.lock().unwrap()
     }
 
+    /// Whether a `/sync` with an access token but `access_token` came.
+    fn received_sync_with_another_token_than(&self, access_token: &str) -> bool {
+        self.runtime
+            .block_on(self.server.server().received_requests())
+            .expect("the mock server records requests")
+            .iter()
+            .any(|request| {
+                request.url.path().ends_with("/sync") && bearer(request) != Some(access_token)
+            })
+    }
+
     /// The session of generation `index`, as mirx saves it.
     fn session(&self, index: usize) -> StoredSession {
         let ledger = self.ledger();
@@ -356,5 +367,39 @@ fn a_used_refresh_token_ends_the_session() {
                 .to_owned()
         ))
     );
+    mirx.shut_down();
+}
+
+/// Two requests with the access token that expired: the first one's 401
+/// refreshes it, and the second's, answered after that refresh, finds the
+/// token already replaced and retries with the new one. Before, it
+/// refreshed again: one more rotation of a token seconds old.
+#[test]
+fn concurrent_rejections_of_one_token_refresh_it_once() {
+    let server = Synapse::new(Duration::from_secs(1));
+    let mirx = Mirx::restored(&server, server.session(0));
+    mirx.wait_for("SyncConnected", |event| *event == Event::SyncConnected);
+
+    // The sync's 401 comes a second after it arrived; the display name's
+    // at once.
+    server.ledger().expire_at_next_sync = true;
+    let deadline = Instant::now() + EVENT_TIMEOUT;
+    while server.ledger().expire_at_next_sync {
+        assert!(Instant::now() < deadline, "no sync came");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let display_name = mirx.send(Command::SetDisplayName(SetDisplayNameRequest {
+        display_name: "Alice".to_owned(),
+    }));
+    mirx.wait_for("the display name's ack", |event| {
+        *event == Event::CommandHandled(display_name)
+    });
+    while !server.received_sync_with_another_token_than("AT0") {
+        assert!(Instant::now() < deadline, "no sync with a new token");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let refreshes = server.ledger().refreshes;
+    assert_eq!(refreshes, 1);
     mirx.shut_down();
 }
