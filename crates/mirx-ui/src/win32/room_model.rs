@@ -1870,6 +1870,47 @@ pub(super) fn room_by_id<'a>(rooms: &'a [RoomSummary], room_id: &str) -> Option<
     rooms.iter().find(|room| room.room_id == room_id)
 }
 
+/// Where each room is in a room list, by id, for a pass over every
+/// window: `room_by_id` searches the list, which over a big account's
+/// thousand windows is half a million comparisons. The first of a room id
+/// is its room, as for `room_by_id`. It is the index of the list it was
+/// built from, which must not change while it is used.
+pub(super) struct RoomIndex(std::collections::HashMap<String, usize>);
+
+impl RoomIndex {
+    pub(super) fn new(rooms: &[RoomSummary]) -> Self {
+        let mut index = std::collections::HashMap::with_capacity(rooms.len());
+        for (position, room) in rooms.iter().enumerate() {
+            index.entry(room.room_id.clone()).or_insert(position);
+        }
+        Self(index)
+    }
+
+    /// `room_by_id`.
+    pub(super) fn get<'r>(
+        &self,
+        rooms: &'r [RoomSummary],
+        room_id: &str,
+    ) -> Option<&'r RoomSummary> {
+        let room = &rooms[*self.0.get(room_id)?];
+        assert_eq!(
+            room.room_id, room_id,
+            "a room index is used with its own list"
+        );
+        Some(room)
+    }
+
+    /// `navigable_room_by_id`.
+    pub(super) fn navigable<'r>(
+        &self,
+        rooms: &'r [RoomSummary],
+        room_id: &str,
+    ) -> Option<&'r RoomSummary> {
+        self.get(rooms, room_id)
+            .filter(|room| is_navigable_room(room))
+    }
+}
+
 pub(super) fn navigable_room_by_id<'a>(
     rooms: &'a [RoomSummary],
     room_id: &str,
@@ -1926,10 +1967,27 @@ pub(super) fn projected_thread_by_id<'a>(
 }
 
 pub(super) fn view_id_is_valid(model: &UiModel, view_id: &ViewId) -> bool {
+    view_id_is_valid_with(model, view_id, |room_id| {
+        navigable_room_by_id(&model.rooms, room_id).is_some()
+    })
+}
+
+/// `view_id_is_valid`, with the rooms' index, for a pass over the windows.
+pub(super) fn view_id_is_valid_in(model: &UiModel, rooms: &RoomIndex, view_id: &ViewId) -> bool {
+    view_id_is_valid_with(model, view_id, |room_id| {
+        rooms.navigable(&model.rooms, room_id).is_some()
+    })
+}
+
+fn view_id_is_valid_with(
+    model: &UiModel,
+    view_id: &ViewId,
+    navigable: impl Fn(&str) -> bool,
+) -> bool {
     match view_id {
         ViewId::Status => true,
         ViewId::RoomList => model.room_list.is_some(),
-        ViewId::Room(room_id) => navigable_room_by_id(&model.rooms, room_id).is_some(),
+        ViewId::Room(room_id) => navigable(room_id),
         ViewId::Thread {
             room_id,
             thread_root_event_id,

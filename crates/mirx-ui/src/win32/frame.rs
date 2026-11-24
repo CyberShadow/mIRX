@@ -7,7 +7,7 @@ use windows_sys::Win32::UI::Controls::{
     TBSTYLE_LIST, TVM_SETIMAGELIST, TVSIL_NORMAL,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    WM_CAPTURECHANGED, WM_ENDSESSION, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR,
+    MDIS_ALLCHILDSTYLES, WM_CAPTURECHANGED, WM_ENDSESSION, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR,
 };
 
 use super::nick_colors::NickColorSetting;
@@ -487,12 +487,14 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     // No MDI window list in the Window menu: the switchbar is the window
     // list, as in mIRC.
     mdi_client.hWindowMenu = null_mut();
-    mdi_client.idFirstChild = 50000;
+    mdi_client.idFirstChild = MDI_FIRST_CHILD_ID as u32;
     state.controls.mdi_client = create_child_window(
         hwnd,
         MDI_CLASS_NAME,
         "",
-        WS_CHILD | WS_VISIBLE | WS_BORDER,
+        // A window opened behind the active one is created hidden, which
+        // MDI allows only with this style (`create_mdi_child`).
+        WS_CHILD | WS_VISIBLE | WS_BORDER | MDIS_ALLCHILDSTYLES,
         0,
         MDI_ID,
         instance,
@@ -552,9 +554,7 @@ pub(super) unsafe fn apply_nick_colors(
 /// again, and the nick lists, which colour as they draw, repaint.
 pub(super) unsafe fn show_nick_colors(hwnd: HWND) -> Result<(), String> {
     let view_ids = state_ref(hwnd).views.keys().cloned().collect::<Vec<_>>();
-    for view_id in &view_ids {
-        sync_view_content(hwnd, view_id)?;
-    }
+    sync_views_content(hwnd, &view_ids)?;
     redraw_every_window(hwnd);
     Ok(())
 }

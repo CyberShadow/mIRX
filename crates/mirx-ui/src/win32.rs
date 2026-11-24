@@ -90,25 +90,26 @@ use windows_sys::Win32::UI::Controls::Dialogs::{
     CommDlgExtendedError,
 };
 use windows_sys::Win32::UI::Controls::{
-    BTNS_CHECK, BTNS_SHOWTEXT, CCS_NOPARENTALIGN, CCS_NORESIZE, CDDS_ITEMPREPAINT, CDDS_PREPAINT,
-    CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL, EM_SETSEL, ICC_BAR_CLASSES,
-    ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX,
-    InitCommonControlsEx, LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCFMT_LEFT, LVCFMT_RIGHT, LVCOLUMNW,
-    LVIF_TEXT, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVM_GETNEXTITEM, LVM_INSERTCOLUMNW,
-    LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMCOUNT, LVM_SETITEMSTATE, LVN_COLUMNCLICK,
-    LVN_GETDISPINFOW, LVNI_SELECTED, LVS_EX_FULLROWSELECT, LVS_OWNERDATA, LVS_REPORT,
-    LVS_SHOWSELALWAYS, LVS_SINGLESEL, LVSICF_NOSCROLL, MEASUREITEMSTRUCT, NM_CUSTOMDRAW, NM_DBLCLK,
-    NM_RETURN, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NMLVDISPINFOW, NMTBCUSTOMDRAW, NMTREEVIEWW,
-    NMTVCUSTOMDRAW, ODS_FOCUS, ODS_SELECTED, SB_SETTEXTW, SBARS_SIZEGRIP, STATUSCLASSNAMEW,
-    SetScrollInfo, TB_ADDBUTTONSW, TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE, TB_CHECKBUTTON,
-    TB_DELETEBUTTON, TB_GETBUTTONSIZE, TB_GETROWS, TB_SETBITMAPSIZE, TB_SETBUTTONWIDTH,
-    TB_SETEXTENDEDSTYLE, TB_SETMAXTEXTROWS, TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED,
-    TBSTYLE_EX_MIXEDBUTTONS, TBSTYLE_FLAT, TBSTYLE_WRAPABLE, TOOLBARCLASSNAMEW, TVC_BYKEYBOARD,
-    TVC_BYMOUSE, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_PARENT, TVGN_ROOT,
-    TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_IMAGE, TVIF_SELECTEDIMAGE, TVIF_TEXT, TVINSERTSTRUCTW,
-    TVINSERTSTRUCTW_0, TVIS_EXPANDED, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMRECT,
-    TVM_GETITEMSTATE, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM,
-    TVN_ITEMEXPANDEDW, TVN_SELCHANGEDW, TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT,
+    BTNS_CHECK, BTNS_GROUP, BTNS_SHOWTEXT, CCS_NOPARENTALIGN, CCS_NORESIZE, CDDS_ITEMPREPAINT,
+    CDDS_PREPAINT, CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL, EM_SETSEL,
+    ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, ICC_TREEVIEW_CLASSES,
+    INITCOMMONCONTROLSEX, InitCommonControlsEx, LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCFMT_LEFT,
+    LVCFMT_RIGHT, LVCOLUMNW, LVIF_TEXT, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVM_GETNEXTITEM,
+    LVM_INSERTCOLUMNW, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMCOUNT, LVM_SETITEMSTATE,
+    LVN_COLUMNCLICK, LVN_GETDISPINFOW, LVNI_SELECTED, LVS_EX_FULLROWSELECT, LVS_OWNERDATA,
+    LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, LVSICF_NOSCROLL, MEASUREITEMSTRUCT,
+    NM_CUSTOMDRAW, NM_DBLCLK, NM_RETURN, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NMLVDISPINFOW,
+    NMTBCUSTOMDRAW, NMTREEVIEWW, NMTVCUSTOMDRAW, ODS_FOCUS, ODS_SELECTED, SB_SETTEXTW,
+    SBARS_SIZEGRIP, STATUSCLASSNAMEW, SetScrollInfo, TB_ADDBUTTONSW, TB_BUTTONCOUNT,
+    TB_BUTTONSTRUCTSIZE, TB_CHECKBUTTON, TB_DELETEBUTTON, TB_GETBUTTONSIZE, TB_GETROWS,
+    TB_SETBITMAPSIZE, TB_SETBUTTONWIDTH, TB_SETEXTENDEDSTYLE, TB_SETMAXTEXTROWS, TBBUTTON,
+    TBSTATE_CHECKED, TBSTATE_ENABLED, TBSTYLE_EX_MIXEDBUTTONS, TBSTYLE_FLAT, TBSTYLE_WRAPABLE,
+    TOOLBARCLASSNAMEW, TVC_BYKEYBOARD, TVC_BYMOUSE, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT,
+    TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_IMAGE, TVIF_SELECTEDIMAGE,
+    TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_EXPANDED, TVITEMEXW, TVM_DELETEITEM,
+    TVM_EXPAND, TVM_GETITEMRECT, TVM_GETITEMSTATE, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW,
+    TVM_SELECTITEM, TVN_ITEMEXPANDEDW, TVN_SELCHANGEDW, TVS_HASBUTTONS, TVS_HASLINES,
+    TVS_LINESATROOT,
 };
 #[cfg(any(test, feature = "automation"))]
 use windows_sys::Win32::UI::Controls::{
@@ -523,14 +524,15 @@ use room_list_window::{
 use room_model::automation::validate_synthetic_room_activity_events;
 use room_model::{
     BufferTrim, LastMessageActivity, ReplyTarget, ReplyTargetState, RoomHistoryBackfillState,
-    RoomPreviewMediaState, RoomViewModel, RoomViews, RoomWindowKind, activity_level_for,
+    RoomIndex, RoomPreviewMediaState, RoomViewModel, RoomViews, RoomWindowKind, activity_level_for,
     failed_room_activity_update_view_id, is_invite_command_target, is_invited_room,
     is_joined_message_room, is_navigable_room, is_sendable_room, joined_room_notification_mode,
     last_activity_from_room_activity, navigable_room_by_id, projected_thread_by_id,
     raise_view_activity, read_target_for_room_activity, room_activity_belongs_to_thread,
     room_activity_event_id, room_activity_sender_user_id, room_activity_target_view_id,
     room_activity_update_marks_inactive_room, room_by_id, room_window_kind, rooms_in_window_order,
-    sendable_room_by_id, view_id_is_valid, view_id_is_valid_for_rooms, window_message,
+    sendable_room_by_id, view_id_is_valid, view_id_is_valid_for_rooms, view_id_is_valid_in,
+    window_message,
 };
 #[cfg(test)]
 use room_model::{RoomArrivals, ThreadViewModel};
@@ -591,15 +593,15 @@ use verification::{
     submit_verification_answer, verification_action_label,
 };
 #[cfg(any(test, feature = "automation"))]
-use views::automation::{mdi_window_placement, set_view_window_state};
+use views::automation::cached_view_is_alive;
 #[cfg(any(test, feature = "automation"))]
-use views::cached_view_is_alive;
+use views::automation::{mdi_window_placement, set_view_window_state};
 use views::{
     CloseAction, ViewRowsKey, activate_view, check_window_menu_logging, close_action,
-    destroy_stale_room_views, ensure_room_view, ensure_status_view, ensure_view, layout_mdi_child,
-    mdi_child_content, mdi_child_edit, refresh_every_view_content, refresh_view_content,
-    register_mdi_child_class, register_room_content_class, room_content_member_list,
-    room_content_timeline, show_view, sync_view_content, timeline_view, view_timeline,
+    destroy_stale_room_views, ensure_status_view, ensure_view, layout_mdi_child, mdi_child_content,
+    mdi_child_edit, refresh_every_view_content, refresh_view_content, register_mdi_child_class,
+    register_room_content_class, room_content_member_list, room_content_timeline, show_view,
+    sync_views_content, timeline_view, view_timeline,
 };
 #[cfg(test)]
 use views::{ROOM_CONTENT_CLASS_NAME, take_stale_room_views};
@@ -620,8 +622,18 @@ const BUTTON_CLASS_NAME: &str = "BUTTON";
 const COMBOBOX_CLASS_NAME: &str = "COMBOBOX";
 const COMPOSE_EDIT_STYLE: WINDOW_STYLE = WS_CHILD | WS_BORDER | ES_AUTOHSCROLL as u32;
 const COMPOSE_EDIT_EX_STYLE: WINDOW_EX_STYLE = WS_EX_CLIENTEDGE;
+/// A switchbar button's command id is this plus its index. Every window
+/// has a button, and every joined room a window, so the range is all the
+/// 16-bit `WM_COMMAND` ids left up to MDI's own child ids
+/// (`CLIENTCREATESTRUCT.idFirstChild`, 50000): 8999 windows, beyond what
+/// Windows' 10,000 USER handles a process lets it create (a room window
+/// is eight of them).
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
-const SWITCHBAR_COMMAND_LAST: usize = 41999;
+const SWITCHBAR_COMMAND_LAST: usize = MDI_FIRST_CHILD_ID - 1;
+/// MDI numbers its children from here (`CLIENTCREATESTRUCT.idFirstChild`).
+const MDI_FIRST_CHILD_ID: usize = 50000;
+/// The core's events wait in `WindowState.event_queue`: posted by the
+/// bridge when the queue gets its first, it starts `CORE_EVENTS_TIMER_ID`.
 const WM_CORE_EVENT: u32 = WM_APP + 1;
 #[cfg(any(test, feature = "automation"))]
 const WM_SELF_TEST: u32 = WM_APP + 2;

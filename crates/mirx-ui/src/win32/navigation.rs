@@ -182,34 +182,31 @@ unsafe fn tree_item_expanded(tree: HWND, item: isize) -> bool {
 pub(super) unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
     ensure_status_view(hwnd)?;
 
-    let room_ids = {
+    destroy_stale_room_views(hwnd)?;
+    let new_room_views = {
         let state = state_ref(hwnd);
         state
             .model
             .rooms
             .iter()
             .filter(|room| is_navigable_room(room) && !state.closed_queries.contains(&room.room_id))
-            .map(|room| room.room_id.clone())
+            .map(|room| ViewId::Room(room.room_id.clone()))
+            .filter(|view_id| !state.views.contains_key(view_id))
             .collect::<Vec<_>>()
     };
-    destroy_stale_room_views(hwnd)?;
-    for room_id in room_ids {
-        ensure_room_view(hwnd, &room_id)?;
+    for view_id in new_room_views {
+        ensure_view(hwnd, view_id)?;
     }
     if state_ref(hwnd).model.room_list.is_some() {
         ensure_room_list_view(hwnd)?;
     }
 
     let view_ids = state_ref(hwnd).views.keys().cloned().collect::<Vec<_>>();
-    for view_id in &view_ids {
-        sync_view_content(hwnd, view_id)?;
-    }
+    sync_views_content(hwnd, &view_ids)?;
     // The window buffer trims only lines the pass above showed and logged;
     // the trimmed windows' rows are built again.
     if trim_window_buffers(hwnd) {
-        for view_id in &view_ids {
-            sync_view_content(hwnd, view_id)?;
-        }
+        sync_views_content(hwnd, &view_ids)?;
     }
     repaint_nick_lists_after_presence_change(hwnd);
 
@@ -231,8 +228,8 @@ pub(super) unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
             .unwrap_or_else(|| state.active_view.clone())
     };
     sync_tree(hwnd);
-    sync_switchbar(hwnd)?;
-    refresh_status_bar(hwnd)?;
+    // Either way the activation syncs the switchbar and the status bar
+    // (`finish_view_activation_chrome`).
     if active_view == state_ref(hwnd).active_view {
         show_view(hwnd, &active_view, None).map(drop)
     } else {
@@ -668,6 +665,7 @@ fn room_nav_item(model: &UiModel, room: &RoomSummary) -> NavItem {
 /// The switchbar order, mIRC's: Status, channels, queries, then invites,
 /// each room followed by its open threads; then views of rooms that left.
 pub(super) fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
+    let rooms = RoomIndex::new(&state.model.rooms);
     let mut ordered = Vec::new();
     if state.views.contains_key(&ViewId::Status) {
         ordered.push(ViewId::Status);
@@ -696,9 +694,7 @@ pub(super) fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
         .keys()
         .filter_map(|view_id| match view_id {
             ViewId::Status | ViewId::RoomList => None,
-            ViewId::Room(room_id)
-                if navigable_room_by_id(&state.model.rooms, room_id).is_none() =>
-            {
+            ViewId::Room(room_id) if rooms.navigable(&state.model.rooms, room_id).is_none() => {
                 Some(room_id.clone())
             }
             ViewId::Room(_) => None,
@@ -780,11 +776,23 @@ pub(super) unsafe fn sync_switchbar(hwnd: HWND) -> Result<(), String> {
     let (view_ids, faces) = {
         let state = state_ref(hwnd);
         let view_ids = ordered_view_ids(state);
+        let rooms = RoomIndex::new(&state.model.rooms);
         let faces = view_ids
             .iter()
-            .map(|view_id| SwitchbarFace {
-                label: view_short_title(&state.model, view_id),
-                icon: WindowIcon::of_view(&state.model, view_id),
+            .map(|view_id| match view_id {
+                ViewId::Room(room_id) => {
+                    let room = rooms
+                        .get(&state.model.rooms, room_id)
+                        .expect("a room window's room is in the model");
+                    SwitchbarFace {
+                        label: room_tree_label(room),
+                        icon: WindowIcon::of_room(room),
+                    }
+                }
+                ViewId::Status | ViewId::Thread { .. } | ViewId::RoomList => SwitchbarFace {
+                    label: view_short_title(&state.model, view_id),
+                    icon: WindowIcon::of_view(&state.model, view_id),
+                },
             })
             .collect::<Vec<_>>();
         (view_ids, faces)
@@ -849,7 +857,9 @@ unsafe fn rebuild_switchbar(
             iBitmap: faces[index].icon.image(),
             idCommand: (SWITCHBAR_COMMAND_FIRST + index) as i32,
             fsState: button_states[index],
-            fsStyle: (BTNS_CHECK | BTNS_SHOWTEXT) as u8,
+            // One group: checking the active window's button unchecks the
+            // one checked before (`refresh_switchbar_state`).
+            fsStyle: (BTNS_CHECK | BTNS_GROUP | BTNS_SHOWTEXT) as u8,
             iString: wide_labels[index].as_ptr() as isize,
             ..TBBUTTON::default()
         })
@@ -878,21 +888,23 @@ unsafe fn rebuild_switchbar(
 }
 
 unsafe fn refresh_switchbar_state(hwnd: HWND) -> Result<(), String> {
-    let switchbar = state_ref(hwnd).controls.switchbar;
+    let state = state_ref(hwnd);
+    let switchbar = state.controls.switchbar;
     if switchbar.is_null() {
         return Err("switchbar control was not created".to_owned());
     }
 
-    let view_ids = state_ref(hwnd).switchbar_views.clone();
-    for (index, view_id) in view_ids.iter().enumerate() {
-        let command_id = SWITCHBAR_COMMAND_FIRST + index;
-        let checked = state_ref(hwnd).active_view == *view_id;
-        // TB_SETSTATE would replace the whole state, wrap bit included,
-        // which only the toolbar's layout sets.
-        if SendMessageW(switchbar, TB_CHECKBUTTON, command_id, checked as LPARAM) == 0 {
-            return Err(format!("failed to refresh switchbar button {command_id}"));
-        }
-    }
+    let index = state
+        .switchbar_views
+        .iter()
+        .position(|view_id| *view_id == state.active_view)
+        .expect("the active window has a switchbar button");
+    let command_id = SWITCHBAR_COMMAND_FIRST + index;
+    // TB_SETSTATE would replace the whole state, wrap bit included, which
+    // only the toolbar's layout sets. The button is there (the views mirror
+    // the buttons): the result says nothing, as a group button checked
+    // already answers 0.
+    SendMessageW(switchbar, TB_CHECKBUTTON, command_id, 1);
     // Repaint for the activity colours, which custom draw reads.
     InvalidateRect(switchbar, null(), 1);
 
@@ -1395,6 +1407,94 @@ mod tests {
             activate_view(hwnd, &room_view_id("!a:example"), None).unwrap();
             test(hwnd);
         });
+    }
+
+    /// A big account: a frame at the default size with Status and a
+    /// thousand rooms, Status active, synced once. `test` gets the MDI
+    /// activations the rooms' sync caused.
+    unsafe fn with_a_thousand_room_frame(test: impl FnOnce(HWND, u64)) {
+        with_test_frame(1024, 768, |hwnd| {
+            state_mut(hwnd).model.rooms = (0..1000)
+                .map(|index| {
+                    room(
+                        &format!("!r{index}:example"),
+                        &format!("Room {index}"),
+                        false,
+                    )
+                })
+                .collect();
+            let activations = state_ref(hwnd).harness.refresh_counters.mdi_activations();
+            sync_views_and_tree(hwnd).unwrap();
+            let activations =
+                state_ref(hwnd).harness.refresh_counters.mdi_activations() - activations;
+            test(hwnd, activations);
+        });
+    }
+
+    #[test]
+    fn a_thousand_rooms_each_have_a_window_and_a_button() {
+        unsafe {
+            with_a_thousand_room_frame(|hwnd, _| {
+                let state = state_ref(hwnd);
+                assert_eq!(state.views.len(), 1001);
+                assert_eq!(
+                    SendMessageW(state.controls.switchbar, TB_BUTTONCOUNT, 0, 0),
+                    1001
+                );
+            });
+        }
+    }
+
+    /// Opening a window behind the active one activates nothing: each
+    /// activation moves MDI's maximized window and its buttons in the
+    /// menubar, which blinked through a big account's thousand windows.
+    #[test]
+    fn windows_opened_behind_the_active_one_are_not_activated() {
+        unsafe {
+            with_a_thousand_room_frame(|hwnd, activations| {
+                assert_eq!(activations, 0);
+                let state = state_ref(hwnd);
+                assert_eq!(state.active_view, ViewId::Status);
+                let status = state.views[&ViewId::Status].child;
+                assert_eq!(
+                    SendMessageW(state.controls.mdi_client, WM_MDIGETACTIVE, 0, 0) as HWND,
+                    status
+                );
+                assert_ne!(IsZoomed(status), 0);
+                for (view_id, view) in &state.views {
+                    assert_ne!(IsWindowVisible(view.child), 0, "{view_id:?}");
+                    if *view_id != ViewId::Status {
+                        assert_eq!(IsZoomed(view.child), 0, "{view_id:?}");
+                    }
+                }
+
+                // One taken in front is maximized, as Status was.
+                let room = room_view_id("!r500:example");
+                activate_view(hwnd, &room, None).unwrap();
+                let state = state_ref(hwnd);
+                assert_ne!(IsZoomed(state.views[&room].child), 0);
+                assert_eq!(IsZoomed(status), 0);
+            });
+        }
+    }
+
+    /// Wrapping a thousand buttons takes more rows than the frame is high:
+    /// the switchbar stops at the rows that leave the windows their least
+    /// height, as the treebar leaves them their least width.
+    #[test]
+    fn a_thousand_buttons_leave_the_windows_their_height() {
+        unsafe {
+            with_a_thousand_room_frame(|hwnd, _| {
+                let state = state_ref(hwnd);
+                let mut mdi = RECT::default();
+                GetWindowRect(state.controls.mdi_client, &mut mdi);
+                assert!(
+                    mdi.bottom - mdi.top >= Dpi::of_window(hwnd).px(100),
+                    "{} px",
+                    mdi.bottom - mdi.top
+                );
+            });
+        }
     }
 
     /// The treebar and switchbar rebuilds so far.

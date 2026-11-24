@@ -2,7 +2,8 @@
 
 use windows_sys::Win32::Graphics::Gdi::{HDC, SetBkColor};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EN_CHANGE, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_ERASEBKGND, WS_CLIPSIBLINGS,
+    EN_CHANGE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetWindowPos,
+    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_ERASEBKGND, WS_CLIPSIBLINGS,
 };
 
 use super::nick_colors::{NickColorSetting, NickColorer};
@@ -607,10 +608,11 @@ pub(super) fn resolve_active_view(
 /// registry, and returns them for destroying. The active view may be one
 /// of them: `destroy_stale_room_views` activates its successor.
 pub(super) fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState> {
+    let rooms = RoomIndex::new(&state.model.rooms);
     let stale_view_ids = state
         .views
         .keys()
-        .filter(|view_id| !view_id_is_valid(&state.model, view_id))
+        .filter(|view_id| !view_id_is_valid_in(&state.model, &rooms, view_id))
         .cloned()
         .collect::<Vec<_>>();
 
@@ -630,6 +632,14 @@ pub(super) fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState
         .collect::<Vec<_>>()
 }
 
+/// Opens a view's window. The first one opens maximized and active.
+/// Later ones open behind the active window, in the state it would give
+/// them on activation (maximized windows stay maximized as they take
+/// turns): MDI activates a window it creates visible, which moves its
+/// maximized window and that window's buttons in the menubar, so a later
+/// window is created hidden and then shown under the active one, with
+/// nothing activated. A window to be active is activated after by
+/// `show_view`.
 unsafe fn create_mdi_child(
     frame_hwnd: HWND,
     title: &str,
@@ -640,6 +650,7 @@ unsafe fn create_mdi_child(
         return Err("MDI client control was not created".to_owned());
     }
 
+    let active = SendMessageW(mdi_client, WM_MDIGETACTIVE, 0, 0) as HWND;
     let instance = GetModuleHandleW(null());
     let mut class_name = wide_null(MDI_CHILD_CLASS_NAME);
     let mut title_wide = wide_null(title);
@@ -655,10 +666,12 @@ unsafe fn create_mdi_child(
         y: CW_USEDEFAULT,
         cx: CW_USEDEFAULT,
         cy: CW_USEDEFAULT,
+        // The styles MDI gives a child without `MDIS_ALLCHILDSTYLES`.
         style: WS_CHILD
-            | WS_VISIBLE
-            | if new_child_should_maximize(mdi_client) {
-                WS_MAXIMIZE
+            | WS_CLIPSIBLINGS
+            | WS_OVERLAPPEDWINDOW
+            | if active.is_null() {
+                WS_VISIBLE | WS_MAXIMIZE
             } else {
                 0
             },
@@ -674,22 +687,21 @@ unsafe fn create_mdi_child(
     if child.is_null() {
         return Err(last_os_error("WM_MDICREATE"));
     }
+    if !active.is_null()
+        && SetWindowPos(
+            child,
+            active,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        ) == 0
+    {
+        return Err(last_os_error("SetWindowPos new MDI child"));
+    }
 
     Ok(child)
-}
-
-/// The first window opens maximized, and later ones follow the active
-/// window, as on Windows. Wine's MDI restores the active maximized window
-/// instead of maximizing the new one unless the new one asks for it.
-unsafe fn new_child_should_maximize(mdi_client: HWND) -> bool {
-    let mut active_maximized = 0;
-    let active = SendMessageW(
-        mdi_client,
-        WM_MDIGETACTIVE,
-        0,
-        &mut active_maximized as *mut i32 as LPARAM,
-    );
-    active == 0 || active_maximized != 0
 }
 
 /// Creates the child's content window for its view and its editbox, and
@@ -986,16 +998,6 @@ unsafe fn unregister_destroyed_view(child: HWND) {
     let _ = unregister_view_by_child(state_mut(frame_window_for(child)), child);
 }
 
-pub(super) unsafe fn cached_view_is_alive(view: &MdiViewState) -> bool {
-    IsWindow(view.child) != 0
-        && GetDlgItem(view.child, VIEW_CONTENT_ID as i32) == view.content
-        && GetDlgItem(view.child, VIEW_EDIT_ID as i32)
-            == view
-                .compose
-                .as_ref()
-                .map_or(null_mut(), |compose| compose.edit)
-}
-
 /// Every window has an editbox but the Rooms List, as in mIRC.
 fn view_has_editbox(view_id: &ViewId) -> bool {
     match view_id {
@@ -1004,19 +1006,10 @@ fn view_has_editbox(view_id: &ViewId) -> bool {
     }
 }
 
+/// The view's window, opened if it has none. A destroyed window has left
+/// the views already (`WM_NCDESTROY`).
 pub(super) unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, String> {
-    let stale_child = state_ref(hwnd)
-        .views
-        .get(&view_id)
-        .and_then(|view| (!cached_view_is_alive(view)).then_some(view.child));
-    if let Some(child) = stale_child {
-        let removed = unregister_view_by_child(state_mut(hwnd), child)
-            .expect("tracked view must exist before stale child cleanup");
-        assert_eq!(
-            removed, view_id,
-            "stale child cleanup must match requested view"
-        );
-    } else if let Some(view) = state_ref(hwnd).views.get(&view_id) {
+    if let Some(view) = state_ref(hwnd).views.get(&view_id) {
         return Ok(view.child);
     }
 
@@ -1145,13 +1138,21 @@ pub(super) struct ViewRowsKey {
 
 /// The inputs of `view_id`'s rows now; the Rooms List has none.
 pub(super) fn view_rows_key(state: &WindowState, view_id: &ViewId) -> ViewRowsKey {
-    let room = view_id.room_id().map(|room_id| {
-        (
-            room_by_id(&state.model.rooms, room_id)
-                .expect("a room or thread window's room exists")
-                .clone(),
-            state.model.room_views.revision(room_id),
-        )
+    let room = view_id
+        .room_id()
+        .map(|room_id| room_by_id(&state.model.rooms, room_id));
+    view_rows_key_of(state, view_id, room)
+}
+
+/// `view_rows_key`, with the room of a room or thread window found.
+fn view_rows_key_of(
+    state: &WindowState,
+    view_id: &ViewId,
+    room: Option<Option<&RoomSummary>>,
+) -> ViewRowsKey {
+    let room = room.map(|room| {
+        let room = room.expect("a room or thread window's room exists");
+        (room.clone(), state.model.room_views.revision(&room.room_id))
     });
     ViewRowsKey {
         room,
@@ -1199,19 +1200,33 @@ fn view_nick_colors(
     Some((nick_colors.clone(), notify))
 }
 
-/// Brings a window up to date with the model: its caption, and its rows
-/// if their inputs changed since they were built. Rebuilding is the costly
-/// part of a refresh, which runs after every core event batch.
+/// Brings a window up to date with the model: its rows, if their inputs
+/// changed since they were built. Rebuilding is the costly part of a
+/// refresh, which runs after every core event batch.
 pub(super) unsafe fn sync_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
-    if *view_id == ViewId::RoomList {
+    sync_views_content(hwnd, std::slice::from_ref(view_id))
+}
+
+/// `sync_view_content` for each of `view_ids`, in order: one window's
+/// refresh may move the inputs of the next (its fetches mark its room's
+/// view model).
+pub(super) unsafe fn sync_views_content(hwnd: HWND, view_ids: &[ViewId]) -> Result<(), String> {
+    // No refresh changes the room list.
+    let rooms = RoomIndex::new(&state_ref(hwnd).model.rooms);
+    for view_id in view_ids {
         // Owner data: a refresh only sets the item count and repaints.
-        return refresh_view_content(hwnd, view_id);
+        let current = *view_id != ViewId::RoomList && {
+            let state = state_ref(hwnd);
+            let room = view_id
+                .room_id()
+                .map(|room_id| rooms.get(&state.model.rooms, room_id));
+            state.views[view_id].rows_key.as_ref() == Some(&view_rows_key_of(state, view_id, room))
+        };
+        if !current {
+            refresh_view_content(hwnd, view_id)?;
+        }
     }
-    let state = state_ref(hwnd);
-    if state.views[view_id].rows_key.as_ref() == Some(&view_rows_key(state, view_id)) {
-        return Ok(());
-    }
-    refresh_view_content(hwnd, view_id)
+    Ok(())
 }
 
 /// Sets the window's caption, unless it already reads so: setting a
@@ -1525,6 +1540,17 @@ unsafe fn handle_native_mdi_child_activation(child: HWND) -> Result<(), String> 
 #[cfg(any(test, feature = "automation"))]
 pub(super) mod automation {
     use super::*;
+
+    /// Whether a tracked view's windows are the ones its window has.
+    pub(in crate::win32) unsafe fn cached_view_is_alive(view: &MdiViewState) -> bool {
+        IsWindow(view.child) != 0
+            && GetDlgItem(view.child, VIEW_CONTENT_ID as i32) == view.content
+            && GetDlgItem(view.child, VIEW_EDIT_ID as i32)
+                == view
+                    .compose
+                    .as_ref()
+                    .map_or(null_mut(), |compose| compose.edit)
+    }
 
     /// Shows a view's window maximized, normal or minimized.
     pub(in crate::win32) unsafe fn set_view_window_state(
