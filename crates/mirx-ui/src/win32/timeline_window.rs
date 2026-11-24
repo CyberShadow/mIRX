@@ -637,21 +637,42 @@ fn timeline_top_line_after_content_replaced(
     }
 }
 
-pub(super) unsafe fn update_timeline_scrollbar(hwnd: HWND) {
+/// The scroll bar's range, page and position for the lines laid out and
+/// the top line: one step per line.
+#[derive(Debug, PartialEq, Eq)]
+struct TimelineScroll {
+    max: i32,
+    page: u32,
+    pos: i32,
+}
+
+unsafe fn timeline_scroll(hwnd: HWND) -> TimelineScroll {
     let visible_rows = timeline_visible_rows(hwnd);
     let state = timeline_state_ref(hwnd);
-    let expected_max = state.paint_lines.len().saturating_sub(1) as i32;
-    let expected_page = visible_rows.max(1).min(state.paint_lines.len().max(1)) as u32;
+    TimelineScroll {
+        max: state.paint_lines.len().saturating_sub(1) as i32,
+        page: visible_rows.max(1).min(state.paint_lines.len().max(1)) as u32,
+        pos: state.top_line as i32,
+    }
+}
+
+pub(super) unsafe fn update_timeline_scrollbar(hwnd: HWND) {
+    let scroll = timeline_scroll(hwnd);
     let scroll_info = SCROLLINFO {
         cbSize: size_of::<SCROLLINFO>() as u32,
         fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
         nMin: 0,
-        nMax: expected_max,
-        nPage: expected_page,
-        nPos: state.top_line as i32,
+        nMax: scroll.max,
+        nPage: scroll.page,
+        nPos: scroll.pos,
         nTrackPos: 0,
     };
-    let set_result = SetScrollInfo(hwnd, SB_VERT, &scroll_info, 1);
+    SetScrollInfo(hwnd, SB_VERT, &scroll_info, 1);
+    // Showing or hiding the scroll bar resized the client inside that
+    // call, and the lines laid out again for the new width set the scroll
+    // bar themselves (`relayout_timeline`): it shows the lines as they are
+    // now, which may be more or fewer than `scroll` counted.
+    let expected = timeline_scroll(hwnd);
 
     let mut actual = SCROLLINFO {
         cbSize: size_of::<SCROLLINFO>() as u32,
@@ -662,34 +683,18 @@ pub(super) unsafe fn update_timeline_scrollbar(hwnd: HWND) {
         nPos: 0,
         nTrackPos: 0,
     };
-    let get_success = GetScrollInfo(hwnd, SB_VERT, &mut actual);
-    if get_success == 0
-        || actual.nMax != expected_max
-        || actual.nPage != expected_page
-        || actual.nPos != state.top_line as i32
-    {
-        let mut rect = RECT::default();
-        GetClientRect(hwnd, &mut rect);
-        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-        let error = if get_success == 0 { GetLastError() } else { 0 };
-        eprintln!(
-            "timeline scrollbar mismatch: hwnd={:#x} style=0x{style:x} rect={}x{} lines={} visible_rows={} expected_max={} expected_page={} expected_pos={} set_result={} get_success={} actual_max={} actual_page={} actual_pos={} last_error={}",
-            hwnd as usize,
-            rect.right - rect.left,
-            rect.bottom - rect.top,
-            state.paint_lines.len(),
-            visible_rows,
-            expected_max,
-            expected_page,
-            state.top_line,
-            set_result,
-            get_success,
-            actual.nMax,
-            actual.nPage,
-            actual.nPos,
-            error
-        );
-    }
+    let read = GetScrollInfo(hwnd, SB_VERT, &mut actual) != 0;
+    let actual = TimelineScroll {
+        max: actual.nMax,
+        page: actual.nPage,
+        pos: actual.nPos,
+    };
+    // What the scroll bar shows is the OS's: checked where mirx is tested,
+    // never failing a user's window.
+    debug_assert!(
+        read && actual == expected,
+        "the timeline's scroll bar shows {actual:?} (read: {read}), not its lines' {expected:?}"
+    );
 }
 
 pub(super) unsafe fn capture_room_history_backfill_anchor(
@@ -1231,6 +1236,55 @@ mod tests {
                 RoomHistoryBackfillEvent::ActivityUpdate(Box::new(update))
             }
             other => panic!("expected room history backfill event payload, got {other:?}"),
+        }
+    }
+
+    /// Lines that do not fit show the scroll bar, which narrows the text:
+    /// inside `SetScrollInfo` the lines wrap again, onto more of them, and
+    /// the scroll bar takes those. A window squeezed this small (a big
+    /// account's windows, under a switchbar that filled the frame) did so
+    /// on every refresh.
+    #[test]
+    fn the_scroll_bar_shows_the_lines_wrapped_beside_it() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                let timeline = create_child_window(
+                    hwnd,
+                    TIMELINE_CLASS_NAME,
+                    "",
+                    WS_CHILD | WS_VISIBLE | WS_VSCROLL,
+                    WS_EX_CLIENTEDGE,
+                    0,
+                    GetModuleHandleW(null()),
+                    null_mut(),
+                )
+                .unwrap();
+                SendMessageW(
+                    timeline,
+                    WM_SETFONT,
+                    state_ref(hwnd).text_font.hfont() as WPARAM,
+                    0,
+                );
+                MoveWindow(timeline, 0, 0, 160, 30, 1);
+                let width_alone = timeline_client_width(timeline);
+                let rows = (0..3)
+                    .map(|index| {
+                        TimelineRow::log(
+                            TimelineRowKind::Info,
+                            format!("row {index}: {}", "word ".repeat(12)),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                set_timeline_rows(timeline, &rows);
+
+                // The scroll bar came, and took some of the width.
+                assert!(timeline_client_width(timeline) < width_alone);
+                assert_eq!(
+                    timeline_scroll(timeline).max,
+                    timeline_state_ref(timeline).paint_lines.len() as i32 - 1
+                );
+                DestroyWindow(timeline);
+            });
         }
     }
 
