@@ -465,3 +465,197 @@ mod with_two_hundred_rooms {
         Ok(())
     }
 }
+
+/// A big, long-lived account, as a user's was: a thousand rooms (one in
+/// ten a direct message, some in spaces), a highlight in many. Each window
+/// costs Wine several milliseconds to create, so these load once and
+/// check the whole startup.
+mod with_a_thousand_rooms {
+    use std::time::Instant;
+
+    use mirx_core::{RoomReadState, SpaceChildSummary};
+
+    use super::*;
+
+    const BIG_ROOMS: usize = 1000;
+    const SPACES: usize = 5;
+    /// Rooms per batch of the startup's activity: the core's events come
+    /// in small batches.
+    const BATCH_ROOMS: usize = 10;
+
+    fn big_room_id(index: usize) -> String {
+        format!("!big{index:04}:example")
+    }
+
+    fn space_id(index: usize) -> String {
+        format!("!space{index}:example")
+    }
+
+    fn big_room(index: usize) -> RoomSummary {
+        let mut room = room_summary(index, &format!("Big {index:04}"));
+        room.room_id = big_room_id(index);
+        if index.is_multiple_of(10) {
+            room.is_direct = true;
+            room.direct_user_ids = vec![format!("@u{index}:example")];
+        }
+        room
+    }
+
+    fn space(index: usize) -> RoomSummary {
+        let mut space = room_summary(index, &format!("Space {index}"));
+        space.room_id = space_id(index);
+        space.is_space = true;
+        space.space_children = (0..BIG_ROOMS)
+            .filter(|room| room % 7 == index)
+            .map(|room| SpaceChildSummary {
+                room_id: big_room_id(room),
+                order: None,
+                suggested: false,
+            })
+            .collect();
+        space
+    }
+
+    fn big_account_rooms() -> Event {
+        Event::SyncedRooms(
+            (0..SPACES)
+                .map(space)
+                .chain((0..BIG_ROOMS).map(big_room))
+                .collect(),
+        )
+    }
+
+    /// A room's activity at startup: two lines, the second a highlight in
+    /// every third room, and its unread counts.
+    fn big_room_activity(index: usize) -> Vec<Event> {
+        let room_id = big_room_id(index);
+        let message = |number: u64, highlight: bool| {
+            Event::RoomActivity(Box::new(RoomActivity {
+                room_id: room_id.clone(),
+                activity_id: format!("event:$big{index:04}m{number}:example"),
+                timestamp_ms: BASE_TIMESTAMP_MS + number * 60_000,
+                highlight,
+                relation: None,
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: Some(format!("$big{index:04}m{number}:example")),
+                    transaction_id: None,
+                    sender: RoomUserProfile {
+                        user_id: MEMBERS[number as usize % MEMBERS.len()].to_owned(),
+                        nick: None,
+                        nick_ambiguous: false,
+                    },
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: format!("big room {index} line {number}"),
+                    styles: Vec::new(),
+                    user_links: Vec::new(),
+                    source_body: None,
+                    send_state: RoomMessageSendState::Sent,
+                }),
+            }))
+        };
+        let highlight = index.is_multiple_of(3);
+        vec![
+            message(0, false),
+            message(1, highlight),
+            Event::RoomReadState(RoomReadState {
+                room_id: room_id.clone(),
+                latest_active_event_id: Some(format!("$big{index:04}m1:example")),
+                fully_read_event_id: None,
+                fully_read_timestamp_ms: None,
+                marked_unread: false,
+                num_unread: 2,
+                num_notifications: 2,
+                num_mentions: u64::from(highlight),
+            }),
+        ]
+    }
+
+    /// The big account's rooms load as a restart reads them from the store,
+    /// then their activity comes in batches, as the first sync brings it.
+    #[test]
+    fn a_thousand_rooms_start_without_moving_the_active_window()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = lock_gui_test();
+        let exe_path =
+            mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+        let app = MirxApp::launch_with_options(
+            &exe_path,
+            &[OsString::from("--automation")],
+            LaunchOptions {
+                startup_timeout: Duration::from_secs(20),
+                local_app_data: Some(unique_local_app_data_path()),
+                frame_size: None,
+            },
+        )?;
+        app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+        let before = app.dump_ui_state()?;
+        let started = Instant::now();
+        app.load_events(&serde_json::to_string(&[
+            Event::Started,
+            big_account_rooms(),
+        ])?)?;
+        app.wait_idle(Duration::from_secs(300))?;
+        eprintln!("a thousand rooms open in {:?}", started.elapsed());
+        let loaded = app.dump_ui_state()?;
+
+        // A window and a button each, and Status's.
+        assert_eq!(loaded.mdi.views.len(), BIG_ROOMS + 1);
+        assert_eq!(loaded.switchbar.items.len(), BIG_ROOMS + 1);
+        // Opening them activated only the window the load makes active,
+        // which Wine's MDI activates twice as it maximizes it in place of
+        // Status. Opening each one in front moved MDI's maximized window
+        // a thousand times.
+        let counts = delta(&before, &loaded);
+        eprintln!("opening a thousand windows: {counts:?}");
+        assert!(counts.mdi_activations <= 2, "{counts:?}");
+        assert_eq!(
+            loaded.mdi.active,
+            ViewIdentity::Room {
+                room_id: big_room_id(0)
+            }
+        );
+        // The switchbar's rows stop where the windows keep their height.
+        let least = 100 * loaded.dpi as i32 / 96;
+        assert!(
+            loaded.frame_layout.mdi_client.height >= least,
+            "{:?}",
+            loaded.frame_layout
+        );
+
+        let started = Instant::now();
+        for batch in (0..BIG_ROOMS).collect::<Vec<_>>().chunks(BATCH_ROOMS) {
+            let events = batch
+                .iter()
+                .flat_map(|index| big_room_activity(*index))
+                .collect::<Vec<_>>();
+            app.append_synthetic_events(&serde_json::to_string(&events)?)?;
+        }
+        app.wait_idle(Duration::from_secs(300))?;
+        eprintln!(
+            "{} batches of activity in {:?}",
+            BIG_ROOMS / BATCH_ROOMS,
+            started.elapsed()
+        );
+        let synced = app.dump_ui_state()?;
+        let counts = delta(&loaded, &synced);
+        eprintln!("the activity: {counts:?}");
+        // Each window builds its rows for its own lines; the bars repaint
+        // their colours and rebuild nothing; nothing is activated.
+        assert_eq!(counts.treebar_rebuilds, 0);
+        assert_eq!(counts.switchbar_rebuilds, 0);
+        assert_eq!(counts.mdi_activations, 0);
+        assert!(
+            counts.timeline_row_builds <= 2 * BIG_ROOMS as u64,
+            "{counts:?}"
+        );
+        let highlighted = synced
+            .switchbar
+            .items
+            .iter()
+            .filter(|item| item.activity == Some(ViewActivityLevel::Highlight))
+            .count();
+        // Room 0 is active: its highlight colours nothing.
+        assert_eq!(highlighted, BIG_ROOMS.div_ceil(3) - 1);
+        Ok(())
+    }
+}
