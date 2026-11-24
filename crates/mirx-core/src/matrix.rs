@@ -6637,16 +6637,12 @@ async fn timeline_event_mapping(
     }
 
     // Every power-level field has a default, so any state event would
-    // deserialize as one: match the type first.
+    // deserialize as one: match the type first. One that does not decode
+    // (a level that is no number) is no line, as live.
     if event.kind.event_type().as_deref() == Some("m.room.power_levels") {
-        let event = raw
-            .deserialize_as_unchecked::<OriginalSyncRoomPowerLevelsEvent>()
-            .map_err(|err| {
-                MatrixCoreError::new(format!(
-                    "failed to decode Matrix power levels event in {room_id}: {}",
-                    ErrorChain(&err)
-                ))
-            })?;
+        let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomPowerLevelsEvent>() else {
+            return Ok(Vec::new());
+        };
         return Ok(room_activity_from_power_levels_event(
             room,
             &event,
@@ -14632,11 +14628,18 @@ mod tests {
                 "m.room.history_visibility",
                 serde_json::json!({ "history_visibility": "shared" }),
             );
+            // Power levels that do not decode are no line, as live, not a
+            // failed page.
+            let undecodable_levels = room_settings_state_event_json(
+                "$bad-levels:localhost",
+                "m.room.power_levels",
+                serde_json::json!({ "ban": "fifty" }),
+            );
             // `/messages` is newest first.
             let history = settings
                 .iter()
                 .map(|(event, _)| event.clone())
-                .chain([other_state, visibility])
+                .chain([other_state, visibility, undecodable_levels])
                 .rev()
                 .map(|event| {
                     Raw::<AnyTimelineEvent>::from_json_string(event.to_string())
