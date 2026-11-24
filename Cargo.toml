@@ -37,8 +37,9 @@ opt-level = 3
 [profile.dev.package.sha2]
 opt-level = 3
 
-# Local copies of matrix-sdk 0.18.0 crates with fixes a later release will
-# have: see vendor/*/VENDORED.md.
+# Local copies of matrix-sdk 0.18.0 crates and the ruma-events it locks,
+# with fixes: see vendor/*/VENDORED.md.
 [patch.crates-io]
 matrix-sdk = { path = "vendor/matrix-sdk-0.18.0" }
 matrix-sdk-common = { path = "vendor/matrix-sdk-common-0.18.0" }
+ruma-events = { path = "vendor/ruma-events-0.34.0" }
