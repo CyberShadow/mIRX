@@ -4902,23 +4902,27 @@ pub(crate) fn room_list_update_task(
 
     async move {
         loop {
-            match updates.recv().await {
-                Ok(update) => {
-                    if !room_list_update_is_relevant(update.reasons) {
-                        continue;
-                    }
-
-                    emit_room_snapshot_or_room_list_error(&client, &snapshots, &events).await;
+            let mut relist = match updates.recv().await {
+                Ok(update) => room_list_update_is_relevant(update.reasons),
+                Err(broadcast::error::RecvError::Closed) => break,
+                // The list is a snapshot: reading it makes up for the
+                // missed updates. A big sync sends more than the channel
+                // holds (one or more per room) while a list is read.
+                Err(broadcast::error::RecvError::Lagged(_)) => true,
+            };
+            // One list shows every update queued before it is read: a sync
+            // of hundreds of rooms is one read, not one per room.
+            loop {
+                match updates.try_recv() {
+                    Ok(update) => relist |= room_list_update_is_relevant(update.reasons),
+                    Err(broadcast::error::TryRecvError::Lagged(_)) => relist = true,
+                    // Closed: the next `recv` says so, after this list.
+                    Err(broadcast::error::TryRecvError::Empty)
+                    | Err(broadcast::error::TryRecvError::Closed) => break,
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => emit_event(
-                    &events,
-                    Event::Error(CoreErrorEvent {
-                        operation: Operation::RoomList,
-                        room_id: None,
-                        message: "missed Matrix room-list update".to_owned(),
-                    }),
-                ),
+            }
+            if relist {
+                emit_room_snapshot_or_room_list_error(&client, &snapshots, &events).await;
             }
         }
     }
@@ -14972,6 +14976,91 @@ mod tests {
                     order: None,
                 }]
             );
+        });
+    }
+
+    /// A big account's first sync: hundreds of rooms in several spaces at
+    /// once, more room updates than the SDK's channel holds (500). The
+    /// room-list task reads the list once for the updates queued, reads it
+    /// again after missing some, and reports no error.
+    #[test]
+    fn a_big_sync_relists_the_rooms_without_errors() {
+        const SPACES: usize = 6;
+        const ROOMS_PER_SPACE: usize = 100;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_room_state_encryption()
+                .plain()
+                .mount()
+                .await;
+            let (events, event_rx) = mpsc::channel();
+            let task = tokio::task::spawn_local(super::room_list_update_task(
+                client.clone(),
+                events,
+                RoomSnapshots::default(),
+            ));
+
+            mock_server
+                .mock_sync()
+                .ok_and_run(&client, |builder| {
+                    for space in 0..SPACES {
+                        let space_id = OwnedRoomId::try_from(format!("!space{space}:example.org"))
+                            .expect("room id");
+                        let mut space_room =
+                            JoinedRoomBuilder::new(&space_id).add_state_event(space_create_state());
+                        for room in 0..ROOMS_PER_SPACE {
+                            let room_id =
+                                OwnedRoomId::try_from(format!("!room{space}-{room}:example.org"))
+                                    .expect("room id");
+                            space_room = space_room.add_state_event(space_child_state(
+                                &room_id,
+                                serde_json::json!({ "via": ["example.org"] }),
+                            ));
+                            builder.add_joined_room(JoinedRoomBuilder::new(&room_id));
+                        }
+                        builder.add_joined_room(space_room);
+                    }
+                })
+                .await;
+
+            let all = SPACES * (ROOMS_PER_SPACE + 1);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+            let mut lists = 0;
+            loop {
+                match event_rx.try_recv() {
+                    Ok(Event::SyncedRooms(rooms)) => {
+                        lists += 1;
+                        if rooms.len() == all {
+                            break;
+                        }
+                    }
+                    Ok(event) => panic!("expected SyncedRooms, got {event:?}"),
+                    Err(mpsc::TryRecvError::Empty) => {
+                        assert!(
+                            tokio::time::Instant::now() < deadline,
+                            "no list of all {all} rooms after {lists} lists"
+                        );
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => panic!("room-list task stopped"),
+                }
+            }
+            // What the task read later still has every room and no error.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            for event in event_rx.try_iter() {
+                match event {
+                    Event::SyncedRooms(rooms) => assert_eq!(rooms.len(), all),
+                    event => panic!("expected SyncedRooms, got {event:?}"),
+                }
+            }
+            task.abort();
         });
     }
 
