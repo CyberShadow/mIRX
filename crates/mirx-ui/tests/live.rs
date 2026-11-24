@@ -24,6 +24,9 @@ use std::time::{Duration, Instant};
 
 use matrix_sdk::Client;
 use matrix_sdk::config::SyncSettings;
+use matrix_sdk::encryption::verification::{
+    SasState, SasVerification, Verification, VerificationRequest, VerificationRequestState,
+};
 use matrix_sdk::room::Room as SdkRoom;
 use matrix_sdk::ruma::api::client::account::register::v3::Request as RegisterRequest;
 use matrix_sdk::ruma::api::client::directory::get_room_visibility;
@@ -624,6 +627,71 @@ impl Peer<'_> {
                 .delete_devices(&devices, Some(AuthData::Password(password)))
                 .await
                 .expect("deleting a device with the password succeeds");
+        });
+    }
+
+    /// Asks `user_id`'s session `device_id` to verify this device, once
+    /// this device knows that session's keys.
+    fn request_verification(&self, user_id: &UserId, device_id: &DeviceId) -> VerificationRequest {
+        let encryption = self.client.encryption();
+        let device = self.sync_until(&format!("{user_id}'s session {device_id}"), async || {
+            encryption
+                .request_user_identity(user_id)
+                .await
+                .map_err(|error| error.to_string())?;
+            encryption
+                .get_device(user_id, device_id)
+                .await
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "not among the keys".to_owned())
+        });
+        self.homeserver
+            .runtime
+            .block_on(device.request_verification())
+            .expect("requesting a verification succeeds")
+    }
+
+    /// Waits for the other side, which accepted `request`, to start SAS,
+    /// accepts it, and returns it once its emoji can be compared.
+    fn accept_sas(&self, request: &VerificationRequest) -> SasVerification {
+        let sas = self.sync_until("the SAS start", async || match request.state() {
+            VerificationRequestState::Transitioned {
+                verification: Verification::SasV1(sas),
+                ..
+            } => Ok(sas),
+            state => Err(format!("{state:?}")),
+        });
+        // The other side's start waits for our accept (`we_started` is
+        // about the request, not the SAS).
+        if matches!(sas.state(), SasState::Started { .. }) {
+            self.homeserver
+                .runtime
+                .block_on(sas.accept())
+                .expect("accepting SAS succeeds");
+        }
+        self.sync_until("the SAS keys", async || {
+            if sas.can_be_presented() {
+                Ok(())
+            } else {
+                Err(format!("{:?}", sas.state()))
+            }
+        });
+        sas
+    }
+
+    /// Confirms that the emoji match and waits for the other side's
+    /// confirmation, which ends the verification.
+    fn confirm_sas(&self, sas: &SasVerification) {
+        self.homeserver
+            .runtime
+            .block_on(sas.confirm())
+            .expect("confirming SAS succeeds");
+        self.sync_until("the verification done", async || {
+            if sas.is_done() {
+                Ok(())
+            } else {
+                Err(format!("{:?}", sas.state()))
+            }
         });
     }
 }
@@ -2065,6 +2133,113 @@ fn sessions_dialog_renames_and_signs_out_another_session() -> Result<(), Box<dyn
     );
 
     press_dialog_button(&app, dialog, IDCANCEL as usize, "Sessions")?;
+    finish(app, &local_app_data)
+}
+
+/// The emoji line mirx shows for `sas`: the line after the flow's
+/// "compare" line names the same emoji in the same order.
+fn assert_same_emoji(
+    app: &MirxApp,
+    label: &str,
+    sas: &SasVerification,
+) -> Result<(), Box<dyn Error>> {
+    let compare = format!("* Verification with {label}: compare the emoji or the numbers");
+    wait_for_status_line(app, &compare, TIMEOUT)?;
+    let lines = status_view_lines(app)?;
+    let at = lines
+        .iter()
+        .position(|line| line.contains(&compare))
+        .expect("the compare line is shown");
+    let emoji = sas
+        .emoji()
+        .expect("the peer's SAS has emoji")
+        .iter()
+        .map(|emoji| format!("{} {}", emoji.symbol, emoji.description))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        lines[at + 1].ends_with(&format!("* Emoji: {emoji}")),
+        "{label}: {:?}, the peer's: {emoji}",
+        lines[at + 1]
+    );
+    Ok(())
+}
+
+/// Two verifications of mirx's session at once, from Alice's phone and
+/// from Bob: each is shown by its user and session, a bare `/verify
+/// accept` answers the latest (the phone's), the others name the flow, and
+/// both end verified on both sides.
+#[test]
+fn two_verifications_at_once_are_each_answered() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let alice_phone = homeserver.register("alice", "Alice");
+    let bob = homeserver.register("bob", "Bob");
+    let alice = alice_phone.user_id().to_owned();
+    let phone = alice_phone.device_id().to_owned();
+    let bob_device = bob.device_id().to_owned();
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_live_app(&local_app_data)?;
+    let device = OwnedDeviceId::from(sign_in(&app, &homeserver, &alice_phone)?);
+
+    // The SDK ignores a request from a session whose keys it does not
+    // have: /devices fetches both.
+    app.select_status_view()?;
+    type_commands(&app, &["/devices", &format!("/devices {}", bob.user_id())])?;
+    wait_for_status_line(&app, &format!(" {phone} "), TIMEOUT)?;
+    wait_for_status_line(&app, &format!(" {bob_device} "), TIMEOUT)?;
+
+    let bob_label = format!("{} (session {bob_device})", bob.user_id());
+    let phone_label = format!("your session {phone}");
+    let bob_request = bob.request_verification(&alice, &device);
+    wait_for_status_line(
+        &app,
+        &format!("* Verification requested by {bob_label}"),
+        TIMEOUT,
+    )?;
+    let phone_request = alice_phone.request_verification(&alice, &device);
+    wait_for_status_line(
+        &app,
+        &format!("* Verification requested by {phone_label}"),
+        TIMEOUT,
+    )?;
+    wait_for_status_line(
+        &app,
+        &format!(
+            "* Also under way: {} {bob_device} (requested)",
+            bob.user_id()
+        ),
+        TIMEOUT,
+    )?;
+
+    type_commands(
+        &app,
+        &[
+            "/verify accept",
+            &format!("/verify accept {}", bob.user_id()),
+        ],
+    )?;
+    let phone_sas = alice_phone.accept_sas(&phone_request);
+    let bob_sas = bob.accept_sas(&bob_request);
+    assert_same_emoji(&app, &phone_label, &phone_sas)?;
+    assert_same_emoji(&app, &bob_label, &bob_sas)?;
+
+    type_commands(
+        &app,
+        &[
+            &format!("/verify confirm {} {bob_device}", bob.user_id()),
+            &format!("/verify confirm {alice} {phone}"),
+        ],
+    )?;
+    bob.confirm_sas(&bob_sas);
+    alice_phone.confirm_sas(&phone_sas);
+    for label in [&bob_label, &phone_label] {
+        wait_for_status_line(
+            &app,
+            &format!("* Verification done with {label}: verified"),
+            TIMEOUT,
+        )?;
+    }
+    assert_eq!(app.dump_model()?.verifications, []);
     finish(app, &local_app_data)
 }
 
