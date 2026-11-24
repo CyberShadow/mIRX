@@ -22,7 +22,7 @@ exe_path=${1:-"$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/mirx-ui.exe"}
 cd "$root_dir"
 
 if [[ $# -eq 0 ]] && [[ ! -f "$exe_path" ]]; then
-  cargo build --release --package mirx-ui --target x86_64-pc-windows-gnu
+  "$root_dir/scripts/cross-build.sh"
 fi
 
 declare -a allowlist=(
@@ -145,4 +145,17 @@ if [[ -n $harness_hits ]]; then
   exit 1
 fi
 
-printf 'dll-gate ok: %s; subsystem GUI; resources: icon, group icon, version, manifest; no "mIRC"; no automation harness\n' "${imported_dlls[*]}"
+# The exe names no directory of the machine that built it: cross-build.sh
+# remaps the paths of the sources that panic locations name.
+path_hits=$(
+  for path in "$root_dir" "${CARGO_HOME:?}"; do
+    LC_ALL=C grep -a -o -b -P "\\Q$path\\E[[:print:]]{0,60}" "$exe_path" | sed -n 1,5p || true
+  done
+)
+if [[ -n $path_hits ]]; then
+  echo "dll-gate failed: $exe_path names the build machine's directories (offset:text):" >&2
+  echo "$path_hits" >&2
+  exit 1
+fi
+
+printf 'dll-gate ok: %s; subsystem GUI; resources: icon, group icon, version, manifest; no "mIRC"; no automation harness; no build paths\n' "${imported_dlls[*]}"

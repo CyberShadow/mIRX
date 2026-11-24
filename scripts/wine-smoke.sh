@@ -31,7 +31,7 @@ fi
 exe_path=${1:-"$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/mirx-ui.exe"}
 
 if [[ $# -eq 0 ]] && [[ ! -f "$exe_path" ]]; then
-  cargo build --release --package mirx-ui --target x86_64-pc-windows-gnu
+  "$root_dir/scripts/cross-build.sh"
 fi
 
 ensure_wineprefix "$tmpdir/wineprefix"
