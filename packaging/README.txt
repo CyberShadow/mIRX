@@ -15,6 +15,8 @@ Running it
 - Extract the folder anywhere and run mirx-ui.exe. Nothing is installed.
 - The exe is not signed: Windows SmartScreen may say "Windows protected
   your PC". Choose "More info", then "Run anyway".
+- On exit the window closes at once; mirx-ui.exe may take up to a few
+  seconds more to end, while it tells the server what you read.
 
 Signing in
 ----------
