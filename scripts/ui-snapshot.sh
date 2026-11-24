@@ -242,6 +242,7 @@ configure_case_expectations() {
   expect_error=
   expect_verification=
   expect_verification_state=
+  expect_verification_count=
   expect_active_view=
   select_views=()
   trigger_history_backfill=
@@ -1079,7 +1080,7 @@ configure_case_expectations() {
       ;;
     find-status)
       expect_active_view='status'
-      find_active_view_query='flow-verify-request'
+      find_active_view_query='session ALICEDEVICE'
       expect_verification='flow-verify-request'
       expect_verification_state='requested'
       verification_text_expect_args=(
@@ -1088,10 +1089,10 @@ configure_case_expectations() {
         --expect-verification-text 'state=requested'
       )
       status_view_expect_args=(
-        --expect-status-view '[22:12] * Verification requested by @alice:example (flow flow-verify-request)'
+        --expect-status-view '[22:12] * Verification requested by @alice:example (session ALICEDEVICE)'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'find: 1/1 "flow-verify-request"'
+        --expect-status-bar 'find: 1/1 "session ALICEDEVICE"'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1535,13 +1536,13 @@ configure_case_expectations() {
         --expect-room-view '!verify:example::[22:16] <@alice:example> waiting for confirmation'
       )
       status_view_expect_args=(
-        --expect-status-view 'flow-verify-123'
+        --expect-status-view 'Verification requested by @alice:example (session ALICEDEVICE)'
         --expect-status-view 'message send failed'
         --expect-status-view '* Actions: Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel'
       )
       status_bar_expect_args=(
         --expect-status-bar 'error during send text'
-        --expect-status-bar 'flow-verify-123'
+        --expect-status-bar 'verification: requested by @alice:example (session ALICEDEVICE)'
         --expect-status-bar 'message send failed'
       )
       switchbar_item_expect_args=(
@@ -1572,15 +1573,16 @@ configure_case_expectations() {
       verification_text_expect_args=(
         --expect-verification-text 'flow_id=flow-verify-request'
         --expect-verification-text 'user_id=@alice:example'
+        --expect-verification-text 'device_id=ALICEDEVICE'
+        --expect-verification-text 'outgoing=false'
         --expect-verification-text 'state=requested'
       )
       status_view_expect_args=(
-        --expect-status-view '[22:12] * Verification requested by @alice:example (flow flow-verify-request)'
+        --expect-status-view '[22:12] * Verification requested by @alice:example (session ALICEDEVICE)'
         --expect-status-view '* Actions: Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'verification requested by @alice:example'
-        --expect-status-bar 'verification: requested flow-verify-request from @alice:example'
+        --expect-status-bar 'verification requested by @alice:example (session ALICEDEVICE) | verification: requested by @alice:example (session ALICEDEVICE)'
       )
       status_view_forbid_args=(
         --expect-no-status-view '/verify confirm'
@@ -1605,6 +1607,8 @@ configure_case_expectations() {
       verification_text_expect_args=(
         --expect-verification-text 'flow_id=flow-verify-sent'
         --expect-verification-text 'user_id=@alice:example'
+        --expect-verification-text 'device_id=none'
+        --expect-verification-text 'outgoing=true'
         --expect-verification-text 'state=sent'
       )
       status_view_expect_args=(
@@ -1612,8 +1616,7 @@ configure_case_expectations() {
         --expect-status-view '* Actions: Tools > Cancel Verification, /verify cancel'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'verification request sent to @alice:example'
-        --expect-status-bar 'verification: sent flow-verify-sent to @alice:example'
+        --expect-status-bar 'verification request sent to @alice:example | verification: request sent to @alice:example'
       )
       status_view_forbid_args=(
         --expect-no-status-view '/verify accept'
@@ -1633,19 +1636,20 @@ configure_case_expectations() {
       expect_verification_state='sas_ready'
       verification_text_expect_args=(
         --expect-verification-text 'flow_id=flow-verify-sas-ready'
+        --expect-verification-text 'device_id=ALICEDEVICE'
         --expect-verification-text 'state=sas_ready'
         --expect-verification-text 'emoji=🐶 dog | 🐱 cat | 🦁 lion | 🐎 horse | 🦄 unicorn | 🐷 pig | 🐘 elephant'
         --expect-verification-text 'decimals=1234-5678-9012'
       )
       status_view_expect_args=(
-        --expect-status-view '[22:12] * Verification with @alice:example: compare the emoji or the numbers'
+        --expect-status-view '[22:12] * Verification requested by @alice:example (session ALICEDEVICE)'
+        --expect-status-view '[22:12] * Verification with @alice:example (session ALICEDEVICE): compare the emoji or the numbers'
         --expect-status-view '* Emoji: 🐶 dog | 🐱 cat | 🦁 lion | 🐎 horse | 🦄 unicorn | 🐷 pig | 🐘 elephant'
         --expect-status-view '* Decimals: 1234-5678-9012'
         --expect-status-view '* Actions: Tools > Confirm SAS, Tools > Reject SAS, Tools > Cancel Verification, /verify confirm, /verify reject, /verify cancel'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'verification sas ready with @alice:example'
-        --expect-status-bar 'verification: sas ready flow-verify-sas-ready from @alice:example'
+        --expect-status-bar 'verification sas ready with @alice:example (session ALICEDEVICE) | verification: sas ready with @alice:example (session ALICEDEVICE)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1661,23 +1665,21 @@ configure_case_expectations() {
       ;;
     verification-done)
       expect_active_view='status'
-      expect_verification='flow-verify-done'
-      expect_verification_state='done'
-      verification_text_expect_args=(
-        --expect-verification-text 'flow_id=flow-verify-done'
-        --expect-verification-text 'state=done'
-      )
+      # The flow ended: it is no longer under way.
+      expect_verification_count=0
       status_view_expect_args=(
-        --expect-status-view '[22:12] * Verification done with @alice:example: verified'
+        --expect-status-view '[22:12] * Verification requested by @alice:example (session ALICEDEVICE)'
+        --expect-status-view '[22:12] * Verification done with @alice:example (session ALICEDEVICE): verified'
       )
       status_view_forbid_args=(
         --expect-no-status-view '/verify confirm'
         --expect-no-status-view '/verify reject'
-        --expect-no-status-view '/verify cancel'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'verification done with @alice:example'
-        --expect-status-bar 'verification: done flow-verify-done from @alice:example'
+        --expect-status-bar 'verification done with @alice:example (session ALICEDEVICE)'
+      )
+      status_bar_forbid_args=(
+        --expect-no-status-bar 'verification:'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1693,25 +1695,20 @@ configure_case_expectations() {
       ;;
     verification-cancelled)
       expect_active_view='status'
-      expect_verification='flow-verify-cancelled'
-      expect_verification_state='cancelled'
-      verification_text_expect_args=(
-        --expect-verification-text 'flow_id=flow-verify-cancelled'
-        --expect-verification-text 'state=cancelled'
-        --expect-verification-text 'reason=timed out waiting for confirmation'
-        --expect-verification-text 'code=m.timeout'
-      )
+      # The flow ended: it is no longer under way.
+      expect_verification_count=0
       status_view_expect_args=(
-        --expect-status-view '[22:12] * Verification cancelled with @alice:example: timed out waiting for confirmation (m.timeout)'
+        --expect-status-view '[22:12] * Verification cancelled with @alice:example (session ALICEDEVICE): timed out waiting for confirmation (m.timeout)'
       )
       status_view_forbid_args=(
         --expect-no-status-view '/verify confirm'
         --expect-no-status-view '/verify reject'
-        --expect-no-status-view '/verify cancel'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'verification cancelled with @alice:example'
-        --expect-status-bar 'verification: cancelled flow-verify-cancelled from @alice:example'
+        --expect-status-bar 'verification cancelled with @alice:example (session ALICEDEVICE)'
+      )
+      status_bar_forbid_args=(
+        --expect-no-status-bar 'verification:'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1724,6 +1721,34 @@ configure_case_expectations() {
         --expect-no-navigation-text 'flow-verify-cancelled'
         --expect-no-navigation-text 'm.timeout'
       )
+      ;;
+    verification-concurrent)
+      # Bob's verification reached the emoji, then your phone asked: both
+      # are under way, each labelled; the phone's, the latest, is what the
+      # Tools items and a bare /verify answer.
+      expect_active_view='status'
+      expect_verification_count=2
+      expect_verification='flow-phone'
+      expect_verification_state='requested'
+      verification_text_expect_args=(
+        --expect-verification-text 'user_id=@me:example'
+        --expect-verification-text 'device_id=PH0NE'
+      )
+      status_view_expect_args=(
+        --expect-status-view '[22:12] * Verification requested by @bob:example (session B0BDEVICE)'
+        --expect-status-view '[22:12] * Verification with @bob:example (session B0BDEVICE): compare the emoji or the numbers'
+        --expect-status-view '* Emoji: 🐶 dog | 🐱 cat | 🦁 lion | 🐎 horse | 🦄 unicorn | 🐷 pig | 🐘 elephant'
+        --expect-status-view '[22:12] * Verification requested by your session PH0NE'
+        --expect-status-view '* Actions: Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel'
+        --expect-status-view '* Also under way: @bob:example B0BDEVICE (sas ready); /verify <action> <user> [session] answers one of them'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'verification: requested by your session PH0NE (+1 more)'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::@me:example'
+      )
+      expect_switchbar_active='status'
       ;;
     e2ee-recovery-needed)
       expect_active_view='status'
@@ -3854,6 +3879,9 @@ run_case() {
   fi
   if [[ -n "${expect_verification_state:-}" ]]; then
     driver_args+=(--expect-verification-state "$expect_verification_state")
+  fi
+  if [[ -n "${expect_verification_count:-}" ]]; then
+    driver_args+=(--expect-verification-count "$expect_verification_count")
   fi
   driver_args+=("${verification_text_expect_args[@]}")
   if [[ -n "${expect_switchbar_active:-}" ]]; then

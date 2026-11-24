@@ -1,0 +1,80 @@
+[
+  "Started",
+  {
+    "LoggedIn": {
+      "session": {
+        "user_id": "@me:example",
+        "device_id": "MIRXDEVICE",
+        "access_token": "fixture-access-token",
+        "refresh_token": null,
+        "auth": "Matrix"
+      },
+      "homeserver_url": "https://matrix.example/"
+    }
+  },
+  {
+    "VerificationRequest": {
+      "flow_id": "flow-bob",
+      "user_id": "@bob:example",
+      "direction": {
+        "type": "incoming",
+        "from_device": "B0BDEVICE"
+      }
+    }
+  },
+  {
+    "VerificationState": {
+      "flow_id": "flow-bob",
+      "user_id": "@bob:example",
+      "device_id": "B0BDEVICE",
+      "state": {
+        "state": "sas_ready",
+        "emojis": [
+          {
+            "symbol": "🐶",
+            "description": "dog"
+          },
+          {
+            "symbol": "🐱",
+            "description": "cat"
+          },
+          {
+            "symbol": "🦁",
+            "description": "lion"
+          },
+          {
+            "symbol": "🐎",
+            "description": "horse"
+          },
+          {
+            "symbol": "🦄",
+            "description": "unicorn"
+          },
+          {
+            "symbol": "🐷",
+            "description": "pig"
+          },
+          {
+            "symbol": "🐘",
+            "description": "elephant"
+          }
+        ],
+        "decimals": {
+          "first": 1234,
+          "second": 5678,
+          "third": 9012
+        }
+      }
+    }
+  },
+  {
+    "VerificationRequest": {
+      "flow_id": "flow-phone",
+      "user_id": "@me:example",
+      "direction": {
+        "type": "incoming",
+        "from_device": "PH0NE"
+      }
+    }
+  }
+]
