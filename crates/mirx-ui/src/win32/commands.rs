@@ -246,11 +246,14 @@ pub(super) enum SlashCommand {
     /// `/clearall [-snq]`.
     ClearAll(ClearAll),
     E2ee(E2eeSlashCommand),
-    /// `/verify accept|cancel|confirm|reject`: answers the current flow.
+    /// `/verify accept|cancel|confirm|reject [nick [session]]`: answers the
+    /// flow under way with that user (and session), the latest without a
+    /// nick.
     Verify {
         action: VerificationAction,
+        target: Option<(String, Option<String>)>,
     },
-    /// `/verify [nick [device]]`: starts a verification. No nick verifies
+    /// `/verify [nick [session]]`: starts a verification. No nick verifies
     /// this session with your other sessions; a nick alone, that user.
     VerifyStart {
         target: Option<String>,
@@ -807,8 +810,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "verify",
-        usage: "[nick [device]] | accept|cancel|confirm|reject",
-        summary: "verify a session or user, or answer a verification",
+        usage: "[nick [session]] | accept|cancel|confirm|reject [nick [session]]",
+        summary: "verify a session or user, or answer a verification (the latest without a nick)",
     },
     CommandSpec {
         name: "voice",
@@ -1632,8 +1635,8 @@ fn parse_bar(bar: Bar, argument: &str) -> Result<SlashCommand, CommandError> {
     Ok(SlashCommand::Bar { bar, command })
 }
 
-/// `[nick [device]]`, or one of the actions alone. A user named like an
-/// action is named by user ID.
+/// `[nick [session]]`, or an action and `[nick [session]]`. A user named
+/// like an action is named by user ID.
 fn parse_verify(argument: &str) -> Result<SlashCommand, CommandError> {
     let (first, rest) = split_word(argument);
     let action = match first.to_ascii_lowercase().as_str() {
@@ -1643,20 +1646,24 @@ fn parse_verify(argument: &str) -> Result<SlashCommand, CommandError> {
         "reject" => Some(VerificationAction::Reject),
         _ => None,
     };
-    if let Some(action) = action {
-        if !rest.is_empty() {
-            return Err(CommandError::new("verify", "invalid parameters"));
-        }
-        return Ok(SlashCommand::Verify { action });
-    }
-    let (device, extra) = split_word(rest);
+    let (nick, rest) = match action {
+        Some(_) => split_word(rest),
+        None => (first, rest),
+    };
+    let (session, extra) = split_word(rest);
     if !extra.is_empty() {
         return Err(CommandError::new("verify", "too many parameters"));
     }
     let word = |word: &str| (!word.is_empty()).then(|| word.to_owned());
-    Ok(SlashCommand::VerifyStart {
-        target: word(first),
-        device_id: word(device),
+    Ok(match action {
+        Some(action) => SlashCommand::Verify {
+            action,
+            target: word(nick).map(|nick| (nick, word(session))),
+        },
+        None => SlashCommand::VerifyStart {
+            target: word(nick),
+            device_id: word(session),
+        },
     })
 }
 
@@ -2442,8 +2449,28 @@ mod tests {
             ("/verify confirm", VerificationAction::Confirm),
             ("/verify reject", VerificationAction::Reject),
         ] {
-            assert_eq!(parse(input), Ok(SlashCommand::Verify { action }));
+            assert_eq!(
+                parse(input),
+                Ok(SlashCommand::Verify {
+                    action,
+                    target: None
+                })
+            );
         }
+        let answer = |action, nick: &str, session: Option<&str>| {
+            Ok(SlashCommand::Verify {
+                action,
+                target: Some((nick.to_owned(), session.map(str::to_owned))),
+            })
+        };
+        assert_eq!(
+            parse("/verify confirm Bob"),
+            answer(VerificationAction::Confirm, "Bob", None)
+        );
+        assert_eq!(
+            parse("/verify CANCEL @me:example PH0NE"),
+            answer(VerificationAction::Cancel, "@me:example", Some("PH0NE"))
+        );
         let start = |target: Option<&str>, device_id: Option<&str>| {
             Ok(SlashCommand::VerifyStart {
                 target: target.map(str::to_owned),
@@ -2472,8 +2499,8 @@ mod tests {
         assert_eq!(parse("/find"), insufficient("find"));
         assert_eq!(parse("/window"), insufficient("window"));
         assert_eq!(
-            parse("/verify accept extra"),
-            error("verify", "invalid parameters")
+            parse("/verify accept bob DEV1 more"),
+            error("verify", "too many parameters")
         );
         assert_eq!(
             parse("/verify bob DEV1 more"),

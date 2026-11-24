@@ -37,6 +37,7 @@ mod cli {
         pub(crate) expect_verification: Option<String>,
         pub(crate) expect_verification_state: Option<String>,
         pub(crate) expect_verification_texts: Vec<String>,
+        pub(crate) expect_verification_count: Option<usize>,
         pub(crate) expect_active_view: Option<ViewIdentity>,
         pub(crate) expect_views: Vec<ViewExpectation>,
         pub(crate) expect_no_views: Vec<ViewExpectation>,
@@ -475,17 +476,24 @@ mod cli {
                         "missing value for --expect-verification-state".to_owned()
                     })?;
                     match value.as_str() {
-                        "requested" | "sent" | "accepted" | "ready" | "sas_ready" | "confirmed"
-                        | "done" | "cancelled" => {
+                        "requested" | "sent" | "ready" | "sas_ready" | "confirmed" => {
                             config.expect_verification_state = Some(value);
                         }
                         _ => {
                             return Err(format!(
-                                "invalid --expect-verification-state value {value:?}; expected requested|sent|accepted|ready|sas_ready|confirmed|done|cancelled\n{}",
+                                "invalid --expect-verification-state value {value:?}; expected requested|sent|ready|sas_ready|confirmed\n{}",
                                 usage()
                             ));
                         }
                     }
+                }
+                "--expect-verification-count" => {
+                    let value = args.next().ok_or_else(|| {
+                        "missing value for --expect-verification-count".to_owned()
+                    })?;
+                    config.expect_verification_count = Some(value.parse().map_err(|err| {
+                        format!("invalid --expect-verification-count value {value:?}: {err}")
+                    })?);
                 }
                 "--expect-verification-text" => {
                     config
@@ -857,9 +865,10 @@ mod cli {
             "  --expect-room-unread <room_id>::<num_unread>::<num_notifications>::<num_mentions>::<marked_unread>",
             "  --expect-room-activity <room_id>::<substring>",
             "  --expect-error <substring>",
-            "  --expect-verification <flow_id>",
-            "  --expect-verification-state <requested|sent|accepted|ready|sas_ready|confirmed|done|cancelled>",
+            "  --expect-verification <flow_id>            (the latest under way)",
+            "  --expect-verification-state <requested|sent|ready|sas_ready|confirmed>",
             "  --expect-verification-text <substring>",
+            "  --expect-verification-count <n>            (under way)",
             "  --expect-active-view <status|room:<room_id>|thread:<room_id>|<thread_root_event_id>>",
             "  --expect-view <identity>::<substring>",
             "  --expect-no-view <identity>::<substring>",
@@ -1993,6 +2002,8 @@ mod cli {
                     "requested",
                     "--expect-verification-text",
                     "emoji",
+                    "--expect-verification-count",
+                    "2",
                     "--expect-active-view",
                     "room:!ops:example",
                     "--expect-room-view",
@@ -2062,6 +2073,7 @@ mod cli {
                 Some("requested".to_owned())
             );
             assert_eq!(config.expect_verification_texts, vec!["emoji".to_owned()]);
+            assert_eq!(config.expect_verification_count, Some(2));
             assert_eq!(
                 config.expect_active_view,
                 Some(ViewIdentity::Room {
@@ -2926,8 +2938,18 @@ mod windows_main {
             println!("PASS no room {room_id}");
         }
 
+        if let Some(expected) = config.expect_verification_count {
+            let count = model.verifications.len();
+            if count != expected {
+                return Err(format!(
+                    "verification count assertion failed: expected {expected} under way, found {count}"
+                ));
+            }
+            println!("PASS verification count {expected}");
+        }
+
         if let Some(expected_flow_id) = config.expect_verification.as_deref() {
-            let verification = model.last_verification.as_ref().ok_or_else(|| {
+            let verification = model.verifications.last().ok_or_else(|| {
                 format!(
                     "verification assertion failed: expected flow {expected_flow_id}, found none"
                 )
@@ -2942,7 +2964,7 @@ mod windows_main {
         }
 
         if let Some(expected_state) = config.expect_verification_state.as_deref() {
-            let verification = model.last_verification.as_ref().ok_or_else(|| {
+            let verification = model.verifications.last().ok_or_else(|| {
                 format!(
                     "verification state assertion failed: expected state {expected_state}, found none"
                 )
@@ -2957,7 +2979,7 @@ mod windows_main {
         }
 
         if !config.expect_verification_texts.is_empty() {
-            let verification = model.last_verification.as_ref().ok_or_else(|| {
+            let verification = model.verifications.last().ok_or_else(|| {
                 "verification text assertion failed: expected verification, found none".to_owned()
             })?;
             let rendered = render_verification_text(verification);
@@ -3937,7 +3959,6 @@ mod windows_main {
         match state {
             VerificationState::Requested => "requested",
             VerificationState::Sent => "sent",
-            VerificationState::Accepted => "accepted",
             VerificationState::Ready => "ready",
             VerificationState::SasReady { .. } => "sas_ready",
             VerificationState::Confirmed => "confirmed",
@@ -3959,6 +3980,11 @@ mod windows_main {
         let mut parts = vec![
             format!("flow_id={}", verification.flow_id),
             format!("user_id={}", verification.user_id),
+            format!(
+                "device_id={}",
+                verification.device_id.as_deref().unwrap_or("none")
+            ),
+            format!("outgoing={}", verification.outgoing),
             format!("state={}", verification_state_name(&verification.state)),
         ];
 
@@ -3986,7 +4012,6 @@ mod windows_main {
             }
             VerificationState::Requested
             | VerificationState::Sent
-            | VerificationState::Accepted
             | VerificationState::Ready
             | VerificationState::Confirmed
             | VerificationState::Done => {}

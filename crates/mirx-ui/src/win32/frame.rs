@@ -725,17 +725,16 @@ pub(super) fn frame_status_text(state: &WindowState) -> String {
         _ => model.status.clone(),
     };
 
-    if let Some(event) = &model.last_verification {
+    // The latest verification, which the Tools items answer.
+    if let Some(latest) = model.verifications.latest() {
         text.push_str(" | verification: ");
-        text.push_str(verification_state_label(&event.state));
-        text.push(' ');
-        text.push_str(&event.flow_id);
-        // Sent is the one state known to be outgoing.
-        text.push_str(match event.state {
-            VerificationState::Sent => " to ",
-            _ => " from ",
-        });
-        text.push_str(&event.user_id);
+        text.push_str(verification_state_label(&latest.state));
+        text.push_str(" with ");
+        text.push_str(&latest.label(model.own_user_id()));
+        let others = model.verifications.len() - 1;
+        if others > 0 {
+            text.push_str(&format!(" (+{others} more)"));
+        }
     }
 
     if let Some(status) = &model.last_e2ee_status {
@@ -938,30 +937,39 @@ mod tests {
         }
     }
 
-    #[test]
-    fn frame_status_text_includes_flow_user_and_compact_state() {
-        let mut state = test_state();
-        state.model.status = "verification accepted with @alice:example".to_owned();
-        state.model.last_verification = Some(VerificationStateEvent {
-            flow_id: "flow-verify-123".to_owned(),
-            user_id: "@alice:example".to_owned(),
-            state: VerificationState::Accepted,
-        });
+    fn start(state: &mut WindowState, request: VerificationRequest) {
+        apply_verification_request(state, request);
+    }
 
+    #[test]
+    fn frame_status_text_names_the_latest_verification_and_counts_the_others() {
+        let mut state = test_state();
+        start(
+            &mut state,
+            VerificationRequest {
+                flow_id: "flow-out".to_owned(),
+                user_id: "@alice:example".to_owned(),
+                direction: VerificationDirection::Outgoing { to_device: None },
+            },
+        );
         assert_eq!(
             frame_status_text(&state),
-            "verification accepted with @alice:example | verification: accepted flow-verify-123 from @alice:example"
+            "verification sent with @alice:example | verification: sent with @alice:example"
         );
 
-        state.model.status = "verification request sent to @alice:example".to_owned();
-        state.model.last_verification = Some(VerificationStateEvent {
-            flow_id: "flow-out".to_owned(),
-            user_id: "@alice:example".to_owned(),
-            state: VerificationState::Sent,
-        });
+        start(
+            &mut state,
+            VerificationRequest {
+                flow_id: "flow-in".to_owned(),
+                user_id: "@bob:example".to_owned(),
+                direction: VerificationDirection::Incoming {
+                    from_device: "B0B".to_owned(),
+                },
+            },
+        );
         assert_eq!(
             frame_status_text(&state),
-            "verification request sent to @alice:example | verification: sent flow-out to @alice:example"
+            "verification requested with @bob:example (session B0B) | verification: requested with @bob:example (session B0B) (+1 more)"
         );
     }
 
@@ -1013,12 +1021,16 @@ mod tests {
     #[test]
     fn frame_status_text_appends_verification_before_error_when_both_exist() {
         let mut state = test_state();
-        state.model.status = "verification accepted with @alice:example".to_owned();
-        state.model.last_verification = Some(VerificationStateEvent {
-            flow_id: "flow-verify-123".to_owned(),
-            user_id: "@alice:example".to_owned(),
-            state: VerificationState::Accepted,
-        });
+        start(
+            &mut state,
+            VerificationRequest {
+                flow_id: "flow-verify-123".to_owned(),
+                user_id: "@alice:example".to_owned(),
+                direction: VerificationDirection::Incoming {
+                    from_device: "PH0NE".to_owned(),
+                },
+            },
+        );
         state.model.last_error = Some(CoreErrorEvent {
             operation: Operation::SendMessage,
             room_id: Some("!room:example".to_owned()),
@@ -1027,7 +1039,7 @@ mod tests {
 
         assert_eq!(
             frame_status_text(&state),
-            "verification accepted with @alice:example | verification: accepted flow-verify-123 from @alice:example | error: send text: message send failed"
+            "verification requested with @alice:example (session PH0NE) | verification: requested with @alice:example (session PH0NE) | error: send text: message send failed"
         );
     }
 

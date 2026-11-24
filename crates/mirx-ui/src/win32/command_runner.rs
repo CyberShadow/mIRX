@@ -805,6 +805,7 @@ pub(super) unsafe fn run_slash_command(
                 }
                 None => own_user_id(&state.model)?.to_owned(),
             };
+            refuse_second_verification(&state.model, &user_id)?;
             let status = match &device_id {
                 Some(device_id) => format!("verification requested: {user_id} {device_id}"),
                 None => format!("verification requested: {user_id}"),
@@ -815,14 +816,17 @@ pub(super) unsafe fn run_slash_command(
             )?;
             Ok(Some(status))
         }
-        SlashCommand::Verify { action } => {
+        SlashCommand::Verify { action, target } => {
             let state = state_mut(hwnd);
-            match action {
-                VerificationAction::Accept => submit_accept_verification(state),
-                VerificationAction::Cancel => submit_cancel_verification(state),
-                VerificationAction::Confirm => submit_confirm_verification_sas(state),
-                VerificationAction::Reject => submit_reject_verification_sas(state),
-            }?;
+            let user_id = target
+                .as_ref()
+                .map(|(nick, _)| user_target(&state.model, nick))
+                .transpose()?;
+            let target = user_id.as_deref().map(|user_id| VerificationTarget {
+                user_id,
+                device_id: target.as_ref().and_then(|(_, session)| session.as_deref()),
+            });
+            submit_verification_answer(state, action, target.as_ref())?;
             Ok(Some(format!(
                 "verification {} submitted",
                 verification_action_label(action)

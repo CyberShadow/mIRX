@@ -30,7 +30,7 @@ use crate::api::{
     SetupE2eeRecoveryRequest, SignOutDeviceRequest, UnbanRoomMemberRequest,
     UpdateRoomSettingsRequest, VerificationFlowId,
 };
-use crate::matrix::{self, AwayFlag, BackupServerStatusMode};
+use crate::matrix::{self, AwayFlag, BackupServerStatusMode, MatrixCoreError};
 
 /// A command, with every in-session command made its lane job.
 pub(super) enum Route {
@@ -1219,90 +1219,48 @@ fn emit_identity_reset(events: &EventSender, outcome: E2eeIdentityResetOutcome) 
 }
 
 async fn request_verification(ctx: JobCtx, request: RequestVerificationRequest) -> Followup {
-    let JobCtx { client, events, .. } = &ctx;
+    let JobCtx {
+        client,
+        events,
+        verifications,
+        ..
+    } = &ctx;
     match matrix::request_verification(client, &request).await {
-        Ok((announcement, flow_request)) => {
-            let flow = VerificationFlowId {
-                flow_id: announcement.flow_id.clone(),
-                user_id: announcement.user_id.clone(),
-            };
-            emit_event(events, Event::VerificationRequest(announcement));
-            // An outgoing flow has no Accept to start the watcher, which
-            // sees the other side's ready and starts SAS.
-            let watcher =
-                matrix::watch_verification_request(flow_request, flow.clone(), events.clone());
-            Followup::Watch(flow, Box::pin(watcher))
+        Ok((announcement, flow)) => {
+            emit_event(events, Event::VerificationRequest(announcement.clone()));
+            // Its watcher sees the other side's ready and starts SAS.
+            verifications.follow(announcement, flow);
         }
-        Err(err) => {
-            emit_matrix_error(events, Operation::RequestVerification, err);
-            Followup::Done
-        }
+        Err(err) => emit_matrix_error(events, Operation::RequestVerification, err),
     }
+    Followup::Done
+}
+
+/// An answer to a flow: the flow's watcher reports what it changes.
+async fn answer_verification<F: Future<Output = Result<(), MatrixCoreError>>>(
+    ctx: &JobCtx,
+    answer: F,
+) -> Followup {
+    if let Err(err) = answer.await {
+        emit_matrix_error(&ctx.events, Operation::Verification, err);
+    }
+    Followup::Done
 }
 
 async fn accept_verification(ctx: JobCtx, flow: VerificationFlowId) -> Followup {
-    let JobCtx { client, events, .. } = &ctx;
-    match matrix::accept_verification(client, &flow).await {
-        Ok(event) => {
-            emit_event(events, Event::VerificationState(event));
-            verification_watcher(&ctx, flow).await
-        }
-        Err(err) => {
-            emit_matrix_error(events, Operation::Verification, err);
-            Followup::Done
-        }
-    }
+    answer_verification(&ctx, matrix::accept_verification(&ctx.client, &flow)).await
 }
 
 async fn cancel_verification(ctx: JobCtx, flow: VerificationFlowId) -> Followup {
-    let JobCtx { client, events, .. } = &ctx;
-    match matrix::cancel_verification(client, &flow).await {
-        Ok(event) => emit_event(events, Event::VerificationState(event)),
-        Err(err) => emit_matrix_error(events, Operation::Verification, err),
-    }
-
-    Followup::Done
+    answer_verification(&ctx, matrix::cancel_verification(&ctx.client, &flow)).await
 }
 
 async fn confirm_verification_sas(ctx: JobCtx, flow: VerificationFlowId) -> Followup {
-    let JobCtx { client, events, .. } = &ctx;
-    match matrix::confirm_verification_sas(client, &flow).await {
-        Ok(event) => {
-            emit_event(events, Event::VerificationState(event));
-            verification_watcher(&ctx, flow).await
-        }
-        Err(err) => {
-            emit_matrix_error(events, Operation::Verification, err);
-            Followup::Done
-        }
-    }
+    answer_verification(&ctx, matrix::confirm_verification_sas(&ctx.client, &flow)).await
 }
 
 async fn reject_verification_sas(ctx: JobCtx, flow: VerificationFlowId) -> Followup {
-    let JobCtx { client, events, .. } = &ctx;
-    match matrix::reject_verification_sas(client, &flow).await {
-        Ok(event) => emit_event(events, Event::VerificationState(event)),
-        Err(err) => emit_matrix_error(events, Operation::Verification, err),
-    }
-
-    Followup::Done
-}
-
-/// The watcher of `flow`: of its request while it is one, of its SAS once
-/// it is one. The actor starts it unless one already runs.
-async fn verification_watcher(ctx: &JobCtx, flow: VerificationFlowId) -> Followup {
-    let JobCtx { client, events, .. } = ctx;
-    if let Ok(request) = matrix::lookup_verification_request(client, &flow).await {
-        let watcher = matrix::watch_verification_request(request, flow.clone(), events.clone());
-        return Followup::Watch(flow, Box::pin(watcher));
-    }
-    match matrix::lookup_sas_verification(client, &flow).await {
-        Ok(sas) => {
-            let watcher = matrix::watch_sas_verification(sas, flow.clone(), events.clone());
-            Followup::Watch(flow, Box::pin(watcher))
-        }
-        Err(_) => Followup::Done,
-    }
+    answer_verification(&ctx, matrix::reject_verification_sas(&ctx.client, &flow)).await
 }
 
 /// A job that only refuses.

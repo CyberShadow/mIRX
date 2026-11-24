@@ -5,14 +5,13 @@
 //! builds the Win32 menus from them. The Room, Message and Member menus are
 //! right-click menus of the treebar, timeline and nick list, not bar menus.
 
-use mirx_core::{
-    RoomMemberSummary, RoomNotificationMode, VerificationState, VerificationStateEvent,
-};
+use mirx_core::{RoomMemberSummary, RoomNotificationMode};
 
 use super::commands::{RankChange, SlashCommand, VerificationAction, rank_change_role};
 use super::ignore::{check_ignore, check_unignore};
 use super::navigation::WindowCycle;
 use super::settings::{Bar, Settings};
+use super::verification::{Verification, verification_action_applies};
 use crate::shared::ConnectionState;
 
 pub(super) const MENU_ID_LOGOUT: usize = 40004;
@@ -569,8 +568,8 @@ pub(super) struct MemberMenuContext<'a> {
 /// applies to, by the checks its command makes before asking the server
 /// (the server decides the rest; a refused op prints in the room window).
 /// The others are left out. Op, Deop, Voice and Devoice are one change of
-/// the room's power levels for all of them; Verify takes exactly one
-/// member, as one verification runs at a time.
+/// the room's power levels for all of them; Verify asks each, one
+/// verification per user.
 pub(super) fn member_menu_action(
     id: usize,
     members: &[RoomMemberSummary],
@@ -612,7 +611,7 @@ pub(super) fn member_menu_action(
         }
         MENU_ID_MEMBER_WHOIS => each(&all, &|nick| SlashCommand::Whois { nick }),
         MENU_ID_MEMBER_DEVICES => each(&all, &|nick| SlashCommand::Devices { target: Some(nick) }),
-        MENU_ID_MEMBER_VERIFY => each(&|_| members.len() == 1, &|nick| SlashCommand::VerifyStart {
+        MENU_ID_MEMBER_VERIFY => each(&all, &|nick| SlashCommand::VerifyStart {
             target: Some(nick),
             device_id: None,
         }),
@@ -687,55 +686,13 @@ pub(super) fn file_menu_state(connection: ConnectionState) -> FileMenuState {
     }
 }
 
+/// Whether a Tools verification item applies: to the latest flow, as a
+/// `/verify` answer without a name does.
 pub(super) fn verification_menu_action_enabled(
-    last_verification: Option<&VerificationStateEvent>,
+    latest: Option<&Verification>,
     action: VerificationAction,
 ) -> bool {
-    let Some(event) = last_verification else {
-        return false;
-    };
-
-    matches!(
-        (&event.state, action),
-        (
-            VerificationState::Requested,
-            VerificationAction::Accept | VerificationAction::Cancel
-        ) | (
-            VerificationState::Sent
-                | VerificationState::Accepted
-                | VerificationState::Ready
-                | VerificationState::Confirmed,
-            VerificationAction::Cancel
-        ) | (
-            VerificationState::SasReady { .. },
-            VerificationAction::Cancel | VerificationAction::Confirm | VerificationAction::Reject
-        )
-    )
-}
-
-/// The Status window's "Actions:" hint for a verification: the Tools items
-/// that apply now, and their commands.
-pub(super) fn verification_actions_text(
-    last_verification: Option<&VerificationStateEvent>,
-) -> Option<&'static str> {
-    let actions = (
-        verification_menu_action_enabled(last_verification, VerificationAction::Accept),
-        verification_menu_action_enabled(last_verification, VerificationAction::Cancel),
-        verification_menu_action_enabled(last_verification, VerificationAction::Confirm),
-        verification_menu_action_enabled(last_verification, VerificationAction::Reject),
-    );
-
-    match actions {
-        (true, true, false, false) => Some(
-            "Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel",
-        ),
-        (false, true, false, false) => Some("Tools > Cancel Verification, /verify cancel"),
-        (false, true, true, true) => Some(
-            "Tools > Confirm SAS, Tools > Reject SAS, Tools > Cancel Verification, /verify confirm, /verify reject, /verify cancel",
-        ),
-        (false, false, false, false) => None,
-        _ => unreachable!("verification action text must match the menu action predicate"),
-    }
+    latest.is_some_and(|latest| verification_action_applies(&latest.state, action))
 }
 
 #[cfg(test)]
@@ -1367,8 +1324,19 @@ mod tests {
                 target: vic.user_id.clone()
             }])
         );
-        // One verification at a time.
-        assert!(act(MENU_ID_MEMBER_VERIFY).is_empty());
+        // One verification per user, each under way at once.
+        assert_eq!(
+            act(MENU_ID_MEMBER_VERIFY),
+            commands(
+                ids(&[&bob, &vic, &op])
+                    .into_iter()
+                    .map(|nick| SlashCommand::VerifyStart {
+                        target: Some(nick),
+                        device_id: None,
+                    })
+                    .collect()
+            )
+        );
         assert_eq!(
             act(MENU_ID_MEMBER_MENTION),
             MemberMenuAction::Mention(vec!["bob".into(), "vic".into(), "op".into()])

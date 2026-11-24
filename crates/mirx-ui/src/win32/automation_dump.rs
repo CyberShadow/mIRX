@@ -8,8 +8,11 @@ use super::colors::automation::colorref_hex;
 use super::hotlinks::LinkKind;
 use super::settings::{ActivityColors, Settings};
 use super::timeline_layout::{line_nick_color, timeline_row_color};
+use super::verification::Verification;
 use super::*;
-use crate::automation::{UiActivityColors, UiColorItem, UiColors, UiNickColor, UiRefreshCounters};
+use crate::automation::{
+    DumpVerification, UiActivityColors, UiColorItem, UiColors, UiNickColor, UiRefreshCounters,
+};
 
 pub(super) unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenuState, String> {
     let menu = state_ref(hwnd).controls.member_menu;
@@ -38,29 +41,27 @@ pub(super) unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenu
     })
 }
 
+fn dump_verification(verification: &Verification) -> DumpVerification {
+    DumpVerification {
+        flow_id: verification.flow_id.clone(),
+        user_id: verification.user_id.clone(),
+        device_id: verification.device_id.clone(),
+        outgoing: verification.outgoing,
+        state: verification.state.clone(),
+    }
+}
+
 pub(super) unsafe fn dump_verification_menu_state(
     hwnd: HWND,
 ) -> Result<DumpVerificationMenuState, String> {
     refresh_tools_menu_state(hwnd, state_ref(hwnd).controls.tools_menu)?;
 
-    let last_verification = state_ref(hwnd).model.last_verification.as_ref();
+    let latest = state_ref(hwnd).model.verifications.latest();
     Ok(DumpVerificationMenuState {
-        accept_enabled: verification_menu_action_enabled(
-            last_verification,
-            VerificationAction::Accept,
-        ),
-        cancel_enabled: verification_menu_action_enabled(
-            last_verification,
-            VerificationAction::Cancel,
-        ),
-        confirm_sas_enabled: verification_menu_action_enabled(
-            last_verification,
-            VerificationAction::Confirm,
-        ),
-        reject_sas_enabled: verification_menu_action_enabled(
-            last_verification,
-            VerificationAction::Reject,
-        ),
+        accept_enabled: verification_menu_action_enabled(latest, VerificationAction::Accept),
+        cancel_enabled: verification_menu_action_enabled(latest, VerificationAction::Cancel),
+        confirm_sas_enabled: verification_menu_action_enabled(latest, VerificationAction::Confirm),
+        reject_sas_enabled: verification_menu_action_enabled(latest, VerificationAction::Reject),
     })
 }
 
@@ -1293,10 +1294,7 @@ pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
                 recovery_key_present: true,
             },
         ),
-        last_verification: model
-            .last_verification
-            .as_ref()
-            .map(dump_verification_from_state_event),
+        verifications: model.verifications.iter().map(dump_verification).collect(),
         identity_warnings: dump_identity_warnings(model),
         submitted_membership_commands: submitted_membership_commands_from_state(state),
         submitted_member_moderation_commands: submitted_member_moderation_commands_from_state(

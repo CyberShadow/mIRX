@@ -1,9 +1,20 @@
 [
   "Started",
   {
+    "VerificationRequest": {
+      "flow_id": "flow-verify-cancelled",
+      "user_id": "@alice:example",
+      "direction": {
+        "type": "incoming",
+        "from_device": "ALICEDEVICE"
+      }
+    }
+  },
+  {
     "VerificationState": {
       "flow_id": "flow-verify-cancelled",
       "user_id": "@alice:example",
+      "device_id": "ALICEDEVICE",
       "state": {
         "state": "cancelled",
         "reason": "timed out waiting for confirmation",

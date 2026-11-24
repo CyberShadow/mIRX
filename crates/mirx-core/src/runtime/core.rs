@@ -33,9 +33,9 @@ use tokio::task::JoinHandle;
 
 use super::commands::{LaneCommand, Route, identity_reset_ended, route};
 use super::jobs::{Finished, Jobs, Lane, Owes, Work};
-use super::lifecycle::{self, SignInEnd};
+use super::lifecycle::{self, Handlers, SignInEnd};
 use super::session::{Followup, IdentityResetEnd, Session, abort_and_join};
-use super::{EventSender, RoomSnapshots, emit_error, emit_event, emit_invalid_state};
+use super::{EventSender, emit_error, emit_event, emit_invalid_state};
 use crate::api::{
     Command, CommandId, CoreConfig, Event, LoginRequest, LogoutRefusal, LogoutRequest, LogoutScope,
     Operation, RestoreSessionRequest, SyncStopReason,
@@ -98,7 +98,7 @@ struct LoggingOut {
 
 struct PendingBrowserLogin {
     client: Client,
-    snapshots: RoomSnapshots,
+    handlers: Handlers,
     flow: BrowserFlow,
     /// The listener, answering until the browser's request for the
     /// redirect URI; it closes its port when it ends.
@@ -107,6 +107,10 @@ struct PendingBrowserLogin {
 }
 
 /// What the actor does next.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one value at a time, on the actor's stack for one turn: boxing the command would allocate per command for nothing"
+)]
 enum Next {
     Command(Option<(CommandId, Command)>),
     Job(Finished<Followup>),
@@ -264,7 +268,6 @@ impl Core {
         let session = self.state.session();
         match output {
             Followup::Done => {}
-            Followup::Watch(flow, watcher) => session.watch(&flow, watcher),
             Followup::IdentityResetStarted(started) => session.begin_identity_reset(*started),
         }
         if let Owes::Ack(id) = owes {
@@ -331,7 +334,7 @@ impl Core {
                 emit_event(&self.events, Event::SignInUrl { url: ready.url });
                 self.state = Lifecycle::AwaitingBrowser(Box::new(PendingBrowserLogin {
                     client: ready.client,
-                    snapshots: ready.snapshots,
+                    handlers: ready.handlers,
                     flow: ready.flow,
                     redirect,
                     start_sync: ready.start_sync,
@@ -356,7 +359,7 @@ impl Core {
         };
         let PendingBrowserLogin {
             client,
-            snapshots,
+            handlers,
             flow,
             redirect: _,
             start_sync,
@@ -366,7 +369,7 @@ impl Core {
                 self.state = Lifecycle::SigningIn(SigningIn {
                     transition: Box::pin(lifecycle::finish_browser_login(
                         client,
-                        snapshots,
+                        handlers,
                         flow,
                         redirect,
                         self.events.clone(),

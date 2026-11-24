@@ -3257,6 +3257,7 @@ fn verification_state_event_serializes_with_tagged_state_payload() {
     let event = Event::VerificationState(VerificationStateEvent {
         flow_id: "txn-123".to_owned(),
         user_id: "@alice:example.org".to_owned(),
+        device_id: Some("ALICEDEVICE".to_owned()),
         state: VerificationState::SasReady {
             emojis: vec![VerificationEmoji {
                 symbol: "🐶".to_owned(),
@@ -3273,7 +3274,7 @@ fn verification_state_event_serializes_with_tagged_state_payload() {
     let json = serde_json::to_string(&event).expect("serialize verification state");
     assert_eq!(
         json,
-        r#"{"VerificationState":{"flow_id":"txn-123","user_id":"@alice:example.org","state":{"state":"sas_ready","emojis":[{"symbol":"🐶","description":"Dog"}],"decimals":{"first":1234,"second":5678,"third":9012}}}}"#
+        r#"{"VerificationState":{"flow_id":"txn-123","user_id":"@alice:example.org","device_id":"ALICEDEVICE","state":{"state":"sas_ready","emojis":[{"symbol":"🐶","description":"Dog"}],"decimals":{"first":1234,"second":5678,"third":9012}}}}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize verification state");

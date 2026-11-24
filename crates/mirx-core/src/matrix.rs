@@ -134,6 +134,7 @@ use matrix_sdk_crypto::{CrossSigningStatus, IdentityState, IdentityStatusChange}
 use mime::Mime;
 use serde::Deserialize;
 use tokio::sync::broadcast;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio_stream::StreamMap;
 use url::Url;
 
@@ -2683,6 +2684,7 @@ pub(crate) fn register_event_handlers(
     client: &Client,
     events: EventSender,
     snapshots: &RoomSnapshots,
+    verifications: &VerificationWatch,
 ) {
     let direct_account_data_events = events.clone();
     let direct_snapshots = snapshots.clone();
@@ -2867,14 +2869,14 @@ pub(crate) fn register_event_handlers(
         }
     });
 
-    let verification_events = events.clone();
+    let to_device_verifications = verifications.clone();
     client.add_event_handler(
         move |event: ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent>, client: Client| {
-            let events = verification_events.clone();
+            let verifications = to_device_verifications.clone();
             async move {
-                emit_incoming_verification_request(
+                follow_incoming_verification_request(
                     &client,
-                    &events,
+                    &verifications,
                     &event.sender,
                     event.content.transaction_id.as_str(),
                     &event.content.from_device,
@@ -2886,9 +2888,9 @@ pub(crate) fn register_event_handlers(
 
     // Another user verifying you (Element's "Verify user") asks in your DM,
     // with a room message whose event ID is the flow ID.
-    let room_verification_events = events.clone();
+    let room_verifications = verifications.clone();
     client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, client: Client| {
-        let events = room_verification_events.clone();
+        let verifications = room_verifications.clone();
         async move {
             let MessageType::VerificationRequest(content) = &event.content.msgtype else {
                 return;
@@ -2898,9 +2900,9 @@ pub(crate) fn register_event_handlers(
             if content.to != own_user_id || event.sender == own_user_id {
                 return;
             }
-            emit_incoming_verification_request(
+            follow_incoming_verification_request(
                 &client,
-                &events,
+                &verifications,
                 &event.sender,
                 event.event_id.as_str(),
                 &content.from_device,
@@ -2910,13 +2912,14 @@ pub(crate) fn register_event_handlers(
     });
 }
 
-/// Announces a request another session sent this one, once the SDK holds
-/// it as pending. The SDK drops requests older than ten minutes, which a
+/// Hands the session's verification task a request another session sent
+/// this one, once the SDK holds it as pending: the task announces it and
+/// follows it. The SDK drops requests older than ten minutes, which a
 /// first sync replays; one done, cancelled or answered by another of your
 /// sessions (passive) needs no answer from this one.
-async fn emit_incoming_verification_request(
+async fn follow_incoming_verification_request(
     client: &Client,
-    events: &EventSender,
+    verifications: &VerificationWatch,
     sender: &UserId,
     flow_id: &str,
     from_device: &DeviceId,
@@ -2931,15 +2934,15 @@ async fn emit_incoming_verification_request(
     if request.is_done() || request.is_cancelled() || request.is_passive() {
         return;
     }
-    emit_event(
-        events,
-        Event::VerificationRequest(VerificationRequest {
+    verifications.follow(
+        VerificationRequest {
             flow_id: flow_id.to_owned(),
             user_id: sender.to_string(),
             direction: VerificationDirection::Incoming {
                 from_device: from_device.to_string(),
             },
-        }),
+        },
+        request,
     );
 }
 
@@ -4031,14 +4034,114 @@ fn room_typing_from_sync_typing(room_id: &str, event: &SyncTypingEvent) -> RoomT
     }
 }
 
-fn verification_state_event(
-    flow: &VerificationFlowId,
-    state: VerificationState,
-) -> VerificationStateEvent {
-    VerificationStateEvent {
-        flow_id: flow.flow_id.clone(),
-        user_id: flow.user_id.clone(),
-        state,
+/// A new flow for the session's verification task: its announcement, and
+/// the SDK's request it follows.
+pub(crate) struct NewVerificationFlow {
+    announcement: VerificationRequest,
+    request: MatrixVerificationRequest,
+}
+
+/// Hands new flows to the session's verification task: the event
+/// handlers the requests other sessions send, the `RequestVerification`
+/// job the ones this session sends.
+#[derive(Clone)]
+pub(crate) struct VerificationWatch(UnboundedSender<NewVerificationFlow>);
+
+/// The flows `VerificationWatch` hands over, for `verification_task`.
+pub(crate) type NewVerificationFlows = UnboundedReceiver<NewVerificationFlow>;
+
+pub(crate) fn verification_watch() -> (VerificationWatch, NewVerificationFlows) {
+    let (sender, receiver) = unbounded_channel();
+    (VerificationWatch(sender), receiver)
+}
+
+impl VerificationWatch {
+    /// An outgoing flow's job has announced it (before its ack); the task
+    /// announces an incoming one.
+    pub(crate) fn follow(
+        &self,
+        announcement: VerificationRequest,
+        request: MatrixVerificationRequest,
+    ) {
+        self.0
+            .send(NewVerificationFlow {
+                announcement,
+                request,
+            })
+            .unwrap_or_else(|_| panic!("the session's verification task outlives its senders"));
+    }
+}
+
+/// Follows every flow the session hears of from its announcement to its
+/// end, one watcher each: every state the UI sees comes from the flow's
+/// watcher, none from the commands that answer it. An incoming request
+/// the SDK hands over twice is announced and followed once.
+pub(crate) async fn verification_task(mut new_flows: NewVerificationFlows, events: EventSender) {
+    let mut followed = BTreeSet::new();
+    let mut watchers = futures_util::stream::FuturesUnordered::new();
+    loop {
+        tokio::select! {
+            new = new_flows.recv() => {
+                let NewVerificationFlow { announcement, request } =
+                    new.expect("the session holds a verification watch");
+                let flow = FollowedFlow::of(&announcement);
+                if !followed.insert(flow.key()) {
+                    continue;
+                }
+                if matches!(announcement.direction, VerificationDirection::Incoming { .. }) {
+                    emit_event(&events, Event::VerificationRequest(announcement));
+                }
+                let events = events.clone();
+                watchers.push(async move {
+                    let key = flow.key();
+                    watch_verification_request(request, flow, events).await;
+                    key
+                });
+            }
+            Some(ended) = watchers.next() => {
+                followed.remove(&ended);
+            }
+        }
+    }
+}
+
+/// A flow a watcher follows, and the other side's session once known:
+/// every event it reports from then on names it.
+struct FollowedFlow {
+    id: VerificationFlowId,
+    device_id: Option<String>,
+}
+
+impl FollowedFlow {
+    fn of(announcement: &VerificationRequest) -> Self {
+        Self {
+            id: VerificationFlowId {
+                flow_id: announcement.flow_id.clone(),
+                user_id: announcement.user_id.clone(),
+            },
+            device_id: match &announcement.direction {
+                VerificationDirection::Incoming { from_device } => Some(from_device.clone()),
+                VerificationDirection::Outgoing { to_device } => to_device.clone(),
+            },
+        }
+    }
+
+    fn key(&self) -> (String, String) {
+        (self.id.user_id.clone(), self.id.flow_id.clone())
+    }
+
+    /// The session that answered, when the SDK names it.
+    fn learn_device(&mut self, device_id: &DeviceId) {
+        self.device_id = Some(device_id.to_string());
+    }
+
+    fn event(&self, state: VerificationState) -> VerificationStateEvent {
+        VerificationStateEvent {
+            flow_id: self.id.flow_id.clone(),
+            user_id: self.id.user_id.clone(),
+            device_id: self.device_id.clone(),
+            state,
+        }
     }
 }
 
@@ -4084,8 +4187,8 @@ pub(crate) async fn lookup_sas_verification(
 
 /// Starts the verification `request` names (see
 /// `RequestVerificationRequest`), offering SAS only: mirx cannot show a QR
-/// code. Returns the announcement and the SDK's flow, which the caller
-/// watches for the other side's answer.
+/// code. Returns the announcement and the SDK's flow, which the session's
+/// verification task follows.
 pub(crate) async fn request_verification(
     client: &Client,
     request: &RequestVerificationRequest,
@@ -4176,97 +4279,74 @@ pub(crate) async fn request_verification(
     Ok((announcement, flow))
 }
 
+/// Accepts an incoming request, offering SAS; its watcher starts SAS
+/// once the request is ready.
 pub(crate) async fn accept_verification(
     client: &Client,
     flow: &VerificationFlowId,
-) -> Result<VerificationStateEvent, MatrixCoreError> {
-    let request = lookup_verification_request(client, flow).await?;
-    request
+) -> Result<(), MatrixCoreError> {
+    lookup_verification_request(client, flow)
+        .await?
         .accept_with_methods(vec![VerificationMethod::SasV1])
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to accept verification: {err}")))?;
-
-    match request.state() {
-        VerificationRequestState::Ready { .. } => {
-            request.start_sas().await.map_err(|err| {
-                MatrixCoreError::new(format!("failed to start SAS verification: {err}"))
-            })?;
-            Ok(verification_state_event(flow, VerificationState::Ready))
-        }
-        VerificationRequestState::Done => {
-            Ok(verification_state_event(flow, VerificationState::Done))
-        }
-        VerificationRequestState::Cancelled(cancel_info) => {
-            Ok(verification_state_event(flow, map_cancel_info(cancel_info)))
-        }
-        VerificationRequestState::Created { .. }
-        | VerificationRequestState::Requested { .. }
-        | VerificationRequestState::Transitioned { .. } => {
-            Ok(verification_state_event(flow, VerificationState::Accepted))
-        }
-    }
+        .map_err(|err| MatrixCoreError::new(format!("failed to accept verification: {err}")))
 }
 
+/// Cancels the flow's SAS, or its request before there is one.
 pub(crate) async fn cancel_verification(
     client: &Client,
     flow: &VerificationFlowId,
-) -> Result<VerificationStateEvent, MatrixCoreError> {
+) -> Result<(), MatrixCoreError> {
     if let Ok(sas) = lookup_sas_verification(client, flow).await {
-        sas.cancel().await.map_err(|err| {
+        return sas.cancel().await.map_err(|err| {
             MatrixCoreError::new(format!("failed to cancel SAS verification: {err}"))
-        })?;
-        return cancelled_sas_state_event(flow, &sas);
+        });
     }
-
-    let request = lookup_verification_request(client, flow).await?;
-    request.cancel().await.map_err(|err| {
-        MatrixCoreError::new(format!("failed to cancel verification request: {err}"))
-    })?;
-    cancelled_request_state_event(flow, &request)
+    lookup_verification_request(client, flow)
+        .await?
+        .cancel()
+        .await
+        .map_err(|err| {
+            MatrixCoreError::new(format!("failed to cancel verification request: {err}"))
+        })
 }
 
 pub(crate) async fn confirm_verification_sas(
     client: &Client,
     flow: &VerificationFlowId,
-) -> Result<VerificationStateEvent, MatrixCoreError> {
-    let sas = lookup_sas_verification(client, flow).await?;
-    sas.confirm().await.map_err(|err| {
-        MatrixCoreError::new(format!("failed to confirm SAS verification: {err}"))
-    })?;
-
-    match sas.state() {
-        SasState::Done { .. } => Ok(verification_state_event(flow, VerificationState::Done)),
-        SasState::Cancelled(cancel_info) => {
-            Ok(verification_state_event(flow, map_cancel_info(cancel_info)))
-        }
-        _ => Ok(verification_state_event(flow, VerificationState::Confirmed)),
-    }
+) -> Result<(), MatrixCoreError> {
+    lookup_sas_verification(client, flow)
+        .await?
+        .confirm()
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to confirm SAS verification: {err}")))
 }
 
 pub(crate) async fn reject_verification_sas(
     client: &Client,
     flow: &VerificationFlowId,
-) -> Result<VerificationStateEvent, MatrixCoreError> {
-    let sas = lookup_sas_verification(client, flow).await?;
-    sas.mismatch()
+) -> Result<(), MatrixCoreError> {
+    lookup_sas_verification(client, flow)
+        .await?
+        .mismatch()
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to reject SAS verification: {err}")))?;
-    cancelled_sas_state_event(flow, &sas)
+        .map_err(|err| MatrixCoreError::new(format!("failed to reject SAS verification: {err}")))
 }
 
 /// Follows a request's flow until it ends. Either side may start SAS once
 /// both are ready: this session starts it on Ready, and accepts one the
 /// other side started; the SDK settles a start race, replacing one SAS by
-/// the other.
-pub(crate) async fn watch_verification_request(
+/// the other. Failing to start or accept SAS is reported, and the watch
+/// goes on: the other side may start it, and either side may cancel.
+async fn watch_verification_request(
     request: MatrixVerificationRequest,
-    flow: VerificationFlowId,
+    mut flow: FollowedFlow,
     events: EventSender,
 ) {
     let mut state = request.state();
     let mut changes = request.changes();
-    // `Event::VerificationRequest` announced the flow, as requested or sent.
-    if let Some(event) = map_request_state(&flow, state.clone())
+    // The announcement told the flow as requested or sent.
+    if let Some(event) = map_request_state(&mut flow, state.clone())
         && !matches!(
             event.state,
             VerificationState::Requested | VerificationState::Sent
@@ -4286,7 +4366,6 @@ pub(crate) async fn watch_verification_request(
                         &events,
                         format!("failed to start SAS verification: {err}"),
                     );
-                    return;
                 }
             }
             VerificationRequestState::Transitioned { verification } => {
@@ -4299,7 +4378,8 @@ pub(crate) async fn watch_verification_request(
                     );
                     return;
                 };
-                let Some(replaced) = follow_sas(&sas, &flow, &events, &mut changes).await else {
+                let Some(replaced) = follow_sas(&sas, &mut flow, &events, &mut changes).await
+                else {
                     return;
                 };
                 state = replaced;
@@ -4311,7 +4391,7 @@ pub(crate) async fn watch_verification_request(
         let Some(next) = changes.next().await else {
             return;
         };
-        if let Some(event) = map_request_state(&flow, next.clone()) {
+        if let Some(event) = map_request_state(&mut flow, next.clone()) {
             emit_event(&events, Event::VerificationState(event));
         }
         state = next;
@@ -4322,17 +4402,17 @@ pub(crate) async fn watch_verification_request(
 /// to another one: the other side's, which won a start race.
 async fn follow_sas(
     sas: &MatrixSasVerification,
-    flow: &VerificationFlowId,
+    flow: &mut FollowedFlow,
     events: &EventSender,
     request_changes: &mut (impl futures_util::Stream<Item = VerificationRequestState> + Unpin),
 ) -> Option<VerificationRequestState> {
+    flow.learn_device(sas.other_device().device_id());
     // The other side started it. Accepting goes on to the key exchange; the
     // user still compares the emoji before anything is verified.
     if matches!(sas.state(), SasState::Started { .. })
         && let Err(err) = sas.accept().await
     {
         emit_verification_error(events, format!("failed to accept SAS verification: {err}"));
-        return None;
     }
     if let Some(event) = map_sas_verification(flow, sas)
         && emit_verification_state(events, event)
@@ -4362,27 +4442,6 @@ async fn follow_sas(
     }
 }
 
-pub(crate) async fn watch_sas_verification(
-    sas: MatrixSasVerification,
-    flow: VerificationFlowId,
-    events: EventSender,
-) {
-    if let Some(event) = map_sas_verification(&flow, &sas)
-        && emit_verification_state(&events, event)
-    {
-        return;
-    }
-
-    let mut changes = sas.changes();
-    while let Some(state) = changes.next().await {
-        if let Some(event) = map_sas_state(&flow, state)
-            && emit_verification_state(&events, event)
-        {
-            return;
-        }
-    }
-}
-
 /// Emits the state; whether it ends the flow.
 fn emit_verification_state(events: &EventSender, event: VerificationStateEvent) -> bool {
     let terminal = matches!(
@@ -4404,103 +4463,61 @@ fn emit_verification_error(events: &EventSender, message: String) {
     );
 }
 
-fn cancelled_request_state_event(
-    flow: &VerificationFlowId,
-    request: &MatrixVerificationRequest,
-) -> Result<VerificationStateEvent, MatrixCoreError> {
-    match request.state() {
-        VerificationRequestState::Cancelled(cancel_info) => {
-            Ok(verification_state_event(flow, map_cancel_info(cancel_info)))
-        }
-        _ => request
-            .cancel_info()
-            .map(|cancel_info| verification_state_event(flow, map_cancel_info(cancel_info)))
-            .ok_or_else(|| {
-                MatrixCoreError::new(
-                    "verification request missing cancelled state after cancellation",
-                )
-            }),
-    }
-}
-
-fn cancelled_sas_state_event(
-    flow: &VerificationFlowId,
-    sas: &MatrixSasVerification,
-) -> Result<VerificationStateEvent, MatrixCoreError> {
-    match sas.state() {
-        SasState::Cancelled(cancel_info) => {
-            Ok(verification_state_event(flow, map_cancel_info(cancel_info)))
-        }
-        _ => sas
-            .cancel_info()
-            .map(|cancel_info| verification_state_event(flow, map_cancel_info(cancel_info)))
-            .ok_or_else(|| {
-                MatrixCoreError::new("SAS verification missing cancelled state after cancellation")
-            }),
-    }
-}
-
 fn map_request_state(
-    flow: &VerificationFlowId,
+    flow: &mut FollowedFlow,
     state: VerificationRequestState,
 ) -> Option<VerificationStateEvent> {
     match state {
-        VerificationRequestState::Requested { .. } => {
-            Some(verification_state_event(flow, VerificationState::Requested))
+        VerificationRequestState::Requested {
+            other_device_data, ..
+        } => {
+            flow.learn_device(other_device_data.device_id());
+            Some(flow.event(VerificationState::Requested))
         }
-        VerificationRequestState::Ready { .. } => {
-            Some(verification_state_event(flow, VerificationState::Ready))
+        VerificationRequestState::Ready {
+            other_device_data, ..
+        } => {
+            flow.learn_device(other_device_data.device_id());
+            Some(flow.event(VerificationState::Ready))
         }
-        VerificationRequestState::Done => {
-            Some(verification_state_event(flow, VerificationState::Done))
-        }
+        VerificationRequestState::Done => Some(flow.event(VerificationState::Done)),
         VerificationRequestState::Cancelled(cancel_info) => {
-            Some(verification_state_event(flow, map_cancel_info(cancel_info)))
+            Some(flow.event(map_cancel_info(cancel_info)))
         }
-        VerificationRequestState::Created { .. } => {
-            Some(verification_state_event(flow, VerificationState::Sent))
-        }
+        VerificationRequestState::Created { .. } => Some(flow.event(VerificationState::Sent)),
         VerificationRequestState::Transitioned { .. } => None,
     }
 }
 
 fn map_sas_verification(
-    flow: &VerificationFlowId,
+    flow: &FollowedFlow,
     sas: &MatrixSasVerification,
 ) -> Option<VerificationStateEvent> {
     if sas.can_be_presented() {
         let decimals = sas.decimals().map(map_decimals)?;
         let emojis = sas.emoji().map(map_emoji_array).unwrap_or_default();
-        return Some(verification_state_event(
-            flow,
-            VerificationState::SasReady { emojis, decimals },
-        ));
+        return Some(flow.event(VerificationState::SasReady { emojis, decimals }));
     }
 
     match sas.state() {
-        SasState::Confirmed => Some(verification_state_event(flow, VerificationState::Confirmed)),
-        SasState::Done { .. } => Some(verification_state_event(flow, VerificationState::Done)),
-        SasState::Cancelled(cancel_info) => {
-            Some(verification_state_event(flow, map_cancel_info(cancel_info)))
-        }
+        SasState::Confirmed => Some(flow.event(VerificationState::Confirmed)),
+        SasState::Done { .. } => Some(flow.event(VerificationState::Done)),
+        SasState::Cancelled(cancel_info) => Some(flow.event(map_cancel_info(cancel_info))),
         _ => None,
     }
 }
 
-fn map_sas_state(flow: &VerificationFlowId, state: SasState) -> Option<VerificationStateEvent> {
+fn map_sas_state(flow: &FollowedFlow, state: SasState) -> Option<VerificationStateEvent> {
     match state {
-        SasState::KeysExchanged { emojis, decimals } => Some(verification_state_event(
-            flow,
-            VerificationState::SasReady {
+        SasState::KeysExchanged { emojis, decimals } => {
+            Some(flow.event(VerificationState::SasReady {
                 emojis: emojis.map(map_emoji_short_auth_string).unwrap_or_default(),
                 decimals: map_decimals(decimals),
-            },
-        )),
-        SasState::Confirmed => Some(verification_state_event(flow, VerificationState::Confirmed)),
-        SasState::Done { .. } => Some(verification_state_event(flow, VerificationState::Done)),
-        SasState::Cancelled(cancel_info) => {
-            Some(verification_state_event(flow, map_cancel_info(cancel_info)))
+            }))
         }
+        SasState::Confirmed => Some(flow.event(VerificationState::Confirmed)),
+        SasState::Done { .. } => Some(flow.event(VerificationState::Done)),
+        SasState::Cancelled(cancel_info) => Some(flow.event(map_cancel_info(cancel_info))),
         SasState::Created { .. } | SasState::Started { .. } | SasState::Accepted { .. } => None,
     }
 }
@@ -6444,6 +6461,20 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    /// The session's event handlers, and the verification flows they hand
+    /// over, which the caller keeps (a handler panics if it cannot hand
+    /// one over).
+    #[must_use]
+    fn register_event_handlers(
+        client: &Client,
+        events: EventSender,
+        snapshots: &RoomSnapshots,
+    ) -> super::NewVerificationFlows {
+        let (verifications, new_flows) = super::verification_watch();
+        super::register_event_handlers(client, events, snapshots, &verifications);
+        new_flows
+    }
+
     use super::edit_message;
     use super::{
         EventBatchLookups, LocalEchoMessageDetails, MessageText, PendingOutgoingKind,
@@ -6460,8 +6491,8 @@ mod tests {
         map_send_queue_update, member_nick, member_target_display_name, member_target_nick,
         message_presentation_and_text_from_serialized_event, outgoing_events_from_local_echo_event,
         own_room_user_profile, owned_event_id_from_str, power_levels_change,
-        reaction_event_content, read_file_bytes, register_event_handlers, remove_highlight_word,
-        restore_session, room_activity_from_member_event, room_activity_from_sync_member,
+        reaction_event_content, read_file_bytes, remove_highlight_word, restore_session,
+        room_activity_from_member_event, room_activity_from_sync_member,
         room_activity_from_sync_message, room_activity_from_sync_topic,
         room_activity_update_from_sync_message_replacement,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
@@ -6741,7 +6772,7 @@ mod tests {
                 .build()
                 .await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
+            let _flows = register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             restore_session(
                 &client,
                 StoredSession {
@@ -11537,7 +11568,7 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
+            let _flows = register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             let state_events = serde_json::json!([
                 { "type": "m.room.create", "state_key": "", "sender": "@example:localhost", "event_id": "$create:localhost", "origin_server_ts": 1u64, "content": { "creator": "@example:localhost" } },
                 { "type": "m.room.power_levels", "state_key": "", "sender": "@example:localhost", "event_id": "$power:localhost", "origin_server_ts": 2u64, "content": { "users": { "@example:localhost": 100 } }, "unsigned": { "prev_content": { "users": {} } } },
@@ -11844,7 +11875,8 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
+            let _flows =
+                register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             let mut room = JoinedRoomBuilder::new(room_id().as_ref());
             for event in counted_message_like_events() {
                 room = room.add_timeline_event(raw_sync_timeline_event(event));
@@ -11893,7 +11925,8 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = session_client(&mock_server).await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
+            let _flows =
+                register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             sync_and_refresh_members(
                 &mock_server,
                 &client,
@@ -11977,7 +12010,8 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
+            let _flows =
+                register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             sync_and_refresh_members(
                 &mock_server,
                 &client,
@@ -12115,7 +12149,8 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
+            let _flows =
+                register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             let state_events = profile_test_state_events();
 
             sync_and_refresh_members(
@@ -13389,7 +13424,7 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events, &RoomSnapshots::default());
+            let _flows = register_event_handlers(&client, events, &RoomSnapshots::default());
             let state_events = profile_test_state_events();
 
             // No `m.push_rules` account data: the SDK applies the server
@@ -13782,7 +13817,8 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
+            let _flows =
+                register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             let levels = |actor: i64| {
                 serde_json::json!({
                     "kick": 50, "ban": 50, "users_default": 0,
@@ -14079,7 +14115,8 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
+            let _flows =
+                register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             sync_and_refresh_members(
                 &mock_server,
                 &client,
@@ -14640,7 +14677,7 @@ mod tests {
                 .await;
             let (events, event_rx) = mpsc::channel();
             let snapshots = RoomSnapshots::default();
-            register_event_handlers(&client, events.clone(), &snapshots);
+            let _flows = register_event_handlers(&client, events.clone(), &snapshots);
             // The session's first room list is out: the handler re-lists.
             super::emit_room_snapshot(&client, &snapshots, &events)
                 .await
@@ -15148,7 +15185,7 @@ mod tests {
                 Vec::<String>::new()
             );
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events, &RoomSnapshots::default());
+            let _flows = register_event_handlers(&client, events, &RoomSnapshots::default());
 
             sync_ignored_users(
                 &mock_server,
@@ -15187,7 +15224,7 @@ mod tests {
                 .await;
             mock_server.sync_joined_room(&client, &room_id()).await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
+            let _flows = register_event_handlers(&client, events.clone(), &RoomSnapshots::default());
             client.event_cache().subscribe().expect("subscribe the event cache");
             let read_state_task = tokio::task::spawn_local(super::room_read_state_update_task(
                 client.clone(),
@@ -17842,8 +17879,9 @@ mod tests {
         use matrix_sdk::ruma::{DeviceId, owned_device_id, owned_user_id};
 
         use super::super::{
-            accept_verification, confirm_verification_sas, lookup_verification_request,
-            request_verification, watch_verification_request,
+            VerificationWatch, accept_verification, cancel_verification, confirm_verification_sas,
+            lookup_verification_request, request_verification, verification_task,
+            verification_watch,
         };
         use super::*;
         use crate::api::{RequestVerificationRequest, VerificationStateEvent};
@@ -17854,6 +17892,23 @@ mod tests {
                 .build()
                 .expect("build tokio runtime")
                 .block_on(future)
+        }
+
+        /// `block_on` in a `LocalSet`, where the verification tasks run.
+        fn block_on_local<F: std::future::Future>(future: F) -> F::Output {
+            block_on(tokio::task::LocalSet::new().run_until(future))
+        }
+
+        /// `client`'s event handlers, and the session's verification task
+        /// following the requests they hand over.
+        fn follow_verifications(client: &Client, events: EventSender) {
+            let flows = register_event_handlers(client, events.clone(), &RoomSnapshots::default());
+            tokio::task::spawn_local(verification_task(flows, events));
+        }
+
+        /// Lets the verification tasks take what they were handed.
+        async fn settle() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
         fn now_ms() -> u64 {
@@ -17893,12 +17948,12 @@ mod tests {
 
         #[test]
         fn in_room_verification_request_emits_incoming_request() {
-            block_on(async {
+            block_on_local(async {
                 let server = MatrixMockServer::new().await;
                 server.mock_crypto_endpoints_preset().await;
                 let (alice, _bob) = server.set_up_alice_and_bob_for_encryption().await;
                 let (events, event_rx) = mpsc::channel();
-                register_event_handlers(&alice, events, &RoomSnapshots::default());
+                follow_verifications(&alice, events);
 
                 server
                     .sync_room(
@@ -17913,6 +17968,7 @@ mod tests {
                         ),
                     )
                     .await;
+                settle().await;
 
                 let got = drain_events(&event_rx);
                 assert_eq!(
@@ -17943,12 +17999,12 @@ mod tests {
 
         #[test]
         fn in_room_verification_requests_to_others_or_stale_emit_nothing() {
-            block_on(async {
+            block_on_local(async {
                 let server = MatrixMockServer::new().await;
                 server.mock_crypto_endpoints_preset().await;
                 let (alice, _bob) = server.set_up_alice_and_bob_for_encryption().await;
                 let (events, event_rx) = mpsc::channel();
-                register_event_handlers(&alice, events, &RoomSnapshots::default());
+                follow_verifications(&alice, events);
 
                 // The SDK drops a request older than ten minutes.
                 let eleven_minutes_ago = now_ms() - 11 * 60 * 1000;
@@ -17970,6 +18026,7 @@ mod tests {
                             ))),
                     )
                     .await;
+                settle().await;
 
                 let got = drain_events(&event_rx);
                 assert_eq!(
@@ -17981,12 +18038,12 @@ mod tests {
 
         #[test]
         fn to_device_verification_request_emits_incoming_request_once_pending() {
-            block_on(async {
+            block_on_local(async {
                 let server = MatrixMockServer::new().await;
                 server.mock_crypto_endpoints_preset().await;
                 let (alice, _bob) = server.set_up_alice_and_bob_for_encryption().await;
                 let (events, event_rx) = mpsc::channel();
-                register_event_handlers(&alice, events, &RoomSnapshots::default());
+                follow_verifications(&alice, events);
 
                 let request = |transaction_id: &str, timestamp: u64| {
                     serde_json::from_value(serde_json::json!({
@@ -18009,6 +18066,7 @@ mod tests {
                             .add_to_device_event(request("txn-stale", 1_700_000_000_000));
                     })
                     .await;
+                settle().await;
 
                 let got = drain_events(&event_rx);
                 assert_eq!(
@@ -18288,6 +18346,43 @@ mod tests {
         /// homeserver queues them for the recipient's next sync.
         type ToDeviceInbox = Arc<Mutex<BTreeMap<(String, String), Vec<serde_json::Value>>>>;
 
+        /// Queues every to-device message `client` sends, and answers its
+        /// syncs with the messages waiting for it. Not the SDK's scoped
+        /// sync mocks: their guards can deactivate the wrong mock (see
+        /// wiremock-scoped-mock-priority-bug), and a sync meant for one
+        /// client then answers another.
+        async fn relay_to_device(server: &MatrixMockServer, client: &Client, inbox: ToDeviceInbox) {
+            let token = client.access_token().expect("an access token");
+            let key = (
+                client.user_id().expect("signed in").to_string(),
+                client.device_id().expect("a device").to_string(),
+            );
+            let syncs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let waiting = inbox.clone();
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+                .and(wiremock::matchers::header(
+                    "authorization",
+                    format!("Bearer {token}").as_str(),
+                ))
+                .respond_with(move |_: &wiremock::Request| {
+                    let events = waiting
+                        .lock()
+                        .expect("inbox lock")
+                        .remove(&key)
+                        .unwrap_or_default();
+                    let batch = syncs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "next_batch": format!("relay-{batch}"),
+                        "to_device": { "events": events },
+                    }))
+                })
+                .with_priority(1)
+                .mount(server.server())
+                .await;
+            relay_to_device_from(server, client, inbox).await;
+        }
+
         /// Queues every to-device message `sender` sends.
         async fn relay_to_device_from(
             server: &MatrixMockServer,
@@ -18332,46 +18427,98 @@ mod tests {
         }
 
         /// Syncs the recipient its waiting messages; whether there were any.
-        async fn deliver_to_device(
-            server: &MatrixMockServer,
-            recipient: &Client,
-            inbox: &ToDeviceInbox,
-        ) -> bool {
+        async fn deliver_to_device(recipient: &Client, inbox: &ToDeviceInbox) -> bool {
             let key = (
                 recipient.user_id().expect("signed in").to_string(),
                 recipient.device_id().expect("a device").to_string(),
             );
-            let messages = inbox.lock().expect("inbox lock").remove(&key);
-            let Some(messages) = messages else {
+            if !inbox.lock().expect("inbox lock").contains_key(&key) {
                 return false;
-            };
-            server
-                .mock_sync()
-                .ok_and_run(recipient, |builder| {
-                    for message in messages {
-                        builder.add_to_device_event(message);
-                    }
-                })
-                .await;
+            }
+            recipient
+                .sync_once(Default::default())
+                .await
+                .expect("the recipient syncs");
             true
         }
 
-        fn sas_ready_decimals(events: &[Event]) -> Option<VerificationDecimals> {
-            events.iter().find_map(|event| match event {
-                Event::VerificationState(VerificationStateEvent {
-                    state: VerificationState::SasReady { decimals, .. },
-                    ..
-                }) => Some(decimals.clone()),
-                _ => None,
+        /// The states a client's events report, by flow.
+        fn states(events: &[Event]) -> Vec<&VerificationStateEvent> {
+            events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::VerificationState(state) => Some(state),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn sas_ready<'e>(events: &'e [Event], flow_id: &str) -> Option<&'e VerificationStateEvent> {
+            states(events).into_iter().find(|event| {
+                event.flow_id == flow_id
+                    && matches!(event.state, VerificationState::SasReady { .. })
             })
         }
 
+        fn decimals(event: &VerificationStateEvent) -> &VerificationDecimals {
+            let VerificationState::SasReady { decimals, .. } = &event.state else {
+                panic!("not a SAS: {event:?}");
+            };
+            decimals
+        }
+
+        fn dones(events: &[Event], flow_id: &str) -> usize {
+            states(events)
+                .into_iter()
+                .filter(|event| event.flow_id == flow_id && event.state == VerificationState::Done)
+                .count()
+        }
+
+        /// `client`'s verification task, which `RequestVerification` hands
+        /// its flow, as the session's job does.
+        fn verification_watch_of(client: &Client, events: EventSender) -> VerificationWatch {
+            let (watch, flows) = verification_watch();
+            super::super::register_event_handlers(
+                client,
+                events.clone(),
+                &RoomSnapshots::default(),
+                &watch,
+            );
+            tokio::task::spawn_local(verification_task(flows, events));
+            watch
+        }
+
+        /// `from` asks `to`'s device, as `/verify <user> <device>` does: its
+        /// task follows the flow. The flow ID.
+        async fn ask(from: &Client, from_watch: &VerificationWatch, to: &Client) -> String {
+            let (announcement, request) = request_verification(
+                from,
+                &verify(
+                    to.user_id().expect("signed in").as_str(),
+                    Some(to.device_id().expect("a device").as_str()),
+                ),
+            )
+            .await
+            .expect("request the device");
+            let flow_id = announcement.flow_id.clone();
+            from_watch.follow(announcement, request);
+            flow_id
+        }
+
+        fn flow(flow_id: &str, user: &Client) -> VerificationFlowId {
+            VerificationFlowId {
+                flow_id: flow_id.to_owned(),
+                user_id: user.user_id().expect("signed in").to_string(),
+            }
+        }
+
         /// Alice asks Bob's device; Bob accepts as mirx does; the watcher
-        /// Alice's request starts sees Bob's ready, starts SAS, and both
-        /// sides reach the same short authentication string.
+        /// of Alice's request sees Bob's ready, starts SAS, and both sides
+        /// reach the same short authentication string. Every state comes
+        /// from the watchers, once, naming the other side's session.
         #[test]
         fn outgoing_request_round_trip_verifies_the_device() {
-            block_on(tokio::task::LocalSet::new().run_until(async {
+            block_on_local(async {
                 let server = MatrixMockServer::new().await;
                 server.mock_crypto_endpoints_preset().await;
                 let (alice, bob) = server.set_up_alice_and_bob_for_encryption().await;
@@ -18381,108 +18528,66 @@ mod tests {
                     .await
                     .expect("query alice's keys");
                 let inbox = ToDeviceInbox::default();
-                relay_to_device_from(&server, &alice, inbox.clone()).await;
-                relay_to_device_from(&server, &bob, inbox.clone()).await;
+                relay_to_device(&server, &alice, inbox.clone()).await;
+                relay_to_device(&server, &bob, inbox.clone()).await;
                 let (alice_events, alice_rx) = mpsc::channel();
                 let (bob_events, bob_rx) = mpsc::channel();
-                register_event_handlers(&bob, bob_events.clone(), &RoomSnapshots::default());
+                let alice_watch = verification_watch_of(&alice, alice_events);
+                follow_verifications(&bob, bob_events);
 
-                let (announcement, request) =
-                    request_verification(&alice, &verify("@bob:example.org", Some("B0B0B0B0B")))
-                        .await
-                        .expect("request bob's device");
-                let alice_flow = VerificationFlowId {
-                    flow_id: announcement.flow_id.clone(),
-                    user_id: announcement.user_id.clone(),
-                };
-                tokio::task::spawn_local(watch_verification_request(
-                    request,
-                    alice_flow,
-                    alice_events,
-                ));
+                let flow_id = ask(&alice, &alice_watch, &bob).await;
 
-                assert!(deliver_to_device(&server, &bob, &inbox).await);
-                let bob_flow = VerificationFlowId {
-                    flow_id: announcement.flow_id.clone(),
-                    user_id: "@alice:example.org".to_owned(),
-                };
+                assert!(deliver_to_device(&bob, &inbox).await);
+                settle().await;
                 assert_eq!(
                     verification_requests(&drain_events(&bob_rx)),
                     vec![&VerificationRequest {
-                        flow_id: announcement.flow_id.clone(),
+                        flow_id: flow_id.clone(),
                         user_id: "@alice:example.org".to_owned(),
                         direction: VerificationDirection::Incoming {
                             from_device: "4L1C3".to_owned(),
                         },
                     }]
                 );
-                accept_verification(&bob, &bob_flow)
+                accept_verification(&bob, &flow(&flow_id, &alice))
                     .await
                     .expect("bob accepts");
-                let bob_request = lookup_verification_request(&bob, &bob_flow)
-                    .await
-                    .expect("bob's flow");
-                tokio::task::spawn_local(watch_verification_request(
-                    bob_request,
-                    bob_flow,
-                    bob_events,
-                ));
 
                 let (mut alice_got, mut bob_got) = (Vec::new(), Vec::new());
-                relay_until_quiet(&server, [&alice, &bob], &inbox).await;
+                relay_until_quiet([&alice, &bob], &inbox).await;
                 alice_got.extend(alice_rx.try_iter());
                 bob_got.extend(bob_rx.try_iter());
 
-                let alice_decimals = sas_ready_decimals(&alice_got)
-                    .unwrap_or_else(|| panic!("alice reaches SAS: {alice_got:?}"));
-                let bob_decimals = sas_ready_decimals(&bob_got)
+                let alice_sas = sas_ready(&alice_got, &flow_id)
+                    .unwrap_or_else(|| panic!("alice reaches SAS: {alice_got:?} {bob_got:?}"));
+                let bob_sas = sas_ready(&bob_got, &flow_id)
                     .unwrap_or_else(|| panic!("bob reaches SAS: {bob_got:?}"));
-                assert_eq!(alice_decimals, bob_decimals);
+                assert_eq!(decimals(alice_sas), decimals(bob_sas));
+                assert_eq!(alice_sas.device_id.as_deref(), Some("B0B0B0B0B"));
+                assert_eq!(bob_sas.device_id.as_deref(), Some("4L1C3"));
                 // Alice's watcher reported Bob's ready before SAS, and never
                 // re-announced the sent request.
                 assert!(
-                    !alice_got.iter().any(|event| matches!(
-                        event,
-                        Event::VerificationState(VerificationStateEvent {
-                            state: VerificationState::Sent | VerificationState::Requested,
-                            ..
-                        })
+                    !states(&alice_got).iter().any(|event| matches!(
+                        event.state,
+                        VerificationState::Sent | VerificationState::Requested
                     )),
                     "{alice_got:?}"
                 );
 
                 // Both compare and confirm: each side now trusts the other's
                 // device, as the SDK says.
-                let alice_flow = VerificationFlowId {
-                    flow_id: announcement.flow_id.clone(),
-                    user_id: "@bob:example.org".to_owned(),
-                };
-                let bob_flow = VerificationFlowId {
-                    flow_id: announcement.flow_id.clone(),
-                    user_id: "@alice:example.org".to_owned(),
-                };
-                confirm_verification_sas(&alice, &alice_flow)
+                confirm_verification_sas(&alice, &flow(&flow_id, &bob))
                     .await
                     .expect("alice confirms");
-                confirm_verification_sas(&bob, &bob_flow)
+                confirm_verification_sas(&bob, &flow(&flow_id, &alice))
                     .await
                     .expect("bob confirms");
-                relay_until_quiet(&server, [&alice, &bob], &inbox).await;
-                let done = |events: &[Event]| {
-                    events.iter().any(|event| {
-                        matches!(
-                            event,
-                            Event::VerificationState(VerificationStateEvent {
-                                state: VerificationState::Done,
-                                ..
-                            })
-                        )
-                    })
-                };
+                relay_until_quiet([&alice, &bob], &inbox).await;
                 let alice_got = alice_rx.try_iter().collect::<Vec<_>>();
                 let bob_got = bob_rx.try_iter().collect::<Vec<_>>();
-                assert!(done(&alice_got), "{alice_got:?}");
-                assert!(done(&bob_got), "{bob_got:?}");
+                assert_eq!(dones(&alice_got, &flow_id), 1, "{alice_got:?}");
+                assert_eq!(dones(&bob_got, &flow_id), 1, "{bob_got:?}");
                 let bobs_device = alice
                     .encryption()
                     .get_device(bob.user_id().expect("bob"), <&DeviceId>::from("B0B0B0B0B"))
@@ -18490,20 +18595,197 @@ mod tests {
                     .expect("store")
                     .expect("bob's device");
                 assert!(bobs_device.is_verified());
-            }));
+            });
+        }
+
+        /// Bob asks Alice's device, then cancels before she answers: her
+        /// session hears it, once, naming his session.
+        #[test]
+        fn an_incoming_request_its_sender_cancels_ends_here_too() {
+            block_on_local(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                let (alice, bob) = server.set_up_alice_and_bob_for_encryption().await;
+                bob.encryption()
+                    .request_user_identity(alice.user_id().expect("alice"))
+                    .await
+                    .expect("query alice's keys");
+                let inbox = ToDeviceInbox::default();
+                relay_to_device(&server, &alice, inbox.clone()).await;
+                relay_to_device(&server, &bob, inbox.clone()).await;
+                let (alice_events, alice_rx) = mpsc::channel();
+                let (bob_events, _bob_rx) = mpsc::channel();
+                follow_verifications(&alice, alice_events);
+                let bob_watch = verification_watch_of(&bob, bob_events);
+
+                let flow_id = ask(&bob, &bob_watch, &alice).await;
+                assert!(deliver_to_device(&alice, &inbox).await);
+                settle().await;
+                assert_eq!(verification_requests(&drain_events(&alice_rx)).len(), 1);
+
+                cancel_verification(&bob, &flow(&flow_id, &alice))
+                    .await
+                    .expect("bob cancels");
+                assert!(deliver_to_device(&alice, &inbox).await);
+                settle().await;
+
+                let got = drain_events(&alice_rx);
+                assert_eq!(
+                    states(&got),
+                    vec![&VerificationStateEvent {
+                        flow_id,
+                        user_id: "@bob:example.org".to_owned(),
+                        device_id: Some("B0B0B0B0B".to_owned()),
+                        state: cancelled_state(
+                            "The user cancelled the verification.",
+                            "m.user",
+                            false
+                        ),
+                    }],
+                    "{got:?}"
+                );
+            });
+        }
+
+        /// The SDK hands a request it already holds over again: the session
+        /// announces and follows it once.
+        #[test]
+        fn a_request_seen_twice_is_announced_once() {
+            block_on_local(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                let (alice, _bob) = server.set_up_alice_and_bob_for_encryption().await;
+                let (events, event_rx) = mpsc::channel();
+                follow_verifications(&alice, events);
+                let request = serde_json::json!({
+                    "type": "m.key.verification.request",
+                    "sender": "@bob:example.org",
+                    "content": {
+                        "from_device": "B0B0B0B0B",
+                        "transaction_id": "txn-twice",
+                        "methods": ["m.sas.v1"],
+                        "timestamp": now_ms(),
+                    }
+                });
+                for _ in 0..2 {
+                    let request = serde_json::from_value(request.clone()).expect("request");
+                    server
+                        .mock_sync()
+                        .ok_and_run(&alice, |builder| {
+                            builder.add_to_device_event(request);
+                        })
+                        .await;
+                    settle().await;
+                }
+
+                let got = drain_events(&event_rx);
+                assert_eq!(verification_requests(&got).len(), 1, "{got:?}");
+                assert!(states(&got).is_empty(), "{got:?}");
+            });
+        }
+
+        /// Bob and Carl each ask Alice's device at once: her session follows
+        /// both flows, each to its own SAS and its own end.
+        #[test]
+        fn two_users_verify_this_session_at_once() {
+            block_on_local(async {
+                let server = MatrixMockServer::new().await;
+                server.mock_crypto_endpoints_preset().await;
+                let (alice, bob) = server.set_up_alice_and_bob_for_encryption().await;
+                let carl = server.set_up_carl_for_encryption(&alice, &bob).await;
+                for peer in [&bob, &carl] {
+                    peer.encryption()
+                        .request_user_identity(alice.user_id().expect("alice"))
+                        .await
+                        .expect("query alice's keys");
+                }
+                alice
+                    .encryption()
+                    .request_user_identity(carl.user_id().expect("carl"))
+                    .await
+                    .expect("query carl's keys");
+                let inbox = ToDeviceInbox::default();
+                for client in [&alice, &bob, &carl] {
+                    relay_to_device(&server, client, inbox.clone()).await;
+                }
+                let (alice_events, alice_rx) = mpsc::channel();
+                let (bob_events, bob_rx) = mpsc::channel();
+                let (carl_events, carl_rx) = mpsc::channel();
+                follow_verifications(&alice, alice_events);
+                let bob_watch = verification_watch_of(&bob, bob_events);
+                let carl_watch = verification_watch_of(&carl, carl_events);
+
+                let bob_flow = ask(&bob, &bob_watch, &alice).await;
+                let carl_flow = ask(&carl, &carl_watch, &alice).await;
+                assert!(deliver_to_device(&alice, &inbox).await);
+                settle().await;
+                let mut alice_got = drain_events(&alice_rx);
+                assert_eq!(
+                    verification_requests(&alice_got)
+                        .into_iter()
+                        .map(|request| (request.flow_id.as_str(), request.user_id.as_str()))
+                        .collect::<Vec<_>>(),
+                    [
+                        (bob_flow.as_str(), "@bob:example.org"),
+                        (carl_flow.as_str(), "@carlg:example.org")
+                    ]
+                );
+
+                accept_verification(&alice, &flow(&bob_flow, &bob))
+                    .await
+                    .expect("alice accepts bob");
+                accept_verification(&alice, &flow(&carl_flow, &carl))
+                    .await
+                    .expect("alice accepts carl");
+                relay_until_quiet([&alice, &bob, &carl], &inbox).await;
+                alice_got.extend(alice_rx.try_iter());
+                let bob_got = bob_rx.try_iter().collect::<Vec<_>>();
+                let carl_got = carl_rx.try_iter().collect::<Vec<_>>();
+
+                let with_bob = sas_ready(&alice_got, &bob_flow).unwrap_or_else(|| {
+                    panic!("SAS with bob: {alice_got:?}\nBOB {bob_got:?}\nCARL {carl_got:?}")
+                });
+                let with_carl = sas_ready(&alice_got, &carl_flow)
+                    .unwrap_or_else(|| panic!("SAS with carl: {alice_got:?}"));
+                assert_eq!(
+                    (with_bob.user_id.as_str(), with_bob.device_id.as_deref()),
+                    ("@bob:example.org", Some("B0B0B0B0B"))
+                );
+                assert_eq!(
+                    (with_carl.user_id.as_str(), with_carl.device_id.as_deref()),
+                    ("@carlg:example.org", Some("CARL_DEVICE"))
+                );
+                assert_eq!(
+                    decimals(with_bob),
+                    decimals(sas_ready(&bob_got, &bob_flow).expect("bob's SAS"))
+                );
+                assert_eq!(
+                    decimals(with_carl),
+                    decimals(sas_ready(&carl_got, &carl_flow).expect("carl's SAS"))
+                );
+
+                for (peer, flow_id) in [(&bob, &bob_flow), (&carl, &carl_flow)] {
+                    confirm_verification_sas(&alice, &flow(flow_id, peer))
+                        .await
+                        .expect("alice confirms");
+                    confirm_verification_sas(peer, &flow(flow_id, &alice))
+                        .await
+                        .expect("the peer confirms");
+                }
+                relay_until_quiet([&alice, &bob, &carl], &inbox).await;
+                let alice_got = alice_rx.try_iter().collect::<Vec<_>>();
+                assert_eq!(dones(&alice_got, &bob_flow), 1, "{alice_got:?}");
+                assert_eq!(dones(&alice_got, &carl_flow), 1, "{alice_got:?}");
+            });
         }
 
         /// Delivers waiting to-device messages, and lets the watchers
         /// answer, until no client has any.
-        async fn relay_until_quiet<const N: usize>(
-            server: &MatrixMockServer,
-            clients: [&Client; N],
-            inbox: &ToDeviceInbox,
-        ) {
+        async fn relay_until_quiet<const N: usize>(clients: [&Client; N], inbox: &ToDeviceInbox) {
             for _ in 0..10 {
                 let mut delivered = false;
                 for client in clients {
-                    delivered |= deliver_to_device(server, client, inbox).await;
+                    delivered |= deliver_to_device(client, inbox).await;
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 if !delivered && inbox.lock().expect("inbox lock").is_empty() {

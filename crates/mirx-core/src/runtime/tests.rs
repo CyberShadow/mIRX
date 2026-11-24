@@ -789,53 +789,6 @@ fn initial_room_members_presence_and_read_states_follow_joined_synced_rooms() {
     );
 }
 
-#[test]
-fn shutdown_state_drops_every_task_inside_the_runtime() {
-    /// Owned by a task like a `Client` clone: dropping it needs the
-    /// runtime, as the SDK store's connection pool does.
-    struct NeedsRuntimeOnDrop(std::rc::Rc<std::cell::Cell<bool>>);
-    impl Drop for NeedsRuntimeOnDrop {
-        fn drop(&mut self) {
-            tokio::runtime::Handle::current();
-            self.0.set(true);
-        }
-    }
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("build tokio runtime");
-    let local = tokio::task::LocalSet::new();
-    let dropped = std::rc::Rc::new(std::cell::Cell::new(false));
-
-    local.block_on(&runtime, async {
-        let client = matrix_sdk::Client::builder()
-            .homeserver_url("http://localhost")
-            .build()
-            .await
-            .expect("build matrix client");
-        let guard = NeedsRuntimeOnDrop(dropped.clone());
-        let (event_tx, _event_rx) = mpsc::channel::<Event>();
-        let mut core = Core::for_client(client, event_tx);
-        let flow = crate::api::VerificationFlowId {
-            user_id: "@alice:example.org".to_owned(),
-            flow_id: "txn-123".to_owned(),
-        };
-        core.session().watch(
-            &flow,
-            Box::pin(async move {
-                let _guard = guard;
-                std::future::pending::<()>().await
-            }),
-        );
-
-        core.stop().await;
-
-        assert!(dropped.get(), "the task is gone when shutdown returns");
-    });
-    drop(local);
-}
-
 /// Runs `core` on its command channel, which `sender` feeds; `send` and
 /// `events` drive it.
 struct RunningCore {

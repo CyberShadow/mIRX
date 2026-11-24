@@ -7,16 +7,16 @@
 //! may print other lines too, such as `-> *Alice* hi`.
 
 use mirx_core::{
-    E2eeIdentityResetOutcome, E2eeRecoveryState, E2eeSessionState, E2eeStatus,
-    VerificationDirection, VerificationRequest, VerificationState, VerificationStateEvent,
+    E2eeIdentityResetOutcome, E2eeRecoveryState, E2eeSessionState, E2eeStatus, VerificationState,
 };
 
 use super::colors::PaletteIndex;
-use super::menus::verification_actions_text;
+use super::commands::VerificationAction;
+use super::verification::{Verification, verification_action_applies};
 use super::{
     e2ee_cross_signing_label, e2ee_local_backup_label, e2ee_recovery_state_label,
     e2ee_server_backup_label, e2ee_session_label, format_verification_emojis,
-    verification_state_event_from_request,
+    verification_action_label,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -285,87 +285,113 @@ fn session_needs_verifying(status: &E2eeStatus) -> bool {
             .is_some_and(|keys| !keys.has_self_signing)
 }
 
-/// A new flow: who asked whom, and the actions that answer it. A flow
-/// with the own user is between your own sessions.
+/// A new flow: who asked whom, the actions that answer it, and the
+/// flows `others` already under way, which now need naming.
 pub(super) fn verification_request(
-    request: &VerificationRequest,
+    verification: &Verification,
     own_user_id: Option<&str>,
+    others: &[String],
 ) -> Vec<String> {
-    let user = &request.user_id;
-    let own = own_user_id == Some(user.as_str());
-    let flow = &request.flow_id;
-    let line = match (&request.direction, own) {
-        (VerificationDirection::Incoming { from_device }, true) => {
-            format!("Verification requested by your other session {from_device} (flow {flow})")
+    let label = verification.label(own_user_id);
+    let own = own_user_id == Some(verification.user_id.as_str());
+    let line = match (verification.outgoing, own, &verification.device_id) {
+        (false, _, _) => format!("Verification requested by {label}"),
+        (true, true, None) => {
+            format!("Verification request sent to {label}; accept it on one of them")
         }
-        (VerificationDirection::Incoming { .. }, false) => {
-            format!("Verification requested by {user} (flow {flow})")
-        }
-        (VerificationDirection::Outgoing { to_device: None }, true) => {
-            "Verification request sent to your other sessions; accept it on one of them".to_owned()
-        }
-        (VerificationDirection::Outgoing { to_device: None }, false) => {
-            format!("Verification request sent to {user}; waiting for them to accept")
-        }
-        (
-            VerificationDirection::Outgoing {
-                to_device: Some(device),
-            },
-            true,
-        ) => {
-            format!("Verification request sent to your session {device}; accept it there")
-        }
-        (
-            VerificationDirection::Outgoing {
-                to_device: Some(device),
-            },
-            false,
-        ) => {
-            format!(
-                "Verification request sent to {user} device {device}; waiting for them to accept"
-            )
+        (true, true, Some(_)) => format!("Verification request sent to {label}; accept it there"),
+        (true, false, _) => {
+            format!("Verification request sent to {label}; waiting for them to accept")
         }
     };
-    let event = verification_state_event_from_request(request.clone());
     let mut lines = vec![line];
-    lines.extend(
-        verification_actions_text(Some(&event)).map(|actions| format!("Actions: {actions}")),
-    );
+    lines.extend(verification_actions(verification, true));
+    if !others.is_empty() {
+        lines.push(format!(
+            "Also under way: {}; /verify <action> <user> [session] answers one of them",
+            others.join(", ")
+        ));
+    }
     lines
 }
 
-pub(super) fn verification(event: &VerificationStateEvent) -> Vec<String> {
-    let user = &event.user_id;
-    let mut lines = match &event.state {
-        VerificationState::Requested => vec![format!(
-            "Verification requested by {user} (flow {})",
-            event.flow_id
-        )],
-        VerificationState::Sent => vec![format!(
-            "Verification request sent to {user}; waiting for them to accept"
-        )],
-        VerificationState::Accepted => vec![format!("Verification accepted with {user}")],
-        VerificationState::Ready => vec![format!("Verification ready with {user}")],
+/// A flow's new state, and the actions that answer it now. `latest`: it
+/// is the latest flow, which the Tools items and the answers without a
+/// name act on.
+pub(super) fn verification(
+    verification: &Verification,
+    own_user_id: Option<&str>,
+    latest: bool,
+) -> Vec<String> {
+    let label = verification.label(own_user_id);
+    let mut lines = match &verification.state {
+        VerificationState::Requested => vec![format!("Verification requested by {label}")],
+        VerificationState::Sent => vec![format!("Verification request sent to {label}")],
+        VerificationState::Ready => vec![format!("Verification ready with {label}")],
         VerificationState::SasReady { emojis, decimals } => vec![
-            format!("Verification with {user}: compare the emoji or the numbers"),
+            format!("Verification with {label}: compare the emoji or the numbers"),
             format!("Emoji: {}", format_verification_emojis(emojis)),
             format!(
                 "Decimals: {}-{}-{}",
                 decimals.first, decimals.second, decimals.third
             ),
         ],
-        VerificationState::Confirmed => vec![format!("Verification confirmed with {user}")],
-        VerificationState::Done => vec![format!("Verification done with {user}: verified")],
+        VerificationState::Confirmed => vec![format!("Verification confirmed with {label}")],
+        VerificationState::Done => vec![format!("Verification done with {label}: verified")],
         VerificationState::Cancelled { reason, code, .. } => {
             vec![format!(
-                "Verification cancelled with {user}: {reason} ({code})"
+                "Verification cancelled with {label}: {reason} ({code})"
             )]
         }
     };
-    lines.extend(
-        verification_actions_text(Some(event)).map(|actions| format!("Actions: {actions}")),
-    );
+    lines.extend(verification_actions(verification, latest));
     lines
+}
+
+/// The `Actions:` hint of a flow: the Tools items and `/verify` answers
+/// that apply now, without a name for the latest flow, named otherwise.
+/// None for a flow that has ended.
+fn verification_actions(verification: &Verification, latest: bool) -> Option<String> {
+    let actions = [
+        VerificationAction::Accept,
+        VerificationAction::Confirm,
+        VerificationAction::Reject,
+        VerificationAction::Cancel,
+    ]
+    .into_iter()
+    .filter(|&action| verification_action_applies(&verification.state, action))
+    .collect::<Vec<_>>();
+    if actions.is_empty() {
+        return None;
+    }
+    let name = if latest {
+        String::new()
+    } else {
+        format!(" {}", verification.name())
+    };
+    let commands = actions
+        .iter()
+        .map(|&action| format!("/verify {}{name}", verification_action_label(action)));
+    let items: Vec<String> = if latest {
+        actions
+            .iter()
+            .map(|&action| format!("Tools > {}", verification_menu_item(action)))
+            .chain(commands)
+            .collect()
+    } else {
+        commands.collect()
+    };
+    Some(format!("Actions: {}", items.join(", ")))
+}
+
+/// The Tools item of an answer, as the menu labels it.
+fn verification_menu_item(action: VerificationAction) -> &'static str {
+    match action {
+        VerificationAction::Accept => "Accept Verification",
+        VerificationAction::Cancel => "Cancel Verification",
+        VerificationAction::Confirm => "Confirm SAS",
+        VerificationAction::Reject => "Reject SAS",
+    }
 }
 
 /// A room key file is being written: the key derivation takes a moment.
@@ -644,129 +670,153 @@ mod tests {
         }
     }
 
-    fn verification_event(state: VerificationState) -> VerificationStateEvent {
-        VerificationStateEvent {
+    fn flow(
+        user_id: &str,
+        device_id: Option<&str>,
+        outgoing: bool,
+        state: VerificationState,
+    ) -> Verification {
+        Verification {
             flow_id: "flow-1".to_owned(),
-            user_id: "@alice:example".to_owned(),
+            user_id: user_id.to_owned(),
+            device_id: device_id.map(str::to_owned),
+            outgoing,
             state,
         }
     }
 
     #[test]
     fn verification_request_lines_name_who_asked_whom() {
-        let request = |user_id: &str, direction| VerificationRequest {
-            flow_id: "flow-1".to_owned(),
-            user_id: user_id.to_owned(),
-            direction,
-        };
-        let incoming = || VerificationDirection::Incoming {
-            from_device: "PHONE".to_owned(),
-        };
         let own = Some("@me:example");
         let accept_or_cancel = "Actions: Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel";
         let cancel = "Actions: Tools > Cancel Verification, /verify cancel";
+        let requested = VerificationState::Requested;
+        let sent = VerificationState::Sent;
         let cases = [
             (
-                request("@alice:example", incoming()),
-                "Verification requested by @alice:example (flow flow-1)",
+                flow("@alice:example", Some("PHONE"), false, requested.clone()),
+                "Verification requested by @alice:example (session PHONE)",
                 accept_or_cancel,
             ),
             (
-                request("@me:example", incoming()),
-                "Verification requested by your other session PHONE (flow flow-1)",
+                flow("@me:example", Some("PHONE"), false, requested),
+                "Verification requested by your session PHONE",
                 accept_or_cancel,
             ),
             (
-                request(
-                    "@me:example",
-                    VerificationDirection::Outgoing { to_device: None },
-                ),
+                flow("@me:example", None, true, sent.clone()),
                 "Verification request sent to your other sessions; accept it on one of them",
                 cancel,
             ),
             (
-                request(
-                    "@me:example",
-                    VerificationDirection::Outgoing {
-                        to_device: Some("PHONE".to_owned()),
-                    },
-                ),
+                flow("@me:example", Some("PHONE"), true, sent.clone()),
                 "Verification request sent to your session PHONE; accept it there",
                 cancel,
             ),
             (
-                request(
-                    "@alice:example",
-                    VerificationDirection::Outgoing { to_device: None },
-                ),
+                flow("@alice:example", None, true, sent.clone()),
                 "Verification request sent to @alice:example; waiting for them to accept",
                 cancel,
             ),
             (
-                request(
-                    "@alice:example",
-                    VerificationDirection::Outgoing {
-                        to_device: Some("LAPTOP".to_owned()),
-                    },
-                ),
-                "Verification request sent to @alice:example device LAPTOP; waiting for them to accept",
+                flow("@alice:example", Some("LAPTOP"), true, sent),
+                "Verification request sent to @alice:example (session LAPTOP); waiting for them to accept",
                 cancel,
             ),
         ];
-        for (request, line, actions) in cases {
+        for (verification, line, actions) in cases {
             assert_eq!(
-                verification_request(&request, own),
+                verification_request(&verification, own, &[]),
                 vec![line.to_owned(), actions.to_owned()],
-                "{request:?}"
+                "{verification:?}"
             );
         }
     }
 
     #[test]
-    fn verification_lines_follow_the_flow() {
-        assert_eq!(
-            verification(&verification_event(VerificationState::Requested)),
-            vec![
-                "Verification requested by @alice:example (flow flow-1)".to_owned(),
-                "Actions: Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel"
-                    .to_owned(),
-            ]
+    fn a_request_names_the_flows_already_under_way() {
+        let carol = flow(
+            "@carol:example",
+            Some("C4R0L"),
+            false,
+            VerificationState::Requested,
         );
         assert_eq!(
-            verification(&verification_event(VerificationState::SasReady {
-                emojis: vec![
-                    VerificationEmoji {
-                        symbol: "🐶".to_owned(),
-                        description: "Dog".to_owned(),
-                    },
-                    VerificationEmoji {
-                        symbol: "🔑".to_owned(),
-                        description: "Key".to_owned(),
-                    },
-                ],
-                decimals: VerificationDecimals {
-                    first: 1234,
-                    second: 5678,
-                    third: 9012,
+            verification_request(&carol, None, &["@bob:example B0B (sas ready)".to_owned()])[2],
+            "Also under way: @bob:example B0B (sas ready); /verify <action> <user> [session] answers one of them"
+        );
+    }
+
+    fn sas() -> VerificationState {
+        VerificationState::SasReady {
+            emojis: vec![
+                VerificationEmoji {
+                    symbol: "🐶".to_owned(),
+                    description: "Dog".to_owned(),
                 },
-            }))[..3],
+                VerificationEmoji {
+                    symbol: "🔑".to_owned(),
+                    description: "Key".to_owned(),
+                },
+            ],
+            decimals: VerificationDecimals {
+                first: 1234,
+                second: 5678,
+                third: 9012,
+            },
+        }
+    }
+
+    #[test]
+    fn verification_lines_follow_the_flow_and_name_its_session() {
+        let alice = |state| flow("@alice:example", Some("PH0NE"), false, state);
+        assert_eq!(
+            verification(&alice(sas()), None, true),
             [
-                "Verification with @alice:example: compare the emoji or the numbers".to_owned(),
-                "Emoji: 🐶 Dog | 🔑 Key".to_owned(),
-                "Decimals: 1234-5678-9012".to_owned(),
+                "Verification with @alice:example (session PH0NE): compare the emoji or the numbers",
+                "Emoji: 🐶 Dog | 🔑 Key",
+                "Decimals: 1234-5678-9012",
+                "Actions: Tools > Confirm SAS, Tools > Reject SAS, Tools > Cancel Verification, /verify confirm, /verify reject, /verify cancel",
             ]
         );
         assert_eq!(
-            verification(&verification_event(VerificationState::Done)),
-            vec!["Verification done with @alice:example: verified".to_owned()]
+            verification(
+                &alice(VerificationState::Ready),
+                Some("@alice:example"),
+                true
+            ),
+            [
+                "Verification ready with your session PH0NE",
+                "Actions: Tools > Cancel Verification, /verify cancel",
+            ]
         );
         assert_eq!(
-            verification(&verification_event(VerificationState::Cancelled {
-                reason: "user cancelled".to_owned(),
-                code: "m.user".to_owned(),
-                cancelled_by_us: false,
-            })),
-            vec!["Verification cancelled with @alice:example: user cancelled (m.user)".to_owned()]
+            verification(&alice(VerificationState::Done), None, false),
+            ["Verification done with @alice:example (session PH0NE): verified"]
+        );
+        assert_eq!(
+            verification(
+                &alice(VerificationState::Cancelled {
+                    reason: "user cancelled".to_owned(),
+                    code: "m.user".to_owned(),
+                    cancelled_by_us: false,
+                }),
+                None,
+                false
+            ),
+            ["Verification cancelled with @alice:example (session PH0NE): user cancelled (m.user)"]
+        );
+    }
+
+    #[test]
+    fn a_flow_that_is_not_the_latest_is_answered_by_name() {
+        assert_eq!(
+            verification(
+                &flow("@bob:example", Some("B0B"), false, sas()),
+                None,
+                false
+            )[3],
+            "Actions: /verify confirm @bob:example B0B, /verify reject @bob:example B0B, /verify cancel @bob:example B0B"
         );
     }
 }

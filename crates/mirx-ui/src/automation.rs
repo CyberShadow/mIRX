@@ -11,7 +11,7 @@ use mirx_core::{
     RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
     RoomPowerLevelValueChange, RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity,
     RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomVideoActivity, RoomVideoInfo,
-    StoredSession, UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
+    StoredSession, UnsupportedRoomMessageActivity, VerificationState,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ use crate::shared::{
     ConnectionState, FormatKey, LifecycleState, MdiArrangement, ReactionSummary, ViewActivityLevel,
 };
 
-pub(crate) const PROTOCOL_VERSION: u32 = 94;
+pub(crate) const PROTOCOL_VERSION: u32 = 95;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1880,7 +1880,10 @@ pub(crate) struct DumpModel {
     pub(crate) e2ee_status: Option<E2eeStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) last_e2ee_recovery_setup_result: Option<DumpE2eeRecoverySetupResult>,
-    pub(crate) last_verification: Option<DumpVerification>,
+    /// The verifications under way, in the order they started: the last
+    /// is the latest, which the Tools items answer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) verifications: Vec<DumpVerification>,
     /// Every room's identity-change warnings, by room and then user.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) identity_warnings: Vec<DumpIdentityWarning>,
@@ -2591,6 +2594,8 @@ pub(crate) struct DumpRoomPowerLevelUserChange {
 pub(crate) struct DumpVerification {
     pub(crate) flow_id: String,
     pub(crate) user_id: String,
+    pub(crate) device_id: Option<String>,
+    pub(crate) outgoing: bool,
     pub(crate) state: VerificationState,
 }
 
@@ -3034,16 +3039,6 @@ pub(crate) fn dump_room_state_notice_content_from_core(
             DumpRoomStateNoticeContent::JoinRule { rule: rule.clone() }
         }
         RoomStateNoticeContent::Encryption => DumpRoomStateNoticeContent::Encryption,
-    }
-}
-
-pub(crate) fn dump_verification_from_state_event(
-    event: &VerificationStateEvent,
-) -> DumpVerification {
-    DumpVerification {
-        flow_id: event.flow_id.clone(),
-        user_id: event.user_id.clone(),
-        state: event.state.clone(),
     }
 }
 
@@ -3503,7 +3498,7 @@ mod tests {
         RoomNotificationMode, RoomPollActivity, RoomReadState, RoomRedactedActivity, RoomSummary,
         RoomTagSummary, RoomVideoActivity, RoomVideoInfo, SessionAuth, SpaceChildSummary,
         StoredSession, UnsupportedRoomMessageActivity, VerificationDirection, VerificationRequest,
-        VerificationState, VerificationStateEvent,
+        VerificationState,
     };
     use serde_json::{Value, json};
 
@@ -3677,7 +3672,6 @@ mod tests {
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
-            "last_verification":null,
             "last_error":null,
             "selected_room":null
         });
@@ -3850,7 +3844,6 @@ mod tests {
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
-            "last_verification":null,
             "identity_warnings":[
                 {"room_id":"!ops:example","user_id":"@bob:example","warning":"changed"},
                 {"room_id":"!ops:example","user_id":"@carol:example","warning":"verified_changed"}
@@ -4095,8 +4088,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_94() {
-        assert_eq!(PROTOCOL_VERSION, 94);
+    fn protocol_version_is_95() {
+        assert_eq!(PROTOCOL_VERSION, 95);
     }
 
     #[test]
@@ -6140,7 +6133,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":94,
+                    "protocol_version":95,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6197,7 +6190,7 @@ mod tests {
                     last_activity: None,
                     e2ee_status: Some(sample_e2ee_status()),
                     last_e2ee_recovery_setup_result: None,
-                    last_verification: None,
+                    verifications: Vec::new(),
                     submitted_membership_commands: Vec::new(),
                     submitted_member_moderation_commands: Vec::new(),
                     submitted_room_settings_commands: Vec::new(),
@@ -6255,7 +6248,6 @@ mod tests {
                         },
                         "session":"verified"
                     },
-                    "last_verification":null,
                     "last_error":null,
                     "selected_room":"!room:example"
                 }
@@ -7306,7 +7298,7 @@ mod tests {
             last_activity: None,
             e2ee_status: Some(sample_e2ee_status()),
             last_e2ee_recovery_setup_result: None,
-            last_verification: None,
+            verifications: Vec::new(),
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_room_settings_commands: Vec::new(),
@@ -7355,7 +7347,6 @@ mod tests {
                     "session":"verified",
                     "unexpected":true
                 },
-                "last_verification":null,
                 "last_error":null,
                 "selected_room":null
             }),
@@ -7371,7 +7362,6 @@ mod tests {
                     "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false},
                     "session":"verified"
                 },
-                "last_verification":null,
                 "last_error":null,
                 "selected_room":null
             }),
@@ -7387,7 +7377,6 @@ mod tests {
                     "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false,"unexpected":true},
                     "session":"verified"
                 },
-                "last_verification":null,
                 "last_error":null,
                 "selected_room":null
             }),
@@ -7409,7 +7398,7 @@ mod tests {
             last_e2ee_recovery_setup_result: Some(DumpE2eeRecoverySetupResult {
                 recovery_key_present: true,
             }),
-            last_verification: None,
+            verifications: Vec::new(),
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_room_settings_commands: Vec::new(),
@@ -7451,12 +7440,11 @@ mod tests {
             json!({
                 "status":"ready", "lifecycle_state":"ready", "connection":"syncing", "reconnect_attempts":0, "rooms":[], "last_activity":null,
                 "e2ee_status":null,
-                "last_e2ee_recovery_setup_result":{"recovery_key_present":true,"unexpected":true},
-                "last_verification":null, "last_error":null, "selected_room":null,
+                "last_e2ee_recovery_setup_result":{"recovery_key_present":true,"unexpected":true}, "last_error":null, "selected_room":null,
             }),
             json!({
                 "status":"ready", "lifecycle_state":"ready", "connection":"syncing", "reconnect_attempts":0, "rooms":[], "last_activity":null,
-                "e2ee_status":null, "last_e2ee_recovery_setup_result":null, "last_verification":null,
+                "e2ee_status":null, "last_e2ee_recovery_setup_result":null,
                 "submitted_setup_recovery_commands":[{"passphrase_redacted":true,"wait_for_backups_to_upload":true,"unexpected":true}],
                 "last_error":null, "selected_room":null,
             }),
@@ -7476,7 +7464,7 @@ mod tests {
             last_activity: None,
             e2ee_status: None,
             last_e2ee_recovery_setup_result: None,
-            last_verification: None,
+            verifications: Vec::new(),
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_room_settings_commands: Vec::new(),
@@ -7521,7 +7509,6 @@ mod tests {
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
-            "last_verification":null,
             "submitted_membership_commands":[],
             "submitted_direct_room_commands":[],
             "submitted_room_topic_commands":[
@@ -7552,7 +7539,7 @@ mod tests {
             last_activity: None,
             e2ee_status: None,
             last_e2ee_recovery_setup_result: None,
-            last_verification: None,
+            verifications: Vec::new(),
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_room_settings_commands: Vec::new(),
@@ -7599,7 +7586,6 @@ mod tests {
                 "rooms":[],
                 "last_activity":null,
                 "e2ee_status":null,
-                "last_verification":null,
                 "submitted_edit_commands":[
                     {
                         "room_id":"!ops:example",
@@ -7621,7 +7607,6 @@ mod tests {
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
-            "last_verification":null,
             "submitted_membership_commands":[],
             "submitted_direct_room_commands":[],
             "submitted_room_topic_commands":[],
@@ -7655,7 +7640,7 @@ mod tests {
             last_activity: None,
             e2ee_status: None,
             last_e2ee_recovery_setup_result: None,
-            last_verification: None,
+            verifications: Vec::new(),
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_room_settings_commands: Vec::new(),
@@ -7704,7 +7689,6 @@ mod tests {
                 "rooms":[],
                 "last_activity":null,
                 "e2ee_status":null,
-                "last_verification":null,
                 "submitted_reply_commands":[
                     {
                         "room_id":"!ops:example",
@@ -7727,7 +7711,6 @@ mod tests {
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
-            "last_verification":null,
             "submitted_membership_commands":[],
             "submitted_direct_room_commands":[],
             "submitted_room_topic_commands":[],
@@ -7764,7 +7747,7 @@ mod tests {
             last_activity: None,
             e2ee_status: None,
             last_e2ee_recovery_setup_result: None,
-            last_verification: None,
+            verifications: Vec::new(),
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_room_settings_commands: Vec::new(),
@@ -7816,7 +7799,6 @@ mod tests {
                 "rooms":[],
                 "last_activity":null,
                 "e2ee_status":null,
-                "last_verification":null,
                 "submitted_reply_commands":[
                     {
                         "room_id":"!ops:example",
@@ -7843,7 +7825,6 @@ mod tests {
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
-            "last_verification":null,
             "submitted_membership_commands":[],
             "submitted_direct_room_commands":[],
             "submitted_room_topic_commands":[],
@@ -7883,7 +7864,7 @@ mod tests {
             last_activity: None,
             e2ee_status: None,
             last_e2ee_recovery_setup_result: None,
-            last_verification: None,
+            verifications: Vec::new(),
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_room_settings_commands: Vec::new(),
@@ -7932,7 +7913,6 @@ mod tests {
                 "rooms":[],
                 "last_activity":null,
                 "e2ee_status":null,
-                "last_verification":null,
                 "submitted_reaction_commands":[
                     {
                         "room_id":"!ops:example",
@@ -7959,7 +7939,6 @@ mod tests {
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
-            "last_verification":null,
             "submitted_membership_commands":[],
             "submitted_direct_room_commands":[],
             "submitted_room_topic_commands":[],
@@ -7989,7 +7968,6 @@ mod tests {
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
-            "last_verification":null,
             "submitted_membership_commands":[],
             "submitted_direct_room_commands":[],
             "submitted_room_topic_commands":[],
@@ -8023,7 +8001,7 @@ mod tests {
             last_activity: None,
             e2ee_status: None,
             last_e2ee_recovery_setup_result: None,
-            last_verification: None,
+            verifications: Vec::new(),
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_room_settings_commands: Vec::new(),
@@ -8078,7 +8056,6 @@ mod tests {
                 "rooms":[],
                 "last_activity":null,
                 "e2ee_status":null,
-                "last_verification":null,
                 "submitted_history_commands":[
                     {
                         "room_id":"!room:example",
@@ -8107,7 +8084,6 @@ mod tests {
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
-            "last_verification":null,
             "last_error":null,
             "selected_room":null
         }))
@@ -8124,7 +8100,7 @@ mod tests {
                 last_activity: None,
                 e2ee_status: None,
                 last_e2ee_recovery_setup_result: None,
-                last_verification: None,
+                verifications: Vec::new(),
                 submitted_membership_commands: Vec::new(),
                 submitted_member_moderation_commands: Vec::new(),
                 submitted_room_settings_commands: Vec::new(),
@@ -8168,7 +8144,6 @@ mod tests {
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
-            "last_verification":null,
             "submitted_membership_commands":[],
             "submitted_direct_room_commands":[],
             "submitted_room_topic_commands":[],
@@ -9172,21 +9147,11 @@ mod tests {
             .is_err()
         );
         assert_eq!(
-            super::dump_verification_from_state_event(&VerificationStateEvent {
-                flow_id: "flow".to_owned(),
-                user_id: "@alice:example".to_owned(),
-                state: VerificationState::Requested,
-            }),
-            super::DumpVerification {
-                flow_id: "flow".to_owned(),
-                user_id: "@alice:example".to_owned(),
-                state: VerificationState::Requested,
-            }
-        );
-        assert_eq!(
             serde_json::to_value(super::DumpVerification {
                 flow_id: "flow".to_owned(),
                 user_id: "@alice:example".to_owned(),
+                device_id: Some("PH0NE".to_owned()),
+                outgoing: false,
                 state: VerificationState::Cancelled {
                     reason: "timed out".to_owned(),
                     code: "m.timeout".to_owned(),
@@ -9197,6 +9162,8 @@ mod tests {
             json!({
                 "flow_id":"flow",
                 "user_id":"@alice:example",
+                "device_id":"PH0NE",
+                "outgoing":false,
                 "state":{
                     "state":"cancelled",
                     "reason":"timed out",

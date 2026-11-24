@@ -1745,12 +1745,72 @@ fn sample_e2ee_status() -> E2eeStatus {
     }
 }
 
-fn verification_state_event(flow_id: &str, user_id: &str, state: CoreVerificationState) -> Event {
+fn verification_state_event(
+    flow_id: &str,
+    user_id: &str,
+    device_id: &str,
+    state: CoreVerificationState,
+) -> Event {
     Event::VerificationState(CoreVerificationStateEvent {
         flow_id: flow_id.to_owned(),
         user_id: user_id.to_owned(),
+        device_id: Some(device_id.to_owned()),
         state,
     })
+}
+
+/// A verification `user_id`'s session `device_id` asked for.
+fn incoming_verification(flow_id: &str, user_id: &str, device_id: &str) -> Event {
+    Event::VerificationRequest(mirx_core::VerificationRequest {
+        flow_id: flow_id.to_owned(),
+        user_id: user_id.to_owned(),
+        direction: VerificationDirection::Incoming {
+            from_device: device_id.to_owned(),
+        },
+    })
+}
+
+fn sas_ready() -> CoreVerificationState {
+    CoreVerificationState::SasReady {
+        emojis: vec![CoreVerificationEmoji {
+            symbol: "🐶".to_owned(),
+            description: "dog".to_owned(),
+        }],
+        decimals: CoreVerificationDecimals {
+            first: 1234,
+            second: 5678,
+            third: 9012,
+        },
+    }
+}
+
+fn dumped_sas_ready() -> VerificationState {
+    VerificationState::SasReady {
+        emojis: vec![mirx_testkit::VerificationEmoji {
+            symbol: "🐶".to_owned(),
+            description: "dog".to_owned(),
+        }],
+        decimals: mirx_testkit::VerificationDecimals {
+            first: 1234,
+            second: 5678,
+            third: 9012,
+        },
+    }
+}
+
+fn dumped_incoming(
+    flow_id: &str,
+    user_id: &str,
+    device_id: &str,
+    state: VerificationState,
+) -> Verification {
+    Verification {
+        flow_id: flow_id.to_owned(),
+        user_id: user_id.to_owned(),
+        device_id: Some(device_id.to_owned()),
+        outgoing: false,
+        state,
+    }
 }
 
 fn replacement_events() -> Vec<Event> {
@@ -3606,7 +3666,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 94);
+    assert_eq!(version.protocol_version, 95);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -6679,42 +6739,20 @@ fn automation_driver_submits_verification_actions_for_current_flow_without_local
 
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
-        verification_state_event(
-            "flow-current",
-            "@alice:example",
-            CoreVerificationState::SasReady {
-                emojis: vec![CoreVerificationEmoji {
-                    symbol: "🐶".to_owned(),
-                    description: "dog".to_owned(),
-                }],
-                decimals: CoreVerificationDecimals {
-                    first: 1234,
-                    second: 5678,
-                    third: 9012,
-                },
-            },
-        ),
+        incoming_verification("flow-current", "@alice:example", "ALICEDEVICE"),
+        verification_state_event("flow-current", "@alice:example", "ALICEDEVICE", sas_ready()),
     ])?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let initial_model = app.dump_model()?;
     assert_eq!(
-        initial_model.last_verification,
-        Some(Verification {
-            flow_id: "flow-current".to_owned(),
-            user_id: "@alice:example".to_owned(),
-            state: VerificationState::SasReady {
-                emojis: vec![mirx_testkit::VerificationEmoji {
-                    symbol: "🐶".to_owned(),
-                    description: "dog".to_owned(),
-                }],
-                decimals: mirx_testkit::VerificationDecimals {
-                    first: 1234,
-                    second: 5678,
-                    third: 9012,
-                },
-            },
-        })
+        initial_model.verifications,
+        [dumped_incoming(
+            "flow-current",
+            "@alice:example",
+            "ALICEDEVICE",
+            dumped_sas_ready()
+        )]
     );
     assert!(initial_model.submitted_verification_actions.is_empty());
 
@@ -6725,7 +6763,7 @@ fn automation_driver_submits_verification_actions_for_current_flow_without_local
     app.wait_idle(Duration::from_secs(5))?;
 
     let model = app.dump_model()?;
-    assert_eq!(model.last_verification, initial_model.last_verification);
+    assert_eq!(model.verifications, initial_model.verifications);
     assert_eq!(
         model.submitted_verification_actions,
         vec![
@@ -6766,11 +6804,7 @@ fn automation_driver_submits_verification_action_for_explicit_flow()
 
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
-        verification_state_event(
-            "flow-current",
-            "@alice:example",
-            CoreVerificationState::Requested,
-        ),
+        incoming_verification("flow-current", "@alice:example", "ALICEDEVICE"),
     ])?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
@@ -6779,7 +6813,7 @@ fn automation_driver_submits_verification_action_for_explicit_flow()
     app.wait_idle(Duration::from_secs(5))?;
 
     let model = app.dump_model()?;
-    assert_eq!(model.last_verification, initial_model.last_verification);
+    assert_eq!(model.verifications, initial_model.verifications);
     assert_eq!(
         model.submitted_verification_actions,
         vec![SubmittedVerificationAction {
@@ -6803,11 +6837,7 @@ fn automation_driver_requested_verification_menu_state_and_commands()
 
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
-        verification_state_event(
-            "flow-requested",
-            "@alice:example",
-            CoreVerificationState::Requested,
-        ),
+        incoming_verification("flow-requested", "@alice:example", "ALICEDEVICE"),
     ])?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
@@ -6818,7 +6848,7 @@ fn automation_driver_requested_verification_menu_state_and_commands()
     invoke_account_menu_command(&app, MENU_ID_VERIFY_CANCEL)?;
 
     let model = app.dump_model()?;
-    assert_eq!(model.last_verification, initial_model.last_verification);
+    assert_eq!(model.verifications, initial_model.verifications);
     assert_eq!(
         model.submitted_verification_actions,
         vec![
@@ -6838,6 +6868,127 @@ fn automation_driver_requested_verification_menu_state_and_commands()
     Ok(())
 }
 
+/// Two users verify at once: each flow keeps its own state and Status
+/// lines; the Tools items and a bare `/verify` answer the most recently
+/// started, a named one the flow it names.
+#[test]
+fn automation_driver_concurrent_verifications_answer_the_latest_or_the_named()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let app = launch_app(&exe_path, &[OsString::from("--automation")])?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        incoming_verification("flow-bob", "@bob:example", "B0B"),
+        verification_state_event("flow-bob", "@bob:example", "B0B", sas_ready()),
+        incoming_verification("flow-carol", "@carol:example", "C4R0L"),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.dump_model()?.verifications,
+        [
+            dumped_incoming("flow-bob", "@bob:example", "B0B", dumped_sas_ready()),
+            dumped_incoming(
+                "flow-carol",
+                "@carol:example",
+                "C4R0L",
+                VerificationState::Requested
+            ),
+        ]
+    );
+    for line in [
+        "* Verification with @bob:example (session B0B): compare the emoji or the numbers",
+        "* Verification requested by @carol:example (session C4R0L)",
+        "* Also under way: @bob:example B0B (sas ready); /verify <action> <user> [session] answers one of them",
+    ] {
+        assert!(status_view_contains(&app, line)?, "{line}");
+    }
+    let ui_state = app.dump_ui_state()?;
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .contains("verification: requested with @carol:example (session C4R0L) (+1 more)"),
+        "{}",
+        ui_state.status_bar.text
+    );
+
+    // Carol's request is the latest: the Tools items answer it, and a
+    // bare confirm, which does not apply to it, is refused, not sent to Bob.
+    assert_account_verification_menu_state(&app, true, true, false, false);
+    invoke_account_menu_command(&app, MENU_ID_VERIFY_ACCEPT)?;
+    app.select_status_view()?;
+    for command in [
+        "/verify confirm",
+        "/verify confirm @bob:example",
+        "/verify reject @bob:example B0B",
+        "/verify cancel @dave:example",
+    ] {
+        app.set_compose_text(command)?;
+        app.send_compose_key(ComposeKey::Return)?;
+        app.wait_idle(Duration::from_secs(5))?;
+    }
+    for line in [
+        "* /verify: confirm does not apply to the latest verification, @carol:example C4R0L (requested); under way: @bob:example B0B (sas ready), @carol:example C4R0L (requested)",
+        "* /verify: no verification with @dave:example is under way; under way: @bob:example B0B (sas ready), @carol:example C4R0L (requested)",
+    ] {
+        assert!(status_view_contains(&app, line)?, "{line}");
+    }
+    let submitted = |action, flow_id: &str, user_id: &str| SubmittedVerificationAction {
+        action,
+        flow_id: flow_id.to_owned(),
+        user_id: user_id.to_owned(),
+    };
+    assert_eq!(
+        app.dump_model()?.submitted_verification_actions,
+        [
+            submitted(
+                VerificationActionKind::Accept,
+                "flow-carol",
+                "@carol:example"
+            ),
+            submitted(
+                VerificationActionKind::ConfirmSas,
+                "flow-bob",
+                "@bob:example"
+            ),
+            submitted(
+                VerificationActionKind::RejectSas,
+                "flow-bob",
+                "@bob:example"
+            ),
+        ]
+    );
+
+    // Bob's flow ends: Carol's stays, alone, and no longer needs naming.
+    app.append_synthetic_events(&serde_json::to_string(&vec![verification_state_event(
+        "flow-bob",
+        "@bob:example",
+        "B0B",
+        CoreVerificationState::Done,
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(status_view_contains(
+        &app,
+        "* Verification done with @bob:example (session B0B): verified"
+    )?);
+    assert_eq!(
+        app.dump_model()?.verifications,
+        [dumped_incoming(
+            "flow-carol",
+            "@carol:example",
+            "C4R0L",
+            VerificationState::Requested
+        )]
+    );
+    assert!(!app.dump_ui_state()?.status_bar.text.contains("more)"));
+
+    Ok(())
+}
+
 #[test]
 fn automation_driver_sas_ready_verification_menu_state_and_commands()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -6849,20 +7000,12 @@ fn automation_driver_sas_ready_verification_menu_state_and_commands()
 
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
+        incoming_verification("flow-sas-ready", "@alice:example", "ALICEDEVICE"),
         verification_state_event(
             "flow-sas-ready",
             "@alice:example",
-            CoreVerificationState::SasReady {
-                emojis: vec![CoreVerificationEmoji {
-                    symbol: "🐶".to_owned(),
-                    description: "dog".to_owned(),
-                }],
-                decimals: CoreVerificationDecimals {
-                    first: 1234,
-                    second: 5678,
-                    third: 9012,
-                },
-            },
+            "ALICEDEVICE",
+            sas_ready(),
         ),
     ])?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6875,7 +7018,7 @@ fn automation_driver_sas_ready_verification_menu_state_and_commands()
     invoke_account_menu_command(&app, MENU_ID_VERIFY_CANCEL)?;
 
     let model = app.dump_model()?;
-    assert_eq!(model.last_verification, initial_model.last_verification);
+    assert_eq!(model.verifications, initial_model.verifications);
     assert_eq!(
         model.submitted_verification_actions,
         vec![
@@ -8318,12 +8461,14 @@ fn automation_driver_outgoing_verification_menu_state() -> Result<(), Box<dyn st
     app.wait_idle(Duration::from_secs(5))?;
 
     assert_eq!(
-        app.dump_model()?.last_verification,
-        Some(Verification {
+        app.dump_model()?.verifications,
+        [Verification {
             flow_id: "flow-out".to_owned(),
             user_id: "@bob:example".to_owned(),
+            device_id: None,
+            outgoing: true,
             state: VerificationState::Sent,
-        })
+        }]
     );
     assert_account_verification_menu_state(&app, false, true, false, false);
     assert!(view_contains(
@@ -8340,24 +8485,30 @@ fn automation_driver_outgoing_verification_menu_state() -> Result<(), Box<dyn st
         }]
     );
 
-    // The other side accepted and the keys are exchanged.
+    // Bob's session B0B accepted and the keys are exchanged: the flow
+    // names it from then on.
     app.append_synthetic_events(&serde_json::to_string(&vec![verification_state_event(
         "flow-out",
         "@bob:example",
-        CoreVerificationState::SasReady {
-            emojis: vec![CoreVerificationEmoji {
-                symbol: "🐶".to_owned(),
-                description: "Dog".to_owned(),
-            }],
-            decimals: CoreVerificationDecimals {
-                first: 1234,
-                second: 5678,
-                third: 9012,
-            },
-        },
+        "B0B",
+        sas_ready(),
     )])?)?;
     app.wait_idle(Duration::from_secs(5))?;
     assert_account_verification_menu_state(&app, false, true, true, true);
+    assert_eq!(
+        app.dump_model()?.verifications,
+        [Verification {
+            flow_id: "flow-out".to_owned(),
+            user_id: "@bob:example".to_owned(),
+            device_id: Some("B0B".to_owned()),
+            outgoing: true,
+            state: dumped_sas_ready(),
+        }]
+    );
+    assert!(view_contains(
+        find_view(&app.dump_ui_state()?, &ViewIdentity::Status),
+        "* Verification with @bob:example (session B0B): compare the emoji or the numbers"
+    ));
 
     Ok(())
 }
@@ -16170,12 +16321,13 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
     let model = attached.dump_model()?;
     assert_eq!(model.lifecycle_state, "error");
     assert_eq!(
-        model.last_verification,
-        Some(Verification {
-            flow_id: "flow-verify-123".to_owned(),
-            user_id: "@alice:example".to_owned(),
-            state: VerificationState::Requested,
-        })
+        model.verifications,
+        [dumped_incoming(
+            "flow-verify-123",
+            "@alice:example",
+            "ALICEDEVICE",
+            VerificationState::Requested
+        )]
     );
     assert_eq!(
         model.last_error,
@@ -16196,7 +16348,12 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
     );
     let ui_state = attached.dump_ui_state()?;
     assert!(ui_state.status_bar.text.contains("error during send text"));
-    assert!(ui_state.status_bar.text.contains("flow-verify-123"));
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .contains("verification: requested with @alice:example (session ALICEDEVICE)")
+    );
     assert!(ui_state.status_bar.text.contains("message send failed"));
     assert_eq!(
         ui_state
@@ -16222,7 +16379,10 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
     assert!(view_contains(verify_view, "sas emoji ready"));
     assert!(view_contains(verify_view, "waiting for confirmation"));
     let status_view = find_view(&ui_state, &ViewIdentity::Status);
-    assert!(view_contains(status_view, "flow-verify-123"));
+    assert!(view_contains(
+        status_view,
+        "Verification requested by @alice:example (session ALICEDEVICE)"
+    ));
     assert!(view_contains(status_view, "message send failed"));
     assert_navigation_not_contains(&ui_state.navigation, "verification requested");
     assert_navigation_not_contains(&ui_state.navigation, "sas emoji ready");
@@ -23005,21 +23165,8 @@ fn automation_driver_slash_join_part_and_verify_regressions_keep_original_comman
             1_700_000_120_000,
             "beta latest",
         ),
-        verification_state_event(
-            "flow-current",
-            "@alice:example",
-            CoreVerificationState::SasReady {
-                emojis: vec![CoreVerificationEmoji {
-                    symbol: "🐶".to_owned(),
-                    description: "dog".to_owned(),
-                }],
-                decimals: CoreVerificationDecimals {
-                    first: 1234,
-                    second: 5678,
-                    third: 9012,
-                },
-            },
-        ),
+        incoming_verification("flow-current", "@alice:example", "ALICEDEVICE"),
+        verification_state_event("flow-current", "@alice:example", "ALICEDEVICE", sas_ready()),
     ])?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
@@ -23033,7 +23180,7 @@ fn automation_driver_slash_join_part_and_verify_regressions_keep_original_comman
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
 
-    app.set_compose_text("/verify accept")?;
+    app.set_compose_text("/verify cancel")?;
     app.send_compose_key(ComposeKey::Return)?;
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
@@ -23061,7 +23208,7 @@ fn automation_driver_slash_join_part_and_verify_regressions_keep_original_comman
         model.submitted_verification_actions,
         vec![
             SubmittedVerificationAction {
-                action: VerificationActionKind::Accept,
+                action: VerificationActionKind::Cancel,
                 flow_id: "flow-current".to_owned(),
                 user_id: "@alice:example".to_owned(),
             },
@@ -26858,15 +27005,15 @@ fn automation_driver_status_window_is_a_timestamped_log() -> Result<(), Box<dyn 
     ));
     assert!(view_contains(
         status_view,
-        "[22:12] * Verification requested by @alice:example (flow flow-status-log)"
+        "[22:12] * Verification requested by @alice:example (session ALICEDEVICE)"
     ));
 
-    let result = app.find_active_view("flow-status-log")?;
+    let result = app.find_active_view("session ALICEDEVICE")?;
     assert_eq!(result.active, ViewIdentity::Status);
     assert_eq!(result.match_count, 1);
     assert_eq!(
         result.selected_text.as_deref(),
-        Some("[22:12] * Verification requested by @alice:example (flow flow-status-log)")
+        Some("[22:12] * Verification requested by @alice:example (session ALICEDEVICE)")
     );
 
     // Status lines are not messages: the message menu has nothing to act on.

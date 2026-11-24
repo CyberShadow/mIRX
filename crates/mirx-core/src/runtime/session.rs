@@ -1,8 +1,7 @@
 //! A signed-in session: its client, its background tasks (sync, the
-//! update tasks, verification watchers, an identity reset waiting for
-//! approval), and what jobs take from it.
+//! update tasks, an identity reset waiting for approval), and what jobs
+//! take from it.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use futures_util::future::LocalBoxFuture;
@@ -15,8 +14,8 @@ use super::{
     E2eeStatusWatch, EventSender, FirstContact, FirstE2eeStatus, RoomSnapshot, RoomSnapshots,
     emit_event, emit_matrix_error,
 };
-use crate::api::{Event, Operation, VerificationFlowId};
-use crate::matrix::{self, AwayFlag, MatrixCoreError, PausedSendRooms};
+use crate::api::{Event, Operation};
+use crate::matrix::{self, AwayFlag, MatrixCoreError, PausedSendRooms, VerificationWatch};
 
 /// What a job takes from the session: it owns clones, never the session.
 #[derive(Clone)]
@@ -26,14 +25,14 @@ pub(super) struct JobCtx {
     pub(super) snapshots: RoomSnapshots,
     /// Told a command's answer that asked the server.
     pub(super) e2ee_status: E2eeStatusWatch,
+    /// Hands the flows this session asks for to the verification task.
+    pub(super) verifications: VerificationWatch,
 }
 
 /// What a job leaves for the actor to apply to the session, before the
 /// job's ack.
 pub(super) enum Followup {
     Done,
-    /// Follow the flow with this watcher, unless one already does.
-    Watch(VerificationFlowId, LocalBoxFuture<'static, ()>),
     /// The server asked for authentication: run the reset beside the actor
     /// until it ends.
     IdentityResetStarted(Box<StartedReset>),
@@ -64,6 +63,7 @@ pub(super) struct EnteredSession {
     /// session's first status is out.
     pub(super) e2ee_status_watch: E2eeStatusWatch,
     pub(super) snapshots: RoomSnapshots,
+    pub(super) verifications: VerificationWatch,
     pub(super) paused_sends: PausedSendRooms,
     /// The update tasks, which subscribed to what they follow when they
     /// were made, so they miss nothing between then and their spawn.
@@ -108,7 +108,6 @@ pub(super) struct Session {
     away: AwayFlag,
     sync: Option<JoinHandle<()>>,
     background: JoinSet<()>,
-    verification: HashMap<(String, String), JoinHandle<()>>,
     /// The one identity reset under way, between the server's request for
     /// authentication and its end.
     identity_reset: Option<PendingIdentityReset>,
@@ -127,6 +126,7 @@ impl Session {
             e2ee_status,
             e2ee_status_watch,
             snapshots,
+            verifications,
             paused_sends,
             tasks,
             start_sync,
@@ -164,13 +164,13 @@ impl Session {
                 events: events.clone(),
                 snapshots,
                 e2ee_status: e2ee_status_watch,
+                verifications,
             },
             first_contact,
             paused_sends,
             away: AwayFlag::default(),
             sync: None,
             background,
-            verification: HashMap::new(),
             identity_reset: None,
         };
         if start_sync {
@@ -181,23 +181,26 @@ impl Session {
         session
     }
 
-    /// A session of `client` without update tasks, for the tests of what
-    /// commands do.
+    /// A session of `client` with no update task but the verification
+    /// task, for the tests of what commands do.
     #[cfg(test)]
     pub(super) fn for_client(client: Client, events: &EventSender) -> Self {
+        let (verifications, new_flows) = matrix::verification_watch();
+        let mut background = JoinSet::new();
+        background.spawn_local(matrix::verification_task(new_flows, events.clone()));
         Self {
             ctx: JobCtx {
                 client,
                 events: events.clone(),
                 snapshots: RoomSnapshots::default(),
                 e2ee_status: E2eeStatusWatch::default(),
+                verifications,
             },
             first_contact: FirstContact::pending(false, false, E2eeStatusWatch::default()),
             paused_sends: PausedSendRooms::default(),
             away: AwayFlag::default(),
             sync: None,
-            background: JoinSet::new(),
-            verification: HashMap::new(),
+            background,
             identity_reset: None,
         }
     }
@@ -255,24 +258,6 @@ impl Session {
             abort_and_join(task).await;
         }
         running
-    }
-
-    /// Follows `flow` with `watcher`, unless a watcher already does.
-    pub(super) fn watch(
-        &mut self,
-        flow: &VerificationFlowId,
-        watcher: LocalBoxFuture<'static, ()>,
-    ) {
-        let key = (flow.user_id.clone(), flow.flow_id.clone());
-        if self
-            .verification
-            .get(&key)
-            .is_some_and(|task| !task.is_finished())
-        {
-            return;
-        }
-        self.verification
-            .insert(key, tokio::task::spawn_local(watcher));
     }
 
     pub(super) fn identity_reset(&mut self) -> Option<&mut PendingIdentityReset> {
@@ -334,9 +319,6 @@ impl Session {
         if let Some(task) = self.sync.take() {
             abort_and_join(task).await;
         }
-        for (_, task) in std::mem::take(&mut self.verification) {
-            abort_and_join(task).await;
-        }
         self.background.abort_all();
         while let Some(joined) = self.background.join_next().await {
             if let Err(err) = joined
@@ -355,7 +337,6 @@ impl Drop for Session {
             std::thread::panicking()
                 || (self.identity_reset.is_none()
                     && self.sync.is_none()
-                    && self.verification.is_empty()
                     && self.background.is_empty()),
             "a session dropped with its tasks running"
         );

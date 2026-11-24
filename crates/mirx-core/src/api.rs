@@ -2107,6 +2107,10 @@ pub struct VerificationFlowId {
 pub struct VerificationStateEvent {
     pub flow_id: String,
     pub user_id: String,
+    /// The other side's session once known: the one that asked, for an
+    /// incoming request; for an outgoing one, the one asked or the one
+    /// that accepted. Every later event of the flow names it.
+    pub device_id: Option<String>,
     pub state: VerificationState,
 }
 
@@ -2118,7 +2122,6 @@ pub enum VerificationState {
     /// This session asked (`VerificationDirection::Outgoing`); waiting for
     /// the other side to accept.
     Sent,
-    Accepted,
     Ready,
     SasReady {
         emojis: Vec<VerificationEmoji>,
@@ -2138,7 +2141,6 @@ pub enum VerificationState {
 enum VerificationStateSerde {
     Requested {},
     Sent {},
-    Accepted {},
     Ready {},
     SasReady {
         emojis: Vec<VerificationEmoji>,
@@ -2162,7 +2164,6 @@ impl<'de> serde::Deserialize<'de> for VerificationState {
         Ok(match state {
             VerificationStateSerde::Requested {} => Self::Requested,
             VerificationStateSerde::Sent {} => Self::Sent,
-            VerificationStateSerde::Accepted {} => Self::Accepted,
             VerificationStateSerde::Ready {} => Self::Ready,
             VerificationStateSerde::SasReady { emojis, decimals } => {
                 Self::SasReady { emojis, decimals }

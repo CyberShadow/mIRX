@@ -205,8 +205,8 @@ use crate::automation::{
     UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiToolbarButton,
     VerificationActionArgs, ViewIdentity, WaitIdleResponse, dump_error_from_core,
     dump_room_activity_from_activity, dump_room_from_summary,
-    dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
-    dump_verification_from_state_event, failure_response, parse_command_request, success_response,
+    dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core, failure_response,
+    parse_command_request, success_response,
 };
 
 mod account;
@@ -584,12 +584,11 @@ use tray::{
 #[cfg(any(test, feature = "automation"))]
 use verification::automation::submit_automation_verification_action;
 use verification::{
-    apply_verification_event, apply_verification_request, e2ee_backup_health_summary,
-    e2ee_cross_signing_label, e2ee_local_backup_label, e2ee_recovery_state_label,
-    e2ee_server_backup_label, e2ee_session_label, format_verification_emojis,
-    submit_accept_verification, submit_cancel_verification, submit_confirm_verification_sas,
-    submit_menu_verification_action, submit_reject_verification_sas, verification_action_label,
-    verification_state_event_from_request, verification_state_label,
+    VerificationTarget, Verifications, apply_verification_event, apply_verification_request,
+    e2ee_backup_health_summary, e2ee_cross_signing_label, e2ee_local_backup_label,
+    e2ee_recovery_state_label, e2ee_server_backup_label, e2ee_session_label,
+    format_verification_emojis, refuse_second_verification, submit_menu_verification_action,
+    submit_verification_answer, verification_action_label, verification_state_label,
 };
 #[cfg(any(test, feature = "automation"))]
 use views::automation::{mdi_window_placement, set_view_window_state};
@@ -793,7 +792,7 @@ struct UiModel {
     last_activity: Option<LastMessageActivity>,
     last_e2ee_status: Option<E2eeStatus>,
     last_e2ee_recovery_setup_result: bool,
-    last_verification: Option<VerificationStateEvent>,
+    verifications: Verifications,
     last_error: Option<CoreErrorEvent>,
     /// The `/list` listing; the Rooms List window exists exactly while this
     /// is `Some`.

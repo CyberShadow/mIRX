@@ -682,9 +682,11 @@ fn data_models_round_trip_through_json() {
         }),
         e2ee_status: Some(sample_e2ee_status()),
         last_e2ee_recovery_setup_result: None,
-        last_verification: Some(Verification {
+        verifications: vec![Verification {
             flow_id: "flow".to_owned(),
             user_id: "@alice:example".to_owned(),
+            device_id: Some("PH0NE".to_owned()),
+            outgoing: false,
             state: VerificationState::SasReady {
                 emojis: vec![
                     VerificationEmoji {
@@ -702,7 +704,7 @@ fn data_models_round_trip_through_json() {
                     third: 9012,
                 },
             },
-        }),
+        }],
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
@@ -4829,7 +4831,7 @@ fn model_last_activity_round_trips_through_json() {
         }),
         e2ee_status: None,
         last_e2ee_recovery_setup_result: None,
-        last_verification: None,
+        verifications: Vec::new(),
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
@@ -4884,7 +4886,6 @@ fn model_last_activity_round_trips_through_json() {
                 }
             },
             "e2ee_status": null,
-            "last_verification": null,
             "last_error": null,
             "selected_room": "!room:example"
         })
@@ -4907,7 +4908,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
         last_activity: None,
         e2ee_status: None,
         last_e2ee_recovery_setup_result: None,
-        last_verification: None,
+        verifications: Vec::new(),
         submitted_membership_commands: vec![
             SubmittedMembershipCommand {
                 action: MembershipCommandAction::Join,
@@ -4959,7 +4960,6 @@ fn model_submitted_membership_commands_round_trip_through_json() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_membership_commands": [
                 {
                     "action": "join",
@@ -4983,7 +4983,6 @@ fn model_submitted_membership_commands_round_trip_through_json() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_membership_commands": [
                 {
                     "action": "join",
@@ -5111,7 +5110,6 @@ fn model_submitted_member_moderation_commands_round_trip_and_default_to_empty() 
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
-        "last_verification": null,
         "submitted_member_moderation_commands": [
             {"action": "kick", "room_id": "!ops:example.org", "user_id": "@bob:example.org", "reason": null},
             {"action": "ban", "room_id": "!ops:example.org", "user_id": "@carol:example.org", "reason": null}
@@ -5147,7 +5145,6 @@ fn model_submitted_member_moderation_commands_round_trip_and_default_to_empty() 
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
-        "last_verification": null,
         "last_error": null,
         "selected_room": null
     }))
@@ -5166,7 +5163,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
         last_activity: None,
         e2ee_status: None,
         last_e2ee_recovery_setup_result: None,
-        last_verification: None,
+        verifications: Vec::new(),
         submitted_membership_commands: vec![SubmittedMembershipCommand {
             action: MembershipCommandAction::Join,
             target: "#ops:example.org".to_owned(),
@@ -5214,7 +5211,6 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_membership_commands": [
                 {
                     "action": "join",
@@ -5239,7 +5235,6 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_membership_commands": [
                 {
                     "action": "join",
@@ -5270,7 +5265,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
         last_activity: None,
         e2ee_status: None,
         last_e2ee_recovery_setup_result: None,
-        last_verification: None,
+        verifications: Vec::new(),
         submitted_membership_commands: vec![SubmittedMembershipCommand {
             action: MembershipCommandAction::Join,
             target: "#ops:example.org".to_owned(),
@@ -5321,7 +5316,6 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_membership_commands": [
                 {
                     "action": "join",
@@ -5352,7 +5346,6 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_membership_commands": [
                 {
                     "action": "join",
@@ -5389,7 +5382,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
         last_activity: None,
         e2ee_status: None,
         last_e2ee_recovery_setup_result: None,
-        last_verification: None,
+        verifications: Vec::new(),
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
@@ -5436,7 +5429,6 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_reaction_commands": [
                 {
                     "room_id": "!ops:example.org",
@@ -5457,7 +5449,6 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_reaction_commands": [
                 {
                     "room_id": "!ops:example.org",
@@ -5484,7 +5475,7 @@ fn model_submitted_message_commands_round_trip_with_their_format() {
         last_activity: None,
         e2ee_status: None,
         last_e2ee_recovery_setup_result: None,
-        last_verification: None,
+        verifications: Vec::new(),
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
@@ -5530,7 +5521,6 @@ fn model_submitted_message_commands_round_trip_with_their_format() {
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
-        "last_verification": null,
         "submitted_message_commands": [
             {
                 "room_id": "!ops:example.org",
@@ -5561,7 +5551,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
         last_activity: None,
         e2ee_status: None,
         last_e2ee_recovery_setup_result: None,
-        last_verification: None,
+        verifications: Vec::new(),
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
@@ -5611,7 +5601,6 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_reply_commands": [
                 {
                     "room_id": "!ops:example.org",
@@ -5634,7 +5623,6 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_reply_commands": [
                 {
                     "room_id": "!ops:example.org",
@@ -5663,7 +5651,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
         last_activity: None,
         e2ee_status: None,
         last_e2ee_recovery_setup_result: None,
-        last_verification: None,
+        verifications: Vec::new(),
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
@@ -5716,7 +5704,6 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_reply_commands": [
                 {
                     "room_id": "!ops:example.org",
@@ -5743,7 +5730,6 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_reply_commands": [
                 {
                     "room_id": "!ops:example.org",
@@ -5776,7 +5762,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
         last_activity: None,
         e2ee_status: None,
         last_e2ee_recovery_setup_result: None,
-        last_verification: None,
+        verifications: Vec::new(),
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
@@ -5822,7 +5808,6 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_redaction_commands": [
                 {
                     "room_id": "!ops:example.org",
@@ -5842,7 +5827,6 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_redaction_commands": [
                 {
                     "room_id": "!ops:example.org",
@@ -5867,7 +5851,6 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
-        "last_verification": null,
         "submitted_membership_commands": [],
         "submitted_direct_room_commands": [],
         "submitted_room_topic_commands": [],
@@ -5916,7 +5899,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
             last_activity: None,
             e2ee_status: None,
             last_e2ee_recovery_setup_result: None,
-            last_verification: None,
+            verifications: Vec::new(),
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_room_settings_commands: Vec::new(),
@@ -5976,7 +5959,6 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_reply_commands": [
                 {
                     "room_id": "!ops:example.org",
@@ -6020,7 +6002,7 @@ fn model_submitted_history_commands_round_trip_through_json() {
         last_activity: None,
         e2ee_status: None,
         last_e2ee_recovery_setup_result: None,
-        last_verification: None,
+        verifications: Vec::new(),
         submitted_membership_commands: Vec::new(),
         submitted_member_moderation_commands: Vec::new(),
         submitted_room_settings_commands: Vec::new(),
@@ -6076,7 +6058,6 @@ fn model_submitted_history_commands_round_trip_through_json() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_history_commands": [
                 {
                     "room_id": "!room:example",
@@ -6102,7 +6083,6 @@ fn model_submitted_history_commands_round_trip_through_json() {
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
-            "last_verification": null,
             "submitted_history_commands": [
                 {
                     "room_id": "!room:example",
@@ -6133,7 +6113,6 @@ fn model_submitted_history_commands_default_to_empty_when_omitted() {
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
-        "last_verification": null,
         "last_error": null,
         "selected_room": null
     }))
@@ -6150,7 +6129,7 @@ fn model_submitted_history_commands_default_to_empty_when_omitted() {
             last_activity: None,
             e2ee_status: None,
             last_e2ee_recovery_setup_result: None,
-            last_verification: None,
+            verifications: Vec::new(),
             submitted_membership_commands: Vec::new(),
             submitted_member_moderation_commands: Vec::new(),
             submitted_room_settings_commands: Vec::new(),
@@ -6195,7 +6174,6 @@ fn model_submitted_membership_commands_reject_unknown_nested_fields() {
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
-        "last_verification": null,
         "submitted_membership_commands": [
             {
                 "action": "join",
@@ -6223,7 +6201,6 @@ fn model_submitted_reply_commands_reject_unknown_nested_fields() {
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
-        "last_verification": null,
         "submitted_membership_commands": [],
         "submitted_direct_room_commands": [],
         "submitted_room_topic_commands": [],
@@ -6257,7 +6234,6 @@ fn model_submitted_reply_command_threads_reject_unknown_nested_fields() {
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
-        "last_verification": null,
         "submitted_membership_commands": [],
         "submitted_direct_room_commands": [],
         "submitted_room_topic_commands": [],
@@ -6295,7 +6271,6 @@ fn model_submitted_direct_room_commands_reject_unknown_nested_fields() {
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
-        "last_verification": null,
         "submitted_membership_commands": [],
         "submitted_direct_room_commands": [
             {
@@ -6323,7 +6298,6 @@ fn model_submitted_room_topic_commands_reject_unknown_nested_fields() {
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
-        "last_verification": null,
         "submitted_membership_commands": [],
         "submitted_direct_room_commands": [],
         "submitted_room_topic_commands": [
@@ -6353,7 +6327,6 @@ fn model_submitted_reaction_commands_reject_unknown_nested_fields() {
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
-        "last_verification": null,
         "submitted_membership_commands": [],
         "submitted_direct_room_commands": [],
         "submitted_room_topic_commands": [],
@@ -6384,7 +6357,6 @@ fn model_submitted_redaction_commands_reject_unknown_nested_fields() {
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
-        "last_verification": null,
         "submitted_membership_commands": [],
         "submitted_direct_room_commands": [],
         "submitted_room_topic_commands": [],
@@ -6414,7 +6386,6 @@ fn model_submitted_history_commands_reject_unknown_nested_fields() {
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
-        "last_verification": null,
         "submitted_membership_commands": [],
         "submitted_direct_room_commands": [],
         "submitted_room_topic_commands": [],
@@ -6446,7 +6417,6 @@ fn data_models_reject_unknown_fields() {
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
-            "last_verification":null,
             "last_error":null,
             "selected_room":null,
             "unexpected":true
@@ -7121,7 +7091,7 @@ fn room_message_presentation_contracts_are_strict() {
 }
 
 #[test]
-fn model_last_verification_round_trips_typed_state_json() {
+fn model_verifications_round_trip_typed_state_json() {
     let model = serde_json::from_value::<Model>(serde_json::json!({
         "status":"verification sas ready with @alice:example",
         "lifecycle_state":"ready",
@@ -7129,32 +7099,36 @@ fn model_last_verification_round_trips_typed_state_json() {
         "rooms":[],
         "last_activity":null,
         "e2ee_status":null,
-        "last_verification":{
+        "verifications":[{
             "flow_id":"flow-verify-123",
             "user_id":"@alice:example",
+            "device_id":"PH0NE",
+            "outgoing":true,
             "state":{
                 "state":"cancelled",
                 "reason":"timed out",
                 "code":"m.timeout",
                 "cancelled_by_us":false
             }
-        },
+        }],
         "last_error":null,
         "selected_room":null
     }))
     .expect("deserialize typed verification model");
 
     assert_eq!(
-        model.last_verification,
-        Some(Verification {
+        model.verifications,
+        vec![Verification {
             flow_id: "flow-verify-123".to_owned(),
             user_id: "@alice:example".to_owned(),
+            device_id: Some("PH0NE".to_owned()),
+            outgoing: true,
             state: VerificationState::Cancelled {
                 reason: "timed out".to_owned(),
                 code: "m.timeout".to_owned(),
                 cancelled_by_us: false,
             },
-        })
+        }]
     );
 
     assert_eq!(
@@ -7166,16 +7140,18 @@ fn model_last_verification_round_trips_typed_state_json() {
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
-            "last_verification":{
+            "verifications":[{
                 "flow_id":"flow-verify-123",
                 "user_id":"@alice:example",
+                "device_id":"PH0NE",
+                "outgoing":true,
                 "state":{
                     "state":"cancelled",
                     "reason":"timed out",
                     "code":"m.timeout",
                     "cancelled_by_us":false
                 }
-            },
+            }],
             "last_error":null,
             "selected_room":null
         })
@@ -7205,7 +7181,6 @@ fn model_e2ee_status_round_trips_typed_state_json() {
             },
             "session":"verified"
         },
-        "last_verification":null,
         "last_error":null,
         "selected_room":null
     }))
@@ -7236,7 +7211,6 @@ fn model_e2ee_status_round_trips_typed_state_json() {
                 },
                 "session":"verified"
             },
-            "last_verification":null,
             "last_error":null,
             "selected_room":null
         })
@@ -7259,7 +7233,6 @@ fn model_e2ee_status_rejects_unknown_nested_fields() {
                 "session":"verified",
                 "unexpected":true
             },
-            "last_verification":null,
             "last_error":null,
             "selected_room":null
         }),
@@ -7275,7 +7248,6 @@ fn model_e2ee_status_rejects_unknown_nested_fields() {
                 "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false},
                 "session":"verified"
             },
-            "last_verification":null,
             "last_error":null,
             "selected_room":null
         }),
@@ -7291,7 +7263,6 @@ fn model_e2ee_status_rejects_unknown_nested_fields() {
                 "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false,"unexpected":true},
                 "session":"verified"
             },
-            "last_verification":null,
             "last_error":null,
             "selected_room":null
         }),

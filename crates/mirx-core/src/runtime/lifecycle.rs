@@ -10,7 +10,10 @@ use super::session::EnteredSession;
 use super::{E2eeStatusWatch, EventSender, FirstE2eeStatus, RoomSnapshot, RoomSnapshots};
 use crate::api::{CoreConfig, Event, LoginMethod, LoginRequest, Operation, RestoreSessionRequest};
 use crate::loopback::{self, LoopbackListener, LoopbackRedirect};
-use crate::matrix::{self, BrowserFlow, HomeserverSpec, MatrixCoreError, PausedSendRooms};
+use crate::matrix::{
+    self, BrowserFlow, HomeserverSpec, MatrixCoreError, NewVerificationFlows, PausedSendRooms,
+    VerificationWatch,
+};
 
 /// How a sign-in or restore ended.
 pub(super) enum SignInEnd {
@@ -25,13 +28,32 @@ pub(super) enum SignInEnd {
 
 pub(super) struct BrowserReady {
     pub(super) client: Client,
-    /// The snapshots of the client's event handlers.
-    pub(super) snapshots: RoomSnapshots,
+    pub(super) handlers: Handlers,
     pub(super) flow: BrowserFlow,
     pub(super) listener: LoopbackListener,
     /// The page to open in the browser.
     pub(super) url: String,
     pub(super) start_sync: bool,
+}
+
+/// What the client's event handlers share with the session: the room
+/// snapshots they keep, and the verification flows they hand over, which
+/// wait for the session's verification task.
+pub(super) struct Handlers {
+    snapshots: RoomSnapshots,
+    verifications: VerificationWatch,
+    new_flows: NewVerificationFlows,
+}
+
+fn register_event_handlers(client: &Client, events: &EventSender) -> Handlers {
+    let snapshots = RoomSnapshots::default();
+    let (verifications, new_flows) = matrix::verification_watch();
+    matrix::register_event_handlers(client, events.clone(), &snapshots, &verifications);
+    Handlers {
+        snapshots,
+        verifications,
+        new_flows,
+    }
 }
 
 /// A `Login`: a password sign-in up to the session, or a browser sign-in
@@ -57,8 +79,7 @@ pub(super) async fn log_in(
             Err(err) => return SignInEnd::Failed(Operation::Login, err.to_string()),
         };
     // Before the session exists: signing in starts E2EE.
-    let snapshots = RoomSnapshots::default();
-    matrix::register_event_handlers(&client, events.clone(), &snapshots);
+    let handlers = register_event_handlers(&client, &events);
 
     match request.method {
         LoginMethod::Password { username, password } => {
@@ -73,7 +94,7 @@ pub(super) async fn log_in(
                         signed_in,
                         Operation::Login,
                         events,
-                        snapshots,
+                        handlers,
                         request.start_sync,
                     )
                     .await
@@ -84,7 +105,7 @@ pub(super) async fn log_in(
         LoginMethod::Browser { user_id_hint } => {
             start_browser_login(
                 client,
-                snapshots,
+                handlers,
                 &request.server,
                 user_id_hint.as_deref(),
                 &request.device_display_name,
@@ -99,7 +120,7 @@ pub(super) async fn log_in(
 /// page.
 async fn start_browser_login(
     client: Client,
-    snapshots: RoomSnapshots,
+    handlers: Handlers,
     server: &str,
     user_id_hint: Option<&str>,
     device_display_name: &str,
@@ -125,7 +146,7 @@ async fn start_browser_login(
     {
         Ok(sign_in) => SignInEnd::BrowserReady(Box::new(BrowserReady {
             client,
-            snapshots,
+            handlers,
             flow: sign_in.flow,
             listener,
             url: sign_in.url,
@@ -139,7 +160,7 @@ async fn start_browser_login(
 /// went, and reads the session.
 pub(super) async fn finish_browser_login(
     client: Client,
-    snapshots: RoomSnapshots,
+    handlers: Handlers,
     flow: BrowserFlow,
     redirect: LoopbackRedirect,
     events: EventSender,
@@ -168,7 +189,7 @@ pub(super) async fn finish_browser_login(
                 signed_in,
                 Operation::Login,
                 events,
-                snapshots,
+                handlers,
                 start_sync,
             )
             .await
@@ -188,8 +209,7 @@ pub(super) async fn restore(
             Ok(client) => client,
             Err(err) => return SignInEnd::Failed(Operation::RestoreSession, err.to_string()),
         };
-    let snapshots = RoomSnapshots::default();
-    matrix::register_event_handlers(&client, events.clone(), &snapshots);
+    let handlers = register_event_handlers(&client, &events);
     if let Err(err) = matrix::restore_session(&client, request.session).await {
         return SignInEnd::Failed(Operation::RestoreSession, err.to_string());
     }
@@ -198,7 +218,7 @@ pub(super) async fn restore(
         Event::RestoredSession,
         Operation::RestoreSession,
         events,
-        snapshots,
+        handlers,
         request.start_sync,
     )
     .await
@@ -219,9 +239,14 @@ async fn read_session(
     signed_in: Event,
     operation: Operation,
     events: EventSender,
-    snapshots: RoomSnapshots,
+    handlers: Handlers,
     start_sync: bool,
 ) -> SignInEnd {
+    let Handlers {
+        snapshots,
+        verifications,
+        new_flows,
+    } = handlers;
     let store_has_synced = match matrix::store_has_synced(&client).await {
         Ok(synced) => synced,
         Err(err) => return SignInEnd::Failed(operation, err.to_string()),
@@ -234,6 +259,8 @@ async fn read_session(
     let e2ee_status_watch = E2eeStatusWatch::default();
     let mut tasks: Vec<LocalBoxFuture<'static, ()>> = vec![
         Box::pin(matrix::session_update_task(client.clone(), events.clone())),
+        // Before any sync: the requests it hands over wait for it.
+        Box::pin(matrix::verification_task(new_flows, events.clone())),
         Box::pin(matrix::send_queue_update_task(
             client.clone(),
             current_user_id,
@@ -310,6 +337,7 @@ async fn read_session(
         e2ee_status,
         e2ee_status_watch,
         snapshots,
+        verifications,
         paused_sends,
         tasks,
         start_sync,

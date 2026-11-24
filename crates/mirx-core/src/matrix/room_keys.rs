@@ -317,7 +317,7 @@ mod tests {
     use matrix_sdk_test::JoinedRoomBuilder;
     use matrix_sdk_test::event_factory::EventFactory;
 
-    use super::super::{backfill_room_history, register_event_handlers};
+    use super::super::{backfill_room_history, register_event_handlers, verification_watch};
     use super::{import_room_keys, retry_decryption, room_decryption_task};
     use crate::api::{
         BackfillRoomHistoryRequest, Event, HistoryFrom, ImportRoomKeysRequest,
@@ -360,7 +360,13 @@ mod tests {
             // As the session does before its first sync.
             bob.event_cache().subscribe().expect("the client is alive");
             let (events_tx, events) = mpsc::channel();
-            register_event_handlers(&bob, events_tx.clone(), &RoomSnapshots::default());
+            let (verifications, _) = verification_watch();
+            register_event_handlers(
+                &bob,
+                events_tx.clone(),
+                &RoomSnapshots::default(),
+                &verifications,
+            );
             // As the session does: subscribed before the room's first sync.
             let mut decryption = Box::pin(room_decryption_task(bob.clone(), events_tx));
             assert!(futures_util::poll!(decryption.as_mut()).is_pending());

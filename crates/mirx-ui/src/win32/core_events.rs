@@ -774,7 +774,7 @@ pub(super) fn apply_core_event(
             state.model.last_activity = None;
             state.model.last_e2ee_status = None;
             state.model.last_e2ee_recovery_setup_result = false;
-            state.model.last_verification = None;
+            state.model.verifications.clear();
             state.model.last_error = None;
             state.model.room_read_states.clear();
             state.model.room_list = None;
@@ -2988,40 +2988,107 @@ mod tests {
         assert_eq!(state.model.status, "offline");
     }
 
+    fn alice_asks(flow_id: &str) -> Event {
+        Event::VerificationRequest(VerificationRequest {
+            flow_id: flow_id.to_owned(),
+            user_id: "@alice:example".to_owned(),
+            direction: VerificationDirection::Incoming {
+                from_device: "ALICEDEVICE".to_owned(),
+            },
+        })
+    }
+
+    fn verification_state(flow_id: &str, user_id: &str, state: VerificationState) -> Event {
+        Event::VerificationState(VerificationStateEvent {
+            flow_id: flow_id.to_owned(),
+            user_id: user_id.to_owned(),
+            device_id: None,
+            state,
+        })
+    }
+
+    fn flows(state: &WindowState) -> Vec<(String, &'static str)> {
+        state
+            .model
+            .verifications
+            .iter()
+            .map(|verification| {
+                (
+                    verification.flow_id.clone(),
+                    verification_state_label(&verification.state),
+                )
+            })
+            .collect()
+    }
+
     #[test]
     fn verification_request_event_stores_requested_state_and_logs_actions() {
         let mut state = test_state();
 
-        apply_core_event(
-            &mut state,
-            Event::VerificationRequest(VerificationRequest {
-                flow_id: "flow-verify-123".to_owned(),
-                user_id: "@alice:example".to_owned(),
-                direction: VerificationDirection::Incoming {
-                    from_device: "ALICEDEVICE".to_owned(),
-                },
-            }),
-        )
-        .unwrap();
+        apply_core_event(&mut state, alice_asks("flow-verify-123")).unwrap();
 
-        assert_eq!(
-            state.model.last_verification,
-            Some(VerificationStateEvent {
-                flow_id: "flow-verify-123".to_owned(),
-                user_id: "@alice:example".to_owned(),
-                state: VerificationState::Requested,
-            })
-        );
+        assert_eq!(flows(&state), [("flow-verify-123".to_owned(), "requested")]);
         assert_eq!(
             status_log_lines(&state),
             vec![
-                "[22:12] * Verification requested by @alice:example (flow flow-verify-123)"
+                "[22:12] * Verification requested by @alice:example (session ALICEDEVICE)"
                     .to_owned(),
                 "[22:12] * Actions: Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel"
                     .to_owned(),
             ]
         );
     }
+
+    /// Until iter-77 the second flow replaced the first, and every event of
+    /// either flow made its flow the current one.
+    #[test]
+    fn a_second_flow_joins_the_first_and_the_firsts_events_stay_its_own() {
+        let mut state = test_state();
+        apply_core_event(&mut state, alice_asks("flow-alice")).unwrap();
+        apply_core_event(
+            &mut state,
+            Event::VerificationRequest(VerificationRequest {
+                flow_id: "flow-bob".to_owned(),
+                user_id: "@bob:example".to_owned(),
+                direction: VerificationDirection::Incoming {
+                    from_device: "B0B".to_owned(),
+                },
+            }),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            verification_state("flow-alice", "@alice:example", VerificationState::Ready),
+        )
+        .unwrap();
+
+        assert_eq!(
+            flows(&state),
+            [
+                ("flow-alice".to_owned(), "ready"),
+                ("flow-bob".to_owned(), "requested")
+            ]
+        );
+        assert_eq!(
+            state
+                .model
+                .verifications
+                .latest()
+                .map(|latest| latest.flow_id.as_str()),
+            Some("flow-bob")
+        );
+        assert_eq!(
+            status_log_lines(&state)[2..],
+            [
+                "[22:12] * Verification requested by @bob:example (session B0B)",
+                "[22:12] * Actions: Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel",
+                "[22:12] * Also under way: @alice:example ALICEDEVICE (requested); /verify <action> <user> [session] answers one of them",
+                "[22:12] * Verification ready with @alice:example (session ALICEDEVICE)",
+                "[22:12] * Actions: /verify cancel @alice:example ALICEDEVICE",
+            ]
+        );
+    }
+
     #[test]
     fn outgoing_verification_request_is_sent_with_only_cancel() {
         let mut state = test_state();
@@ -3037,17 +3104,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            state.model.last_verification,
-            Some(VerificationStateEvent {
-                flow_id: "flow-out".to_owned(),
-                user_id: "@me:example".to_owned(),
-                state: VerificationState::Sent,
-            })
-        );
+        assert_eq!(flows(&state), [("flow-out".to_owned(), "sent")]);
         assert_eq!(
             state.model.status,
-            "verification request sent to @me:example"
+            "verification sent with your other sessions"
         );
         assert_eq!(
             status_log_lines(&state),
@@ -3062,12 +3122,14 @@ mod tests {
     #[test]
     fn verification_sas_ready_and_errors_are_logged_to_status() {
         let mut state = test_state();
+        apply_core_event(&mut state, alice_asks("flow-verify-123")).unwrap();
+        state.model.status_log = StatusLog::default();
         apply_core_event(
             &mut state,
-            Event::VerificationState(VerificationStateEvent {
-                flow_id: "flow-verify-123".to_owned(),
-                user_id: "@alice:example".to_owned(),
-                state: VerificationState::SasReady {
+            verification_state(
+                "flow-verify-123",
+                "@alice:example",
+                VerificationState::SasReady {
                     emojis: vec![
                         VerificationEmoji {
                             symbol: "🐶".to_owned(),
@@ -3084,7 +3146,7 @@ mod tests {
                         third: 9012,
                     },
                 },
-            }),
+            ),
         )
         .unwrap();
         apply_core_event(
@@ -3101,7 +3163,7 @@ mod tests {
         assert_eq!(
             project_timeline_rows(&rows),
             vec![
-                "[22:12] * Verification with @alice:example: compare the emoji or the numbers"
+                "[22:12] * Verification with @alice:example (session ALICEDEVICE): compare the emoji or the numbers"
                     .to_owned(),
                 "[22:12] * Emoji: 🐶 dog | 🔥 fire".to_owned(),
                 "[22:12] * Decimals: 1234-5678-9012".to_owned(),
@@ -3356,47 +3418,46 @@ mod tests {
     }
 
     #[test]
-    fn verification_done_logs_terminal_text_without_actions() {
+    fn verification_done_logs_terminal_text_without_actions_and_ends_the_flow() {
         let mut state = test_state();
+        apply_core_event(&mut state, alice_asks("flow-verify-123")).unwrap();
         apply_core_event(
             &mut state,
-            Event::VerificationState(VerificationStateEvent {
-                flow_id: "flow-verify-123".to_owned(),
-                user_id: "@alice:example".to_owned(),
-                state: VerificationState::Done,
-            }),
+            verification_state("flow-verify-123", "@alice:example", VerificationState::Done),
         )
         .unwrap();
 
         assert_eq!(
-            status_log_lines(&state),
-            vec!["[22:12] * Verification done with @alice:example: verified".to_owned()]
+            status_log_lines(&state)[2..],
+            ["[22:12] * Verification done with @alice:example (session ALICEDEVICE): verified"]
         );
+        assert!(flows(&state).is_empty());
     }
     #[test]
-    fn verification_cancelled_logs_reason_code_without_actions() {
+    fn verification_cancelled_logs_reason_code_without_actions_and_ends_the_flow() {
         let mut state = test_state();
+        apply_core_event(&mut state, alice_asks("flow-verify-123")).unwrap();
         apply_core_event(
             &mut state,
-            Event::VerificationState(VerificationStateEvent {
-                flow_id: "flow-verify-123".to_owned(),
-                user_id: "@alice:example".to_owned(),
-                state: VerificationState::Cancelled {
+            verification_state(
+                "flow-verify-123",
+                "@alice:example",
+                VerificationState::Cancelled {
                     reason: "timed out".to_owned(),
                     code: "m.timeout".to_owned(),
                     cancelled_by_us: false,
                 },
-            }),
+            ),
         )
         .unwrap();
 
         assert_eq!(
-            status_log_lines(&state),
-            vec![
-                "[22:12] * Verification cancelled with @alice:example: timed out (m.timeout)"
-                    .to_owned()
+            status_log_lines(&state)[2..],
+            [
+                "[22:12] * Verification cancelled with @alice:example (session ALICEDEVICE): timed out (m.timeout)"
             ]
         );
+        assert!(flows(&state).is_empty());
     }
 
     #[test]
@@ -3522,11 +3583,7 @@ mod tests {
             Some(true),
             Some(true),
         ));
-        state.model.last_verification = Some(VerificationStateEvent {
-            flow_id: "flow".to_owned(),
-            user_id: "@alice:example".to_owned(),
-            state: VerificationState::Requested,
-        });
+        apply_core_event(&mut state, alice_asks("flow")).unwrap();
         state.model.last_error = Some(CoreErrorEvent {
             operation: Operation::SendMessage,
             room_id: Some("!room:example".to_owned()),
@@ -3564,7 +3621,7 @@ mod tests {
         assert!(state.model.room_views.is_empty());
         assert_eq!(state.model.last_activity, None);
         assert_eq!(state.model.last_e2ee_status, None);
-        assert_eq!(state.model.last_verification, None);
+        assert_eq!(state.model.verifications.len(), 0);
         assert_eq!(state.model.last_error, None);
         assert!(state.find_states.is_empty());
         assert_eq!(removed.len(), 1);

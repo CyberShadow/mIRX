@@ -399,7 +399,10 @@ pub struct Model {
     pub e2ee_status: Option<E2eeStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_e2ee_recovery_setup_result: Option<E2eeRecoverySetupResult>,
-    pub last_verification: Option<Verification>,
+    /// The verifications under way, in the order they started: the last
+    /// is the latest, which the Tools items answer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verifications: Vec<Verification>,
     /// Every room's identity-change warnings, by room and then user.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub identity_warnings: Vec<IdentityWarning>,
@@ -1330,6 +1333,8 @@ impl RoomImageMedia {
 pub struct Verification {
     pub flow_id: String,
     pub user_id: String,
+    pub device_id: Option<String>,
+    pub outgoing: bool,
     pub state: VerificationState,
 }
 
@@ -1338,7 +1343,6 @@ pub struct Verification {
 pub enum VerificationState {
     Requested,
     Sent,
-    Accepted,
     Ready,
     SasReady {
         emojis: Vec<VerificationEmoji>,
@@ -1358,7 +1362,6 @@ pub enum VerificationState {
 enum VerificationStateSerde {
     Requested {},
     Sent {},
-    Accepted {},
     Ready {},
     SasReady {
         emojis: Vec<VerificationEmoji>,
@@ -1382,7 +1385,6 @@ impl<'de> Deserialize<'de> for VerificationState {
         Ok(match state {
             VerificationStateSerde::Requested {} => Self::Requested,
             VerificationStateSerde::Sent {} => Self::Sent,
-            VerificationStateSerde::Accepted {} => Self::Accepted,
             VerificationStateSerde::Ready {} => Self::Ready,
             VerificationStateSerde::SasReady { emojis, decimals } => {
                 Self::SasReady { emojis, decimals }

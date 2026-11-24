@@ -1,39 +1,267 @@
-//! Device verification and E2EE status: labels and submissions.
+//! Device verification and E2EE status: the verifications under way,
+//! their labels, and the answers to them.
 
 use super::*;
 
-pub(super) fn apply_verification_event(state: &mut WindowState, event: VerificationStateEvent) {
-    for line in status_log::verification(&event) {
-        log_status(state, StatusLineKind::Info, line);
-    }
-    state.model.status = verification_status_message(&event);
-    state.model.last_verification = Some(event);
+/// A verification under way, as the core reported it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Verification {
+    pub(super) flow_id: String,
+    /// The other side: your own user for a verification between your
+    /// sessions.
+    pub(super) user_id: String,
+    /// The other side's session, once known.
+    pub(super) device_id: Option<String>,
+    /// This session asked.
+    pub(super) outgoing: bool,
+    pub(super) state: VerificationState,
 }
 
-/// A new flow, in or out, replaces the current one: the UI follows one
-/// verification at a time.
-pub(super) fn apply_verification_request(state: &mut WindowState, request: VerificationRequest) {
-    let lines = status_log::verification_request(&request, state.model.own_user_id());
+impl Verification {
+    fn flow(&self) -> VerificationFlowId {
+        VerificationFlowId {
+            flow_id: self.flow_id.clone(),
+            user_id: self.user_id.clone(),
+        }
+    }
+
+    /// How it is named in a `/verify` answer: the user, and the session
+    /// once known.
+    pub(super) fn name(&self) -> String {
+        match &self.device_id {
+            Some(device_id) => format!("{} {device_id}", self.user_id),
+            None => self.user_id.clone(),
+        }
+    }
+
+    /// How Status lines and the status bar call the other side.
+    pub(super) fn label(&self, own_user_id: Option<&str>) -> String {
+        let own = own_user_id == Some(self.user_id.as_str());
+        match (&self.device_id, own) {
+            (Some(device_id), true) => format!("your session {device_id}"),
+            (None, true) => "your other sessions".to_owned(),
+            (Some(device_id), false) => format!("{} (session {device_id})", self.user_id),
+            (None, false) => self.user_id.clone(),
+        }
+    }
+
+    /// `name (state)`, as the lists of flows under way say it.
+    fn listed(&self) -> String {
+        format!(
+            "{} ({})",
+            self.name(),
+            verification_state_label(&self.state)
+        )
+    }
+}
+
+/// Which flow a `/verify` answer names: a user ID, and the session if
+/// given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct VerificationTarget<'t> {
+    pub(super) user_id: &'t str,
+    pub(super) device_id: Option<&'t str>,
+}
+
+/// The verifications under way, in the order they started. The latest
+/// (the last started) is what the Tools items and a `/verify` answer
+/// without a name act on: the most recently started, not the most
+/// recently changed, so another flow's progress never moves the target
+/// between reading the emoji and answering. A flow that starts later is
+/// only requested or sent, which Confirm and Reject do not apply to. A
+/// flow leaves when it is done or cancelled.
+#[derive(Debug, Default)]
+pub(super) struct Verifications(Vec<Verification>);
+
+impl Verifications {
+    /// A flow the core announced. It is new: the core announces each once.
+    fn start(&mut self, request: VerificationRequest) -> &Verification {
+        assert!(
+            self.position(&request.user_id, &request.flow_id).is_none(),
+            "the core announces a flow once: {request:?}"
+        );
+        let (device_id, outgoing, state) = match request.direction {
+            VerificationDirection::Incoming { from_device } => {
+                (Some(from_device), false, VerificationState::Requested)
+            }
+            VerificationDirection::Outgoing { to_device } => {
+                (to_device, true, VerificationState::Sent)
+            }
+        };
+        self.0.push(Verification {
+            flow_id: request.flow_id,
+            user_id: request.user_id,
+            device_id,
+            outgoing,
+            state,
+        });
+        self.0.last().expect("just pushed")
+    }
+
+    /// A state of a flow the core announced; done or cancelled, the flow
+    /// leaves. The flow as it is now.
+    fn update(&mut self, event: VerificationStateEvent) -> Verification {
+        let index = self
+            .position(&event.user_id, &event.flow_id)
+            .unwrap_or_else(|| panic!("the core reports only flows it announced: {event:?}"));
+        let verification = &mut self.0[index];
+        if event.device_id.is_some() {
+            verification.device_id = event.device_id;
+        }
+        verification.state = event.state;
+        match verification.state {
+            VerificationState::Done | VerificationState::Cancelled { .. } => self.0.remove(index),
+            _ => verification.clone(),
+        }
+    }
+
+    fn position(&self, user_id: &str, flow_id: &str) -> Option<usize> {
+        self.0.iter().position(|verification| {
+            verification.user_id == user_id && verification.flow_id == flow_id
+        })
+    }
+
+    pub(super) fn latest(&self) -> Option<&Verification> {
+        self.0.last()
+    }
+
+    fn is_latest(&self, verification: &Verification) -> bool {
+        self.latest()
+            .is_some_and(|latest| latest.flow_id == verification.flow_id)
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = &Verification> {
+        self.0.iter()
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// The flow with `user_id` under way: the SDK holds at most one per
+    /// user (a second request cancels both).
+    fn with_user(&self, user_id: &str) -> Option<&Verification> {
+        self.0
+            .iter()
+            .find(|verification| verification.user_id == user_id)
+    }
+
+    /// `name (state), ...` of every flow under way.
+    fn listing(&self) -> String {
+        self.0
+            .iter()
+            .map(Verification::listed)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// The flow `action` answers: the latest without a target. Refused,
+    /// with the flows under way, when none matches, several do, or the
+    /// action does not apply to the flow's state; never another flow.
+    fn answered(
+        &self,
+        action: VerificationAction,
+        target: Option<&VerificationTarget>,
+    ) -> Result<&Verification, String> {
+        let word = verification_action_label(action);
+        let Some(target) = target else {
+            let latest = self
+                .latest()
+                .ok_or_else(|| "no verification is under way".to_owned())?;
+            if !verification_action_applies(&latest.state, action) {
+                return Err(format!(
+                    "{word} does not apply to the latest verification, {}; under way: {}",
+                    latest.listed(),
+                    self.listing()
+                ));
+            }
+            return Ok(latest);
+        };
+        let matches = self
+            .0
+            .iter()
+            .filter(|verification| {
+                verification.user_id == target.user_id
+                    && target.device_id.is_none_or(|device_id| {
+                        verification.device_id.as_deref() == Some(device_id)
+                    })
+            })
+            .collect::<Vec<_>>();
+        let named = match target.device_id {
+            Some(device_id) => format!("{} {device_id}", target.user_id),
+            None => target.user_id.to_owned(),
+        };
+        match matches[..] {
+            [] if self.0.is_empty() => Err("no verification is under way".to_owned()),
+            [] => Err(format!(
+                "no verification with {named} is under way; under way: {}",
+                self.listing()
+            )),
+            [verification] if !verification_action_applies(&verification.state, action) => {
+                Err(format!(
+                    "{word} does not apply to the verification {}",
+                    verification.listed()
+                ))
+            }
+            [verification] => Ok(verification),
+            _ => Err(format!(
+                "{} verifications with {named} are under way; name the session: {}",
+                matches.len(),
+                matches
+                    .iter()
+                    .map(|verification| verification.listed())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+}
+
+pub(super) fn apply_verification_event(state: &mut WindowState, event: VerificationStateEvent) {
+    let verification = state.model.verifications.update(event);
+    let own_user_id = state.model.own_user_id().map(str::to_owned);
+    let lines = status_log::verification(
+        &verification,
+        own_user_id.as_deref(),
+        state.model.verifications.is_latest(&verification),
+    );
     for line in lines {
         log_status(state, StatusLineKind::Info, line);
     }
-    let event = verification_state_event_from_request(request);
-    state.model.status = verification_status_message(&event);
-    state.model.last_verification = Some(event);
+    state.model.status = verification_status_message(&verification, own_user_id.as_deref());
 }
 
-/// The flow's first state: requested by the other side, or sent by this
-/// session.
-pub(super) fn verification_state_event_from_request(
-    request: VerificationRequest,
-) -> VerificationStateEvent {
-    VerificationStateEvent {
-        flow_id: request.flow_id,
-        user_id: request.user_id,
-        state: match request.direction {
-            VerificationDirection::Incoming { .. } => VerificationState::Requested,
-            VerificationDirection::Outgoing { .. } => VerificationState::Sent,
-        },
+/// A new flow, in or out: it joins those under way, as the latest.
+pub(super) fn apply_verification_request(state: &mut WindowState, request: VerificationRequest) {
+    let own_user_id = state.model.own_user_id().map(str::to_owned);
+    let verification = state.model.verifications.start(request).clone();
+    let others = state
+        .model
+        .verifications
+        .iter()
+        .filter(|other| other.flow_id != verification.flow_id)
+        .map(Verification::listed)
+        .collect::<Vec<_>>();
+    for line in status_log::verification_request(&verification, own_user_id.as_deref(), &others) {
+        log_status(state, StatusLineKind::Info, line);
+    }
+    state.model.status = verification_status_message(&verification, own_user_id.as_deref());
+}
+
+/// Refuses to start a verification with a user who has one under way:
+/// the SDK would cancel both.
+pub(super) fn refuse_second_verification(model: &UiModel, user_id: &str) -> Result<(), String> {
+    match model.verifications.with_user(user_id) {
+        Some(verification) => Err(format!(
+            "a verification with {} is under way; answer or cancel it first: /verify cancel {}",
+            verification.label(model.own_user_id()),
+            verification.name()
+        )),
+        None => Ok(()),
     }
 }
 
@@ -41,13 +269,33 @@ pub(super) fn verification_state_label(state: &VerificationState) -> &'static st
     match state {
         VerificationState::Requested => "requested",
         VerificationState::Sent => "sent",
-        VerificationState::Accepted => "accepted",
         VerificationState::Ready => "ready",
         VerificationState::SasReady { .. } => "sas ready",
         VerificationState::Confirmed => "confirmed",
         VerificationState::Done => "done",
         VerificationState::Cancelled { .. } => "cancelled",
     }
+}
+
+/// Whether `action` answers a flow in `state`: the Tools items' and the
+/// `/verify` answers' one rule.
+pub(super) fn verification_action_applies(
+    state: &VerificationState,
+    action: VerificationAction,
+) -> bool {
+    matches!(
+        (state, action),
+        (
+            VerificationState::Requested,
+            VerificationAction::Accept | VerificationAction::Cancel
+        ) | (
+            VerificationState::Sent | VerificationState::Ready | VerificationState::Confirmed,
+            VerificationAction::Cancel
+        ) | (
+            VerificationState::SasReady { .. },
+            VerificationAction::Cancel | VerificationAction::Confirm | VerificationAction::Reject
+        )
+    )
 }
 
 pub(super) fn e2ee_recovery_state_label(state: E2eeRecoveryState) -> &'static str {
@@ -144,21 +392,12 @@ pub(super) fn e2ee_cross_signing_label(status: Option<&E2eeCrossSigningStatus>) 
     }
 }
 
-fn verification_status_message(event: &VerificationStateEvent) -> String {
-    match &event.state {
-        VerificationState::Requested => format!("verification requested by {}", event.user_id),
-        VerificationState::Sent => format!("verification request sent to {}", event.user_id),
-        VerificationState::Accepted => format!("verification accepted with {}", event.user_id),
-        VerificationState::Ready => format!("verification ready with {}", event.user_id),
-        VerificationState::SasReady { .. } => {
-            format!("verification sas ready with {}", event.user_id)
-        }
-        VerificationState::Confirmed => format!("verification confirmed with {}", event.user_id),
-        VerificationState::Done => format!("verification done with {}", event.user_id),
-        VerificationState::Cancelled { .. } => {
-            format!("verification cancelled with {}", event.user_id)
-        }
-    }
+fn verification_status_message(verification: &Verification, own_user_id: Option<&str>) -> String {
+    format!(
+        "verification {} with {}",
+        verification_state_label(&verification.state),
+        verification.label(own_user_id)
+    )
 }
 
 pub(super) fn format_verification_emojis(emojis: &[VerificationEmoji]) -> String {
@@ -178,43 +417,31 @@ pub(super) fn verification_action_label(action: VerificationAction) -> &'static 
     }
 }
 
-fn current_verification_flow_id(model: &UiModel) -> Result<VerificationFlowId, String> {
-    let event = model
-        .last_verification
-        .as_ref()
-        .ok_or_else(|| "no verification flow available".to_owned())?;
-    Ok(VerificationFlowId {
-        flow_id: event.flow_id.clone(),
-        user_id: event.user_id.clone(),
-    })
-}
-
-fn submit_verification_command(
+/// Sends `action` for the flow it answers (see `Verifications::answered`).
+pub(super) fn submit_verification_answer(
     state: &mut WindowState,
-    command: Command,
-    action_name: &'static str,
+    action: VerificationAction,
+    target: Option<&VerificationTarget>,
 ) -> Result<(), String> {
-    {
-        let sender = state
-            .command_sender
-            .as_ref()
-            .ok_or_else(|| "core command sender is not available".to_owned())?;
-        sender.send(command.clone()).map_err(|err| {
-            format!("failed to enqueue {action_name} verification command: {err}")
-        })?;
-    }
-    state.harness.record_command(command);
-    Ok(())
+    let flow = state.model.verifications.answered(action, target)?.flow();
+    enqueue_command(state, verification_command(action, flow))
 }
 
+fn verification_command(action: VerificationAction, flow: VerificationFlowId) -> Command {
+    match action {
+        VerificationAction::Accept => Command::AcceptVerification(flow),
+        VerificationAction::Cancel => Command::CancelVerification(flow),
+        VerificationAction::Confirm => Command::ConfirmVerificationSas(flow),
+        VerificationAction::Reject => Command::RejectVerificationSas(flow),
+    }
+}
+
+/// A Tools item: the latest flow's answer.
 pub(super) unsafe fn submit_menu_verification_action(
     hwnd: HWND,
     action: VerificationAction,
 ) -> Result<(), String> {
-    {
-        let state = state_mut(hwnd);
-        submit_menu_verification_action_to_state(state, action)?;
-    }
+    submit_verification_answer(state_mut(hwnd), action, None)?;
     set_local_command_status(
         hwnd,
         format!(
@@ -224,76 +451,14 @@ pub(super) unsafe fn submit_menu_verification_action(
     )
 }
 
-fn submit_menu_verification_action_to_state(
-    state: &mut WindowState,
-    action: VerificationAction,
-) -> Result<(), String> {
-    if !verification_menu_action_enabled(state.model.last_verification.as_ref(), action) {
-        return Err("verification action is not available in the current state".to_owned());
-    }
-
-    match action {
-        VerificationAction::Accept => submit_accept_verification(state),
-        VerificationAction::Cancel => submit_cancel_verification(state),
-        VerificationAction::Confirm => submit_confirm_verification_sas(state),
-        VerificationAction::Reject => submit_reject_verification_sas(state),
-    }
-}
-
-fn submit_accept_verification_flow(
-    state: &mut WindowState,
-    flow: VerificationFlowId,
-) -> Result<(), String> {
-    submit_verification_command(state, Command::AcceptVerification(flow), "accept")
-}
-
-pub(super) fn submit_accept_verification(state: &mut WindowState) -> Result<(), String> {
-    let flow = current_verification_flow_id(&state.model)?;
-    submit_accept_verification_flow(state, flow)
-}
-
-fn submit_cancel_verification_flow(
-    state: &mut WindowState,
-    flow: VerificationFlowId,
-) -> Result<(), String> {
-    submit_verification_command(state, Command::CancelVerification(flow), "cancel")
-}
-
-pub(super) fn submit_cancel_verification(state: &mut WindowState) -> Result<(), String> {
-    let flow = current_verification_flow_id(&state.model)?;
-    submit_cancel_verification_flow(state, flow)
-}
-
-fn submit_confirm_verification_sas_flow(
-    state: &mut WindowState,
-    flow: VerificationFlowId,
-) -> Result<(), String> {
-    submit_verification_command(state, Command::ConfirmVerificationSas(flow), "confirm")
-}
-
-pub(super) fn submit_confirm_verification_sas(state: &mut WindowState) -> Result<(), String> {
-    let flow = current_verification_flow_id(&state.model)?;
-    submit_confirm_verification_sas_flow(state, flow)
-}
-
-fn submit_reject_verification_sas_flow(
-    state: &mut WindowState,
-    flow: VerificationFlowId,
-) -> Result<(), String> {
-    submit_verification_command(state, Command::RejectVerificationSas(flow), "reject")
-}
-
-pub(super) fn submit_reject_verification_sas(state: &mut WindowState) -> Result<(), String> {
-    let flow = current_verification_flow_id(&state.model)?;
-    submit_reject_verification_sas_flow(state, flow)
-}
-
 /// The automation harness's part of this module: what it reads and does
 /// here for the protocol.
 #[cfg(any(test, feature = "automation"))]
 pub(super) mod automation {
     use super::*;
 
+    /// The flow the args name, else the latest, whatever its state: the
+    /// harness sends what it is told.
     fn verification_flow_id_from_action_args(
         model: &UiModel,
         args: &VerificationActionArgs,
@@ -303,7 +468,11 @@ pub(super) mod automation {
                 flow_id: flow_id.clone(),
                 user_id: user_id.clone(),
             }),
-            (None, None) => current_verification_flow_id(model),
+            (None, None) => model
+                .verifications
+                .latest()
+                .map(Verification::flow)
+                .ok_or_else(|| "no verification is under way".to_owned()),
             _ => unreachable!("verification action args must contain both flow_id and user_id"),
         }
     }
@@ -332,18 +501,12 @@ pub(super) mod automation {
         args: VerificationActionArgs,
     ) -> Result<(), String> {
         let flow = verification_flow_id_from_action_args(&state.model, &args)?;
-        match action {
-            VerificationAction::Accept => submit_accept_verification_flow(state, flow),
-            VerificationAction::Cancel => submit_cancel_verification_flow(state, flow),
-            VerificationAction::Confirm => submit_confirm_verification_sas_flow(state, flow),
-            VerificationAction::Reject => submit_reject_verification_sas_flow(state, flow),
-        }
+        enqueue_command(state, verification_command(action, flow))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::menus::verification_actions_text;
     use super::automation::*;
 
     use super::super::test_fixtures::*;
@@ -395,15 +558,38 @@ mod tests {
         assert_eq!(e2ee_backup_health_summary(&transitional), "backup enabling");
     }
 
-    fn test_verification_state_event(state: VerificationState) -> VerificationStateEvent {
+    fn request(
+        flow_id: &str,
+        user_id: &str,
+        direction: VerificationDirection,
+    ) -> VerificationRequest {
+        VerificationRequest {
+            flow_id: flow_id.to_owned(),
+            user_id: user_id.to_owned(),
+            direction,
+        }
+    }
+
+    fn incoming(flow_id: &str, user_id: &str, device: &str) -> VerificationRequest {
+        request(
+            flow_id,
+            user_id,
+            VerificationDirection::Incoming {
+                from_device: device.to_owned(),
+            },
+        )
+    }
+
+    fn event(flow_id: &str, user_id: &str, state: VerificationState) -> VerificationStateEvent {
         VerificationStateEvent {
-            flow_id: "flow-current".to_owned(),
-            user_id: "@alice:example".to_owned(),
+            flow_id: flow_id.to_owned(),
+            user_id: user_id.to_owned(),
+            device_id: None,
             state,
         }
     }
 
-    fn test_verification_sas_ready_state() -> VerificationState {
+    fn sas_ready() -> VerificationState {
         VerificationState::SasReady {
             emojis: vec![VerificationEmoji {
                 symbol: "🐶".to_owned(),
@@ -417,263 +603,250 @@ mod tests {
         }
     }
 
-    #[test]
-    fn verification_menu_action_predicate_matches_state_table() {
-        let assert_actions = |last_verification: Option<&VerificationStateEvent>,
-                              accept: bool,
-                              cancel: bool,
-                              confirm: bool,
-                              reject: bool| {
-            assert_eq!(
-                verification_menu_action_enabled(last_verification, VerificationAction::Accept),
-                accept
-            );
-            assert_eq!(
-                verification_menu_action_enabled(last_verification, VerificationAction::Cancel),
-                cancel
-            );
-            assert_eq!(
-                verification_menu_action_enabled(last_verification, VerificationAction::Confirm),
-                confirm
-            );
-            assert_eq!(
-                verification_menu_action_enabled(last_verification, VerificationAction::Reject),
-                reject
-            );
-        };
-
-        let requested = test_verification_state_event(VerificationState::Requested);
-        let sent = test_verification_state_event(VerificationState::Sent);
-        let accepted = test_verification_state_event(VerificationState::Accepted);
-        let ready = test_verification_state_event(VerificationState::Ready);
-        let sas_ready = test_verification_state_event(test_verification_sas_ready_state());
-        let confirmed = test_verification_state_event(VerificationState::Confirmed);
-        let done = test_verification_state_event(VerificationState::Done);
-        let cancelled = test_verification_state_event(VerificationState::Cancelled {
+    fn cancelled() -> VerificationState {
+        VerificationState::Cancelled {
             reason: "timed out".to_owned(),
             code: "m.timeout".to_owned(),
             cancelled_by_us: false,
-        });
+        }
+    }
 
-        assert_actions(None, false, false, false, false);
-        assert_actions(Some(&requested), true, true, false, false);
-        assert_actions(Some(&sent), false, true, false, false);
-        assert_actions(Some(&accepted), false, true, false, false);
-        assert_actions(Some(&ready), false, true, false, false);
-        assert_actions(Some(&sas_ready), false, true, true, true);
-        assert_actions(Some(&confirmed), false, true, false, false);
-        assert_actions(Some(&done), false, false, false, false);
-        assert_actions(Some(&cancelled), false, false, false, false);
+    fn states(verifications: &Verifications) -> Vec<(&str, &'static str)> {
+        verifications
+            .iter()
+            .map(|verification| {
+                (
+                    verification.flow_id.as_str(),
+                    verification_state_label(&verification.state),
+                )
+            })
+            .collect()
+    }
+
+    fn target<'t>(user_id: &'t str, device_id: Option<&'t str>) -> VerificationTarget<'t> {
+        VerificationTarget { user_id, device_id }
+    }
+
+    /// Bob's SAS, then Carol asks: both are under way, Carol's is the
+    /// latest, and Bob's events still update Bob's.
+    fn bob_at_sas_then_carol() -> Verifications {
+        let mut verifications = Verifications::default();
+        verifications.start(incoming("flow-bob", "@bob:example", "B0B"));
+        verifications.update(event("flow-bob", "@bob:example", sas_ready()));
+        verifications.start(incoming("flow-carol", "@carol:example", "C4R0L"));
+        verifications
     }
 
     #[test]
-    fn verification_actions_text_matches_native_menu_affordance_strings() {
-        let requested = test_verification_state_event(VerificationState::Requested);
-        let sas_ready = test_verification_state_event(test_verification_sas_ready_state());
-        let done = test_verification_state_event(VerificationState::Done);
-        let cancelled = test_verification_state_event(VerificationState::Cancelled {
-            reason: "timed out".to_owned(),
-            code: "m.timeout".to_owned(),
-            cancelled_by_us: false,
-        });
-
+    fn a_second_flow_joins_the_first_and_each_keeps_its_own_state() {
+        let mut verifications = bob_at_sas_then_carol();
         assert_eq!(
-            verification_actions_text(Some(&requested)),
-            Some(
-                "Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel"
-            )
+            states(&verifications),
+            [("flow-bob", "sas ready"), ("flow-carol", "requested")]
         );
-        assert_eq!(
-            verification_actions_text(Some(&sas_ready)),
-            Some(
-                "Tools > Confirm SAS, Tools > Reject SAS, Tools > Cancel Verification, /verify confirm, /verify reject, /verify cancel"
-            )
-        );
-        assert_eq!(
-            verification_actions_text(Some(&test_verification_state_event(
-                VerificationState::Sent
-            ))),
-            Some("Tools > Cancel Verification, /verify cancel")
-        );
-        assert_eq!(verification_actions_text(Some(&done)), None);
-        assert_eq!(verification_actions_text(Some(&cancelled)), None);
-        assert_eq!(verification_actions_text(None), None);
-    }
-
-    #[test]
-    fn submit_verification_helpers_enqueue_typed_commands_for_current_flow() {
-        let mut state = test_state();
-        let handle = start_test_core();
-        state.command_sender = Some(handle.command_sender().clone());
-        state.model.last_verification = Some(VerificationStateEvent {
-            flow_id: "flow-verify-123".to_owned(),
-            user_id: "@alice:example".to_owned(),
-            state: VerificationState::SasReady {
-                emojis: vec![VerificationEmoji {
-                    symbol: "🐶".to_owned(),
-                    description: "dog".to_owned(),
-                }],
-                decimals: mirx_core::VerificationDecimals {
-                    first: 1234,
-                    second: 5678,
-                    third: 9012,
-                },
-            },
-        });
-        let last_verification = state.model.last_verification.clone();
-
-        submit_accept_verification(&mut state).unwrap();
-        submit_cancel_verification(&mut state).unwrap();
-        submit_confirm_verification_sas(&mut state).unwrap();
-        submit_reject_verification_sas(&mut state).unwrap();
-
-        assert_eq!(state.model.last_verification, last_verification);
-        assert_eq!(
-            state.harness.commands,
-            vec![
-                Command::AcceptVerification(VerificationFlowId {
-                    flow_id: "flow-verify-123".to_owned(),
-                    user_id: "@alice:example".to_owned(),
-                }),
-                Command::CancelVerification(VerificationFlowId {
-                    flow_id: "flow-verify-123".to_owned(),
-                    user_id: "@alice:example".to_owned(),
-                }),
-                Command::ConfirmVerificationSas(VerificationFlowId {
-                    flow_id: "flow-verify-123".to_owned(),
-                    user_id: "@alice:example".to_owned(),
-                }),
-                Command::RejectVerificationSas(VerificationFlowId {
-                    flow_id: "flow-verify-123".to_owned(),
-                    user_id: "@alice:example".to_owned(),
-                }),
-            ]
-        );
-
-        handle
-            .command_sender()
-            .send(Command::Shutdown)
-            .expect("shutdown command must enqueue");
-        handle.join().expect("test core must stop cleanly");
-    }
-
-    #[test]
-    fn submit_menu_verification_action_rejects_disabled_actions_without_recording_commands() {
-        let mut state = test_state();
-        let handle = start_test_core();
-        state.command_sender = Some(handle.command_sender().clone());
-        state.model.last_verification =
-            Some(test_verification_state_event(VerificationState::Accepted));
-        let last_verification = state.model.last_verification.clone();
-
-        assert_eq!(
-            submit_menu_verification_action_to_state(&mut state, VerificationAction::Accept),
-            Err("verification action is not available in the current state".to_owned())
-        );
-        assert_eq!(state.model.last_verification, last_verification);
-        assert!(state.harness.commands.is_empty());
-
-        handle
-            .command_sender()
-            .send(Command::Shutdown)
-            .expect("shutdown command must enqueue");
-        handle.join().expect("test core must stop cleanly");
-    }
-
-    #[test]
-    fn submit_menu_verification_action_enqueues_typed_commands_for_requested_flow() {
-        let mut state = test_state();
-        let handle = start_test_core();
-        state.command_sender = Some(handle.command_sender().clone());
-        state.model.last_verification =
-            Some(test_verification_state_event(VerificationState::Requested));
-        let last_verification = state.model.last_verification.clone();
-
-        submit_menu_verification_action_to_state(&mut state, VerificationAction::Accept).unwrap();
-        submit_menu_verification_action_to_state(&mut state, VerificationAction::Cancel).unwrap();
-
-        assert_eq!(state.model.last_verification, last_verification);
-        assert_eq!(
-            state.harness.commands,
-            vec![
-                Command::AcceptVerification(VerificationFlowId {
-                    flow_id: "flow-current".to_owned(),
-                    user_id: "@alice:example".to_owned(),
-                }),
-                Command::CancelVerification(VerificationFlowId {
-                    flow_id: "flow-current".to_owned(),
-                    user_id: "@alice:example".to_owned(),
-                }),
-            ]
-        );
-
-        handle
-            .command_sender()
-            .send(Command::Shutdown)
-            .expect("shutdown command must enqueue");
-        handle.join().expect("test core must stop cleanly");
-    }
-
-    #[test]
-    fn submit_menu_verification_action_enqueues_typed_commands_for_sas_ready_flow() {
-        let mut state = test_state();
-        let handle = start_test_core();
-        state.command_sender = Some(handle.command_sender().clone());
-        state.model.last_verification = Some(test_verification_state_event(
-            test_verification_sas_ready_state(),
+        let bob = verifications.update(event(
+            "flow-bob",
+            "@bob:example",
+            VerificationState::Confirmed,
         ));
-        let last_verification = state.model.last_verification.clone();
-
-        submit_menu_verification_action_to_state(&mut state, VerificationAction::Confirm).unwrap();
-        submit_menu_verification_action_to_state(&mut state, VerificationAction::Reject).unwrap();
-        submit_menu_verification_action_to_state(&mut state, VerificationAction::Cancel).unwrap();
-
-        assert_eq!(state.model.last_verification, last_verification);
+        assert_eq!(bob.device_id.as_deref(), Some("B0B"));
         assert_eq!(
-            state.harness.commands,
-            vec![
-                Command::ConfirmVerificationSas(VerificationFlowId {
-                    flow_id: "flow-current".to_owned(),
-                    user_id: "@alice:example".to_owned(),
-                }),
-                Command::RejectVerificationSas(VerificationFlowId {
-                    flow_id: "flow-current".to_owned(),
-                    user_id: "@alice:example".to_owned(),
-                }),
-                Command::CancelVerification(VerificationFlowId {
-                    flow_id: "flow-current".to_owned(),
-                    user_id: "@alice:example".to_owned(),
-                }),
+            states(&verifications),
+            [("flow-bob", "confirmed"), ("flow-carol", "requested")]
+        );
+        assert_eq!(
+            verifications.latest().map(|latest| latest.flow_id.as_str()),
+            Some("flow-carol"),
+            "the latest started, not the latest changed"
+        );
+    }
+
+    #[test]
+    fn done_and_cancelled_flows_leave() {
+        let mut verifications = bob_at_sas_then_carol();
+        let done = verifications.update(event("flow-bob", "@bob:example", VerificationState::Done));
+        assert_eq!(done.state, VerificationState::Done);
+        assert_eq!(states(&verifications), [("flow-carol", "requested")]);
+        verifications.update(event("flow-carol", "@carol:example", cancelled()));
+        assert_eq!(verifications.len(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "the core reports only flows it announced")]
+    fn a_state_of_an_unknown_flow_panics() {
+        Verifications::default().update(event("flow-x", "@x:example", VerificationState::Ready));
+    }
+
+    #[test]
+    fn the_session_that_answers_is_kept_once_named() {
+        let mut verifications = Verifications::default();
+        let sent = verifications
+            .start(request(
+                "flow-out",
+                "@bob:example",
+                VerificationDirection::Outgoing { to_device: None },
+            ))
+            .clone();
+        assert_eq!((sent.device_id, sent.outgoing), (None, true));
+        let mut ready = event("flow-out", "@bob:example", VerificationState::Ready);
+        ready.device_id = Some("B0B".to_owned());
+        assert_eq!(verifications.update(ready).name(), "@bob:example B0B");
+        // A later event that does not name it keeps it.
+        let sas = verifications.update(event("flow-out", "@bob:example", sas_ready()));
+        assert_eq!(sas.device_id.as_deref(), Some("B0B"));
+    }
+
+    #[test]
+    fn labels_and_names_say_user_and_session() {
+        let mut verifications = Verifications::default();
+        let own = Some("@me:example");
+        let label = |verification: &Verification| verification.label(own);
+        assert_eq!(
+            label(verifications.start(incoming("f1", "@me:example", "PH0NE"))),
+            "your session PH0NE"
+        );
+        assert_eq!(
+            label(verifications.start(request(
+                "f2",
+                "@me2:example",
+                VerificationDirection::Outgoing { to_device: None },
+            ))),
+            "@me2:example"
+        );
+        let other = verifications.start(incoming("f3", "@bob:example", "B0B"));
+        assert_eq!(label(other), "@bob:example (session B0B)");
+        assert_eq!(other.name(), "@bob:example B0B");
+        let mut to_own = Verifications::default();
+        let all_own = to_own.start(request(
+            "f4",
+            "@me:example",
+            VerificationDirection::Outgoing { to_device: None },
+        ));
+        assert_eq!(label(all_own), "your other sessions");
+        assert_eq!(all_own.name(), "@me:example");
+    }
+
+    #[test]
+    fn an_answer_without_a_name_is_the_latest_started_or_refused() {
+        let verifications = bob_at_sas_then_carol();
+        let answered = |action| {
+            verifications
+                .answered(action, None)
+                .map(|verification| verification.flow_id.as_str())
+        };
+        assert_eq!(answered(VerificationAction::Accept), Ok("flow-carol"));
+        assert_eq!(answered(VerificationAction::Cancel), Ok("flow-carol"));
+        // Bob's emoji are up, but the latest is Carol's request: never
+        // redirected to Bob's.
+        assert_eq!(
+            answered(VerificationAction::Confirm),
+            Err("confirm does not apply to the latest verification, @carol:example C4R0L (requested); under way: @bob:example B0B (sas ready), @carol:example C4R0L (requested)".to_owned())
+        );
+        assert_eq!(
+            Verifications::default()
+                .answered(VerificationAction::Cancel, None)
+                .map(|_| ()),
+            Err("no verification is under way".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_answer_names_its_flow_by_user_and_session() {
+        let mut verifications = bob_at_sas_then_carol();
+        let answered = |verifications: &Verifications, action, user, device| {
+            verifications
+                .answered(action, Some(&target(user, device)))
+                .map(|verification| verification.flow_id.clone())
+        };
+        let confirm = VerificationAction::Confirm;
+        assert_eq!(
+            answered(&verifications, confirm, "@bob:example", None),
+            Ok("flow-bob".to_owned())
+        );
+        assert_eq!(
+            answered(&verifications, confirm, "@bob:example", Some("B0B")),
+            Ok("flow-bob".to_owned())
+        );
+        assert_eq!(
+            answered(&verifications, confirm, "@bob:example", Some("PH0NE")),
+            Err("no verification with @bob:example PH0NE is under way; under way: @bob:example B0B (sas ready), @carol:example C4R0L (requested)".to_owned())
+        );
+        assert_eq!(
+            answered(&verifications, confirm, "@carol:example", None),
+            Err(
+                "confirm does not apply to the verification @carol:example C4R0L (requested)"
+                    .to_owned()
+            )
+        );
+        // Two of your own sessions for a moment (the SDK cancels both).
+        verifications.start(incoming("flow-phone", "@me:example", "PH0NE"));
+        verifications.start(incoming("flow-laptop", "@me:example", "L4PT0P"));
+        assert_eq!(
+            answered(&verifications, VerificationAction::Cancel, "@me:example", None),
+            Err("2 verifications with @me:example are under way; name the session: @me:example PH0NE (requested), @me:example L4PT0P (requested)".to_owned())
+        );
+        assert_eq!(
+            answered(
+                &verifications,
+                VerificationAction::Cancel,
+                "@me:example",
+                Some("L4PT0P")
+            ),
+            Ok("flow-laptop".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_second_verification_with_a_user_is_refused() {
+        let mut state = test_state();
+        let model = &mut state.model;
+        model
+            .verifications
+            .start(incoming("flow-bob", "@bob:example", "B0B"));
+        assert_eq!(
+            refuse_second_verification(model, "@bob:example"),
+            Err("a verification with @bob:example (session B0B) is under way; answer or cancel it first: /verify cancel @bob:example B0B".to_owned())
+        );
+        assert_eq!(refuse_second_verification(model, "@carol:example"), Ok(()));
+    }
+
+    #[test]
+    fn the_action_table_matches_the_states() {
+        let applies = |state: &VerificationState| {
+            [
+                VerificationAction::Accept,
+                VerificationAction::Cancel,
+                VerificationAction::Confirm,
+                VerificationAction::Reject,
             ]
-        );
-
-        handle
-            .command_sender()
-            .send(Command::Shutdown)
-            .expect("shutdown command must enqueue");
-        handle.join().expect("test core must stop cleanly");
-    }
-
-    #[test]
-    fn submit_verification_helpers_still_allow_accept_after_request_has_advanced() {
-        let mut state = test_state();
-        let handle = start_test_core();
-        state.command_sender = Some(handle.command_sender().clone());
-        state.model.last_verification =
-            Some(test_verification_state_event(VerificationState::Accepted));
-        let last_verification = state.model.last_verification.clone();
-
-        submit_accept_verification(&mut state).unwrap();
-
-        assert_eq!(state.model.last_verification, last_verification);
+            .map(|action| verification_action_applies(state, action))
+        };
         assert_eq!(
-            state.harness.commands,
-            vec![Command::AcceptVerification(VerificationFlowId {
-                flow_id: "flow-current".to_owned(),
-                user_id: "@alice:example".to_owned(),
-            })]
+            applies(&VerificationState::Requested),
+            [true, true, false, false]
         );
+        assert_eq!(
+            applies(&VerificationState::Sent),
+            [false, true, false, false]
+        );
+        assert_eq!(
+            applies(&VerificationState::Ready),
+            [false, true, false, false]
+        );
+        assert_eq!(applies(&sas_ready()), [false, true, true, true]);
+        assert_eq!(
+            applies(&VerificationState::Confirmed),
+            [false, true, false, false]
+        );
+        assert_eq!(applies(&VerificationState::Done), [false; 4]);
+        assert_eq!(applies(&cancelled()), [false; 4]);
+    }
 
+    fn with_test_core(test: impl FnOnce(&mut WindowState)) {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        test(&mut state);
         handle
             .command_sender()
             .send(Command::Shutdown)
@@ -681,119 +854,91 @@ mod tests {
         handle.join().expect("test core must stop cleanly");
     }
 
+    fn flow(flow_id: &str, user_id: &str) -> VerificationFlowId {
+        VerificationFlowId {
+            flow_id: flow_id.to_owned(),
+            user_id: user_id.to_owned(),
+        }
+    }
+
     #[test]
-    fn automation_verification_actions_use_current_flow_when_args_are_omitted() {
-        let mut state = test_state();
-        let handle = start_test_core();
-        state.command_sender = Some(handle.command_sender().clone());
-        state.model.last_verification = Some(VerificationStateEvent {
-            flow_id: "flow-current".to_owned(),
-            user_id: "@alice:example".to_owned(),
-            state: VerificationState::Requested,
+    fn answers_enqueue_the_command_for_their_flow_and_refusals_nothing() {
+        with_test_core(|state| {
+            state.model.verifications = bob_at_sas_then_carol();
+            submit_verification_answer(state, VerificationAction::Accept, None).unwrap();
+            submit_verification_answer(
+                state,
+                VerificationAction::Confirm,
+                Some(&target("@bob:example", Some("B0B"))),
+            )
+            .unwrap();
+            submit_verification_answer(
+                state,
+                VerificationAction::Reject,
+                Some(&target("@bob:example", None)),
+            )
+            .unwrap();
+            assert!(submit_verification_answer(state, VerificationAction::Confirm, None).is_err());
+
+            assert_eq!(
+                state.harness.commands,
+                vec![
+                    Command::AcceptVerification(flow("flow-carol", "@carol:example")),
+                    Command::ConfirmVerificationSas(flow("flow-bob", "@bob:example")),
+                    Command::RejectVerificationSas(flow("flow-bob", "@bob:example")),
+                ]
+            );
+            assert_eq!(
+                states(&state.model.verifications).len(),
+                2,
+                "answers change nothing here"
+            );
         });
-        let last_verification = state.model.last_verification.clone();
-
-        submit_verification_automation_action_to_state(
-            &mut state,
-            VerificationAction::Accept,
-            VerificationActionArgs::default(),
-        )
-        .unwrap();
-        submit_verification_automation_action_to_state(
-            &mut state,
-            VerificationAction::Cancel,
-            VerificationActionArgs::default(),
-        )
-        .unwrap();
-        submit_verification_automation_action_to_state(
-            &mut state,
-            VerificationAction::Confirm,
-            VerificationActionArgs::default(),
-        )
-        .unwrap();
-        submit_verification_automation_action_to_state(
-            &mut state,
-            VerificationAction::Reject,
-            VerificationActionArgs::default(),
-        )
-        .unwrap();
-
-        assert_eq!(state.model.last_verification, last_verification);
-        assert_eq!(
-            state.harness.commands,
-            vec![
-                Command::AcceptVerification(VerificationFlowId {
-                    flow_id: "flow-current".to_owned(),
-                    user_id: "@alice:example".to_owned(),
-                }),
-                Command::CancelVerification(VerificationFlowId {
-                    flow_id: "flow-current".to_owned(),
-                    user_id: "@alice:example".to_owned(),
-                }),
-                Command::ConfirmVerificationSas(VerificationFlowId {
-                    flow_id: "flow-current".to_owned(),
-                    user_id: "@alice:example".to_owned(),
-                }),
-                Command::RejectVerificationSas(VerificationFlowId {
-                    flow_id: "flow-current".to_owned(),
-                    user_id: "@alice:example".to_owned(),
-                }),
-            ]
-        );
-
-        handle
-            .command_sender()
-            .send(Command::Shutdown)
-            .expect("shutdown command must enqueue");
-        handle.join().expect("test core must stop cleanly");
     }
 
     #[test]
-    fn automation_verification_actions_use_explicit_flow_args_without_mutating_current_flow() {
-        let mut state = test_state();
-        let handle = start_test_core();
-        state.command_sender = Some(handle.command_sender().clone());
-        state.model.last_verification = Some(VerificationStateEvent {
-            flow_id: "flow-current".to_owned(),
-            user_id: "@alice:example".to_owned(),
-            state: VerificationState::SasReady {
-                emojis: vec![VerificationEmoji {
-                    symbol: "🐶".to_owned(),
-                    description: "dog".to_owned(),
-                }],
-                decimals: mirx_core::VerificationDecimals {
-                    first: 1234,
-                    second: 5678,
-                    third: 9012,
+    fn automation_verification_actions_use_the_latest_flow_when_args_are_omitted() {
+        with_test_core(|state| {
+            state.model.verifications = bob_at_sas_then_carol();
+            for action in [VerificationAction::Accept, VerificationAction::Confirm] {
+                submit_verification_automation_action_to_state(
+                    state,
+                    action,
+                    VerificationActionArgs::default(),
+                )
+                .unwrap();
+            }
+            assert_eq!(
+                state.harness.commands,
+                vec![
+                    Command::AcceptVerification(flow("flow-carol", "@carol:example")),
+                    Command::ConfirmVerificationSas(flow("flow-carol", "@carol:example")),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn automation_verification_actions_use_explicit_flow_args() {
+        with_test_core(|state| {
+            state.model.verifications = bob_at_sas_then_carol();
+            submit_verification_automation_action_to_state(
+                state,
+                VerificationAction::Accept,
+                VerificationActionArgs {
+                    flow_id: Some("flow-explicit".to_owned()),
+                    user_id: Some("@dave:example".to_owned()),
                 },
-            },
+            )
+            .unwrap();
+            assert_eq!(
+                state.harness.commands,
+                vec![Command::AcceptVerification(flow(
+                    "flow-explicit",
+                    "@dave:example"
+                ))]
+            );
         });
-        let last_verification = state.model.last_verification.clone();
-
-        submit_verification_automation_action_to_state(
-            &mut state,
-            VerificationAction::Accept,
-            VerificationActionArgs {
-                flow_id: Some("flow-explicit".to_owned()),
-                user_id: Some("@bob:example".to_owned()),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(state.model.last_verification, last_verification);
-        assert_eq!(
-            state.harness.commands,
-            vec![Command::AcceptVerification(VerificationFlowId {
-                flow_id: "flow-explicit".to_owned(),
-                user_id: "@bob:example".to_owned(),
-            })]
-        );
-
-        handle
-            .command_sender()
-            .send(Command::Shutdown)
-            .expect("shutdown command must enqueue");
-        handle.join().expect("test core must stop cleanly");
     }
 
     #[test]
@@ -811,27 +956,5 @@ mod tests {
             json!("invalid_args")
         );
         assert!(state.harness.commands.is_empty());
-    }
-
-    #[test]
-    fn submit_verification_helpers_require_current_flow() {
-        let mut state = test_state();
-
-        assert_eq!(
-            submit_accept_verification(&mut state),
-            Err("no verification flow available".to_owned())
-        );
-        assert_eq!(
-            submit_cancel_verification(&mut state),
-            Err("no verification flow available".to_owned())
-        );
-        assert_eq!(
-            submit_confirm_verification_sas(&mut state),
-            Err("no verification flow available".to_owned())
-        );
-        assert_eq!(
-            submit_reject_verification_sas(&mut state),
-            Err("no verification flow available".to_owned())
-        );
     }
 }
