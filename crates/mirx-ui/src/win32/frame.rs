@@ -190,6 +190,18 @@ unsafe extern "system" fn window_proc(
             }
         }
         WM_CORE_EVENT => {
+            // Not now: once input and painting are done with.
+            // Without it the events would wait for ever.
+            assert_ne!(
+                SetTimer(hwnd, CORE_EVENTS_TIMER_ID, CORE_EVENTS_DELAY_MS, None),
+                0,
+                "{}",
+                last_os_error("SetTimer core events")
+            );
+            0
+        }
+        WM_TIMER if wparam == CORE_EVENTS_TIMER_ID => {
+            KillTimer(hwnd, CORE_EVENTS_TIMER_ID);
             handle_core_events(hwnd);
             0
         }
@@ -875,6 +887,8 @@ pub(super) unsafe fn frame_child_rect(hwnd: HWND, child: HWND) -> Option<RECT> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
     use windows_sys::Win32::UI::Controls::{TB_GETSTATE, TBSTATE_WRAP};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
@@ -884,6 +898,44 @@ mod tests {
 
     use super::super::test_fixtures::*;
     use super::*;
+
+    /// The bridge's message only starts the timer: the events wait until
+    /// the frame has no input, painting or posted message left, so a long
+    /// stream of them (a big account's sync) leaves the UI usable.
+    #[test]
+    fn core_events_are_applied_once_the_frame_is_idle() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                let queued = || state_ref(hwnd).event_queue.lock().unwrap().len();
+                state_ref(hwnd)
+                    .event_queue
+                    .lock()
+                    .unwrap()
+                    .push_back(Event::Started);
+                SendMessageW(hwnd, WM_CORE_EVENT, 0, 0);
+                assert_eq!(queued(), 1);
+                assert_eq!(
+                    state_ref(hwnd).model.lifecycle_state,
+                    LifecycleState::Offline
+                );
+
+                let deadline = Instant::now() + Duration::from_secs(10);
+                let mut message = MSG::default();
+                while queued() != 0 {
+                    assert!(Instant::now() < deadline, "the events were never applied");
+                    if PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE) != 0 {
+                        DispatchMessageW(&message);
+                    } else {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+                assert_eq!(
+                    state_ref(hwnd).model.lifecycle_state,
+                    LifecycleState::CoreStarted
+                );
+            });
+        }
+    }
 
     #[test]
     fn frame_status_text_returns_lifecycle_status_only_when_no_details_exist() {

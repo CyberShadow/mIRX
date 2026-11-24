@@ -654,6 +654,14 @@ const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
 /// A connect retry is due (`reconnect`).
 const RECONNECT_TIMER_ID: usize = 2;
+/// The core's queued events are applied. A timer, as Windows makes its
+/// message only when no input, paint or posted message waits: a stream
+/// of events (a big account's sync) never starves the keyboard, the mouse
+/// or the windows' painting, and the events that came meanwhile go as
+/// one batch.
+const CORE_EVENTS_TIMER_ID: usize = 3;
+/// `USER_TIMER_MINIMUM`: the timer is due as soon as Windows allows.
+const CORE_EVENTS_DELAY_MS: u32 = 10;
 // The timeline's lengths at 96 dpi; `TimelineMetrics` scales them.
 const TIMELINE_LEFT_PADDING: i32 = 8;
 const TIMELINE_RIGHT_PADDING: i32 = 8;
@@ -1388,12 +1396,16 @@ fn bridge_core_events(hwnd: HWND, queue: Arc<Mutex<VecDeque<Event>>>, handle: Co
         match handle.events().recv_timeout(Duration::from_millis(100)) {
             Ok(event) => {
                 let should_stop = matches!(event, Event::Stopped);
-                queue
-                    .lock()
-                    .expect("core event queue poisoned")
-                    .push_back(event);
-                unsafe {
-                    PostMessageW(hwnd, WM_CORE_EVENT, 0, 0);
+                let first = {
+                    let mut queue = queue.lock().expect("core event queue poisoned");
+                    queue.push_back(event);
+                    queue.len() == 1
+                };
+                // Later events join it: the UI takes the whole queue at once.
+                if first {
+                    unsafe {
+                        PostMessageW(hwnd, WM_CORE_EVENT, 0, 0);
+                    }
                 }
                 if should_stop {
                     break;
