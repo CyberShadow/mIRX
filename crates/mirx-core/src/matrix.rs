@@ -3058,9 +3058,9 @@ fn room_activity_from_sync_message(
         }
         // What mirx has no line of its own for shows its body, named by
         // its msgtype.
-        MessageType::Location(_)
-        | MessageType::ServerNotice(_)
-        | MessageType::_Custom(_) => unsupported(),
+        MessageType::Location(_) | MessageType::ServerNotice(_) | MessageType::_Custom(_) => {
+            unsupported()
+        }
         // ruma marks MessageType as non_exhaustive.
         _ => unsupported(),
     };
