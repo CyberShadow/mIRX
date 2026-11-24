@@ -8,7 +8,10 @@ use common::{Harness, alice_member_event};
 use matrix_sdk::ruma::OwnedRoomId;
 use matrix_sdk::ruma::serde::Raw;
 use matrix_sdk_test::{JoinedRoomBuilder, SyncResponseBuilder};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+use wiremock::matchers::{method, path_regex};
+use wiremock::{Mock, Request, ResponseTemplate};
 
 use mirx_core::{Command, E2eeStatus, Event, Operation, RoomMemberRank, SyncStopReason};
 use serde_json::json;
@@ -387,6 +390,57 @@ fn a_first_restore_tells_its_e2ee_status_once() {
         panic!("one E2EE status in {events:#?}");
     };
     assert!(status.backup.exists_on_server.is_some(), "{events:#?}");
+
+    harness.shut_down();
+}
+
+/// A restart's first sync response, what happened while mirx was away,
+/// reaches the UI before `SyncConnected`, which tells it apart from live
+/// lines (the UI's catch-up: no tips, one flash at the connect).
+#[test]
+fn the_first_responses_lines_come_before_sync_connected() {
+    let (harness, _) = synced_once();
+    let (harness, _) = harness.restarted();
+    let responses = AtomicUsize::new(0);
+    // A new token each time: the SDK skips a response whose token it has.
+    harness.mount(
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/_matrix/client/v3/sync"))
+            .respond_with(move |_: &Request| {
+                let message = json!({
+                    "type": "m.room.message",
+                    "sender": "@bob:example.org",
+                    "event_id": "$while-away",
+                    "origin_server_ts": 5,
+                    "content": { "msgtype": "m.text", "body": "alice: you there?" },
+                });
+                let mut sync = SyncResponseBuilder::new();
+                sync.add_joined_room(
+                    JoinedRoomBuilder::new(&OwnedRoomId::try_from(ROOM).expect("a room ID"))
+                        .add_timeline_event(
+                            Raw::from_json_string(message.to_string()).expect("a raw event"),
+                        ),
+                );
+                let mut body = sync.build_json_sync_response();
+                body["next_batch"] = json!(format!(
+                    "away-{}",
+                    responses.fetch_add(1, Ordering::Relaxed)
+                ));
+                ResponseTemplate::new(200).set_body_json(body)
+            })
+            .with_priority(1),
+    );
+
+    harness.send(Command::StartSync);
+    let events = harness.events_until("SyncConnected", |event| *event == Event::SyncConnected);
+
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::RoomActivity(activity) if activity.activity_id == "event:$while-away"
+        )),
+        "{events:#?}"
+    );
 
     harness.shut_down();
 }
