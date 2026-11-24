@@ -38,6 +38,17 @@ server then still lists the session until you sign it out from another
 one: Tools > Sessions... in mirx there, or the session list of another
 Matrix app.
 
+Verifying
+---------
+
+A new session reads the encrypted history once it is verified: Tools >
+Verify This Session asks your other sessions. Accept there, compare the
+emoji Status shows with theirs, then Tools > Confirm SAS (or /verify
+confirm). Several verifications can be under way at once, with different
+people: Status names each by user and session, the Tools items and the
+/verify answers without a name act on the most recently started one, and
+/verify confirm <user> [session] answers a given one.
+
 Your data
 ---------
 
