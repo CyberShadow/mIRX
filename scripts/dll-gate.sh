@@ -110,24 +110,15 @@ if ! grep -a -q -E '<dpiAware[^>]*>true</dpiAware>' "$exe_path"; then
   exit 1
 fi
 
-# Nothing shipped names "mIRC" (a trademark), in any case, visible or not:
-# strings, resources, panic messages and the source paths panic locations
-# embed. "mirx" is the product's name. ASCII, then UTF-16LE at any offset.
-trademark_hits=$(
-  LC_ALL=C grep -a -o -b -i -P '[[:print:]]{0,40}mirc(?!x)[[:print:]]{0,40}' "$exe_path" || true
-  LC_ALL=C grep -a -o -b -i -P '(?:[[:print:]]\x00){0,40}m\x00i\x00r\x00c\x00(?!x\x00)(?:[[:print:]]\x00){0,40}' "$exe_path" \
-    | tr -d '\0' || true
-)
-if [[ -n $trademark_hits ]]; then
-  echo "dll-gate failed: $exe_path names mIRC (offset:text):" >&2
-  echo "$trademark_hits" >&2
-  exit 1
-fi
+# Nothing shipped names "mIRC" (a trademark): strings, resources, panic
+# messages and the source paths panic locations embed.
+"$root_dir/scripts/trademark-scan.sh" "$exe_path"
 
 # The shipped exe has no automation harness (the mirx-ui `automation`
 # feature): nothing names it, in any case, and neither its launch flags nor
 # its protocol's version field are there. ASCII, then UTF-16LE.
 harness_words=('(?i:automation)' --render-state --self-test --frame-size protocol_version)
+# shellcheck disable=SC2001 # each character followed by the PCRE escape \x00
 utf16le() { sed 's/./&\\x00/g' <<<"$1"; }
 ascii_pattern=$(IFS='|'; echo "${harness_words[*]}")
 utf16_pattern='(?i:a\x00u\x00t\x00o\x00m\x00a\x00t\x00i\x00o\x00n\x00)'
