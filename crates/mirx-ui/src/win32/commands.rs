@@ -1949,7 +1949,7 @@ pub(super) fn devices_lines(
                 format!("* {nick} is not verified; /verify {user_id}")
             }
             UserIdentityState::NoCrossSigning => format!(
-                "* {nick} has no cross-signing; verify a device: /verify {user_id} <device>"
+                "* {nick} has no cross-signing; verify one of their sessions: /verify {user_id} <session>"
             ),
             UserIdentityState::VerificationViolation => format!(
                 "* {nick} changed identity since you verified them; /verify {user_id}, or \
@@ -3564,7 +3564,7 @@ mod tests {
             ),
             (
                 UserIdentityState::NoCrossSigning,
-                "* Bob has no cross-signing; verify a device: /verify @bob:example <device>",
+                "* Bob has no cross-signing; verify one of their sessions: /verify @bob:example <session>",
             ),
             (
                 UserIdentityState::VerificationViolation,
