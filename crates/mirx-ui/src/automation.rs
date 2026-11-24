@@ -21,7 +21,7 @@ use crate::shared::{
     ConnectionState, FormatKey, LifecycleState, MdiArrangement, ReactionSummary, ViewActivityLevel,
 };
 
-pub(crate) const PROTOCOL_VERSION: u32 = 96;
+pub(crate) const PROTOCOL_VERSION: u32 = 97;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1947,6 +1947,9 @@ pub(crate) struct DumpModel {
     /// The tips the shell took, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) shown_tips: Vec<DumpShownTip>,
+    /// The taskbar flashes asked (`FlashWindowEx`), in all.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) frame_flashes: u64,
     pub(crate) last_error: Option<DumpError>,
     pub(crate) selected_room: Option<String>,
 }
@@ -4090,8 +4093,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_96() {
-        assert_eq!(PROTOCOL_VERSION, 96);
+    fn protocol_version_is_97() {
+        assert_eq!(PROTOCOL_VERSION, 97);
     }
 
     #[test]
@@ -6135,7 +6138,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":96,
+                    "protocol_version":97,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6221,6 +6224,7 @@ mod tests {
                     submitted_room_list_requests: Vec::new(),
                     opened_links: Vec::new(),
                     shown_tips: Vec::new(),
+                    frame_flashes: 0,
                     last_error: None,
                     selected_room: Some("!room:example".to_owned()),
                 },
@@ -7331,6 +7335,7 @@ mod tests {
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
             shown_tips: Vec::new(),
+            frame_flashes: 0,
             last_error: None,
             selected_room: None,
         };
@@ -7434,6 +7439,7 @@ mod tests {
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
             shown_tips: Vec::new(),
+            frame_flashes: 0,
             last_error: None,
             selected_room: None,
         };
@@ -7500,6 +7506,7 @@ mod tests {
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
             shown_tips: Vec::new(),
+            frame_flashes: 0,
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -7577,6 +7584,7 @@ mod tests {
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
             shown_tips: Vec::new(),
+            frame_flashes: 0,
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -7680,6 +7688,7 @@ mod tests {
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
             shown_tips: Vec::new(),
+            frame_flashes: 0,
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -7790,6 +7799,7 @@ mod tests {
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
             shown_tips: Vec::new(),
+            frame_flashes: 0,
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -7904,6 +7914,7 @@ mod tests {
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
             shown_tips: Vec::new(),
+            frame_flashes: 0,
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -8047,6 +8058,7 @@ mod tests {
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
             shown_tips: Vec::new(),
+            frame_flashes: 0,
             last_error: None,
             selected_room: Some("!room:example".to_owned()),
         };
@@ -8133,6 +8145,7 @@ mod tests {
                 submitted_room_list_requests: Vec::new(),
                 opened_links: Vec::new(),
                 shown_tips: Vec::new(),
+                frame_flashes: 0,
                 last_error: None,
                 selected_room: None,
             }
@@ -9203,4 +9216,10 @@ mod tests {
             "backfill_room_history"
         );
     }
+}
+
+/// A count left out of the JSON while nothing was counted, as the records'
+/// lists are while empty.
+fn is_zero(count: &u64) -> bool {
+    *count == 0
 }

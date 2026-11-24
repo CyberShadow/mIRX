@@ -54,6 +54,8 @@ pub(super) struct Harness {
     pub(super) session_commands: Vec<DumpSubmittedSessionCommand>,
     /// Every tip the shell took, in order.
     pub(super) shown_tips: Vec<DumpShownTip>,
+    /// The taskbar flashes asked, in all.
+    pub(super) frame_flashes: u64,
     pub(super) refresh_counters: RefreshCounters,
     /// The Options dialog while it is open.
     pub(super) options_dialog: Option<HWND>,
@@ -151,6 +153,10 @@ impl Harness {
             title: title.to_owned(),
             text: text.to_owned(),
         });
+    }
+
+    pub(super) fn count_frame_flash(&mut self) {
+        self.frame_flashes += 1;
     }
 
     pub(super) fn count_row_build(&mut self, view_id: &ViewId) {

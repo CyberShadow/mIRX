@@ -464,6 +464,9 @@ pub struct Model {
     /// The tips the shell took, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shown_tips: Vec<ShownTip>,
+    /// The taskbar flashes asked (`FlashWindowEx`), in all.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub frame_flashes: u64,
     pub last_error: Option<UiError>,
     pub selected_room: Option<String>,
 }
@@ -5402,4 +5405,10 @@ mod tests {
             vec![OsString::from("--automation")]
         );
     }
+}
+
+/// A count left out of the JSON while nothing was counted, as the records'
+/// lists are while empty.
+fn is_zero(count: &u64) -> bool {
+    *count == 0
 }

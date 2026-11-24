@@ -1156,6 +1156,7 @@ unsafe fn request_frame_attention(hwnd: HWND) {
     };
     // The return value is the window's previous active state, not an error.
     FlashWindowEx(&info);
+    state_mut(hwnd).harness.count_frame_flash();
 }
 
 pub(super) unsafe fn drain_core_events_and_refresh(hwnd: HWND) -> Result<usize, String> {

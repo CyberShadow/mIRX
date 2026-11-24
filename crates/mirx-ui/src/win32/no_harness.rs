@@ -48,6 +48,8 @@ impl Harness {
 
     pub(super) fn record_shown_tip(&mut self, _view: &ViewId, _title: &str, _text: &str) {}
 
+    pub(super) fn count_frame_flash(&mut self) {}
+
     pub(super) fn count_row_build(&mut self, _view_id: &ViewId) {}
 
     pub(super) fn count_rows_wrapped(&mut self, _rows: usize) {}

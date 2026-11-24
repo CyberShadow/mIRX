@@ -1327,6 +1327,7 @@ pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_room_list_requests: submitted_room_list_requests_from_state(state),
         opened_links: state.harness.opened_links.clone(),
         shown_tips: state.harness.shown_tips.clone(),
+        frame_flashes: state.harness.frame_flashes,
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
     }
