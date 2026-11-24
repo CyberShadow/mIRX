@@ -1954,6 +1954,12 @@ pub(crate) struct DumpModel {
     pub(crate) selected_room: Option<String>,
 }
 
+/// A count left out of the JSON while nothing was counted, as the records'
+/// lists are while empty.
+fn is_zero(count: &u64) -> bool {
+    *count == 0
+}
+
 /// A tip: the window it is about, its title and its line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -9216,10 +9222,4 @@ mod tests {
             "backfill_room_history"
         );
     }
-}
-
-/// A count left out of the JSON while nothing was counted, as the records'
-/// lists are while empty.
-fn is_zero(count: &u64) -> bool {
-    *count == 0
 }
