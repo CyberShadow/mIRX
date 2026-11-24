@@ -71,13 +71,12 @@ struct TopicContent {
     topic: Option<String>,
 }
 
-/// A state event's `content`, which every event has (a redacted one too).
-fn state_content<T: DeserializeOwned>(raw: &Raw<AnyStateEvent>) -> Result<T, String> {
-    let content = raw
-        .get_field::<&RawValue>("content")
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| "no content".to_owned())?;
-    serde_json::from_str(content.get()).map_err(|err| err.to_string())
+/// A state event's `content` as `T`; `None` when it does not decode
+/// (every event has a content, a redacted one too, but rooms years old
+/// hold events no client writes now): the spec ignores an invalid event.
+fn state_content<T: DeserializeOwned>(raw: &Raw<AnyStateEvent>) -> Option<T> {
+    let content = raw.get_field::<&RawValue>("content").ok()??;
+    serde_json::from_str(content.get()).ok()
 }
 
 /// The room's settings from the server's current state (`GET
@@ -110,42 +109,45 @@ pub(crate) async fn fetch_room_settings(
             .get_field::<String>("type")
             .map_err(|err| load_error(err.to_string()))?
             .ok_or_else(|| load_error("a state event without a type".to_owned()))?;
-        let decode_error = |err: String| load_error(format!("{event_type}: {err}"));
         // Each type is decoded on its own, never as `AnyStateEvent`: its
         // deserializer, for every state event type ruma knows, is 166 KiB
-        // of the exe. The room's other state is not decoded.
+        // of the exe. The room's other state is not decoded. An event of
+        // these types that does not decode is absent, as is a missing one.
         match event_type.as_str() {
             "m.room.name" => {
-                let content: NameContent = state_content(&raw).map_err(decode_error)?;
-                name = content.name.filter(|name| !name.is_empty());
+                name = state_content::<NameContent>(&raw)
+                    .and_then(|content| content.name)
+                    .filter(|name| !name.is_empty());
             }
             "m.room.topic" => {
-                let content: TopicContent = state_content(&raw).map_err(decode_error)?;
-                topic = content.topic;
+                topic = state_content::<TopicContent>(&raw).and_then(|content| content.topic);
             }
             "m.room.join_rules" => {
                 // A redaction keeps the join rule.
-                join_rule = raw
-                    .deserialize_as_unchecked::<OriginalSyncRoomJoinRulesEvent>()
-                    .map_err(|err| decode_error(err.to_string()))?
-                    .content
-                    .join_rule;
+                if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomJoinRulesEvent>()
+                {
+                    join_rule = event.content.join_rule;
+                }
             }
             "m.room.power_levels" => {
                 // A redaction keeps every level the dialog reads (ban, events,
                 // events_default, kick, redact, state_default, users,
                 // users_default; invite from v11), and every field of the
                 // content has a default: a redacted event's content reads
-                // as the original's levels.
-                power_levels =
-                    RoomPowerLevelsSource::Original(state_content(&raw).map_err(decode_error)?);
+                // as the original's levels. Levels that do not decode are
+                // none, as the SDK's `power_levels_or_default` has them for
+                // the members' ranks.
+                if let Some(content) = state_content(&raw) {
+                    power_levels = RoomPowerLevelsSource::Original(content);
+                }
             }
             "m.room.member" => {
                 // A redaction keeps the membership; the other fields are
                 // optional, so a redacted ban lists without name and reason.
-                let event = raw
-                    .deserialize_as_unchecked::<OriginalSyncRoomMemberEvent>()
-                    .map_err(|err| decode_error(err.to_string()))?;
+                let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomMemberEvent>()
+                else {
+                    continue;
+                };
                 if event.content.membership == MembershipState::Ban {
                     bans.push(RoomBan {
                         user_id: event.state_key.to_string(),
@@ -420,7 +422,7 @@ async fn fetch_power_levels(
         .map_err(|err| ErrorChain(&err).to_string())?
         .into_content()
         .deserialize_as_unchecked::<RoomPowerLevelsEventContent>()
-        .map_err(|err| err.to_string())
+        .map_err(|err| format!("the room's power levels on the server do not decode: {err}"))
 }
 
 /// Edits the room's power levels in one write: the modes, then the
@@ -835,43 +837,97 @@ mod tests {
         });
     }
 
-    async fn fetch_error(state: Vec<serde_json::Value>) -> String {
+    async fn settings_of(state: Vec<serde_json::Value>) -> RoomSettings {
         let server = MatrixMockServer::new().await;
         let client = joined_client(&server, serde_json::json!({ "creator": OWN })).await;
         mount_state(&server, state).await;
         mount_directory(&server, "private").await;
-        fetch_room_settings(&client, ROOM)
-            .await
-            .expect_err("malformed settings")
-            .to_string()
+        fetch_room_settings(&client, ROOM).await.expect("settings")
     }
 
+    /// Years-old rooms hold state events no current client writes. Each
+    /// one that does not decode is absent, as the spec ignores an invalid
+    /// event, and the dialog shows the rest: invalid power levels are none,
+    /// as the SDK's `power_levels_or_default` reads them for the nick list.
     #[test]
-    fn a_malformed_settings_event_fails_the_read() {
+    fn malformed_settings_events_are_absent_not_a_failed_read() {
         runtime().block_on(async {
-            let err = fetch_error(vec![state_event(
-                "m.room.join_rules",
+            let settings = settings_of(vec![
+                state_event("m.room.name", "", OWN, 4, serde_json::json!({ "name": 5 })),
+                state_event(
+                    "m.room.topic",
+                    "",
+                    OWN,
+                    5,
+                    serde_json::json!({ "topic": ["old"] }),
+                ),
+                state_event(
+                    "m.room.join_rules",
+                    "",
+                    OWN,
+                    6,
+                    serde_json::json!({ "join_rule": 5 }),
+                ),
+                state_event(
+                    "m.room.power_levels",
+                    "",
+                    OWN,
+                    7,
+                    serde_json::json!({ "ban": "fifty", "users": { OWN: 100 } }),
+                ),
+                ban(
+                    "@mallory:example.org",
+                    8,
+                    serde_json::json!({ "displayname": "M" }),
+                ),
+                ban(
+                    "@bob:example.org",
+                    9,
+                    serde_json::json!({ "membership": "ban", "reason": "spam" }),
+                ),
+            ])
+            .await;
+
+            assert_eq!(settings.name, None);
+            assert_eq!(settings.topic, None);
+            assert_eq!(settings.join_rule, RoomJoinRule::Invite);
+            // No power levels: the creator has 100, the topic needs
+            // state_default 50, messages events_default 0.
+            assert!(settings.topic_by_operators);
+            assert!(!settings.moderated);
+            assert!(settings.allowed.power_levels && settings.allowed.unban);
+            assert_eq!(
+                settings
+                    .bans
+                    .iter()
+                    .map(|ban| ban.user_id.as_str())
+                    .collect::<Vec<_>>(),
+                ["@bob:example.org"]
+            );
+        });
+    }
+
+    /// Rooms before version 10 may have levels as strings; ruma reads them
+    /// as numbers (`deserialize_v1_powerlevel`), no compat feature needed.
+    #[test]
+    fn string_power_levels_read_as_levels() {
+        runtime().block_on(async {
+            let settings = settings_of(vec![state_event(
+                "m.room.power_levels",
                 "",
                 OWN,
-                6,
-                serde_json::json!({ "join_rule": 5 }),
+                3,
+                serde_json::json!({
+                    "events_default": "1",
+                    "users_default": " 0 ",
+                    "state_default": "0",
+                    "users": { OWN: "+100" },
+                }),
             )])
             .await;
-            assert!(
-                err.starts_with("failed to load Matrix room settings: m.room.join_rules: "),
-                "{err}"
-            );
-
-            let mut nameless = state_event("m.room.name", "", OWN, 4, serde_json::json!({}));
-            nameless
-                .as_object_mut()
-                .expect("event object")
-                .remove("content");
-            let err = fetch_error(vec![nameless]).await;
-            assert!(
-                err.starts_with("failed to load Matrix room settings: m.room.name: "),
-                "{err}"
-            );
+            assert!(settings.moderated);
+            assert!(!settings.topic_by_operators);
+            assert!(settings.allowed.power_levels);
         });
     }
 
@@ -1337,6 +1393,33 @@ mod tests {
             .await;
             result.expect("update");
             assert!(power_levels_puts(&requests).is_empty(), "{requests:?}");
+        });
+    }
+
+    /// The dialog reads levels that do not decode as none, but a write
+    /// edits the server's levels: writing defaults over levels it cannot
+    /// read would lose them, so the write is refused, saying why.
+    #[test]
+    fn a_write_against_levels_that_do_not_decode_is_refused() {
+        runtime().block_on(async {
+            let (result, requests) = update_against(
+                serde_json::json!({ "ban": "fifty", "users": { OWN: 100 } }),
+                false,
+                UpdateRoomSettingsRequest {
+                    moderated: Some(true),
+                    ..request(ROOM)
+                },
+            )
+            .await;
+            let err = result.expect_err("levels that do not decode");
+            assert!(
+                err.to_string().starts_with(
+                    "failed to set the room's power levels: \
+                     the room's power levels on the server do not decode: "
+                ),
+                "{err}"
+            );
+            assert_eq!(requests.len(), 1, "{requests:?}");
         });
     }
 
