@@ -1,0 +1,14 @@
+[
+  "LoggingOut",
+  {
+    "LogoutRefused": {
+      "request": { "discard_room_keys": true, "this_computer_only": false },
+      "reason": {
+        "server_keeps_session": {
+          "device_id": "MIRXDEVICE",
+          "reason": "error sending request for url (https://matrix.example/_matrix/client/v3/logout)"
+        }
+      }
+    }
+  }
+]

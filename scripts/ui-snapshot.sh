@@ -25,6 +25,7 @@ dpi144_prefix=
 # --expect-dpi 144.
 dpi144_cases=(multi-room image-message-loaded room-list-listing
   dialog-options-display dialog-options-chat dialog-colors dialog-sign-out-session dialog-log-out
+  dialog-log-out-server
   dialog-export-room-keys dialog-address-book-notify dialog-address-book-colors toolbar-connected
   line-marker dialog-channel-central dialog-sessions)
 
@@ -469,6 +470,13 @@ configure_case_expectations() {
           # The core's answer to File > Log Out without recovery: the
           # warning opens by itself.
           append_events_path="$root_dir/tests/ui-state-updates/dialog-log-out.json"
+          ordered_actions=(dialog:opened)
+          expect_dialog_title='Log Out'
+          ;;
+        dialog-log-out-server)
+          # The core's answer to a Log Out the server could not end: the
+          # dialog offers this computer only.
+          append_events_path="$root_dir/tests/ui-state-updates/dialog-log-out-server.json"
           ordered_actions=(dialog:opened)
           expect_dialog_title='Log Out'
           ;;
