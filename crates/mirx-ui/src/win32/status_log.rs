@@ -286,7 +286,8 @@ fn session_needs_verifying(status: &E2eeStatus) -> bool {
 }
 
 /// A new flow: who asked whom, the actions that answer it, and the
-/// flows `others` already under way, which now need naming.
+/// flows `others` already under way: with them, every answer names its
+/// flow.
 pub(super) fn verification_request(
     verification: &Verification,
     own_user_id: Option<&str>,
@@ -305,7 +306,7 @@ pub(super) fn verification_request(
         }
     };
     let mut lines = vec![line];
-    lines.extend(verification_actions(verification, true));
+    lines.extend(verification_actions(verification, others.is_empty()));
     if !others.is_empty() {
         lines.push(format!(
             "Also under way: {}; /verify <action> <user> [session] answers one of them",
@@ -315,13 +316,13 @@ pub(super) fn verification_request(
     lines
 }
 
-/// A flow's new state, and the actions that answer it now. `latest`: it
-/// is the latest flow, which the Tools items and the answers without a
-/// name act on.
+/// A flow's new state, and the actions that answer it now. `alone`: it is
+/// the only flow under way, which the Tools items and the answers without
+/// a name act on.
 pub(super) fn verification(
     verification: &Verification,
     own_user_id: Option<&str>,
-    latest: bool,
+    alone: bool,
 ) -> Vec<String> {
     let label = verification.label(own_user_id);
     let mut lines = match &verification.state {
@@ -344,14 +345,14 @@ pub(super) fn verification(
             )]
         }
     };
-    lines.extend(verification_actions(verification, latest));
+    lines.extend(verification_actions(verification, alone));
     lines
 }
 
 /// The `Actions:` hint of a flow: the Tools items and `/verify` answers
-/// that apply now, without a name for the latest flow, named otherwise.
-/// None for a flow that has ended.
-fn verification_actions(verification: &Verification, latest: bool) -> Option<String> {
+/// that apply now, without a name for the only flow under way, named
+/// while others are. None for a flow that has ended.
+fn verification_actions(verification: &Verification, alone: bool) -> Option<String> {
     let actions = [
         VerificationAction::Accept,
         VerificationAction::Confirm,
@@ -364,7 +365,7 @@ fn verification_actions(verification: &Verification, latest: bool) -> Option<Str
     if actions.is_empty() {
         return None;
     }
-    let name = if latest {
+    let name = if alone {
         String::new()
     } else {
         format!(" {}", verification.name())
@@ -372,7 +373,7 @@ fn verification_actions(verification: &Verification, latest: bool) -> Option<Str
     let commands = actions
         .iter()
         .map(|&action| format!("/verify {}{name}", verification_action_label(action)));
-    let items: Vec<String> = if latest {
+    let items: Vec<String> = if alone {
         actions
             .iter()
             .map(|&action| format!("Tools > {}", verification_menu_item(action)))
@@ -741,8 +742,15 @@ mod tests {
             false,
             VerificationState::Requested,
         );
+        let lines =
+            verification_request(&carol, None, &["@bob:example B0B (sas ready)".to_owned()]);
+        // With another under way, the new one is answered by name too.
         assert_eq!(
-            verification_request(&carol, None, &["@bob:example B0B (sas ready)".to_owned()])[2],
+            lines[1],
+            "Actions: /verify accept @carol:example C4R0L, /verify cancel @carol:example C4R0L"
+        );
+        assert_eq!(
+            lines[2],
             "Also under way: @bob:example B0B (sas ready); /verify <action> <user> [session] answers one of them"
         );
     }
@@ -809,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn a_flow_that_is_not_the_latest_is_answered_by_name() {
+    fn a_flow_among_others_is_answered_by_name() {
         assert_eq!(
             verification(
                 &flow("@bob:example", Some("B0B"), false, sas()),

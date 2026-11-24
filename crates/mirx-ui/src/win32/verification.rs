@@ -74,13 +74,13 @@ pub(super) struct VerificationTarget<'t> {
     pub(super) device_id: Option<&'t str>,
 }
 
-/// The verifications under way, in the order they started. The latest
-/// (the last started) is what the Tools items and a `/verify` answer
-/// without a name act on: the most recently started, not the most
-/// recently changed, so another flow's progress never moves the target
-/// between reading the emoji and answering. A flow that starts later is
-/// only requested or sent, which Confirm and Reject do not apply to. A
-/// flow leaves when it is done or cancelled.
+/// The verifications under way, in the order they started. The Tools
+/// items and a `/verify` answer without a name act on the one under way,
+/// and are refused while there are more: a guess could confirm the wrong
+/// flow's emoji, and a flow that starts between reading a line and
+/// answering it would move any "latest" rule's target. The status bar
+/// shows the latest (the last started). A flow leaves when it is done or
+/// cancelled.
 #[derive(Debug, Default)]
 pub(super) struct Verifications(Vec<Verification>);
 
@@ -136,12 +136,6 @@ impl Verifications {
         self.0.last()
     }
 
-    fn is_latest(&self, verification: &Verification) -> bool {
-        self.latest().is_some_and(|latest| {
-            latest.user_id == verification.user_id && latest.flow_id == verification.flow_id
-        })
-    }
-
     pub(super) fn iter(&self) -> impl Iterator<Item = &Verification> {
         self.0.iter()
     }
@@ -171,27 +165,30 @@ impl Verifications {
             .join(", ")
     }
 
-    /// The flow `action` answers: the latest without a target. Refused,
-    /// with the flows under way, when none matches, several do, or the
-    /// action does not apply to the flow's state; never another flow.
-    fn answered(
+    /// The flow `action` answers: without a target, the one under way.
+    /// Refused, with the flows under way, when none matches, several do
+    /// (with or without a target), or the action does not apply to the
+    /// flow's state; never another flow.
+    pub(super) fn answered(
         &self,
         action: VerificationAction,
         target: Option<&VerificationTarget>,
     ) -> Result<&Verification, String> {
         let word = verification_action_label(action);
         let Some(target) = target else {
-            let latest = self
-                .latest()
-                .ok_or_else(|| "no verification is under way".to_owned())?;
-            if !verification_action_applies(&latest.state, action) {
-                return Err(format!(
-                    "{word} does not apply to the latest verification, {}; under way: {}",
-                    latest.listed(),
+            return match &self.0[..] {
+                [] => Err("no verification is under way".to_owned()),
+                [only] if !verification_action_applies(&only.state, action) => Err(format!(
+                    "{word} does not apply to the verification {}",
+                    only.listed()
+                )),
+                [only] => Ok(only),
+                flows => Err(format!(
+                    "{} verifications are under way; name one: /verify {word} <user> [session]; under way: {}",
+                    flows.len(),
                     self.listing()
-                ));
-            }
-            return Ok(latest);
+                )),
+            };
         };
         let matches = self
             .0
@@ -239,7 +236,7 @@ pub(super) fn apply_verification_event(state: &mut WindowState, event: Verificat
     let lines = status_log::verification(
         &verification,
         own_user_id.as_deref(),
-        state.model.verifications.is_latest(&verification),
+        state.model.verifications.len() == 1,
     );
     for line in lines {
         log_status(state, StatusLineKind::Info, line);
@@ -247,7 +244,7 @@ pub(super) fn apply_verification_event(state: &mut WindowState, event: Verificat
     state.model.status = verification_status_message(&verification, own_user_id.as_deref());
 }
 
-/// A new flow, in or out: it joins those under way, as the latest.
+/// A new flow, in or out: it joins those under way.
 pub(super) fn apply_verification_request(state: &mut WindowState, request: VerificationRequest) {
     let own_user_id = state.model.own_user_id().map(str::to_owned);
     let verification = state.model.verifications.start(request).clone();
@@ -444,7 +441,7 @@ fn verification_command(action: VerificationAction, flow: VerificationFlowId) ->
     }
 }
 
-/// A Tools item: the latest flow's answer.
+/// A Tools item: the answer to the one flow under way.
 pub(super) unsafe fn submit_menu_verification_action(
     hwnd: HWND,
     action: VerificationAction,
@@ -734,21 +731,42 @@ mod tests {
         assert_eq!(all_own.name(), "@me:example");
     }
 
+    /// Without a name, an answer is the one flow under way's. With two,
+    /// every answer is refused, never guessed: Bob's emoji are up, and a
+    /// bare confirm must not verify whichever flow a rule picks.
     #[test]
-    fn an_answer_without_a_name_is_the_latest_started_or_refused() {
+    fn an_answer_without_a_name_needs_one_under_way() {
         let verifications = bob_at_sas_then_carol();
+        for action in [
+            VerificationAction::Accept,
+            VerificationAction::Cancel,
+            VerificationAction::Confirm,
+            VerificationAction::Reject,
+        ] {
+            let word = verification_action_label(action);
+            assert_eq!(
+                verifications.answered(action, None).map(|_| ()),
+                Err(format!(
+                    "2 verifications are under way; name one: /verify {word} <user> [session]; under way: @bob:example B0B (sas ready), @carol:example C4R0L (requested)"
+                ))
+            );
+        }
+
+        let mut alone = Verifications::default();
+        alone.start(incoming("flow-bob", "@bob:example", "B0B"));
+        alone.update(event("flow-bob", "@bob:example", sas_ready()));
         let answered = |action| {
-            verifications
+            alone
                 .answered(action, None)
                 .map(|verification| verification.flow_id.as_str())
         };
-        assert_eq!(answered(VerificationAction::Accept), Ok("flow-carol"));
-        assert_eq!(answered(VerificationAction::Cancel), Ok("flow-carol"));
-        // Bob's emoji are up, but the latest is Carol's request: never
-        // redirected to Bob's.
+        assert_eq!(answered(VerificationAction::Confirm), Ok("flow-bob"));
+        assert_eq!(answered(VerificationAction::Cancel), Ok("flow-bob"));
         assert_eq!(
-            answered(VerificationAction::Confirm),
-            Err("confirm does not apply to the latest verification, @carol:example C4R0L (requested); under way: @bob:example B0B (sas ready), @carol:example C4R0L (requested)".to_owned())
+            answered(VerificationAction::Accept),
+            Err(
+                "accept does not apply to the verification @bob:example B0B (sas ready)".to_owned()
+            )
         );
         assert_eq!(
             Verifications::default()
@@ -873,7 +891,13 @@ mod tests {
     fn answers_enqueue_the_command_for_their_flow_and_refusals_nothing() {
         with_test_core(|state| {
             state.model.verifications = bob_at_sas_then_carol();
-            submit_verification_answer(state, VerificationAction::Accept, None).unwrap();
+            assert!(submit_verification_answer(state, VerificationAction::Accept, None).is_err());
+            submit_verification_answer(
+                state,
+                VerificationAction::Accept,
+                Some(&target("@carol:example", None)),
+            )
+            .unwrap();
             submit_verification_answer(
                 state,
                 VerificationAction::Confirm,

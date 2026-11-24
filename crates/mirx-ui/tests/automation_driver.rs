@@ -6872,7 +6872,7 @@ fn automation_driver_requested_verification_menu_state_and_commands()
 /// lines; the Tools items and a bare `/verify` answer the most recently
 /// started, a named one the flow it names.
 #[test]
-fn automation_driver_concurrent_verifications_answer_the_latest_or_the_named()
+fn automation_driver_concurrent_verifications_answer_the_only_or_the_named()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
@@ -6902,6 +6902,7 @@ fn automation_driver_concurrent_verifications_answer_the_latest_or_the_named()
     for line in [
         "* Verification with @bob:example (session B0B): compare the emoji or the numbers",
         "* Verification requested by @carol:example (session C4R0L)",
+        "* Actions: /verify accept @carol:example C4R0L, /verify cancel @carol:example C4R0L",
         "* Also under way: @bob:example B0B (sas ready); /verify <action> <user> [session] answers one of them",
     ] {
         assert!(status_view_contains(&app, line)?, "{line}");
@@ -6916,13 +6917,14 @@ fn automation_driver_concurrent_verifications_answer_the_latest_or_the_named()
         ui_state.status_bar.text
     );
 
-    // Carol's request is the latest: the Tools items answer it, and a
-    // bare confirm, which does not apply to it, is refused, not sent to Bob.
-    assert_account_verification_menu_state(&app, true, true, false, false);
-    invoke_account_menu_command(&app, MENU_ID_VERIFY_ACCEPT)?;
+    // Two under way: the Tools items are greyed, and an answer without a
+    // name is refused, never guessed; named ones are sent.
+    assert_account_verification_menu_state(&app, false, false, false, false);
     app.select_status_view()?;
     for command in [
+        "/verify accept",
         "/verify confirm",
+        "/verify accept @carol:example",
         "/verify confirm @bob:example",
         "/verify reject @bob:example B0B",
         "/verify cancel @dave:example",
@@ -6932,7 +6934,8 @@ fn automation_driver_concurrent_verifications_answer_the_latest_or_the_named()
         app.wait_idle(Duration::from_secs(5))?;
     }
     for line in [
-        "* /verify: confirm does not apply to the latest verification, @carol:example C4R0L (requested); under way: @bob:example B0B (sas ready), @carol:example C4R0L (requested)",
+        "* /verify: 2 verifications are under way; name one: /verify accept <user> [session]; under way: @bob:example B0B (sas ready), @carol:example C4R0L (requested)",
+        "* /verify: 2 verifications are under way; name one: /verify confirm <user> [session]; under way: @bob:example B0B (sas ready), @carol:example C4R0L (requested)",
         "* /verify: no verification with @dave:example is under way; under way: @bob:example B0B (sas ready), @carol:example C4R0L (requested)",
     ] {
         assert!(status_view_contains(&app, line)?, "{line}");
@@ -6942,28 +6945,27 @@ fn automation_driver_concurrent_verifications_answer_the_latest_or_the_named()
         flow_id: flow_id.to_owned(),
         user_id: user_id.to_owned(),
     };
-    assert_eq!(
-        app.dump_model()?.submitted_verification_actions,
-        [
-            submitted(
-                VerificationActionKind::Accept,
-                "flow-carol",
-                "@carol:example"
-            ),
-            submitted(
-                VerificationActionKind::ConfirmSas,
-                "flow-bob",
-                "@bob:example"
-            ),
-            submitted(
-                VerificationActionKind::RejectSas,
-                "flow-bob",
-                "@bob:example"
-            ),
-        ]
-    );
+    let named = [
+        submitted(
+            VerificationActionKind::Accept,
+            "flow-carol",
+            "@carol:example",
+        ),
+        submitted(
+            VerificationActionKind::ConfirmSas,
+            "flow-bob",
+            "@bob:example",
+        ),
+        submitted(
+            VerificationActionKind::RejectSas,
+            "flow-bob",
+            "@bob:example",
+        ),
+    ];
+    assert_eq!(app.dump_model()?.submitted_verification_actions, named);
 
-    // Bob's flow ends: Carol's stays, alone, and no longer needs naming.
+    // Bob's flow ends: Carol's stays, alone, and needs no name: the Tools
+    // items and a bare answer act on it.
     app.append_synthetic_events(&serde_json::to_string(&vec![verification_state_event(
         "flow-bob",
         "@bob:example",
@@ -6985,6 +6987,16 @@ fn automation_driver_concurrent_verifications_answer_the_latest_or_the_named()
         )]
     );
     assert!(!app.dump_ui_state()?.status_bar.text.contains("more)"));
+    assert_account_verification_menu_state(&app, true, true, false, false);
+    invoke_account_menu_command(&app, MENU_ID_VERIFY_ACCEPT)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let mut expected = named.to_vec();
+    expected.push(submitted(
+        VerificationActionKind::Accept,
+        "flow-carol",
+        "@carol:example",
+    ));
+    assert_eq!(app.dump_model()?.submitted_verification_actions, expected);
 
     Ok(())
 }

@@ -2166,9 +2166,9 @@ fn assert_same_emoji(
 }
 
 /// Two verifications of mirx's session at once, from Alice's phone and
-/// from Bob: each is shown by its user and session, a bare `/verify
-/// accept` answers the latest (the phone's), the others name the flow, and
-/// both end verified on both sides.
+/// from Bob: each is shown by its user and session, every answer names its
+/// flow (a bare one is refused while two are under way), and both end
+/// verified on both sides.
 #[test]
 fn two_verifications_at_once_are_each_answered() -> Result<(), Box<dyn Error>> {
     let homeserver = homeserver();
@@ -2214,7 +2214,8 @@ fn two_verifications_at_once_are_each_answered() -> Result<(), Box<dyn Error>> {
     type_commands(
         &app,
         &[
-            "/verify accept",
+            // Two under way: each answer names its flow.
+            &format!("/verify accept {alice} {phone}"),
             &format!("/verify accept {}", bob.user_id()),
         ],
     )?;

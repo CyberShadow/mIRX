@@ -11,7 +11,7 @@ use super::commands::{RankChange, SlashCommand, VerificationAction, rank_change_
 use super::ignore::{check_ignore, check_unignore};
 use super::navigation::WindowCycle;
 use super::settings::{Bar, Settings};
-use super::verification::{Verification, verification_action_applies};
+use super::verification::Verifications;
 use crate::shared::ConnectionState;
 
 pub(super) const MENU_ID_LOGOUT: usize = 40004;
@@ -686,13 +686,14 @@ pub(super) fn file_menu_state(connection: ConnectionState) -> FileMenuState {
     }
 }
 
-/// Whether a Tools verification item applies: to the latest flow, as a
-/// `/verify` answer without a name does.
+/// Whether a Tools verification item applies: exactly when a `/verify`
+/// answer without a name would be taken (one flow under way, in a state
+/// the action fits).
 pub(super) fn verification_menu_action_enabled(
-    latest: Option<&Verification>,
+    verifications: &Verifications,
     action: VerificationAction,
 ) -> bool {
-    latest.is_some_and(|latest| verification_action_applies(&latest.state, action))
+    verifications.answered(action, None).is_ok()
 }
 
 #[cfg(test)]

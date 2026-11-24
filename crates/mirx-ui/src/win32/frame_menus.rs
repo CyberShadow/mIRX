@@ -627,7 +627,7 @@ pub(super) unsafe fn refresh_menu_popup(hwnd: HWND, popup_menu: HMENU) -> Result
 pub(super) fn frame_menu_item_enabled(state: &WindowState, command_id: usize) -> bool {
     let file = file_menu_state(state.model.connection);
     let verification =
-        |action| verification_menu_action_enabled(state.model.verifications.latest(), action);
+        |action| verification_menu_action_enabled(&state.model.verifications, action);
     match command_id {
         MENU_ID_FILE_CONNECT => file.connect,
         MENU_ID_FILE_DISCONNECT => file.disconnect,

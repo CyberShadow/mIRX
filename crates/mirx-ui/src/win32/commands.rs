@@ -247,8 +247,8 @@ pub(super) enum SlashCommand {
     ClearAll(ClearAll),
     E2ee(E2eeSlashCommand),
     /// `/verify accept|cancel|confirm|reject [nick [session]]`: answers the
-    /// flow under way with that user (and session), the latest without a
-    /// nick.
+    /// flow under way with that user (and session); without a nick, the
+    /// only one under way.
     Verify {
         action: VerificationAction,
         target: Option<(String, Option<String>)>,
@@ -811,7 +811,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "verify",
         usage: "[nick [session]] | accept|cancel|confirm|reject [nick [session]]",
-        summary: "verify a session or user, or answer a verification (the latest without a nick)",
+        summary: "verify a session or user, or answer a verification (the only one under way without a nick)",
     },
     CommandSpec {
         name: "voice",

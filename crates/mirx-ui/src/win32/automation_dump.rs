@@ -56,12 +56,13 @@ pub(super) unsafe fn dump_verification_menu_state(
 ) -> Result<DumpVerificationMenuState, String> {
     refresh_tools_menu_state(hwnd, state_ref(hwnd).controls.tools_menu)?;
 
-    let latest = state_ref(hwnd).model.verifications.latest();
+    let verifications = &state_ref(hwnd).model.verifications;
+    let enabled = |action| verification_menu_action_enabled(verifications, action);
     Ok(DumpVerificationMenuState {
-        accept_enabled: verification_menu_action_enabled(latest, VerificationAction::Accept),
-        cancel_enabled: verification_menu_action_enabled(latest, VerificationAction::Cancel),
-        confirm_sas_enabled: verification_menu_action_enabled(latest, VerificationAction::Confirm),
-        reject_sas_enabled: verification_menu_action_enabled(latest, VerificationAction::Reject),
+        accept_enabled: enabled(VerificationAction::Accept),
+        cancel_enabled: enabled(VerificationAction::Cancel),
+        confirm_sas_enabled: enabled(VerificationAction::Confirm),
+        reject_sas_enabled: enabled(VerificationAction::Reject),
     })
 }
 
