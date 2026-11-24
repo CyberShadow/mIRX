@@ -73,6 +73,8 @@
         ln -sfn "$PTHREADS" "$MIRX_ROOT/.nix-pthreads"
         ln -sfn "$MCFGTHREADS" "$MIRX_ROOT/.nix-mcfgthreads"
 
+        # The bootstrap reports on stderr: stdout is the command's that
+        # `nix develop -c` runs (CI reads package.sh's).
         bootstrap_lock="$CARGO_HOME/.bootstrap.lock"
         (
           flock 9
@@ -93,7 +95,7 @@
           if ! rustup component list --installed --toolchain stable | grep -q '^clippy'; then
             rustup component add clippy --toolchain stable
           fi
-        ) 9>"$bootstrap_lock"
+        ) 9>"$bootstrap_lock" >&2
       '';
     in
     {
