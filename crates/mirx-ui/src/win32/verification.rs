@@ -137,8 +137,9 @@ impl Verifications {
     }
 
     fn is_latest(&self, verification: &Verification) -> bool {
-        self.latest()
-            .is_some_and(|latest| latest.flow_id == verification.flow_id)
+        self.latest().is_some_and(|latest| {
+            latest.user_id == verification.user_id && latest.flow_id == verification.flow_id
+        })
     }
 
     pub(super) fn iter(&self) -> impl Iterator<Item = &Verification> {
