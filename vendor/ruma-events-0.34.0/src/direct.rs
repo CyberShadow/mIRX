@@ -166,19 +166,20 @@ impl<'de> Deserialize<'de> for DirectEventContent {
     {
         let entries =
             BTreeMap::<OwnedDirectUserIdentifier, Box<RawJsonValue>>::deserialize(deserializer)?;
-        Ok(Self(
-            entries
-                .into_iter()
-                .filter_map(|(user, rooms)| {
-                    let rooms = serde_json::from_str::<Vec<Box<RawJsonValue>>>(rooms.get()).ok()?;
-                    let rooms = rooms
-                        .iter()
-                        .filter_map(|room| serde_json::from_str::<OwnedRoomId>(room.get()).ok())
-                        .collect();
-                    Some((user, rooms))
-                })
-                .collect(),
-        ))
+        // Inserted one by one, not collected: a collect into a map sorts,
+        // and the entries come in order.
+        let mut content = BTreeMap::new();
+        for (user, rooms) in entries {
+            let Ok(rooms) = serde_json::from_str::<Vec<Box<RawJsonValue>>>(rooms.get()) else {
+                continue;
+            };
+            let rooms = rooms
+                .iter()
+                .filter_map(|room| serde_json::from_str::<OwnedRoomId>(room.get()).ok())
+                .collect();
+            content.insert(user, rooms);
+        }
+        Ok(Self(content))
     }
 }
 

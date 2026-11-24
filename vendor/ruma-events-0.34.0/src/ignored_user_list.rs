@@ -34,11 +34,14 @@ where
     D: serde::Deserializer<'de>,
 {
     let users = BTreeMap::<String, serde::de::IgnoredAny>::deserialize(deserializer)?;
-    Ok(users
-        .into_keys()
-        .filter_map(|user_id| OwnedUserId::try_from(user_id).ok())
-        .map(|user_id| (user_id, IgnoredUser {}))
-        .collect())
+    // Inserted one by one, not collected: a collect into a map sorts.
+    let mut ignored = BTreeMap::new();
+    for user_id in users.into_keys() {
+        if let Ok(user_id) = OwnedUserId::try_from(user_id) {
+            ignored.insert(user_id, IgnoredUser {});
+        }
+    }
+    Ok(ignored)
 }
 
 impl IgnoredUserListEventContent {

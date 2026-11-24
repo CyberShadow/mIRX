@@ -37,10 +37,13 @@ where
     D: serde::Deserializer<'de>,
 {
     let tags = BTreeMap::<TagName, Box<RawJsonValue>>::deserialize(deserializer)?;
-    Ok(tags
-        .into_iter()
-        .map(|(name, info)| (name, serde_json::from_str(info.get()).unwrap_or_default()))
-        .collect())
+    // Inserted one by one, not collected: a collect into a map sorts, and
+    // the tags come in order.
+    let mut infos = Tags::new();
+    for (name, info) in tags {
+        infos.insert(name, serde_json::from_str(info.get()).unwrap_or_default());
+    }
+    Ok(infos)
 }
 
 impl TagEventContent {
