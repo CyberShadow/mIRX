@@ -4289,7 +4289,12 @@ pub(crate) async fn accept_verification(
         .await?
         .accept_with_methods(vec![VerificationMethod::SasV1])
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to accept verification: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to accept verification with {}: {err}",
+                flow.user_id
+            ))
+        })
 }
 
 /// Cancels the flow's SAS, or its request before there is one.
@@ -4299,7 +4304,10 @@ pub(crate) async fn cancel_verification(
 ) -> Result<(), MatrixCoreError> {
     if let Ok(sas) = lookup_sas_verification(client, flow).await {
         return sas.cancel().await.map_err(|err| {
-            MatrixCoreError::new(format!("failed to cancel SAS verification: {err}"))
+            MatrixCoreError::new(format!(
+                "failed to cancel SAS verification with {}: {err}",
+                flow.user_id
+            ))
         });
     }
     lookup_verification_request(client, flow)
@@ -4307,7 +4315,10 @@ pub(crate) async fn cancel_verification(
         .cancel()
         .await
         .map_err(|err| {
-            MatrixCoreError::new(format!("failed to cancel verification request: {err}"))
+            MatrixCoreError::new(format!(
+                "failed to cancel verification request with {}: {err}",
+                flow.user_id
+            ))
         })
 }
 
@@ -4319,7 +4330,12 @@ pub(crate) async fn confirm_verification_sas(
         .await?
         .confirm()
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to confirm SAS verification: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to confirm SAS verification with {}: {err}",
+                flow.user_id
+            ))
+        })
 }
 
 pub(crate) async fn reject_verification_sas(
@@ -4330,7 +4346,12 @@ pub(crate) async fn reject_verification_sas(
         .await?
         .mismatch()
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to reject SAS verification: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to reject SAS verification with {}: {err}",
+                flow.user_id
+            ))
+        })
 }
 
 /// Follows a request's flow until it ends. Either side may start SAS once
@@ -4364,26 +4385,31 @@ async fn watch_verification_request(
                 if let Err(err) = request.start_sas().await {
                     emit_verification_error(
                         &events,
-                        format!("failed to start SAS verification: {err}"),
+                        format!(
+                            "failed to start SAS verification with {}: {err}",
+                            flow.id.user_id
+                        ),
                     );
                 }
             }
             VerificationRequestState::Transitioned { verification } => {
-                // Only SAS is offered, so the other side cannot start another
-                // method.
-                let Some(sas) = verification.sas() else {
-                    emit_verification_error(
-                        &events,
-                        "the other side started a verification method other than SAS".to_owned(),
-                    );
-                    return;
-                };
-                let Some(replaced) = follow_sas(&sas, &mut flow, &events, &mut changes).await
-                else {
-                    return;
-                };
-                state = replaced;
-                continue;
+                if let Some(sas) = verification.sas() {
+                    let Some(replaced) = follow_sas(&sas, &mut flow, &events, &mut changes).await
+                    else {
+                        return;
+                    };
+                    state = replaced;
+                    continue;
+                }
+                // Only SAS is offered, so the other side should not start
+                // another method; the request still reports how it ends.
+                emit_verification_error(
+                    &events,
+                    format!(
+                        "{} started a verification method other than SAS",
+                        flow.id.user_id
+                    ),
+                );
             }
             VerificationRequestState::Done | VerificationRequestState::Cancelled(_) => return,
         }
@@ -4412,7 +4438,13 @@ async fn follow_sas(
     if matches!(sas.state(), SasState::Started { .. })
         && let Err(err) = sas.accept().await
     {
-        emit_verification_error(events, format!("failed to accept SAS verification: {err}"));
+        emit_verification_error(
+            events,
+            format!(
+                "failed to accept SAS verification with {}: {err}",
+                flow.id.user_id
+            ),
+        );
     }
     if let Some(event) = map_sas_verification(flow, sas)
         && emit_verification_state(events, event)
@@ -18614,7 +18646,7 @@ mod tests {
                 relay_to_device(&server, &alice, inbox.clone()).await;
                 relay_to_device(&server, &bob, inbox.clone()).await;
                 let (alice_events, alice_rx) = mpsc::channel();
-                let (bob_events, _bob_rx) = mpsc::channel();
+                let (bob_events, bob_rx) = mpsc::channel();
                 follow_verifications(&alice, alice_events);
                 let bob_watch = verification_watch_of(&bob, bob_events);
 
@@ -18633,7 +18665,7 @@ mod tests {
                 assert_eq!(
                     states(&got),
                     vec![&VerificationStateEvent {
-                        flow_id,
+                        flow_id: flow_id.clone(),
                         user_id: "@bob:example.org".to_owned(),
                         device_id: Some("B0B0B0B0B".to_owned()),
                         state: cancelled_state(
@@ -18643,6 +18675,19 @@ mod tests {
                         ),
                     }],
                     "{got:?}"
+                );
+                // Bob's own cancel is told once, by his flow's watcher.
+                let bob_got = drain_events(&bob_rx);
+                assert_eq!(
+                    states(&bob_got)
+                        .into_iter()
+                        .map(|event| (event.flow_id.as_str(), &event.state))
+                        .collect::<Vec<_>>(),
+                    [(
+                        flow_id.as_str(),
+                        &cancelled_state("The user cancelled the verification.", "m.user", true)
+                    )],
+                    "{bob_got:?}"
                 );
             });
         }

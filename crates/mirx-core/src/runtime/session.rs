@@ -205,6 +205,12 @@ impl Session {
         }
     }
 
+    /// Runs `task` as one of the session's background tasks.
+    #[cfg(test)]
+    pub(super) fn spawn_background(&mut self, task: impl Future<Output = ()> + 'static) {
+        self.background.spawn_local(task);
+    }
+
     pub(super) fn ctx(&self) -> JobCtx {
         self.ctx.clone()
     }
