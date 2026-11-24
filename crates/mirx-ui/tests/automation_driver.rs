@@ -20645,17 +20645,13 @@ fn aliases_dialog_edits_aliases_ini() -> Result<(), Box<dyn std::error::Error>> 
     wait_for_dialog_focus(&app, dialog, ALIASES_DIALOG_EDIT_ID)?;
     assert_eq!(edit_selection(edit), (0, 0));
     // Enter is a line break, Tab goes on to OK.
-    for key in [VK_RETURN, VK_TAB] {
-        assert_ne!(
-            unsafe { PostMessageW(edit, WM_KEYDOWN, key as WPARAM, 0) },
-            0
-        );
-    }
-    wait_for_dialog_focus(&app, dialog, ALIASES_DIALOG_OK_ID as i32)?;
+    post_key(&app, edit, VK_RETURN)?;
     assert_eq!(
         unsafe { read_window_text(edit) },
         format!("\r\n{}", defaults.join("\r\n"))
     );
+    post_key(&app, edit, VK_TAB)?;
+    wait_for_dialog_focus(&app, dialog, ALIASES_DIALOG_OK_ID as i32)?;
 
     // A wrong line keeps the dialog open, and is selected.
     let set_text = |text: &str| {
@@ -22258,6 +22254,20 @@ fn send_key_events(events: &[(u16, bool)]) {
         inputs.len() as u32,
         "SendInput must queue every key event"
     );
+}
+
+/// Posts a key-down to `hwnd` and waits until the UI thread handled it and
+/// what it posted in turn: the `WM_CHAR` that `TranslateMessage` (which
+/// `IsDialogMessageW` calls) posts for it, which types the key. Two keys
+/// posted at once are not typed in order: the first one's char is queued
+/// behind the second key-down.
+fn post_key(app: &MirxApp, hwnd: HWND, key: u16) -> Result<(), Box<dyn std::error::Error>> {
+    assert_ne!(
+        unsafe { PostMessageW(hwnd, WM_KEYDOWN, key as WPARAM, 0) },
+        0
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
 }
 
 /// Waits until the control `id` of `dialog` has the focus.
