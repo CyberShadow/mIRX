@@ -17,7 +17,7 @@ use matrix_sdk_crypto::KeyExportError;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use super::{
-    EventBatchLookups, MatrixCoreError, emit_sync_error,
+    ErrorChain, EventBatchLookups, MatrixCoreError, emit_sync_error,
     room_history_backfill_event_from_timeline_event,
 };
 use crate::api::{
@@ -62,8 +62,9 @@ async fn undecrypted_sync_event(
 ) -> Result<Vec<RoomHistoryBackfillEvent>, MatrixCoreError> {
     let push_context = room.push_context().await.map_err(|err| {
         MatrixCoreError::new(format!(
-            "failed to read the push rules of {}: {err}",
-            room.room_id()
+            "failed to read the push rules of {}: {}",
+            room.room_id(),
+            ErrorChain(&err),
         ))
     })?;
     let event = room
@@ -71,8 +72,9 @@ async fn undecrypted_sync_event(
         .await
         .map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to decrypt a Matrix event in {}: {err}",
-                room.room_id()
+                "failed to decrypt a Matrix event in {}: {}",
+                room.room_id(),
+                ErrorChain(&err),
             ))
         })?;
     let redaction_rules = room.clone_info().room_version_rules_or_default().redaction;
@@ -127,13 +129,17 @@ async fn room_events_decrypted(
     };
     let (cache, _handles) = room.event_cache().await.map_err(|err| {
         MatrixCoreError::new(format!(
-            "failed to open the event cache of {room_id}: {err}"
+            "failed to open the event cache of {room_id}: {}",
+            ErrorChain(&err)
         ))
     })?;
     let mut decrypted: Vec<TimelineEvent> = Vec::with_capacity(event_ids.len());
     for event_id in &event_ids {
         let event = cache.find_event(event_id).await.map_err(|err| {
-            MatrixCoreError::new(format!("failed to read {event_id} in {room_id}: {err}"))
+            MatrixCoreError::new(format!(
+                "failed to read {event_id} in {room_id}: {}",
+                ErrorChain(&err)
+            ))
         })?;
         // The redecryptor reports every event it decrypted, also one it
         // then found in neither the room's events nor the store, which it
@@ -180,7 +186,11 @@ pub(crate) async fn retry_decryption(
     request: RetryDecryptionRequest,
 ) -> Result<Option<RoomEventsDecrypted>, MatrixCoreError> {
     let room_id = OwnedRoomId::try_from(request.room_id.as_str()).map_err(|err| {
-        MatrixCoreError::new(format!("invalid Matrix room ID {}: {err}", request.room_id))
+        MatrixCoreError::new(format!(
+            "invalid Matrix room ID {}: {}",
+            request.room_id,
+            ErrorChain(&err)
+        ))
     })?;
     if request.event_ids.is_empty() {
         return Err(MatrixCoreError::new(
@@ -192,7 +202,10 @@ pub(crate) async fn retry_decryption(
         .iter()
         .map(|event_id| {
             OwnedEventId::try_from(event_id.as_str()).map_err(|err| {
-                MatrixCoreError::new(format!("invalid Matrix event ID {event_id}: {err}"))
+                MatrixCoreError::new(format!(
+                    "invalid Matrix event ID {event_id}: {}",
+                    ErrorChain(&err)
+                ))
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -201,14 +214,18 @@ pub(crate) async fn retry_decryption(
         .ok_or_else(|| MatrixCoreError::new(format!("unknown Matrix room: {room_id}")))?;
     let (cache, _handles) = room.event_cache().await.map_err(|err| {
         MatrixCoreError::new(format!(
-            "failed to open the event cache of {room_id}: {err}"
+            "failed to open the event cache of {room_id}: {}",
+            ErrorChain(&err)
         ))
     })?;
     let mut undecrypted: Vec<TimelineEvent> = Vec::with_capacity(event_ids.len());
     let mut utd_session_ids = BTreeSet::new();
     for event_id in &event_ids {
         let event = cache.find_event(event_id).await.map_err(|err| {
-            MatrixCoreError::new(format!("failed to read {event_id} in {room_id}: {err}"))
+            MatrixCoreError::new(format!(
+                "failed to read {event_id} in {room_id}: {}",
+                ErrorChain(&err)
+            ))
         })?;
         if let Some(event) = event
             && let TimelineEventKind::UnableToDecrypt { utd_info, .. } = &event.kind

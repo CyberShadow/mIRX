@@ -11,8 +11,8 @@ use super::{E2eeStatusWatch, EventSender, FirstE2eeStatus, RoomSnapshot, RoomSna
 use crate::api::{CoreConfig, Event, LoginMethod, LoginRequest, Operation, RestoreSessionRequest};
 use crate::loopback::{self, LoopbackListener, LoopbackRedirect};
 use crate::matrix::{
-    self, BrowserFlow, HomeserverSpec, MatrixCoreError, NewVerificationFlows, PausedSendRooms,
-    VerificationWatch,
+    self, BrowserFlow, ErrorChain, HomeserverSpec, MatrixCoreError, NewVerificationFlows,
+    PausedSendRooms, VerificationWatch,
 };
 
 /// How a sign-in or restore ended.
@@ -70,7 +70,10 @@ pub(super) async fn log_in(
     if let Err(err) = matrix::remove_store(&config).await {
         return SignInEnd::Failed(
             Operation::Login,
-            format!("could not remove the previous session's data in {err}"),
+            format!(
+                "could not remove the previous session's data in {}",
+                ErrorChain(&err)
+            ),
         );
     }
     let client =
@@ -131,7 +134,10 @@ async fn start_browser_login(
         Err(err) => {
             return SignInEnd::Failed(
                 Operation::Login,
-                format!("failed to listen for the browser on 127.0.0.1: {err}"),
+                format!(
+                    "failed to listen for the browser on 127.0.0.1: {}",
+                    ErrorChain(&err)
+                ),
             );
         }
     };
@@ -173,7 +179,10 @@ pub(super) async fn finish_browser_login(
             "Signed in to mirx as {}. You can close this page.",
             session.user_id
         ),
-        Err(err) => format!("mirx could not sign in: {err}. Return to mirx and try again."),
+        Err(err) => format!(
+            "mirx could not sign in: {}. Return to mirx and try again.",
+            ErrorChain(&err)
+        ),
     };
     // The page is a courtesy: a browser that went away undoes nothing.
     let _ = loopback::respond(&mut stream, "200 OK", &loopback::result_page(&page)).await;

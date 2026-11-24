@@ -202,6 +202,29 @@ impl Display for MatrixCoreError {
 
 impl Error for MatrixCoreError {}
 
+/// An error and its causes, as a message: what each `source()` adds to what
+/// the error says. reqwest's errors say "error sending request for url
+/// (...)" and keep why (refused, timed out, a TLS failure) in their source.
+/// A cause whose message the error's already says (an error that prints
+/// its source) is not repeated.
+pub(crate) struct ErrorChain<'a>(pub(crate) &'a dyn Error);
+
+impl Display for ErrorChain<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut said = self.0.to_string();
+        let mut source = self.0.source();
+        while let Some(cause) = source {
+            let message = cause.to_string();
+            if !said.contains(&message) {
+                said.push_str(": ");
+                said.push_str(&message);
+            }
+            source = cause.source();
+        }
+        f.write_str(&said)
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MatrixEncryptedFileDto {
@@ -254,7 +277,13 @@ pub(crate) async fn remove_store(config: &CoreConfig) -> Result<(), MatrixCoreEr
             Err(err) if file_in_use(&err) && tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            Err(err) => return Err(MatrixCoreError::new(format!("{}: {err}", path.display()))),
+            Err(err) => {
+                return Err(MatrixCoreError::new(format!(
+                    "{}: {}",
+                    path.display(),
+                    ErrorChain(&err)
+                )));
+            }
         }
     }
 }
@@ -287,8 +316,12 @@ pub(crate) async fn build_client(
     homeserver: HomeserverSpec<'_>,
 ) -> Result<Client, MatrixCoreError> {
     let store_path = store_path(config);
-    std::fs::create_dir_all(&store_path)
-        .map_err(|err| MatrixCoreError::new(format!("failed to create store directory: {err}")))?;
+    std::fs::create_dir_all(&store_path).map_err(|err| {
+        MatrixCoreError::new(format!(
+            "failed to create store directory: {}",
+            ErrorChain(&err)
+        ))
+    })?;
 
     let builder = match homeserver {
         HomeserverSpec::Discover(server) => Client::builder().server_name_or_homeserver_url(server),
@@ -301,7 +334,12 @@ pub(crate) async fn build_client(
         .handle_refresh_tokens()
         .build()
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to build Matrix client: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to build Matrix client: {}",
+                ErrorChain(&err)
+            ))
+        })
 }
 
 pub(crate) fn encryption_settings() -> EncryptionSettings {
@@ -317,8 +355,9 @@ pub(crate) async fn restore_session(
     dto: StoredSession,
 ) -> Result<(), MatrixCoreError> {
     let meta = SessionMeta {
-        user_id: OwnedUserId::try_from(dto.user_id)
-            .map_err(|err| MatrixCoreError::new(format!("invalid session user id: {err}")))?,
+        user_id: OwnedUserId::try_from(dto.user_id).map_err(|err| {
+            MatrixCoreError::new(format!("invalid session user id: {}", ErrorChain(&err)))
+        })?,
         device_id: OwnedDeviceId::from(dto.device_id),
     };
     let tokens = SessionTokens {
@@ -345,7 +384,12 @@ pub(crate) async fn restore_session(
                 .await
         }
     };
-    restored.map_err(|err| MatrixCoreError::new(format!("failed to restore Matrix session: {err}")))
+    restored.map_err(|err| {
+        MatrixCoreError::new(format!(
+            "failed to restore Matrix session: {}",
+            ErrorChain(&err)
+        ))
+    })
 }
 
 pub(crate) async fn login(
@@ -361,7 +405,9 @@ pub(crate) async fn login(
         .request_refresh_token()
         .send()
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to log in to Matrix: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!("failed to log in to Matrix: {}", ErrorChain(&err)))
+        })?;
 
     Ok(stored_session(client))
 }
@@ -406,12 +452,15 @@ pub(crate) async fn start_browser_login(
             let mut login = oauth.login(redirect_uri.clone(), None, Some(registration), None);
             if let Some(user_id) = user_id_hint {
                 let user_id = UserId::parse(user_id).map_err(|err| {
-                    MatrixCoreError::new(format!("invalid user ID {user_id}: {err}"))
+                    MatrixCoreError::new(format!("invalid user ID {user_id}: {}", ErrorChain(&err)))
                 })?;
                 login = login.user_id_hint(&user_id);
             }
             let authorization = login.build().await.map_err(|err| {
-                MatrixCoreError::new(format!("failed to start the OAuth 2.0 sign-in: {err}"))
+                MatrixCoreError::new(format!(
+                    "failed to start the OAuth 2.0 sign-in: {}",
+                    ErrorChain(&err)
+                ))
             })?;
             // mirx hands the page to the shell unasked. The SDK checks the
             // endpoint is https only for an https homeserver; for a plain
@@ -437,7 +486,8 @@ pub(crate) async fn start_browser_login(
                 .await
                 .map_err(|err| {
                     MatrixCoreError::new(format!(
-                        "failed to read the homeserver's login types: {err}"
+                        "failed to read the homeserver's login types: {}",
+                        ErrorChain(&err)
                     ))
                 })?;
             if !login_types
@@ -455,7 +505,10 @@ pub(crate) async fn start_browser_login(
                 .get_sso_login_url(redirect_uri.as_str(), None)
                 .await
                 .map_err(|err| {
-                    MatrixCoreError::new(format!("failed to build the SSO sign-in address: {err}"))
+                    MatrixCoreError::new(format!(
+                        "failed to build the SSO sign-in address: {}",
+                        ErrorChain(&err)
+                    ))
                 })?;
             Ok(BrowserSignIn {
                 flow: BrowserFlow::Sso {
@@ -465,7 +518,8 @@ pub(crate) async fn start_browser_login(
             })
         }
         Err(err) => Err(MatrixCoreError::new(format!(
-            "failed to discover the homeserver's OAuth 2.0 server: {err}"
+            "failed to discover the homeserver's OAuth 2.0 server: {}",
+            ErrorChain(&err)
         ))),
     }
 }
@@ -502,7 +556,9 @@ pub(crate) async fn finish_browser_login(
             .oauth()
             .finish_login(UrlOrQuery::Query(query.to_owned()))
             .await
-            .map_err(|err| MatrixCoreError::new(format!("failed to sign in: {err}")))?,
+            .map_err(|err| {
+                MatrixCoreError::new(format!("failed to sign in: {}", ErrorChain(&err)))
+            })?,
         BrowserFlow::Sso {
             device_display_name,
         } => {
@@ -517,7 +573,10 @@ pub(crate) async fn finish_browser_login(
                 .send()
                 .await
                 .map_err(|err| {
-                    MatrixCoreError::new(format!("failed to log in to Matrix: {err}"))
+                    MatrixCoreError::new(format!(
+                        "failed to log in to Matrix: {}",
+                        ErrorChain(&err)
+                    ))
                 })?;
         }
     }
@@ -532,7 +591,10 @@ pub(crate) async fn store_has_synced(client: &Client) -> Result<bool, MatrixCore
         .get_kv_data(StateStoreDataKey::SyncToken)
         .await
         .map_err(|err| {
-            MatrixCoreError::new(format!("failed to read the stored sync token: {err}"))
+            MatrixCoreError::new(format!(
+                "failed to read the stored sync token: {}",
+                ErrorChain(&err)
+            ))
         })?;
     Ok(token.is_some())
 }
@@ -545,7 +607,9 @@ pub(crate) async fn initial_room_sync(client: &Client) -> Result<(), MatrixCoreE
     client
         .sync_once(SyncSettings::default())
         .await
-        .map_err(|err| MatrixCoreError::new(format!("initial Matrix sync failed: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!("initial Matrix sync failed: {}", ErrorChain(&err)))
+        })?;
     Ok(())
 }
 
@@ -591,7 +655,8 @@ pub(crate) async fn summarize_e2ee_status(
         BackupServerStatusMode::Fetch => {
             Some(backups.fetch_exists_on_server().await.map_err(|err| {
                 MatrixCoreError::new(format!(
-                    "failed to fetch Matrix backup server status: {err}"
+                    "failed to fetch Matrix backup server status: {}",
+                    ErrorChain(&err)
                 ))
             })?)
         }
@@ -629,7 +694,8 @@ async fn e2ee_session_state(client: &Client) -> Result<E2eeSessionState, MatrixC
                 .await
                 .map_err(|err| {
                     MatrixCoreError::new(format!(
-                        "failed to read your cross-signing identity: {err}"
+                        "failed to read your cross-signing identity: {}",
+                        ErrorChain(&err)
                     ))
                 })? {
                 Some(_) => E2eeSessionState::Unverified,
@@ -656,9 +722,12 @@ pub(crate) async fn setup_e2ee_recovery(
     } else {
         enable
     };
-    let recovery_key = enable
-        .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to set up E2EE recovery: {err}")))?;
+    let recovery_key = enable.await.map_err(|err| {
+        MatrixCoreError::new(format!(
+            "failed to set up E2EE recovery: {}",
+            ErrorChain(&err)
+        ))
+    })?;
 
     let status = summarize_e2ee_status(client, BackupServerStatusMode::Fetch).await?;
     Ok((recovery_key, status))
@@ -673,7 +742,12 @@ pub(crate) async fn recover_e2ee(
         .recovery()
         .recover_and_fix_backup(&request.recovery_secret)
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to recover E2EE secrets: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to recover E2EE secrets: {}",
+                ErrorChain(&err)
+            ))
+        })?;
 
     summarize_e2ee_status(client, BackupServerStatusMode::Fetch).await
 }
@@ -732,12 +806,18 @@ async fn read_rooms(client: &Client) -> Result<Option<Vec<RoomSummary>>, MatrixC
         .account_data::<DirectEventContent>()
         .await
         .map_err(|err| {
-            MatrixCoreError::new(format!("failed to read direct-room account data: {err}"))
+            MatrixCoreError::new(format!(
+                "failed to read direct-room account data: {}",
+                ErrorChain(&err)
+            ))
         })?
         .map(|event| event.deserialize())
         .transpose()
         .map_err(|err| {
-            MatrixCoreError::new(format!("failed to decode direct-room account data: {err}"))
+            MatrixCoreError::new(format!(
+                "failed to decode direct-room account data: {}",
+                ErrorChain(&err)
+            ))
         })?;
     let direct_user_ids_by_room = direct_user_ids_by_room_from_content(direct_content.as_ref());
     let joined_rooms = client.joined_rooms();
@@ -753,11 +833,17 @@ async fn read_rooms(client: &Client) -> Result<Option<Vec<RoomSummary>>, MatrixC
 
     for room in joined_rooms {
         let display_name = room.display_name().await.map_err(|err| {
-            MatrixCoreError::new(format!("failed to read room display name: {err}"))
+            MatrixCoreError::new(format!(
+                "failed to read room display name: {}",
+                ErrorChain(&err)
+            ))
         })?;
         let topic = room.topic();
         let encrypted = room.latest_encryption_state().await.map_err(|err| {
-            MatrixCoreError::new(format!("failed to read room encryption state: {err}"))
+            MatrixCoreError::new(format!(
+                "failed to read room encryption state: {}",
+                ErrorChain(&err)
+            ))
         })?;
         let is_space = room.is_space();
         let space_children = if is_space {
@@ -768,10 +854,14 @@ async fn read_rooms(client: &Client) -> Result<Option<Vec<RoomSummary>>, MatrixC
         let tag_content = room
             .account_data_static::<TagEventContent>()
             .await
-            .map_err(|err| MatrixCoreError::new(format!("failed to read room tags: {err}")))?
+            .map_err(|err| {
+                MatrixCoreError::new(format!("failed to read room tags: {}", ErrorChain(&err)))
+            })?
             .map(|event| event.deserialize().map(|event| event.content.tags))
             .transpose()
-            .map_err(|err| MatrixCoreError::new(format!("failed to decode room tags: {err}")))?;
+            .map_err(|err| {
+                MatrixCoreError::new(format!("failed to decode room tags: {}", ErrorChain(&err)))
+            })?;
         let direct_user_ids = direct_user_ids_by_room
             .get(room.room_id().as_str())
             .cloned()
@@ -801,7 +891,10 @@ async fn read_rooms(client: &Client) -> Result<Option<Vec<RoomSummary>>, MatrixC
     let mut invited_summaries = Vec::with_capacity(invited_rooms.len());
     for room in invited_rooms {
         let display_name = room.display_name().await.map_err(|err| {
-            MatrixCoreError::new(format!("failed to read room display name: {err}"))
+            MatrixCoreError::new(format!(
+                "failed to read room display name: {}",
+                ErrorChain(&err)
+            ))
         })?;
         // The invite's stripped state: a server refuses an invitee the
         // room's state, so asking it (latest_encryption_state) would fail.
@@ -850,15 +943,17 @@ async fn room_invite_summary(room: &Room) -> Result<Option<RoomInviteSummary>, M
         Err(matrix_sdk::Error::WrongRoomState(_)) => return Ok(None),
         Err(err) => {
             return Err(MatrixCoreError::new(format!(
-                "failed to read the invite to {}: {err}",
-                room.room_id()
+                "failed to read the invite to {}: {}",
+                room.room_id(),
+                ErrorChain(&err),
             )));
         }
     };
     let direct = room.is_direct().await.map_err(|err| {
         MatrixCoreError::new(format!(
-            "failed to read whether the invite to {} is direct: {err}",
-            room.room_id()
+            "failed to read whether the invite to {} is direct: {}",
+            room.room_id(),
+            ErrorChain(&err),
         ))
     })?;
     Ok(Some(RoomInviteSummary {
@@ -913,14 +1008,22 @@ pub(crate) async fn join_room(
     client: &Client,
     request: &JoinRoomRequest,
 ) -> Result<OwnedRoomId, MatrixCoreError> {
-    let room_or_alias = <&RoomOrAliasId>::try_from(request.room_or_alias.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id or alias: {err}")))?;
+    let room_or_alias =
+        <&RoomOrAliasId>::try_from(request.room_or_alias.as_str()).map_err(|err| {
+            MatrixCoreError::new(format!(
+                "invalid Matrix room id or alias: {}",
+                ErrorChain(&err)
+            ))
+        })?;
     let via = request
         .via
         .iter()
         .map(|server| {
             ServerName::parse(server).map_err(|err| {
-                MatrixCoreError::new(format!("invalid Matrix server name {server}: {err}"))
+                MatrixCoreError::new(format!(
+                    "invalid Matrix server name {server}: {}",
+                    ErrorChain(&err)
+                ))
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -928,7 +1031,9 @@ pub(crate) async fn join_room(
     let room = client
         .join_room_by_id_or_alias(room_or_alias, &via)
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to join Matrix room: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!("failed to join Matrix room: {}", ErrorChain(&err)))
+        })?;
 
     Ok(room.room_id().to_owned())
 }
@@ -937,8 +1042,9 @@ pub(crate) async fn accept_room_invite(
     client: &Client,
     room_id: &str,
 ) -> Result<(), MatrixCoreError> {
-    let room_id = <&RoomId>::try_from(room_id)
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    let room_id = <&RoomId>::try_from(room_id).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix room id: {}", ErrorChain(&err)))
+    })?;
 
     let room = client
         .invited_rooms()
@@ -947,7 +1053,10 @@ pub(crate) async fn accept_room_invite(
         .ok_or_else(|| MatrixCoreError::new(format!("invited room not found: {room_id}")))?;
 
     room.join().await.map_err(|err| {
-        MatrixCoreError::new(format!("failed to accept Matrix room invitation: {err}"))
+        MatrixCoreError::new(format!(
+            "failed to accept Matrix room invitation: {}",
+            ErrorChain(&err)
+        ))
     })?;
 
     Ok(())
@@ -958,11 +1067,15 @@ pub(crate) async fn create_direct_room(
     client: &Client,
     user_id: &str,
 ) -> Result<OwnedRoomId, MatrixCoreError> {
-    let user_id = <&UserId>::try_from(user_id)
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+    let user_id = <&UserId>::try_from(user_id).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix user id: {}", ErrorChain(&err)))
+    })?;
 
     let room = client.create_dm(user_id).await.map_err(|err| {
-        MatrixCoreError::new(format!("failed to create Matrix direct room: {err}"))
+        MatrixCoreError::new(format!(
+            "failed to create Matrix direct room: {}",
+            ErrorChain(&err)
+        ))
     })?;
 
     Ok(room.room_id().to_owned())
@@ -994,10 +1107,12 @@ pub(crate) async fn create_room(
         }
     }
 
-    let room = client
-        .create_room(create)
-        .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to create Matrix room: {err}")))?;
+    let room = client.create_room(create).await.map_err(|err| {
+        MatrixCoreError::new(format!(
+            "failed to create Matrix room: {}",
+            ErrorChain(&err)
+        ))
+    })?;
 
     Ok(room.room_id().to_owned())
 }
@@ -1006,8 +1121,9 @@ pub(crate) async fn leave_joined_room(
     client: &Client,
     room_id: &str,
 ) -> Result<(), MatrixCoreError> {
-    let room_id = <&RoomId>::try_from(room_id)
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    let room_id = <&RoomId>::try_from(room_id).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix room id: {}", ErrorChain(&err)))
+    })?;
 
     let room = client
         .joined_rooms()
@@ -1015,9 +1131,9 @@ pub(crate) async fn leave_joined_room(
         .find(|room| room.room_id().as_str() == room_id.as_str())
         .ok_or_else(|| MatrixCoreError::new(format!("joined room not found: {room_id}")))?;
 
-    room.leave()
-        .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to leave Matrix room: {err}")))?;
+    room.leave().await.map_err(|err| {
+        MatrixCoreError::new(format!("failed to leave Matrix room: {}", ErrorChain(&err)))
+    })?;
 
     Ok(())
 }
@@ -1026,60 +1142,86 @@ pub(crate) async fn kick_room_member(
     client: &Client,
     request: &KickRoomMemberRequest,
 ) -> Result<(), MatrixCoreError> {
-    let room_id = <&RoomId>::try_from(request.room_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
-    let user_id = <&UserId>::try_from(request.user_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+    let room_id = <&RoomId>::try_from(request.room_id.as_str()).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix room id: {}", ErrorChain(&err)))
+    })?;
+    let user_id = <&UserId>::try_from(request.user_id.as_str()).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix user id: {}", ErrorChain(&err)))
+    })?;
     let room = joined_room_by_id(client, room_id.as_str())?;
 
     room.kick_user(user_id, request.reason.as_deref())
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to kick Matrix room member: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to kick Matrix room member: {}",
+                ErrorChain(&err)
+            ))
+        })
 }
 
 pub(crate) async fn ban_room_member(
     client: &Client,
     request: &BanRoomMemberRequest,
 ) -> Result<(), MatrixCoreError> {
-    let room_id = <&RoomId>::try_from(request.room_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
-    let user_id = <&UserId>::try_from(request.user_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+    let room_id = <&RoomId>::try_from(request.room_id.as_str()).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix room id: {}", ErrorChain(&err)))
+    })?;
+    let user_id = <&UserId>::try_from(request.user_id.as_str()).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix user id: {}", ErrorChain(&err)))
+    })?;
     let room = joined_room_by_id(client, room_id.as_str())?;
 
     room.ban_user(user_id, request.reason.as_deref())
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to ban Matrix room member: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to ban Matrix room member: {}",
+                ErrorChain(&err)
+            ))
+        })
 }
 
 pub(crate) async fn unban_room_member(
     client: &Client,
     request: &UnbanRoomMemberRequest,
 ) -> Result<(), MatrixCoreError> {
-    let room_id = <&RoomId>::try_from(request.room_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
-    let user_id = <&UserId>::try_from(request.user_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+    let room_id = <&RoomId>::try_from(request.room_id.as_str()).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix room id: {}", ErrorChain(&err)))
+    })?;
+    let user_id = <&UserId>::try_from(request.user_id.as_str()).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix user id: {}", ErrorChain(&err)))
+    })?;
     let room = joined_room_by_id(client, room_id.as_str())?;
 
     room.unban_user(user_id, request.reason.as_deref())
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to unban Matrix room member: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to unban Matrix room member: {}",
+                ErrorChain(&err)
+            ))
+        })
 }
 
 pub(crate) async fn invite_room_member(
     client: &Client,
     request: &InviteRoomMemberRequest,
 ) -> Result<(), MatrixCoreError> {
-    let room_id = <&RoomId>::try_from(request.room_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
-    let user_id = <&UserId>::try_from(request.user_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+    let room_id = <&RoomId>::try_from(request.room_id.as_str()).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix room id: {}", ErrorChain(&err)))
+    })?;
+    let user_id = <&UserId>::try_from(request.user_id.as_str()).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix user id: {}", ErrorChain(&err)))
+    })?;
     let room = joined_room_by_id(client, room_id.as_str())?;
 
-    room.invite_user_by_id(user_id)
-        .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to invite Matrix room member: {err}")))
+    room.invite_user_by_id(user_id).await.map_err(|err| {
+        MatrixCoreError::new(format!(
+            "failed to invite Matrix room member: {}",
+            ErrorChain(&err)
+        ))
+    })
 }
 
 /// Writes the room's own push rule for the mode, replacing any other rule
@@ -1088,8 +1230,9 @@ pub(crate) async fn set_room_notification_mode(
     client: &Client,
     request: SetRoomNotificationModeRequest,
 ) -> Result<(), MatrixCoreError> {
-    let room_id = <&RoomId>::try_from(request.room_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    let room_id = <&RoomId>::try_from(request.room_id.as_str()).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix room id: {}", ErrorChain(&err)))
+    })?;
     joined_room_by_id(client, room_id.as_str())?;
     let mode = match request.mode {
         RoomNotificationMode::AllMessages => SdkRoomNotificationMode::AllMessages,
@@ -1105,7 +1248,8 @@ pub(crate) async fn set_room_notification_mode(
         .await
         .map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to set Matrix room notification mode: {err}"
+                "failed to set Matrix room notification mode: {}",
+                ErrorChain(&err)
             ))
         })
 }
@@ -1135,10 +1279,12 @@ fn highlight_words_from_ruleset(ruleset: &Ruleset) -> Vec<HighlightWord> {
 pub(crate) async fn highlight_words(
     client: &Client,
 ) -> Result<Vec<HighlightWord>, MatrixCoreError> {
-    let ruleset =
-        client.account().push_rules().await.map_err(|err| {
-            MatrixCoreError::new(format!("failed to read Matrix push rules: {err}"))
-        })?;
+    let ruleset = client.account().push_rules().await.map_err(|err| {
+        MatrixCoreError::new(format!(
+            "failed to read Matrix push rules: {}",
+            ErrorChain(&err)
+        ))
+    })?;
     Ok(highlight_words_from_ruleset(&ruleset))
 }
 
@@ -1149,10 +1295,20 @@ pub(crate) async fn ignored_users(client: &Client) -> Result<Vec<String>, Matrix
         .account()
         .account_data::<IgnoredUserListEventContent>()
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to read the ignore list: {err}")))?
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to read the ignore list: {}",
+                ErrorChain(&err)
+            ))
+        })?
         .map(|raw| raw.deserialize())
         .transpose()
-        .map_err(|err| MatrixCoreError::new(format!("failed to decode the ignore list: {err}")))?
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to decode the ignore list: {}",
+                ErrorChain(&err)
+            ))
+        })?
         .unwrap_or_default();
     Ok(ignored_user_ids(&content))
 }
@@ -1167,8 +1323,12 @@ fn ignored_user_ids(content: &IgnoredUserListEventContent) -> Vec<String> {
 }
 
 fn parse_user_id(user_id: &str) -> Result<OwnedUserId, MatrixCoreError> {
-    UserId::parse(user_id)
-        .map_err(|err| MatrixCoreError::new(format!("invalid user ID \"{user_id}\": {err}")))
+    UserId::parse(user_id).map_err(|err| {
+        MatrixCoreError::new(format!(
+            "invalid user ID \"{user_id}\": {}",
+            ErrorChain(&err)
+        ))
+    })
 }
 
 /// The ignore list as the server has it now; none (404) is an empty list.
@@ -1187,12 +1347,21 @@ async fn fetch_ignored_user_list(
         .account()
         .fetch_account_data_static::<IgnoredUserListEventContent>()
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to read the ignore list: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to read the ignore list: {}",
+                ErrorChain(&err)
+            ))
+        })?;
     let Some(raw) = raw else {
         return Ok(IgnoredUserListEventContent::default());
     };
-    raw.deserialize()
-        .map_err(|err| MatrixCoreError::new(format!("failed to decode the ignore list: {err}")))
+    raw.deserialize().map_err(|err| {
+        MatrixCoreError::new(format!(
+            "failed to decode the ignore list: {}",
+            ErrorChain(&err)
+        ))
+    })
 }
 
 /// Adds the user to the ignore list. The server's echo of the list, in the
@@ -1211,7 +1380,9 @@ pub(crate) async fn ignore_user(client: &Client, user_id: &str) -> Result<(), Ma
         .set_account_data(content)
         .await
         .map(|_| ())
-        .map_err(|err| MatrixCoreError::new(format!("failed to ignore {user_id}: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!("failed to ignore {user_id}: {}", ErrorChain(&err)))
+        })
 }
 
 /// Removes the user from the ignore list; one who is not on it changes
@@ -1227,7 +1398,12 @@ pub(crate) async fn unignore_user(client: &Client, user_id: &str) -> Result<(), 
         .set_account_data(content)
         .await
         .map(|_| ())
-        .map_err(|err| MatrixCoreError::new(format!("failed to unignore {user_id}: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to unignore {user_id}: {}",
+                ErrorChain(&err)
+            ))
+        })
 }
 
 /// The user's global profile from their homeserver. An empty display name
@@ -1243,11 +1419,15 @@ pub(crate) async fn fetch_user_profile(
         .await
         .map_err(|err| match err.client_api_error_kind() {
             Some(ErrorKind::NotFound) => MatrixCoreError::new(format!("no such user {user_id}")),
-            _ => MatrixCoreError::new(format!("failed to fetch the profile of {user_id}: {err}")),
+            _ => MatrixCoreError::new(format!(
+                "failed to fetch the profile of {user_id}: {}",
+                ErrorChain(&err)
+            )),
         })?;
     let display_name = response.get_static::<DisplayNameField>().map_err(|err| {
         MatrixCoreError::new(format!(
-            "invalid display name in the profile of {user_id}: {err}"
+            "invalid display name in the profile of {user_id}: {}",
+            ErrorChain(&err)
         ))
     })?;
     // Presence after the profile: an unknown user is `no such user`.
@@ -1267,7 +1447,8 @@ pub(crate) async fn fetch_user_profile(
         }
         Err(err) => {
             return Err(MatrixCoreError::new(format!(
-                "failed to fetch the presence of {user_id}: {err}"
+                "failed to fetch the presence of {user_id}: {}",
+                ErrorChain(&err)
             )));
         }
     };
@@ -1304,8 +1485,11 @@ pub(crate) async fn list_user_devices(
 ) -> Result<UserDevices, MatrixCoreError> {
     let user_id = parse_user_id(user_id)?;
     let encryption = client.encryption();
-    let failed = |err: &dyn Display| {
-        MatrixCoreError::new(format!("failed to list the devices of {user_id}: {err}"))
+    let failed = |err: &dyn Error| {
+        MatrixCoreError::new(format!(
+            "failed to list the devices of {user_id}: {}",
+            ErrorChain(err)
+        ))
     };
     let identity = encryption
         .request_user_identity(&user_id)
@@ -1387,8 +1571,11 @@ pub(crate) async fn accept_user_identity(
     user_id: &str,
 ) -> Result<(), MatrixCoreError> {
     let user_id = parse_user_id(user_id)?;
-    let failed = |err: &dyn Display| {
-        MatrixCoreError::new(format!("failed to accept {user_id}'s identity: {err}"))
+    let failed = |err: &dyn Error| {
+        MatrixCoreError::new(format!(
+            "failed to accept {user_id}'s identity: {}",
+            ErrorChain(err)
+        ))
     };
     let identity = client
         .encryption()
@@ -1509,7 +1696,10 @@ async fn watch_room_identities(
             }
             Err(err) => emit_e2ee_status_error(
                 events,
-                MatrixCoreError::new(format!("failed to watch identities in {room_id}: {err}")),
+                MatrixCoreError::new(format!(
+                    "failed to watch identities in {room_id}: {}",
+                    ErrorChain(&err)
+                )),
             ),
         }
     }
@@ -1527,7 +1717,7 @@ pub(crate) async fn start_identity_reset(
         .recovery()
         .reset_identity()
         .await
-        .map_err(|err| identity_reset_error(&err))
+        .map_err(|err| identity_reset_error(&ErrorChain(&err)))
 }
 
 pub(crate) fn identity_reset_error(err: &dyn Display) -> MatrixCoreError {
@@ -1543,10 +1733,10 @@ pub(crate) fn identity_reset_failure(err: &RecoveryError) -> MatrixCoreError {
         ),
         RecoveryError::Sdk(sdk_err) => match sdk_err.as_uiaa_response().and_then(uiaa_refusal) {
             Some(refusal) => identity_reset_error(&refusal),
-            None => identity_reset_error(err),
+            None => identity_reset_error(&ErrorChain(err)),
         },
         RecoveryError::BackupExistsOnServer | RecoveryError::SecretStorage(_) => {
-            identity_reset_error(err)
+            identity_reset_error(&ErrorChain(err))
         }
     }
 }
@@ -1723,7 +1913,12 @@ async fn other_own_device(
     let exists = client
         .device_exists(device_id.clone())
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to look up {device_id}: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to look up {device_id}: {}",
+                ErrorChain(&err)
+            ))
+        })?;
     if !exists {
         return Err(no_such_session(&device_id));
     }
@@ -1754,7 +1949,8 @@ pub(crate) async fn rename_device(
             Err(no_such_session(&device_id))
         }
         Err(err) => Err(MatrixCoreError::new(format!(
-            "failed to rename {device_id}: {err}"
+            "failed to rename {device_id}: {}",
+            ErrorChain(&err)
         ))),
     }
 }
@@ -1769,7 +1965,12 @@ pub(crate) async fn query_own_identity(client: &Client) -> Result<(), MatrixCore
         .request_user_identity(user_id)
         .await
         .map(drop)
-        .map_err(|err| MatrixCoreError::new(format!("failed to query your E2EE identity: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to query your E2EE identity: {}",
+                ErrorChain(&err)
+            ))
+        })
 }
 
 /// Reads your identity back from the server after a reset that did not
@@ -1785,7 +1986,8 @@ pub(crate) async fn settle_identity_reset(client: &Client) -> Result<bool, Matri
         .await
         .map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to read your E2EE identity back from the server: {err}"
+                "failed to read your E2EE identity back from the server: {}",
+                ErrorChain(&err)
             ))
         })?;
     Ok(encryption
@@ -1877,7 +2079,10 @@ pub(crate) async fn remove_highlight_word(
         .remove_keyword(word)
         .await
         .map_err(|err| {
-            MatrixCoreError::new(format!("failed to remove highlight word \"{word}\": {err}"))
+            MatrixCoreError::new(format!(
+                "failed to remove highlight word \"{word}\": {}",
+                ErrorChain(&err)
+            ))
         })
 }
 
@@ -1889,15 +2094,21 @@ pub(crate) async fn set_display_name(
         .account()
         .set_display_name(Some(&request.display_name))
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to set Matrix display name: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to set Matrix display name: {}",
+                ErrorChain(&err)
+            ))
+        })
 }
 
 pub(crate) async fn reject_room_invite(
     client: &Client,
     room_id: &str,
 ) -> Result<(), MatrixCoreError> {
-    let room_id = <&RoomId>::try_from(room_id)
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    let room_id = <&RoomId>::try_from(room_id).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix room id: {}", ErrorChain(&err)))
+    })?;
 
     let room = client
         .invited_rooms()
@@ -1906,7 +2117,10 @@ pub(crate) async fn reject_room_invite(
         .ok_or_else(|| MatrixCoreError::new(format!("invited room not found: {room_id}")))?;
 
     room.leave().await.map_err(|err| {
-        MatrixCoreError::new(format!("failed to reject Matrix room invitation: {err}"))
+        MatrixCoreError::new(format!(
+            "failed to reject Matrix room invitation: {}",
+            ErrorChain(&err)
+        ))
     })?;
 
     Ok(())
@@ -1916,8 +2130,9 @@ pub(crate) async fn set_room_topic(
     client: &Client,
     request: SetRoomTopicRequest,
 ) -> Result<(), MatrixCoreError> {
-    let room_id = <&RoomId>::try_from(request.room_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    let room_id = <&RoomId>::try_from(request.room_id.as_str()).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix room id: {}", ErrorChain(&err)))
+    })?;
 
     let room = client
         .joined_rooms()
@@ -1925,9 +2140,12 @@ pub(crate) async fn set_room_topic(
         .find(|room| room.room_id().as_str() == room_id.as_str())
         .ok_or_else(|| MatrixCoreError::new(format!("joined room not found: {room_id}")))?;
 
-    room.set_room_topic(&request.topic)
-        .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to set Matrix room topic: {err}")))?;
+    room.set_room_topic(&request.topic).await.map_err(|err| {
+        MatrixCoreError::new(format!(
+            "failed to set Matrix room topic: {}",
+            ErrorChain(&err)
+        ))
+    })?;
 
     Ok(())
 }
@@ -2128,7 +2346,10 @@ async fn joined_room_members(
     room: &Room,
 ) -> Result<RoomMembers, MatrixCoreError> {
     let members = room.members(RoomMemberships::JOIN).await.map_err(|err| {
-        MatrixCoreError::new(format!("failed to read joined Matrix room members: {err}"))
+        MatrixCoreError::new(format!(
+            "failed to read joined Matrix room members: {}",
+            ErrorChain(&err)
+        ))
     })?;
     room_members_from_matrix_members(
         room.room_id().as_str(),
@@ -2147,7 +2368,8 @@ async fn joined_room_members_no_sync(
         .await
         .map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to read cached joined Matrix room members: {err}"
+                "failed to read cached joined Matrix room members: {}",
+                ErrorChain(&err)
             ))
         })?;
     room_members_from_matrix_members(
@@ -2190,8 +2412,9 @@ pub(crate) async fn summarize_joined_room_members(
             .await
             .map_err(|err| {
                 MatrixCoreError::new(format!(
-                    "failed to read your membership of {}: {err}",
-                    room.room_id()
+                    "failed to read your membership of {}: {}",
+                    room.room_id(),
+                    ErrorChain(&err),
                 ))
             })?;
         if own_member.is_none() {
@@ -2211,8 +2434,9 @@ async fn room_user_profile(
 ) -> Result<RoomUserProfile, MatrixCoreError> {
     let member = room.get_member_no_sync(user_id).await.map_err(|err| {
         MatrixCoreError::new(format!(
-            "failed to read Matrix room member {user_id} in {}: {err}",
-            room.room_id()
+            "failed to read Matrix room member {user_id} in {}: {}",
+            room.room_id(),
+            ErrorChain(&err),
         ))
     })?;
     Ok(member_profile(user_id, member.as_ref()))
@@ -2256,8 +2480,9 @@ async fn member_target_profile(
             .await
             .map_err(|err| {
                 MatrixCoreError::new(format!(
-                    "failed to read Matrix room display names in {}: {err}",
-                    room.room_id()
+                    "failed to read Matrix room display names in {}: {}",
+                    room.room_id(),
+                    ErrorChain(&err),
                 ))
             })?
             .iter()
@@ -2307,7 +2532,8 @@ impl<'a> EventBatchLookups<'a> {
                 // holds them too.
                 let (cache, _handles) = self.room.event_cache().await.map_err(|err| {
                     MatrixCoreError::new(format!(
-                        "failed to open the event cache of {room_id}: {err}"
+                        "failed to open the event cache of {room_id}: {}",
+                        ErrorChain(&err)
                     ))
                 })?;
                 self.event_cache.insert(cache)
@@ -2321,7 +2547,8 @@ impl<'a> EventBatchLookups<'a> {
             .await
             .map_err(|err| {
                 MatrixCoreError::new(format!(
-                    "failed to read the relations of {event_id} in {room_id}: {err}"
+                    "failed to read the relations of {event_id} in {room_id}: {}",
+                    ErrorChain(&err)
                 ))
             })
     }
@@ -2551,7 +2778,7 @@ pub(crate) async fn fetch_room_media(client: &Client, request: FetchRoomMediaReq
             event_id,
             kind: RoomMediaKind::Failed {
                 format,
-                message: format!("failed to fetch room media: {err}"),
+                message: format!("failed to fetch room media: {}", ErrorChain(&err)),
             },
         },
     }
@@ -2594,8 +2821,9 @@ fn media_source_from_room_media_source(
     match source {
         RoomMediaSource::Plain { url } => {
             let uri = <&MxcUri>::from(url.as_str());
-            uri.validate()
-                .map_err(|err| MatrixCoreError::new(format!("invalid media MXC URI: {err}")))?;
+            uri.validate().map_err(|err| {
+                MatrixCoreError::new(format!("invalid media MXC URI: {}", ErrorChain(&err)))
+            })?;
             Ok(MediaSource::Plain(uri.to_owned()))
         }
         RoomMediaSource::Encrypted {
@@ -2621,7 +2849,10 @@ fn media_source_from_room_media_source(
                 "v": v,
             }))
             .map_err(|err| {
-                MatrixCoreError::new(format!("invalid encrypted media metadata: {err}"))
+                MatrixCoreError::new(format!(
+                    "invalid encrypted media metadata: {}",
+                    ErrorChain(&err)
+                ))
             })?;
 
             Ok(MediaSource::Encrypted(Box::new(file)))
@@ -2636,7 +2867,12 @@ async fn summarize_space_children(
     let raw_events = room
         .get_state_events_static::<SpaceChildEventContent>()
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to read space child state: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to read space child state: {}",
+                ErrorChain(&err)
+            ))
+        })?;
 
     // The spec: a child whose `via` is missing or invalid is ignored. A
     // child removed from a space keeps an `m.space.child` with content `{}`
@@ -4151,8 +4387,12 @@ impl FollowedFlow {
 }
 
 pub(crate) fn parse_verification_user_id(user_id: &str) -> Result<OwnedUserId, MatrixCoreError> {
-    OwnedUserId::try_from(user_id.to_owned())
-        .map_err(|err| MatrixCoreError::new(format!("invalid verification user id: {err}")))
+    OwnedUserId::try_from(user_id.to_owned()).map_err(|err| {
+        MatrixCoreError::new(format!(
+            "invalid verification user id: {}",
+            ErrorChain(&err)
+        ))
+    })
 }
 
 pub(crate) async fn lookup_verification_request(
@@ -4202,8 +4442,12 @@ pub(crate) async fn request_verification(
     let own_user_id = client.user_id().expect("verification runs signed in");
     let encryption = client.encryption();
     let methods = vec![VerificationMethod::SasV1];
-    let failed =
-        |err: &dyn Display| MatrixCoreError::new(format!("failed to request verification: {err}"));
+    let failed = |err: &dyn Error| {
+        MatrixCoreError::new(format!(
+            "failed to request verification: {}",
+            ErrorChain(err)
+        ))
+    };
 
     let flow = match request.device_id.as_deref() {
         Some(device_id) => {
@@ -4296,8 +4540,9 @@ pub(crate) async fn accept_verification(
         .await
         .map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to accept verification with {}: {err}",
-                flow.user_id
+                "failed to accept verification with {}: {}",
+                flow.user_id,
+                ErrorChain(&err),
             ))
         })
 }
@@ -4310,8 +4555,9 @@ pub(crate) async fn cancel_verification(
     if let Ok(sas) = lookup_sas_verification(client, flow).await {
         return sas.cancel().await.map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to cancel SAS verification with {}: {err}",
-                flow.user_id
+                "failed to cancel SAS verification with {}: {}",
+                flow.user_id,
+                ErrorChain(&err),
             ))
         });
     }
@@ -4321,8 +4567,9 @@ pub(crate) async fn cancel_verification(
         .await
         .map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to cancel verification request with {}: {err}",
-                flow.user_id
+                "failed to cancel verification request with {}: {}",
+                flow.user_id,
+                ErrorChain(&err),
             ))
         })
 }
@@ -4337,8 +4584,9 @@ pub(crate) async fn confirm_verification_sas(
         .await
         .map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to confirm SAS verification with {}: {err}",
-                flow.user_id
+                "failed to confirm SAS verification with {}: {}",
+                flow.user_id,
+                ErrorChain(&err),
             ))
         })
 }
@@ -4353,8 +4601,9 @@ pub(crate) async fn reject_verification_sas(
         .await
         .map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to reject SAS verification with {}: {err}",
-                flow.user_id
+                "failed to reject SAS verification with {}: {}",
+                flow.user_id,
+                ErrorChain(&err),
             ))
         })
 }
@@ -4391,8 +4640,9 @@ async fn watch_verification_request(
                     emit_verification_error(
                         &events,
                         format!(
-                            "failed to start SAS verification with {}: {err}",
-                            flow.id.user_id
+                            "failed to start SAS verification with {}: {}",
+                            flow.id.user_id,
+                            ErrorChain(&err),
                         ),
                     );
                 }
@@ -4446,8 +4696,9 @@ async fn follow_sas(
         emit_verification_error(
             events,
             format!(
-                "failed to accept SAS verification with {}: {err}",
-                flow.id.user_id
+                "failed to accept SAS verification with {}: {}",
+                flow.id.user_id,
+                ErrorChain(&err),
             ),
         );
     }
@@ -4722,10 +4973,9 @@ pub(crate) async fn set_own_presence(
     };
     let mut request = set_presence::v3::Request::new(user_id, presence);
     request.status_msg = away_message.map(str::to_owned);
-    client
-        .send(request)
-        .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to set your presence: {err}")))?;
+    client.send(request).await.map_err(|err| {
+        MatrixCoreError::new(format!("failed to set your presence: {}", ErrorChain(&err)))
+    })?;
     Ok(())
 }
 
@@ -4738,7 +4988,12 @@ pub(crate) async fn fetch_own_presence(client: &Client) -> Result<PresenceKind, 
     let response = client
         .send(get_presence::v3::Request::new(user_id))
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to read back your presence: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to read back your presence: {}",
+                ErrorChain(&err)
+            ))
+        })?;
     presence_kind(&response.presence)
 }
 
@@ -4750,9 +5005,9 @@ fn presence_status(status_msg: Option<String>) -> Option<String> {
 /// A presence event, as the sync or the store has it. A presence mirx
 /// does not know (MSC3026's `busy`) is an error naming the user.
 fn presence_change(raw: &Raw<PresenceEvent>) -> Result<PresenceChange, MatrixCoreError> {
-    let event = raw
-        .deserialize()
-        .map_err(|err| MatrixCoreError::new(format!("invalid presence event: {err}")))?;
+    let event = raw.deserialize().map_err(|err| {
+        MatrixCoreError::new(format!("invalid presence event: {}", ErrorChain(&err)))
+    })?;
     let kind = presence_kind(&event.content.presence)
         .map_err(|err| MatrixCoreError::new(format!("{err} of {}", event.sender)))?;
     Ok(PresenceChange {
@@ -4796,7 +5051,12 @@ pub(crate) async fn stored_presence(
         .state_store()
         .get_presence_events(&user_ids)
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to read stored presence: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to read stored presence: {}",
+                ErrorChain(&err)
+            ))
+        })
 }
 
 fn presence_kind(presence: &PresenceState) -> Result<PresenceKind, MatrixCoreError> {
@@ -4814,7 +5074,7 @@ fn presence_kind(presence: &PresenceState) -> Result<PresenceKind, MatrixCoreErr
 /// Only a session the server ended is final; mIRC retries any other
 /// disconnection.
 fn sync_stop_reason(err: &matrix_sdk::Error) -> SyncStopReason {
-    let message = err.to_string();
+    let message = ErrorChain(err).to_string();
     if session_ended(err) {
         SyncStopReason::SessionEnded(message)
     } else {
@@ -4982,7 +5242,10 @@ pub(crate) fn send_queue_update_task(
                 Event::Error(CoreErrorEvent {
                     operation: Operation::SendQueue,
                     room_id: None,
-                    message: format!("failed to hydrate Matrix send queue local echoes: {err}"),
+                    message: format!(
+                        "failed to hydrate Matrix send queue local echoes: {}",
+                        ErrorChain(&err)
+                    ),
                 }),
             ),
         }
@@ -5020,7 +5283,10 @@ pub(crate) fn send_queue_update_task(
                             Event::Error(CoreErrorEvent {
                                 operation: Operation::SendMessage,
                                 room_id: Some(room_id),
-                                message: format!("failed to map Matrix send queue update: {err}"),
+                                message: format!(
+                                    "failed to map Matrix send queue update: {}",
+                                    ErrorChain(&err)
+                                ),
                             }),
                         ),
                     }
@@ -5053,7 +5319,8 @@ async fn own_room_user_profile(
     })?;
     let user_id = UserId::parse(current_user_id).map_err(|err| {
         MatrixCoreError::new(format!(
-            "invalid authenticated user id {current_user_id}: {err}"
+            "invalid authenticated user id {current_user_id}: {}",
+            ErrorChain(&err)
         ))
     })?;
     room_user_profile(&room, &user_id).await
@@ -5184,7 +5451,10 @@ async fn hydrate_send_queue_local_echoes(
     pending: &PendingOutgoingRegistry,
 ) -> Result<Vec<Event>, MatrixCoreError> {
     let local_echoes = client.send_queue().local_echoes().await.map_err(|err| {
-        MatrixCoreError::new(format!("failed to load Matrix local echoes: {err}"))
+        MatrixCoreError::new(format!(
+            "failed to load Matrix local echoes: {}",
+            ErrorChain(&err)
+        ))
     })?;
 
     let mut events = Vec::new();
@@ -5432,9 +5702,13 @@ fn map_local_message_activity(
 fn message_presentation_and_text_from_serialized_event(
     serialized_event: &SerializableEventContent,
 ) -> Result<Option<LocalEchoMessageDetails>, MatrixCoreError> {
-    let AnyMessageLikeEventContent::RoomMessage(content) = serialized_event
-        .deserialize()
-        .map_err(|err| MatrixCoreError::new(format!("failed to deserialize local echo: {err}")))?
+    let AnyMessageLikeEventContent::RoomMessage(content) =
+        serialized_event.deserialize().map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to deserialize local echo: {}",
+                ErrorChain(&err)
+            ))
+        })?
     else {
         return Ok(None);
     };
@@ -5470,9 +5744,13 @@ fn message_presentation_and_text_from_serialized_event(
 fn edited_message_target_event_id_from_serialized_event(
     serialized_event: &SerializableEventContent,
 ) -> Result<Option<String>, MatrixCoreError> {
-    let AnyMessageLikeEventContent::RoomMessage(content) = serialized_event
-        .deserialize()
-        .map_err(|err| MatrixCoreError::new(format!("failed to deserialize local echo: {err}")))?
+    let AnyMessageLikeEventContent::RoomMessage(content) =
+        serialized_event.deserialize().map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to deserialize local echo: {}",
+                ErrorChain(&err)
+            ))
+        })?
     else {
         return Ok(None);
     };
@@ -5488,9 +5766,13 @@ fn edited_message_target_event_id_from_serialized_event(
 fn reaction_target_and_key_from_serialized_event(
     serialized_event: &SerializableEventContent,
 ) -> Result<Option<(String, String)>, MatrixCoreError> {
-    let AnyMessageLikeEventContent::Reaction(content) = serialized_event
-        .deserialize()
-        .map_err(|err| MatrixCoreError::new(format!("failed to deserialize local echo: {err}")))?
+    let AnyMessageLikeEventContent::Reaction(content) =
+        serialized_event.deserialize().map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to deserialize local echo: {}",
+                ErrorChain(&err)
+            ))
+        })?
     else {
         return Ok(None);
     };
@@ -5578,7 +5860,9 @@ fn reaction_event_content(
     key: String,
 ) -> Result<ReactionEventContent, MatrixCoreError> {
     let target_event_id = <&EventId>::try_from(target_event_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))?
+        .map_err(|err| {
+            MatrixCoreError::new(format!("invalid Matrix event id: {}", ErrorChain(&err)))
+        })?
         .to_owned();
 
     Ok(ReactionEventContent::new(Annotation::new(
@@ -5589,7 +5873,9 @@ fn reaction_event_content(
 
 fn owned_event_id_from_str(event_id: &str) -> Result<OwnedEventId, MatrixCoreError> {
     <&EventId>::try_from(event_id)
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!("invalid Matrix event id: {}", ErrorChain(&err)))
+        })
         .map(|event_id| event_id.to_owned())
 }
 
@@ -5615,7 +5901,8 @@ async fn message_mentions(
         .await
         .map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to read cached joined Matrix room members: {err}"
+                "failed to read cached joined Matrix room members: {}",
+                ErrorChain(&err)
             ))
         })?;
     let named = body_mentions(
@@ -5630,8 +5917,9 @@ async fn message_mentions(
     );
     let mut user_ids = named.user_ids;
     if let Some(reply) = reply {
-        let replied_to_sender = UserId::parse(&reply.sender_user_id)
-            .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+        let replied_to_sender = UserId::parse(&reply.sender_user_id).map_err(|err| {
+            MatrixCoreError::new(format!("invalid Matrix user id: {}", ErrorChain(&err)))
+        })?;
         if replied_to_sender != own_user_id {
             user_ids.insert(replied_to_sender);
         }
@@ -5666,7 +5954,12 @@ pub(crate) async fn send_message(
     room.send_queue()
         .send(AnyMessageLikeEventContent::RoomMessage(content))
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix message: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to send Matrix message: {}",
+                ErrorChain(&err)
+            ))
+        })?;
 
     Ok(())
 }
@@ -5679,7 +5972,9 @@ pub(crate) async fn send_file(
     let path = request.path.clone();
     let (bytes, size) = tokio::task::spawn_blocking(move || read_file_bytes(&path))
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to read file path: {err}")))??;
+        .map_err(|err| {
+            MatrixCoreError::new(format!("failed to read file path: {}", ErrorChain(&err)))
+        })??;
 
     let filename = match request.filename {
         Some(filename) => filename,
@@ -5696,8 +5991,9 @@ pub(crate) async fn send_file(
             })?,
     };
     let mime = match request.content_type {
-        Some(content_type) => Mime::from_str(&content_type)
-            .map_err(|err| MatrixCoreError::new(format!("invalid file content type: {err}")))?,
+        Some(content_type) => Mime::from_str(&content_type).map_err(|err| {
+            MatrixCoreError::new(format!("invalid file content type: {}", ErrorChain(&err)))
+        })?,
         None => content_type_for_file_name(&filename),
     };
     let size = UInt::new(size)
@@ -5706,7 +6002,9 @@ pub(crate) async fn send_file(
 
     room.send_attachment(filename, &mime, bytes, config)
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix file: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!("failed to send Matrix file: {}", ErrorChain(&err)))
+        })?;
 
     Ok(())
 }
@@ -5768,8 +6066,9 @@ fn attachment_info(mime: &Mime, size: UInt) -> AttachmentInfo {
 fn read_file_bytes(path: &std::path::Path) -> Result<(Vec<u8>, u64), MatrixCoreError> {
     let metadata = std::fs::metadata(path).map_err(|err| {
         MatrixCoreError::new(format!(
-            "failed to read file path {}: {err}",
-            path.display()
+            "failed to read file path {}: {}",
+            path.display(),
+            ErrorChain(&err),
         ))
     })?;
     if !metadata.is_file() {
@@ -5780,8 +6079,9 @@ fn read_file_bytes(path: &std::path::Path) -> Result<(Vec<u8>, u64), MatrixCoreE
     }
     let bytes = std::fs::read(path).map_err(|err| {
         MatrixCoreError::new(format!(
-            "failed to read file path {}: {err}",
-            path.display()
+            "failed to read file path {}: {}",
+            path.display(),
+            ErrorChain(&err),
         ))
     })?;
     Ok((bytes, metadata.len()))
@@ -5797,7 +6097,12 @@ pub(crate) async fn send_reaction(
     room.send_queue()
         .send(AnyMessageLikeEventContent::Reaction(content))
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix reaction: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to send Matrix reaction: {}",
+                ErrorChain(&err)
+            ))
+        })?;
 
     Ok(())
 }
@@ -5807,8 +6112,10 @@ pub(crate) async fn edit_message(
     request: EditMessageRequest,
 ) -> Result<(), MatrixCoreError> {
     let room = joined_room_by_id(client, &request.room_id)?;
-    let target_event_id = <&EventId>::try_from(request.target_event_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))?;
+    let target_event_id =
+        <&EventId>::try_from(request.target_event_id.as_str()).map_err(|err| {
+            MatrixCoreError::new(format!("invalid Matrix event id: {}", ErrorChain(&err)))
+        })?;
     // The new text's mentions. The SDK's replacement lists them all in
     // `m.new_content` and, at the top level, only those the original did
     // not, so an edit notifies only the newly named. An edited reply's
@@ -5826,11 +6133,17 @@ pub(crate) async fn edit_message(
         .make_edit_event(target_event_id, EditedContent::RoomMessage(new_content))
         .await
         .map_err(|err| {
-            MatrixCoreError::new(format!("failed to create Matrix message edit: {err}"))
+            MatrixCoreError::new(format!(
+                "failed to create Matrix message edit: {}",
+                ErrorChain(&err)
+            ))
         })?;
 
     room.send_queue().send(edit_event).await.map_err(|err| {
-        MatrixCoreError::new(format!("failed to send Matrix message edit: {err}"))
+        MatrixCoreError::new(format!(
+            "failed to send Matrix message edit: {}",
+            ErrorChain(&err)
+        ))
     })?;
 
     Ok(())
@@ -5846,7 +6159,12 @@ pub(crate) async fn redact_event(
     room.send_queue()
         .redact(event_id, None)
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to redact Matrix event: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to redact Matrix event: {}",
+                ErrorChain(&err)
+            ))
+        })?;
 
     Ok(())
 }
@@ -5862,7 +6180,12 @@ pub(crate) async fn mark_room_read(
     joined_room_by_id(client, &request.room_id)?
         .send_multiple_receipts(Receipts::new().public_read_receipt(event_id))
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix read receipt: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to send Matrix read receipt: {}",
+                ErrorChain(&err)
+            ))
+        })
 }
 
 /// Moves the room's read marker (`m.fully_read`, shared with the user's
@@ -5875,7 +6198,12 @@ pub(crate) async fn set_read_marker(
     joined_room_by_id(client, &request.room_id)?
         .send_multiple_receipts(Receipts::new().fully_read_marker(event_id))
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to set Matrix read marker: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to set Matrix read marker: {}",
+                ErrorChain(&err)
+            ))
+        })
 }
 
 /// Tells the room the user is typing, or has stopped (see
@@ -5887,7 +6215,12 @@ pub(crate) async fn set_typing(
     joined_room_by_id(client, &request.room_id)?
         .typing_notice(request.typing)
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to send typing notice: {err}")))
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to send typing notice: {}",
+                ErrorChain(&err)
+            ))
+        })
 }
 
 pub(crate) async fn backfill_room_history(
@@ -5923,7 +6256,10 @@ pub(crate) async fn backfill_room_history(
     options.filter.limit = Some(limit);
 
     let response = room.messages(options).await.map_err(|err| {
-        MatrixCoreError::new(format!("failed to backfill Matrix room history: {err}"))
+        MatrixCoreError::new(format!(
+            "failed to backfill Matrix room history: {}",
+            ErrorChain(&err)
+        ))
     })?;
     let events = room_history_backfill_events_from_timeline(
         &room,
@@ -5953,7 +6289,8 @@ async fn history_token_before_event(
         .await
         .map_err(|err| {
             MatrixCoreError::new(format!(
-                "failed to find {event_id} in Matrix room history: {err}"
+                "failed to find {event_id} in Matrix room history: {}",
+                ErrorChain(&err)
             ))
         })?;
     Ok(context.prev_batch_token)
@@ -6288,7 +6625,8 @@ async fn timeline_event_mapping(
             .deserialize_as_unchecked::<OriginalSyncRoomPowerLevelsEvent>()
             .map_err(|err| {
                 MatrixCoreError::new(format!(
-                    "failed to decode Matrix power levels event in {room_id}: {err}"
+                    "failed to decode Matrix power levels event in {room_id}: {}",
+                    ErrorChain(&err)
                 ))
             })?;
         return Ok(room_activity_from_power_levels_event(
@@ -6348,7 +6686,10 @@ async fn fetch_public_rooms(
         .as_deref()
         .map(|server| {
             ServerName::parse(server).map_err(|err| {
-                MatrixCoreError::new(format!("invalid Matrix server name {server}: {err}"))
+                MatrixCoreError::new(format!(
+                    "invalid Matrix server name {server}: {}",
+                    ErrorChain(&err)
+                ))
             })
         })
         .transpose()?;
@@ -6363,7 +6704,9 @@ async fn fetch_public_rooms(
     let response = client
         .public_rooms_filtered(sdk_request)
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to list public rooms: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!("failed to list public rooms: {}", ErrorChain(&err)))
+        })?;
 
     Ok(PublicRoomsResult::Loaded {
         rooms: response
@@ -6395,7 +6738,12 @@ async fn fetch_room_event_activity(
     let event = room
         .load_or_fetch_event(&event_id, None)
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to fetch Matrix event: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to fetch Matrix event: {}",
+                ErrorChain(&err)
+            ))
+        })?;
     let redaction_rules = room.clone_info().room_version_rules_or_default().redaction;
     let mut mapped = room_history_backfill_event_from_timeline_event(
         &room,
@@ -6426,7 +6774,7 @@ pub(crate) async fn logout(client: Client) -> Result<(), MatrixCoreError> {
     match client.logout().await {
         Ok(()) => Ok(()),
         Err(err) if session_ended(&err) => Ok(()),
-        Err(err) => Err(MatrixCoreError::new(err.to_string())),
+        Err(err) => Err(MatrixCoreError::new(ErrorChain(&err).to_string())),
     }
 }
 
@@ -6498,9 +6846,53 @@ pub(crate) fn stored_session(client: &Client) -> StoredSession {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::error::Error;
+    use std::fmt::{self, Display, Formatter};
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    use super::ErrorChain;
+
+    /// An error with a cause, which prints it or not.
+    #[derive(Debug)]
+    struct Layer {
+        message: &'static str,
+        cause: Option<Box<Layer>>,
+    }
+
+    impl Display for Layer {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            f.write_str(self.message)
+        }
+    }
+
+    impl Error for Layer {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.cause
+                .as_deref()
+                .map(|cause| cause as &(dyn Error + 'static))
+        }
+    }
+
+    #[test]
+    fn an_error_chain_says_each_cause_once() {
+        let err = Layer {
+            message: "failed: error sending request",
+            cause: Some(Box::new(Layer {
+                // A cause the error's own message already says.
+                message: "error sending request",
+                cause: Some(Box::new(Layer {
+                    message: "operation timed out",
+                    cause: None,
+                })),
+            })),
+        };
+        assert_eq!(
+            ErrorChain(&err).to_string(),
+            "failed: error sending request: operation timed out"
+        );
+    }
 
     /// The session's event handlers, and the verification flows they hand
     /// over, which the caller keeps (a handler panics if it cannot hand

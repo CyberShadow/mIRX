@@ -41,7 +41,7 @@ use crate::api::{
     Operation, RestoreSessionRequest, SyncStopReason,
 };
 use crate::loopback::LoopbackRedirect;
-use crate::matrix::{self, BrowserFlow};
+use crate::matrix::{self, BrowserFlow, ErrorChain};
 
 /// How long shutting down lets the read receipts and markers already sent
 /// go on (`Lane::outlasts_shutdown`). The UI has gone by then (the window
@@ -382,7 +382,10 @@ impl Core {
                 &self.events,
                 Operation::Login,
                 None,
-                format!("failed to receive the browser's sign-in: {err}"),
+                format!(
+                    "failed to receive the browser's sign-in: {}",
+                    ErrorChain(&err)
+                ),
             ),
         }
     }
@@ -574,7 +577,10 @@ impl Core {
                         &self.events,
                         Operation::Logout,
                         None,
-                        format!("logged out, but could not remove the session's data in {err}"),
+                        format!(
+                            "logged out, but could not remove the session's data in {}",
+                            ErrorChain(&err)
+                        ),
                     );
                 }
             }

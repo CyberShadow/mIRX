@@ -19,7 +19,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::value::RawValue;
 
-use super::{MatrixCoreError, joined_room_by_id, room_join_rule};
+use super::{ErrorChain, MatrixCoreError, joined_room_by_id, room_join_rule};
 use crate::api::{
     MemberPowerRole, RoomBan, RoomSettings, RoomSettingsPermissions, UpdateRoomSettingsRequest,
 };
@@ -87,8 +87,9 @@ pub(crate) async fn fetch_room_settings(
     client: &Client,
     room_id: &str,
 ) -> Result<RoomSettings, MatrixCoreError> {
-    let room_id = <&RoomId>::try_from(room_id)
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    let room_id = <&RoomId>::try_from(room_id).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix room id: {}", ErrorChain(&err)))
+    })?;
     let room = joined_room_by_id(client, room_id.as_str())?;
     let load_error =
         |err: String| MatrixCoreError::new(format!("failed to load Matrix room settings: {err}"));
@@ -96,7 +97,7 @@ pub(crate) async fn fetch_room_settings(
     let state = client
         .send(get_state_events::v3::Request::new(room_id.to_owned()))
         .await
-        .map_err(|err| load_error(err.to_string()))?
+        .map_err(|err| load_error(ErrorChain(&err).to_string()))?
         .room_state;
     let mut name = None;
     let mut topic = None;
@@ -164,7 +165,7 @@ pub(crate) async fn fetch_room_settings(
         .privacy_settings()
         .get_room_visibility()
         .await
-        .map_err(|err| load_error(err.to_string()))?
+        .map_err(|err| load_error(ErrorChain(&err).to_string()))?
         == Visibility::Public;
 
     let creators = room
@@ -303,11 +304,13 @@ pub(crate) async fn update_room_settings(
     client: &Client,
     request: &UpdateRoomSettingsRequest,
 ) -> Result<(), MatrixCoreError> {
-    let room_id = <&RoomId>::try_from(request.room_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    let room_id = <&RoomId>::try_from(request.room_id.as_str()).map_err(|err| {
+        MatrixCoreError::new(format!("invalid Matrix room id: {}", ErrorChain(&err)))
+    })?;
     fn user_id(user_id: &str) -> Result<&UserId, MatrixCoreError> {
-        <&UserId>::try_from(user_id)
-            .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))
+        <&UserId>::try_from(user_id).map_err(|err| {
+            MatrixCoreError::new(format!("invalid Matrix user id: {}", ErrorChain(&err)))
+        })
     }
     let member_roles = request
         .member_roles
@@ -364,17 +367,17 @@ pub(crate) async fn update_room_settings(
         room.privacy_settings()
             .update_join_rule(rule)
             .await
-            .map_err(|err| failed("set the join rule", err.to_string()))?;
+            .map_err(|err| failed("set the join rule", ErrorChain(&err).to_string()))?;
     }
     if let Some(name) = name {
         room.set_name(name.clone())
             .await
-            .map_err(|err| failed("set the room name", err.to_string()))?;
+            .map_err(|err| failed("set the room name", ErrorChain(&err).to_string()))?;
     }
     if let Some(topic) = topic {
         room.set_room_topic(topic)
             .await
-            .map_err(|err| failed("set the topic", err.to_string()))?;
+            .map_err(|err| failed("set the topic", ErrorChain(&err).to_string()))?;
     }
     if let Some(listed) = listed_in_directory {
         let visibility = if *listed {
@@ -385,12 +388,17 @@ pub(crate) async fn update_room_settings(
         room.privacy_settings()
             .update_room_visibility(visibility)
             .await
-            .map_err(|err| failed("change the room directory listing", err.to_string()))?;
+            .map_err(|err| {
+                failed(
+                    "change the room directory listing",
+                    ErrorChain(&err).to_string(),
+                )
+            })?;
     }
     for user_id in unbans {
         room.unban_user(user_id, None)
             .await
-            .map_err(|err| failed(&format!("unban {user_id}"), err.to_string()))?;
+            .map_err(|err| failed(&format!("unban {user_id}"), ErrorChain(&err).to_string()))?;
     }
     Ok(())
 }
@@ -409,7 +417,7 @@ async fn fetch_power_levels(
     client
         .send(request)
         .await
-        .map_err(|err| err.to_string())?
+        .map_err(|err| ErrorChain(&err).to_string())?
         .into_content()
         .deserialize_as_unchecked::<RoomPowerLevelsEventContent>()
         .map_err(|err| err.to_string())
@@ -450,7 +458,7 @@ async fn write_power_levels(
     room.send_state_event(levels)
         .await
         .map(|_| ())
-        .map_err(|err| err.to_string())
+        .map_err(|err| ErrorChain(&err).to_string())
 }
 
 #[cfg(test)]
