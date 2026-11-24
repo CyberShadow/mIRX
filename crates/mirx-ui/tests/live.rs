@@ -110,6 +110,40 @@ fn homeserver() -> Homeserver {
     Homeserver { url, runtime }
 }
 
+/// Conduit stopped, through the lane's switch (`nix/live-lane.nix`): a
+/// line `stop` or `start` on `MIRX_LIVE_SWITCH`, answered `ok` once done.
+/// It starts again, and answers, when this drops.
+struct StoppedHomeserver;
+
+impl StoppedHomeserver {
+    fn new() -> Self {
+        switch_homeserver("stop");
+        Self
+    }
+}
+
+impl Drop for StoppedHomeserver {
+    fn drop(&mut self) {
+        switch_homeserver("start");
+    }
+}
+
+fn switch_homeserver(action: &str) {
+    use std::io::{Read, Write};
+    let address = env::var("MIRX_LIVE_SWITCH")
+        .expect("MIRX_LIVE_SWITCH is not set: run scripts/live-lane.sh");
+    let mut switch = std::net::TcpStream::connect(&address)
+        .unwrap_or_else(|error| panic!("the switch at {address}: {error}"));
+    switch
+        .write_all(format!("{action}\n").as_bytes())
+        .expect("the switch takes the action");
+    let mut answer = String::new();
+    switch
+        .read_to_string(&mut answer)
+        .expect("the switch answers");
+    assert_eq!(answer.trim(), "ok", "{action}");
+}
+
 /// `<stem>-<process id>-<counter>`: a name no other test uses.
 fn unique_name(stem: &str) -> String {
     static COUNTER: AtomicU32 = AtomicU32::new(1);
@@ -513,6 +547,29 @@ impl Peer<'_> {
 
     fn device_id(&self) -> &DeviceId {
         self.client.device_id().expect("a peer is signed in")
+    }
+
+    /// The same, the first request after the server restarted: the
+    /// connection the client kept alive died with the server, so the
+    /// request is tried again on a new one.
+    fn devices_after_a_restart(&self) -> Vec<OwnedDeviceId> {
+        let request = matrix_sdk::ruma::api::client::device::get_devices::v3::Request::new();
+        let mut devices = self
+            .homeserver
+            .runtime
+            .block_on(
+                self.client
+                    .send(request)
+                    .with_request_config(matrix_sdk::config::RequestConfig::new().retry_limit(2))
+                    .into_future(),
+            )
+            .expect("listing devices succeeds")
+            .devices
+            .into_iter()
+            .map(|device| device.device_id)
+            .collect::<Vec<_>>();
+        devices.sort();
+        devices
     }
 
     /// The user's devices, as the server lists them.
@@ -984,6 +1041,46 @@ fn exiting_moves_the_read_marker_for_the_next_start() -> Result<(), Box<dyn Erro
         }
         std::thread::sleep(POLL_INTERVAL);
     }
+
+    finish(app, &local_app_data)
+}
+
+/// Log Out with the server down: past the room-key warning, the server
+/// could not end the session, and the Log Out dialog offers to remove it
+/// from this computer only. Removed, the saved login and the store are
+/// gone, and the server, back up, still lists the session.
+#[test]
+fn log_out_with_the_server_down_removes_the_session_here_only() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let alice_phone = homeserver.register("alice", "Alice");
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_live_app(&local_app_data)?;
+    let device = sign_in(&app, &homeserver, &alice_phone)?;
+
+    let stopped = StoppedHomeserver::new();
+    // A new account has no recovery.
+    start_log_out_anyway_with_the_menu(&app)?;
+    let dialog = wait_for_dialog(&app, LOG_OUT_DIALOG_CLASS)?;
+    let remove = unsafe { read_window_text(GetDlgItem(dialog, LOG_OUT_DIALOG_LOG_OUT_ID as i32)) };
+    assert_eq!(remove, "&Remove");
+    press_dialog_button(&app, dialog, LOG_OUT_DIALOG_LOG_OUT_ID, "Log Out dialog")?;
+    app.wait_for_connection("signed_out", TIMEOUT)?;
+    wait_for_status_line(
+        &app,
+        &format!(
+            "* Logged out on this computer only: localhost still lists this session ({device}) until you sign it out from another session (Tools > Sessions... there)"
+        ),
+        TIMEOUT,
+    )?;
+    assert!(!session_file_path(&local_app_data).exists());
+    assert!(!store_dir_path(&local_app_data).exists());
+
+    drop(stopped);
+    let devices = alice_phone.devices_after_a_restart();
+    assert!(
+        devices.iter().any(|listed| *listed == device),
+        "{devices:?}"
+    );
 
     finish(app, &local_app_data)
 }

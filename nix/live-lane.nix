@@ -16,11 +16,14 @@ let
   # mirx-ui.exe as the tests' CreateProcessW must see it.
   mirxUiExe = "Z:" + lib.replaceStrings [ "/" ] [ "\\" ] "${bins}/mirx-ui.exe";
   homeserver = "http://127.0.0.1:6167";
+  # The tests' switch for Conduit (conduit-switch below).
+  switch = "127.0.0.1:6168";
   runner = lib.concatStringsSep " " (
     [
       "cd /tmp &&"
       "env"
       "MIRX_LIVE_HOMESERVER=${homeserver}"
+      "MIRX_LIVE_SWITCH=${switch}"
       "MIRX_UI_EXE=${lib.escapeShellArg mirxUiExe}"
       "MIRX_WINE_FONTS=${wineFonts}"
       # Only here to make every run a new derivation: a gate must run.
@@ -52,6 +55,42 @@ pkgs.testers.runNixOSTest {
         well_known.client = homeserver;
       };
     };
+    # A test stops and starts Conduit, as a server going down and coming
+    # back: a line `stop` or `start` sent to the switch, which answers `ok`
+    # once Conduit is stopped, or started and answering.
+    systemd.sockets.conduit-switch = {
+      wantedBy = [ "sockets.target" ];
+      listenStreams = [ switch ];
+      socketConfig.Accept = true;
+    };
+    systemd.services."conduit-switch@" = {
+      path = [
+        pkgs.systemd
+        pkgs.curl
+      ];
+      serviceConfig = {
+        StandardInput = "socket";
+        StandardOutput = "socket";
+        StandardError = "journal";
+      };
+      script = ''
+        read -r action
+        case "$action" in
+          stop) systemctl stop conduit.service ;;
+          start)
+            systemctl start conduit.service
+            until curl -sf ${homeserver}/_matrix/client/versions >/dev/null; do
+              sleep 0.2
+            done
+            ;;
+          *)
+            echo "unknown action: $action" >&2
+            exit 1
+            ;;
+        esac
+        echo ok
+      '';
+    };
     # What wine-runner.sh requires (timeout and flock are in every
     # system), and curl for the test script.
     environment.systemPackages = [
@@ -68,6 +107,7 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     machine.wait_for_unit("conduit.service")
     machine.wait_for_open_port(6167)
+    machine.wait_for_unit("conduit-switch.socket")
     # Conduit makes its first user an admin, in an admin room: that must not
     # be a test's user.
     machine.succeed(
