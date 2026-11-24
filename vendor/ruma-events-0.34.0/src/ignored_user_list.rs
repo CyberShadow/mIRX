@@ -19,7 +19,26 @@ pub struct IgnoredUserListEventContent {
     ///
     /// As [`IgnoredUser`] is currently empty, only the user IDs are useful and
     /// can be accessed with the `.keys()` and `into_keys()` iterators.
+    ///
+    /// Vendored (mirx): a key that is no user ID is ignored, and so is each
+    /// value (the spec's is an empty object), instead of failing the whole
+    /// content (see VENDORED.md).
+    #[serde(deserialize_with = "deserialize_ignored_users")]
     pub ignored_users: BTreeMap<OwnedUserId, IgnoredUser>,
+}
+
+fn deserialize_ignored_users<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<OwnedUserId, IgnoredUser>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let users = BTreeMap::<String, serde::de::IgnoredAny>::deserialize(deserializer)?;
+    Ok(users
+        .into_keys()
+        .filter_map(|user_id| OwnedUserId::try_from(user_id).ok())
+        .map(|user_id| (user_id, IgnoredUser {}))
+        .collect())
 }
 
 impl IgnoredUserListEventContent {
@@ -90,6 +109,22 @@ mod tests {
         assert_eq!(
             ev.content.ignored_users.keys().collect::<Vec<_>>(),
             vec![user_id!("@carl:example.com")]
+        );
+    }
+
+    #[test]
+    fn invalid_entries_are_ignored() {
+        let content: IgnoredUserListEventContent = from_json_value(json!({
+            "ignored_users": {
+                "@spam:example.org": {},
+                "@old:example.org": true,
+                "not a user": {},
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            content.ignored_users.into_keys().collect::<Vec<_>>(),
+            [owned_user_id!("@old:example.org"), owned_user_id!("@spam:example.org")]
         );
     }
 }

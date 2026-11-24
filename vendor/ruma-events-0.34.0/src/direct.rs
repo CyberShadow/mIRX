@@ -10,6 +10,7 @@ use std::{
 use ruma_common::{IdParseError, OwnedRoomId, OwnedUserId, UserId};
 use ruma_macros::{EventContent, IdDst};
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue as RawJsonValue;
 
 /// An user identifier, it can be a [`UserId`] or a third-party identifier
 /// like an email or a phone number.
@@ -149,10 +150,37 @@ impl PartialEq<OwnedDirectUserIdentifier> for OwnedUserId {
 /// for that particular user.
 ///
 /// Informs the client about the rooms that are considered direct by a user.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, EventContent)]
+///
+/// Vendored (mirx): an entry whose value is not a list is ignored, and so is
+/// a list item that is not a room ID, instead of failing the whole content
+/// (see VENDORED.md).
+#[derive(Clone, Debug, Default, Serialize, EventContent)]
 #[allow(clippy::exhaustive_structs)]
 #[ruma_event(type = "m.direct", kind = GlobalAccountData)]
 pub struct DirectEventContent(pub BTreeMap<OwnedDirectUserIdentifier, Vec<OwnedRoomId>>);
+
+impl<'de> Deserialize<'de> for DirectEventContent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let entries =
+            BTreeMap::<OwnedDirectUserIdentifier, Box<RawJsonValue>>::deserialize(deserializer)?;
+        Ok(Self(
+            entries
+                .into_iter()
+                .filter_map(|(user, rooms)| {
+                    let rooms = serde_json::from_str::<Vec<Box<RawJsonValue>>>(rooms.get()).ok()?;
+                    let rooms = rooms
+                        .iter()
+                        .filter_map(|room| serde_json::from_str::<OwnedRoomId>(room.get()).ok())
+                        .collect();
+                    Some((user, rooms))
+                })
+                .collect(),
+        ))
+    }
+}
 
 impl Deref for DirectEventContent {
     type Target = BTreeMap<OwnedDirectUserIdentifier, Vec<OwnedRoomId>>;
@@ -275,5 +303,30 @@ mod tests {
         let alice_direct_uid_mail: OwnedDirectUserIdentifier =
             from_json_value(alice_user_id_json).unwrap();
         assert_eq!(alice_user_id, alice_direct_uid_mail);
+    }
+
+    #[test]
+    fn invalid_entries_are_ignored() {
+        let content: DirectEventContent = from_json_value(json!({
+            "@bob:example.org": ["!direct:example.org", "#alias:example.org", 7, null],
+            "@carol:example.org": null,
+            "dave@example.org": "!direct:example.org",
+            "erin@example.org": ["!mail:example.org"],
+        }))
+        .unwrap();
+        assert_eq!(
+            content.0,
+            BTreeMap::from([
+                (
+                    OwnedDirectUserIdentifier::from("@bob:example.org"),
+                    vec![owned_room_id!("!direct:example.org")]
+                ),
+                (
+                    OwnedDirectUserIdentifier::from("erin@example.org"),
+                    vec![owned_room_id!("!mail:example.org")]
+                ),
+            ])
+        );
+        assert!(from_json_value::<DirectEventContent>(json!([])).is_err());
     }
 }

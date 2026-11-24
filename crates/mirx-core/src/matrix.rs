@@ -15389,6 +15389,96 @@ mod tests {
         });
     }
 
+    /// Real accounts carry account data that years of clients wrote. One
+    /// entry that is not what the spec says is ignored, not its whole
+    /// document: the SDK stores only account data that decodes, so a
+    /// document that fails as a whole would be lost silently.
+    #[test]
+    fn malformed_account_data_entries_are_ignored_not_their_document() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_room_state_encryption()
+                .plain()
+                .mount()
+                .await;
+            let direct = OwnedRoomId::try_from("!direct:example.org").expect("room id");
+            let tagged = OwnedRoomId::try_from("!tagged:example.org").expect("room id");
+            let room_tags =
+                Raw::<matrix_sdk::ruma::events::AnyRoomAccountDataEvent>::from_json_string(
+                    serde_json::json!({
+                        "type": "m.tag",
+                        "content": { "tags": {
+                            "m.favourite": { "order": "first" },
+                            "m.lowpriority": null,
+                            "u.old": { "order": "0.5" },
+                            "u.work": { "order": 0.25 },
+                        } },
+                    })
+                    .to_string(),
+                )
+                .expect("room tags");
+            mock_server
+                .mock_sync()
+                .ok_and_run(&client, |builder| {
+                    builder.add_custom_global_account_data(serde_json::json!({
+                        "type": "m.direct",
+                        "content": {
+                            "@bob:example.org": ["!direct:example.org", "#alias:example.org", 7],
+                            "@carol:example.org": null,
+                            "dave@example.org": "!direct:example.org",
+                        },
+                    }));
+                    builder.add_custom_global_account_data(serde_json::json!({
+                        "type": "m.ignored_user_list",
+                        "content": { "ignored_users": {
+                            "@spam:example.org": {},
+                            "@old:example.org": true,
+                            "not a user": {},
+                        } },
+                    }));
+                    builder.add_joined_room(JoinedRoomBuilder::new(&direct));
+                    builder.add_joined_room(
+                        JoinedRoomBuilder::new(&tagged).add_account_data(room_tags),
+                    );
+                })
+                .await;
+
+            let rooms = summarize_rooms(&client).await.expect("the room list");
+            let room = |room_id: &RoomId| {
+                rooms
+                    .iter()
+                    .find(|room| room.room_id == room_id.as_str())
+                    .expect("the room is listed")
+            };
+            assert!(room(&direct).is_direct);
+            assert_eq!(room(&direct).direct_user_ids, ["@bob:example.org"]);
+            let tag = |tag: &str, order: Option<&str>| RoomTagSummary {
+                tag: tag.to_owned(),
+                order: order.map(str::to_owned),
+            };
+            assert_eq!(
+                room(&tagged).tags,
+                [
+                    tag("m.favourite", None),
+                    tag("m.lowpriority", None),
+                    tag("u.old", Some("0.5")),
+                    tag("u.work", Some("0.25")),
+                ]
+            );
+            assert_eq!(
+                ignored_users(&client).await.expect("the ignore list"),
+                ["@old:example.org", "@spam:example.org"]
+            );
+        });
+    }
+
     /// A big account's first sync: hundreds of rooms in several spaces at
     /// once, more room updates than the SDK's channel holds (500). The
     /// room-list task reads the list once for the updates queued, reads it

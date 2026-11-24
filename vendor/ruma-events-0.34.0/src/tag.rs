@@ -9,6 +9,7 @@ use ruma_common::serde::deserialize_as_optional_number_or_string;
 use ruma_common::serde::deserialize_cow_str;
 use ruma_macros::EventContent;
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue as RawJsonValue;
 
 use crate::PrivOwnedStr;
 
@@ -23,7 +24,23 @@ pub type Tags = BTreeMap<TagName, TagInfo>;
 #[ruma_event(type = "m.tag", kind = RoomAccountData)]
 pub struct TagEventContent {
     /// A map of tag names to tag info.
+    ///
+    /// Vendored (mirx): a tag whose info does not decode (an `order` that is
+    /// no number, info that is no object) is kept with empty info, instead of
+    /// failing the whole content (see VENDORED.md).
+    #[serde(deserialize_with = "deserialize_tags")]
     pub tags: Tags,
+}
+
+fn deserialize_tags<'de, D>(deserializer: D) -> Result<Tags, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let tags = BTreeMap::<TagName, Box<RawJsonValue>>::deserialize(deserializer)?;
+    Ok(tags
+        .into_iter()
+        .map(|(name, info)| (name, serde_json::from_str(info.get()).unwrap_or_default()))
+        .collect())
 }
 
 impl TagEventContent {
@@ -259,5 +276,28 @@ mod tests {
         assert_eq!(TagName::from("u.Work").display_name(), "Work");
         assert_eq!(TagName::from("rs.conduit.rules").display_name(), "rules");
         assert_eq!(TagName::from("Play").display_name(), "Play");
+    }
+
+    #[test]
+    fn invalid_tag_info_is_empty_info() {
+        let content: TagEventContent = from_json_value(json!({
+            "tags": {
+                "m.favourite": { "order": "first" },
+                "m.lowpriority": null,
+                "u.flag": { "order": {} },
+                "u.work": { "order": 0.25 },
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            content.tags,
+            btreemap! {
+                TagName::Favorite => TagInfo::default(),
+                TagName::LowPriority => TagInfo::default(),
+                TagName::from("u.flag") => TagInfo::default(),
+                TagName::from("u.work") => TagInfo { order: Some(0.25) },
+            }
+        );
+        assert!(from_json_value::<TagEventContent>(json!({ "tags": [] })).is_err());
     }
 }
