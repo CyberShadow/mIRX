@@ -1,5 +1,8 @@
 [
   {
-    "LogoutWouldLoseRoomKeys": "recovery_off"
+    "LogoutRefused": {
+      "request": { "discard_room_keys": false, "this_computer_only": false },
+      "reason": { "room_keys_at_risk": "recovery_off" }
+    }
   }
 ]

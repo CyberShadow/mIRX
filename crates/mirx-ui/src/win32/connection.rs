@@ -22,18 +22,12 @@ pub(super) fn after_event(connection: ConnectionState, event: &Event) -> Connect
         Event::SyncStopped(_) => ConnectionState::SignedIn,
         Event::LoggingOut => ConnectionState::LoggingOut,
         Event::LogoutCancelled => ConnectionState::SignedIn,
-        Event::LoggedOut => ConnectionState::SignedOut,
-        // The Log Out under way failed: the session stands, and the core
-        // starts sync again if it ran (`SyncStarted`). From another state
-        // this is the refusal of a Log Out that never started, which
+        Event::LoggedOut(_) => ConnectionState::SignedOut,
+        // The Log Out under way was refused: the session stands, and the
+        // core starts sync again if it ran (`SyncStarted`). From another
+        // state this is the refusal of a Log Out that never started, which
         // changes nothing.
-        Event::LogoutWouldLoseRoomKeys(_) if connection == ConnectionState::LoggingOut => {
-            ConnectionState::SignedIn
-        }
-        Event::Error(error)
-            if error.operation == Operation::Logout
-                && connection == ConnectionState::LoggingOut =>
-        {
+        Event::LogoutRefused { .. } if connection == ConnectionState::LoggingOut => {
             ConnectionState::SignedIn
         }
         // After LoggedIn or RestoredSession (SignedIn already) this is the
@@ -351,17 +345,43 @@ mod tests {
         for connection in [SignedIn, Syncing] {
             assert_eq!(after_event(connection, &Event::LoggingOut), LoggingOut);
         }
-        assert_eq!(after_event(LoggingOut, &Event::LoggedOut), SignedOut);
-        let refusal = Event::LogoutWouldLoseRoomKeys(mirx_core::RoomKeysAtRisk::RecoveryOff);
-        assert_eq!(after_event(LoggingOut, &refusal), SignedIn);
-        assert_eq!(after_event(LoggingOut, &error(Operation::Logout)), SignedIn);
+        for scope in [
+            mirx_core::LogoutScope::Everywhere,
+            mirx_core::LogoutScope::ThisComputerOnly {
+                device_id: "MIRX".to_owned(),
+            },
+        ] {
+            assert_eq!(after_event(LoggingOut, &Event::LoggedOut(scope)), SignedOut);
+        }
+        let request = mirx_core::LogoutRequest {
+            discard_room_keys: false,
+            this_computer_only: false,
+        };
+        let refusals = [
+            Event::LogoutRefused {
+                request,
+                reason: mirx_core::LogoutRefusal::RoomKeysAtRisk(
+                    mirx_core::RoomKeysAtRisk::RecoveryOff,
+                ),
+            },
+            Event::LogoutRefused {
+                request,
+                reason: mirx_core::LogoutRefusal::ServerKeepsSession {
+                    device_id: "MIRX".to_owned(),
+                    reason: "unreachable".to_owned(),
+                },
+            },
+        ];
+        for refusal in &refusals {
+            assert_eq!(after_event(LoggingOut, refusal), SignedIn);
+        }
         // Disconnect stopped it.
         assert_eq!(after_event(LoggingOut, &Event::LogoutCancelled), SignedIn);
         // The core starts the sync the Log Out stopped again.
         assert_eq!(after_event(SignedIn, &Event::SyncStarted), Syncing);
         // A refusal before any Log Out started keeps the connection.
         for connection in [SignedIn, WaitingToReconnect, Syncing] {
-            assert_eq!(after_event(connection, &refusal), connection);
+            assert_eq!(after_event(connection, &refusals[0]), connection);
             assert_eq!(
                 after_event(connection, &error(Operation::Logout)),
                 connection
@@ -372,7 +392,13 @@ mod tests {
     #[test]
     fn logout_signs_out_from_anywhere() {
         for connection in ALL {
-            assert_eq!(after_event(connection, &Event::LoggedOut), SignedOut);
+            assert_eq!(
+                after_event(
+                    connection,
+                    &Event::LoggedOut(mirx_core::LogoutScope::Everywhere)
+                ),
+                SignedOut
+            );
         }
     }
 

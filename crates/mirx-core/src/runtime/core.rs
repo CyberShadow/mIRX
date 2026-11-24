@@ -35,15 +35,13 @@ use super::commands::{LaneCommand, Route, identity_reset_ended, route};
 use super::jobs::{Finished, Jobs, Lane, Owes, Work};
 use super::lifecycle::{self, SignInEnd};
 use super::session::{Followup, IdentityResetEnd, Session, abort_and_join};
-use super::{
-    EventSender, RoomSnapshots, emit_error, emit_event, emit_invalid_state, emit_matrix_error,
-};
+use super::{EventSender, RoomSnapshots, emit_error, emit_event, emit_invalid_state};
 use crate::api::{
-    Command, CommandId, CoreConfig, Event, LoginRequest, LogoutRequest, Operation,
-    RestoreSessionRequest, RoomKeysAtRisk, SyncStopReason,
+    Command, CommandId, CoreConfig, Event, LoginRequest, LogoutRefusal, LogoutRequest, LogoutScope,
+    Operation, RestoreSessionRequest, SyncStopReason,
 };
 use crate::loopback::LoopbackRedirect;
-use crate::matrix::{self, BrowserFlow, MatrixCoreError};
+use crate::matrix::{self, BrowserFlow};
 
 /// How long shutting down lets the read receipts and markers already sent
 /// go on (`Lane::outlasts_shutdown`). The UI has gone by then (the window
@@ -87,20 +85,15 @@ struct SigningIn {
 struct LoggingOut {
     session: Session,
     /// Dropping it mid-wait (`StopSync`, `Shutdown`) is safe: the SDK's
-    /// upload task goes on until the client drops.
-    transition: LocalBoxFuture<'static, Result<(), LogoutFailure>>,
+    /// upload task goes on until the client drops. A refusal is the
+    /// `LogoutRefused`'s reason.
+    transition: LocalBoxFuture<'static, Result<LogoutScope, LogoutRefusal>>,
     /// Sync ran before the logout stopped it.
     resume_sync: bool,
     /// The `Logout`, owed its ack at the end.
     logout: CommandId,
-}
-
-/// Why a logout under way did not log out.
-enum LogoutFailure {
-    /// The key backup could not be made to hold every room key.
-    RoomKeys(RoomKeysAtRisk),
-    /// The server did not end the session.
-    Server(MatrixCoreError),
+    /// What it asked, for a refusal to name.
+    request: LogoutRequest,
 }
 
 struct PendingBrowserLogin {
@@ -119,7 +112,7 @@ enum Next {
     Job(Finished<Followup>),
     SignInEnd(SignInEnd),
     Redirect(io::Result<LoopbackRedirect>),
-    LogoutEnd(Result<(), LogoutFailure>),
+    LogoutEnd(Result<LogoutScope, LogoutRefusal>),
     IdentityResetEnd(IdentityResetEnd),
 }
 
@@ -459,7 +452,10 @@ impl Core {
     }
 
     async fn log_out(&mut self, id: CommandId, request: LogoutRequest) {
-        let LogoutRequest { discard_room_keys } = request;
+        let LogoutRequest {
+            discard_room_keys,
+            this_computer_only,
+        } = request;
         let mut session = match std::mem::replace(&mut self.state, Lifecycle::Idle) {
             Lifecycle::Ready(session) => session,
             state => {
@@ -477,7 +473,13 @@ impl Core {
         // alone.
         if !discard_room_keys && let Some(risk) = matrix::recovery_risk(session.client()) {
             self.state = Lifecycle::Ready(session);
-            emit_event(&self.events, Event::LogoutWouldLoseRoomKeys(risk));
+            emit_event(
+                &self.events,
+                Event::LogoutRefused {
+                    request,
+                    reason: LogoutRefusal::RoomKeysAtRisk(risk),
+                },
+            );
             ack(&self.events, id);
             return;
         }
@@ -487,19 +489,33 @@ impl Core {
         let resume_sync = session.stop_sync_quietly().await;
         emit_event(&self.events, Event::LoggingOut);
         let client = session.client().clone();
+        let device_id = client
+            .device_id()
+            .expect("a session's client is signed in")
+            .to_string();
         let transition = Box::pin(async move {
             if !discard_room_keys {
                 matrix::back_up_room_keys(&client)
                     .await
-                    .map_err(LogoutFailure::RoomKeys)?;
+                    .map_err(LogoutRefusal::RoomKeysAtRisk)?;
             }
-            matrix::logout(client).await.map_err(LogoutFailure::Server)
+            if this_computer_only {
+                return Ok(LogoutScope::ThisComputerOnly { device_id });
+            }
+            match matrix::logout(client).await {
+                Ok(()) => Ok(LogoutScope::Everywhere),
+                Err(err) => Err(LogoutRefusal::ServerKeepsSession {
+                    device_id,
+                    reason: err.to_string(),
+                }),
+            }
         });
         self.state = Lifecycle::LoggingOut(LoggingOut {
             session,
             transition,
             resume_sync,
             logout: id,
+            request,
         });
     }
 
@@ -514,6 +530,7 @@ impl Core {
             transition,
             resume_sync: _,
             logout,
+            request: _,
         }) = std::mem::replace(&mut self.state, Lifecycle::Idle)
         else {
             unreachable!("only a logout is stopped");
@@ -527,26 +544,28 @@ impl Core {
     }
 
     /// The logout under way ended.
-    async fn logout_ended(&mut self, result: Result<(), LogoutFailure>) {
+    async fn logout_ended(&mut self, result: Result<LogoutScope, LogoutRefusal>) {
         let Lifecycle::LoggingOut(LoggingOut {
             mut session,
             transition: _,
             resume_sync,
             logout,
+            request,
         }) = std::mem::replace(&mut self.state, Lifecycle::Idle)
         else {
             unreachable!("only a logout ends a logout");
         };
         match result {
             // The session's client is gone with it: its store can go too.
-            Ok(()) => {
+            Ok(scope) => {
                 let mut dropped = self.jobs.abort_all().await;
                 dropped.extend(self.drop_session_commands());
                 session.shut_down().await;
                 acks(&self.events, dropped);
                 let removed = matrix::remove_store(&self.config).await;
-                // The server's session is gone either way: the UI forgets it.
-                emit_event(&self.events, Event::LoggedOut);
+                // The session is gone from here either way: the UI forgets
+                // it.
+                emit_event(&self.events, Event::LoggedOut(scope));
                 if let Err(err) = removed {
                     emit_error(
                         &self.events,
@@ -557,15 +576,8 @@ impl Core {
                 }
             }
             // The session stays whole.
-            Err(failure) => {
-                match failure {
-                    LogoutFailure::RoomKeys(risk) => {
-                        emit_event(&self.events, Event::LogoutWouldLoseRoomKeys(risk));
-                    }
-                    LogoutFailure::Server(err) => {
-                        emit_matrix_error(&self.events, Operation::Logout, err);
-                    }
-                }
+            Err(reason) => {
+                emit_event(&self.events, Event::LogoutRefused { request, reason });
                 if resume_sync {
                     session.start_sync().expect("the logout stopped sync");
                 }
@@ -613,6 +625,7 @@ impl Core {
                 transition,
                 resume_sync: _,
                 logout,
+                request: _,
             }) => {
                 drop(transition);
                 session.shut_down().await;

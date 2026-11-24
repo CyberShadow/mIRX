@@ -21,7 +21,7 @@ use crate::shared::{
     ConnectionState, FormatKey, LifecycleState, MdiArrangement, ReactionSummary, ViewActivityLevel,
 };
 
-pub(crate) const PROTOCOL_VERSION: u32 = 93;
+pub(crate) const PROTOCOL_VERSION: u32 = 94;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -4095,8 +4095,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_93() {
-        assert_eq!(PROTOCOL_VERSION, 93);
+    fn protocol_version_is_94() {
+        assert_eq!(PROTOCOL_VERSION, 94);
     }
 
     #[test]
@@ -6140,7 +6140,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":93,
+                    "protocol_version":94,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })

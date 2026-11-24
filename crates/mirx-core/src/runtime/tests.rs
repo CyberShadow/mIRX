@@ -13,7 +13,7 @@ use crate::api::{
     RoomMemberSummary, RoomMembers, RoomMembership, RoomNotificationMode, RoomReadState,
     RoomSummary, RoomUserProfile, SyncStopReason,
 };
-use crate::api::{CommandId, ComposeFormat, CoreConfig};
+use crate::api::{CommandId, ComposeFormat, CoreConfig, LogoutScope};
 use crate::api::{
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
     RoomMessagePresentationKind, SendMessageRequest, SetTypingRequest,
@@ -83,6 +83,7 @@ fn joined_member_state() -> Vec<Raw<AnySyncStateEvent>> {
 fn log_out_anyway() -> Command {
     Command::Logout(crate::api::LogoutRequest {
         discard_room_keys: true,
+        this_computer_only: false,
     })
 }
 
@@ -1929,7 +1930,7 @@ fn logging_out_removes_the_sessions_store() {
 
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LoggingOut, Event::LoggedOut]
+            vec![Event::LoggingOut, Event::LoggedOut(LogoutScope::Everywhere)]
         );
         assert!(!store.exists());
         core.stop().await;
@@ -1947,7 +1948,7 @@ fn signing_in_after_logging_out_starts_a_new_session() {
         run(&mut core, log_out_anyway()).await;
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LoggingOut, Event::LoggedOut]
+            vec![Event::LoggingOut, Event::LoggedOut(LogoutScope::Everywhere)]
         );
         let second_server = MatrixMockServer::new().await;
         mount_sign_in(&second_server, "NEWDEVICE", false, |_| {}).await;
@@ -2039,7 +2040,7 @@ fn logging_out_a_session_the_server_ended_logs_out() {
 
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LoggingOut, Event::LoggedOut]
+            vec![Event::LoggingOut, Event::LoggedOut(LogoutScope::Everywhere)]
         );
         core.stop().await;
     });
@@ -2099,7 +2100,7 @@ fn logging_out_closes_the_sessions_store() {
         run(&mut core, log_out_anyway()).await;
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LoggingOut, Event::LoggedOut]
+            vec![Event::LoggingOut, Event::LoggedOut(LogoutScope::Everywhere)]
         );
 
         // The SQLite pools close on blocking threads.
@@ -2133,7 +2134,7 @@ fn logging_out_with_a_dead_refresh_token_logs_out() {
 
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LoggingOut, Event::LoggedOut]
+            vec![Event::LoggingOut, Event::LoggedOut(LogoutScope::Everywhere)]
         );
         core.stop().await;
     });
@@ -2935,6 +2936,7 @@ fn recovering_during_a_key_query_ends_with_recovery_enabled() {
 fn log_out_keeping_room_keys() -> Command {
     Command::Logout(crate::api::LogoutRequest {
         discard_room_keys: false,
+        this_computer_only: false,
     })
 }
 
@@ -2969,7 +2971,7 @@ fn logging_out_saves_the_room_keys_to_the_backup_first() {
 
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LoggingOut, Event::LoggedOut]
+            vec![Event::LoggingOut, Event::LoggedOut(LogoutScope::Everywhere)]
         );
         let arrivals = arrivals.lock().expect("the arrivals lock").clone();
         let [("upload", uploaded), ("logout", logged_out)] = arrivals.as_slice() else {
@@ -3013,9 +3015,17 @@ fn a_failed_key_backup_keeps_the_session() {
             without_e2ee_status(drain_events(&event_rx)),
             vec![
                 Event::LoggingOut,
-                Event::LogoutWouldLoseRoomKeys(crate::api::RoomKeysAtRisk::BackupFailed(
-                    "your server could not be reached or refused them".to_owned()
-                ))
+                Event::LogoutRefused {
+                    request: crate::api::LogoutRequest {
+                        discard_room_keys: false,
+                        this_computer_only: false,
+                    },
+                    reason: crate::api::LogoutRefusal::RoomKeysAtRisk(
+                        crate::api::RoomKeysAtRisk::BackupFailed(
+                            "your server could not be reached or refused them".to_owned()
+                        )
+                    ),
+                }
             ]
         );
         assert!(arrivals.lock().expect("the arrivals lock").is_empty());
@@ -3025,7 +3035,7 @@ fn a_failed_key_backup_keeps_the_session() {
         run(&mut core, log_out_anyway()).await;
         assert_eq!(
             without_e2ee_status(drain_events(&event_rx)),
-            vec![Event::LoggingOut, Event::LoggedOut]
+            vec![Event::LoggingOut, Event::LoggedOut(LogoutScope::Everywhere)]
         );
         core.stop().await;
     });

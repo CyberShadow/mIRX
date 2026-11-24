@@ -402,6 +402,7 @@ fn invalid_command_ordering_emits_typed_error_events() {
         .command_sender()
         .send(Command::Logout(mirx_core::LogoutRequest {
             discard_room_keys: true,
+            this_computer_only: false,
         }))
         .expect("send logout");
 

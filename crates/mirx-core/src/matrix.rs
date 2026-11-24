@@ -6362,14 +6362,13 @@ async fn fetch_room_event_activity(
 }
 
 /// Ends the session on the server. A session the server already ended is
-/// logged out too: its end is what logging out asks for.
+/// logged out too: its end is what logging out asks for. The error is the
+/// reason the server still has it: unreachable, or its error answer.
 pub(crate) async fn logout(client: Client) -> Result<(), MatrixCoreError> {
     match client.logout().await {
         Ok(()) => Ok(()),
         Err(err) if session_ended(&err) => Ok(()),
-        Err(err) => Err(MatrixCoreError::new(format!(
-            "failed to log out of Matrix: {err}"
-        ))),
+        Err(err) => Err(MatrixCoreError::new(err.to_string())),
     }
 }
 

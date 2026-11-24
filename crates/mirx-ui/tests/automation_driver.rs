@@ -14,7 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use mirx_core::{
     DeviceSummary, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeIdentityResetOutcome, E2eeRecoveryState, E2eeSessionState, E2eeStatus, Event,
-    HighlightWord, IdentityChange, IdentityTrust, RoomActivity as CoreRoomActivity,
+    HighlightWord, IdentityChange, IdentityTrust, LogoutScope, RoomActivity as CoreRoomActivity,
     RoomActivityKind as CoreRoomActivityKind, RoomActivityRelation as CoreRoomActivityRelation,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomHistoryBackfill,
     RoomHistoryBackfillEvent, RoomIdentityChanges, RoomInviteSummary, RoomJoined,
@@ -3600,7 +3600,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 93);
+    assert_eq!(version.protocol_version, 94);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -6524,7 +6524,7 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
         Event::Started,
         Event::RestoredSession,
         Event::SyncedRooms(vec![room_summary("!synthetic:example", "Synthetic", false)]),
-        Event::LoggedOut,
+        Event::LoggedOut(LogoutScope::Everywhere),
     ])?)?;
     app.wait_for_lifecycle_state("logged_out", Duration::from_secs(5))?;
     let logged_out_model = app.dump_model()?;
@@ -16509,7 +16509,7 @@ fn automation_driver_clears_room_typing_on_logged_out_event()
 
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
-        Event::LoggedOut,
+        Event::LoggedOut(LogoutScope::Everywhere),
     ])?)?;
     app.wait_idle(Duration::from_secs(5))?;
 

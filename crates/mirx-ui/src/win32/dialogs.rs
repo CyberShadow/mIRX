@@ -1394,23 +1394,42 @@ fn log_out_warning(risk: &RoomKeysAtRisk) -> String {
     }
 }
 
-/// The Log Out confirmation, when logging out would lose room keys.
-fn log_out_confirmation(risk: &RoomKeysAtRisk) -> ConfirmDialog {
+/// The server did not end the session, `device_id`, for `reason`: what
+/// removing it from this computer only does, and what is left to do.
+fn server_keeps_session_warning(device_id: &str, reason: &str) -> String {
+    format!(
+        "Your server did not end this session: {reason}. Remove it from this computer \
+         only? Its saved login, messages and room keys here are deleted, but your server \
+         still lists the session ({device_id}) until you sign it out from another session: \
+         Tools > Sessions... in mirx there, or the session list of another Matrix app. \
+         Cancel keeps you signed in, to try again later."
+    )
+}
+
+/// The Log Out confirmation of the core's refusal: logging out would lose
+/// room keys, or the server did not end the session.
+fn log_out_confirmation(reason: &LogoutRefusal) -> ConfirmDialog {
+    let (warning, confirm_label) = match reason {
+        LogoutRefusal::RoomKeysAtRisk(risk) => (log_out_warning(risk), "&Log Out"),
+        LogoutRefusal::ServerKeepsSession { device_id, reason } => {
+            (server_keeps_session_warning(device_id, reason), "&Remove")
+        }
+    };
     ConfirmDialog {
         class_name: LOG_OUT_DIALOG_CLASS_NAME,
         title: "Log Out",
-        warning: log_out_warning(risk),
-        confirm_label: "&Log Out",
+        warning,
+        confirm_label,
         confirm_with: ConfirmWith::Nothing,
     }
 }
 
-/// Whether the user said to log out all the same.
+/// Whether the user said to go on all the same.
 pub(super) unsafe fn show_log_out_dialog(
     owner: HWND,
-    risk: &RoomKeysAtRisk,
+    reason: &LogoutRefusal,
 ) -> Result<bool, String> {
-    Ok(show_confirm_dialog(owner, &log_out_confirmation(risk))?.is_some())
+    Ok(show_confirm_dialog(owner, &log_out_confirmation(reason))?.is_some())
 }
 
 /// One labelled field with OK and Cancel: the Commands menu's prompts and
@@ -2012,7 +2031,7 @@ mod tests {
         unsafe {
             with_test_frame(600, 400, |hwnd| {
                 register_dialog_classes(GetModuleHandleW(null())).unwrap();
-                let risk = RoomKeysAtRisk::RecoveryOff;
+                let risk = LogoutRefusal::RoomKeysAtRisk(RoomKeysAtRisk::RecoveryOff);
                 let dialog =
                     create_confirm_dialog(hwnd, &log_out_confirmation(&risk), Arc::default())
                         .unwrap();
@@ -2069,6 +2088,29 @@ mod tests {
             }
             assert!(!warning.contains("  "), "{warning}");
         }
+    }
+
+    /// The server kept the session: the dialog says why, what Remove does
+    /// and does not do, and how to sign the session out elsewhere.
+    #[test]
+    fn the_server_keeps_session_warning_says_what_is_left_to_do() {
+        let dialog = log_out_confirmation(&LogoutRefusal::ServerKeepsSession {
+            device_id: "MIRXDEVICE".to_owned(),
+            reason: "error sending request".to_owned(),
+        });
+        assert_eq!((dialog.title, dialog.confirm_label), ("Log Out", "&Remove"));
+        assert_eq!(
+            dialog.warning,
+            "Your server did not end this session: error sending request. Remove it from \
+             this computer only? Its saved login, messages and room keys here are deleted, \
+             but your server still lists the session (MIRXDEVICE) until you sign it out \
+             from another session: Tools > Sessions... in mirx there, or the session list \
+             of another Matrix app. Cancel keeps you signed in, to try again later."
+        );
+        let keys =
+            log_out_confirmation(&LogoutRefusal::RoomKeysAtRisk(RoomKeysAtRisk::RecoveryOff));
+        assert_eq!(keys.confirm_label, "&Log Out");
+        assert_eq!(keys.warning, log_out_warning(&RoomKeysAtRisk::RecoveryOff));
     }
 
     /// Enter presses Cancel, the default; the password goes with a click on
@@ -2349,7 +2391,9 @@ mod tests {
                     .unwrap(),
                     create_confirm_dialog(
                         frame,
-                        &log_out_confirmation(&RoomKeysAtRisk::RecoveryOff),
+                        &log_out_confirmation(&LogoutRefusal::RoomKeysAtRisk(
+                            RoomKeysAtRisk::RecoveryOff,
+                        )),
                         Arc::default(),
                     )
                     .unwrap(),

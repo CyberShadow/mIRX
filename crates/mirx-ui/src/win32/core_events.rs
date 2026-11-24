@@ -715,9 +715,13 @@ pub(super) fn apply_core_event(
         }
         Event::VerificationRequest(request) => apply_verification_request(state, request),
         Event::VerificationState(event) => apply_verification_event(state, event),
-        Event::LogoutWouldLoseRoomKeys(risk) => {
-            state.log_out_warning = Some(risk);
-            state.model.status = "log out: room keys at risk".to_owned();
+        Event::LogoutRefused { request, reason } => {
+            state.model.status = match reason {
+                LogoutRefusal::RoomKeysAtRisk(_) => "log out: room keys at risk",
+                LogoutRefusal::ServerKeepsSession { .. } => "log out: the server kept the session",
+            }
+            .to_owned();
+            state.log_out_warning = Some((request, reason));
         }
         Event::LoggingOut => {
             log_status(
@@ -737,7 +741,21 @@ pub(super) fn apply_core_event(
             );
             state.model.status = "log out cancelled".to_owned();
         }
-        Event::LoggedOut => {
+        Event::LoggedOut(scope) => {
+            let line = match scope {
+                LogoutScope::Everywhere => status_log::LOGGED_OUT.to_owned(),
+                LogoutScope::ThisComputerOnly { device_id } => {
+                    // The connection is `SignedOut` already: `own_server`
+                    // refuses.
+                    let account = state.model.own_account.as_ref();
+                    let (_, server) = account
+                        .expect("a session logs out")
+                        .user_id
+                        .split_once(':')
+                        .expect("a Matrix user ID names its server");
+                    status_log::logged_out_on_this_computer_only(server, &device_id)
+                }
+            };
             state.reconnect.reset();
             // A warning not shown yet was about this session.
             state.log_out_warning = None;
@@ -769,11 +787,7 @@ pub(super) fn apply_core_event(
             state.sent_receipts.clear();
             state.find_states.clear();
             state.decoded_images.clear();
-            log_status(
-                state,
-                StatusLineKind::Info,
-                status_log::LOGGED_OUT.to_owned(),
-            );
+            log_status(state, StatusLineKind::Info, line);
         }
         Event::Stopped => {
             log_status(state, StatusLineKind::Info, status_log::STOPPED.to_owned());
@@ -1756,17 +1770,22 @@ mod tests {
                     ConnectionState::Syncing,
                 ),
                 (
-                    Event::LogoutWouldLoseRoomKeys(RoomKeysAtRisk::RecoveryOff),
+                    Event::LogoutRefused {
+                        request: keep_everything(),
+                        reason: LogoutRefusal::RoomKeysAtRisk(RoomKeysAtRisk::RecoveryOff),
+                    },
                     ConnectionState::Syncing,
                 ),
                 // A Log Out the server refuses: the session goes on syncing.
                 (Event::LoggingOut, ConnectionState::LoggingOut),
                 (
-                    Event::Error(CoreErrorEvent {
-                        operation: Operation::Logout,
-                        room_id: None,
-                        message: "failed to log out of Matrix: busy".to_owned(),
-                    }),
+                    Event::LogoutRefused {
+                        request: keep_everything(),
+                        reason: LogoutRefusal::ServerKeepsSession {
+                            device_id: "MIRXDEVICE".to_owned(),
+                            reason: "busy".to_owned(),
+                        },
+                    },
                     ConnectionState::SignedIn,
                 ),
                 (Event::SyncStarted, ConnectionState::Syncing),
@@ -1778,7 +1797,10 @@ mod tests {
                 (Event::LoggingOut, ConnectionState::LoggingOut),
                 (Event::LogoutCancelled, ConnectionState::SignedIn),
                 (Event::LoggingOut, ConnectionState::LoggingOut),
-                (Event::LoggedOut, ConnectionState::SignedOut),
+                (
+                    Event::LoggedOut(LogoutScope::Everywhere),
+                    ConnectionState::SignedOut,
+                ),
             ] {
                 apply_core_event(&mut state, event.clone()).unwrap();
                 assert_eq!(state.model.connection, connection, "{event:?}");
@@ -3531,7 +3553,7 @@ mod tests {
         assert_eq!(state.model.highlight_words, Some(words));
 
         with_local_app_data(|_| {
-            apply_core_event(&mut state, Event::LoggedOut)
+            apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere))
                 .expect("logged out event must apply successfully");
         });
         let removed = take_stale_room_views(&mut state);
@@ -3554,29 +3576,89 @@ mod tests {
         );
     }
 
-    /// Log Out's refusal waits for its dialog, and says nothing else: the
-    /// session goes on as it was.
+    /// A File > Log Out's request: nothing allowed yet.
+    fn keep_everything() -> LogoutRequest {
+        LogoutRequest {
+            discard_room_keys: false,
+            this_computer_only: false,
+        }
+    }
+
+    /// Log Out's refusal waits for its dialog, with the request it refused,
+    /// and says nothing else: the session goes on as it was.
     #[test]
     fn a_logout_refusal_waits_for_its_dialog_until_logged_out() {
-        let mut state = test_state();
-        state.model.connection = ConnectionState::Syncing;
-        state.model.lifecycle_state = LifecycleState::Syncing;
-        let lines = status_log_lines(&state);
+        for (reason, status) in [
+            (
+                LogoutRefusal::RoomKeysAtRisk(RoomKeysAtRisk::RecoveryOff),
+                "log out: room keys at risk",
+            ),
+            (
+                LogoutRefusal::ServerKeepsSession {
+                    device_id: "MIRXDEVICE".to_owned(),
+                    reason: "unreachable".to_owned(),
+                },
+                "log out: the server kept the session",
+            ),
+        ] {
+            let mut state = test_state();
+            state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
+            state.model.connection = ConnectionState::Syncing;
+            state.model.lifecycle_state = LifecycleState::Syncing;
+            let lines = status_log_lines(&state);
 
-        apply_core_event(
-            &mut state,
-            Event::LogoutWouldLoseRoomKeys(RoomKeysAtRisk::RecoveryOff),
-        )
-        .unwrap();
+            apply_core_event(
+                &mut state,
+                Event::LogoutRefused {
+                    request: keep_everything(),
+                    reason: reason.clone(),
+                },
+            )
+            .unwrap();
 
-        assert_eq!(state.log_out_warning, Some(RoomKeysAtRisk::RecoveryOff));
-        assert_eq!(state.model.status, "log out: room keys at risk");
-        assert_eq!(state.model.connection, ConnectionState::Syncing);
-        assert_eq!(state.model.lifecycle_state, LifecycleState::Syncing);
-        assert_eq!(status_log_lines(&state), lines);
+            assert_eq!(state.log_out_warning, Some((keep_everything(), reason)));
+            assert_eq!(state.model.status, status);
+            assert_eq!(state.model.connection, ConnectionState::Syncing);
+            assert_eq!(state.model.lifecycle_state, LifecycleState::Syncing);
+            assert_eq!(status_log_lines(&state), lines);
 
-        with_local_app_data(|_| apply_core_event(&mut state, Event::LoggedOut).unwrap());
-        assert_eq!(state.log_out_warning, None);
+            with_local_app_data(|_| {
+                apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere)).unwrap()
+            });
+            assert_eq!(state.log_out_warning, None);
+        }
+    }
+
+    /// A Log Out from this computer only says what it left on the server,
+    /// and where to finish it; a whole one just says it logged out.
+    #[test]
+    fn logging_out_says_whether_the_server_still_lists_the_session() {
+        for (scope, line) in [
+            (LogoutScope::Everywhere, "* Logged out".to_owned()),
+            (
+                LogoutScope::ThisComputerOnly {
+                    device_id: "MIRXDEVICE".to_owned(),
+                },
+                "* Logged out on this computer only: example still lists this session \
+                 (MIRXDEVICE) until you sign it out from another session (Tools > Sessions... \
+                 there)"
+                    .to_owned(),
+            ),
+        ] {
+            let mut state = test_state();
+            state.model.own_account = Some(OwnAccount::matrix("@me:example".to_owned()));
+            state.model.connection = ConnectionState::SignedIn;
+
+            with_local_app_data(|_| apply_core_event(&mut state, Event::LoggedOut(scope)).unwrap());
+
+            assert_eq!(state.model.connection, ConnectionState::SignedOut);
+            assert_eq!(state.model.status, "logged out");
+            let lines = status_log_lines(&state);
+            assert!(
+                lines.last().is_some_and(|last| last.ends_with(&line)),
+                "{lines:?}"
+            );
+        }
     }
 
     /// An invite from Bob, as the fixtures' `invited_room`, of `kind`.
@@ -3666,7 +3748,9 @@ mod tests {
         assert_eq!(state.harness.commands, []);
 
         // A new session's first list is no news either.
-        with_local_app_data(|_| apply_core_event(&mut state, Event::LoggedOut).unwrap());
+        with_local_app_data(|_| {
+            apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere)).unwrap()
+        });
         let before = status_invite_lines(&state).len();
         listed(&mut state, vec![invited_room("!w:example", "Whiskey")]);
         assert_eq!(status_invite_lines(&state).len(), before);
@@ -3821,7 +3905,7 @@ mod tests {
         ));
 
         with_local_app_data(|_| {
-            apply_core_event(&mut state, Event::LoggedOut)
+            apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere))
                 .expect("logged out event must apply successfully");
         });
 
@@ -3895,7 +3979,7 @@ mod tests {
             BTreeMap::from([("#new:example".to_owned(), "!new:example".to_owned())])
         );
         // The session's: a log out forgets it.
-        apply_core_event(&mut state, Event::LoggedOut).unwrap();
+        apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere)).unwrap();
         assert!(state.model.joined_aliases.is_empty());
     }
 
@@ -4984,7 +5068,7 @@ mod tests {
             .insert(room_view_id("!room:example"), ViewActivityLevel::Message);
 
         with_local_app_data(|_| {
-            apply_core_event(&mut state, Event::LoggedOut)
+            apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere))
                 .expect("logged out event must apply successfully");
         });
 
@@ -5009,7 +5093,7 @@ mod tests {
         );
 
         with_local_app_data(|_| {
-            apply_core_event(&mut state, Event::LoggedOut)
+            apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere))
                 .expect("logged out event must apply successfully");
         });
         apply_core_event(&mut state, Event::Started).unwrap();
@@ -5343,7 +5427,7 @@ mod tests {
             );
             assert_eq!(status_log_texts(&state).len(), status_lines);
 
-            apply_core_event(&mut state, Event::LoggedOut).unwrap();
+            apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere)).unwrap();
             assert_eq!(state.model.presence.kind("@bob:example"), None);
         });
     }
@@ -5442,7 +5526,7 @@ mod tests {
                 ]
             );
 
-            apply_core_event(&mut state, Event::LoggedOut).unwrap();
+            apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere)).unwrap();
             let logged_out = state.model.status_log.lines().len();
             apply_core_event(&mut state, presence("@bob:example", PresenceKind::Offline)).unwrap();
             assert_eq!(status_lines_since(&state, logged_out), []);
@@ -5726,7 +5810,7 @@ mod tests {
                 })
             );
 
-            apply_core_event(&mut state, Event::LoggedOut).unwrap();
+            apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere)).unwrap();
             assert_eq!(state.model.lifecycle_state, LifecycleState::LoggedOut);
             assert_eq!(state.model.own_account, None);
             assert_eq!(state.current_session_homeserver_url, None);
@@ -5775,7 +5859,7 @@ mod tests {
                 Event::SyncStopped(SyncStopReason::SessionEnded("token gone".to_owned())),
             )
             .unwrap();
-            apply_core_event(&mut state, Event::LoggedOut).unwrap();
+            apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere)).unwrap();
             apply_core_event(&mut state, Event::Stopped).unwrap();
 
             assert_eq!(state.model.own_account, None);
@@ -5900,7 +5984,7 @@ mod tests {
             assert_eq!(counted(&state), 1);
 
             // The next session's first list is news again.
-            apply_core_event(&mut state, Event::LoggedOut).unwrap();
+            apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere)).unwrap();
             apply_core_event(
                 &mut state,
                 Event::LoggedIn {

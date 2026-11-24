@@ -395,18 +395,13 @@ pub(super) fn submit_start_sync(state: &mut WindowState) -> Result<(), String> {
         .map(|_| ())
 }
 
-/// `discard_room_keys`: the user said to log out even if room keys are
-/// lost (`LogoutRequest`).
-pub(super) fn submit_logout(
-    state: &mut WindowState,
-    discard_room_keys: bool,
-) -> Result<(), String> {
+pub(super) fn submit_logout(state: &mut WindowState, request: LogoutRequest) -> Result<(), String> {
     let sender = state
         .command_sender
         .as_ref()
         .ok_or_else(|| "core command sender is not available".to_owned())?;
     sender
-        .send(Command::Logout(LogoutRequest { discard_room_keys }))
+        .send(Command::Logout(request))
         .map_err(|err| format!("failed to enqueue logout command: {err}"))
         .map(|_| ())
 }
@@ -1159,8 +1154,16 @@ mod tests {
                 submit_start_sync(&mut state),
                 Err("core command sender is not available".to_owned())
             );
+            let keep = LogoutRequest {
+                discard_room_keys: false,
+                this_computer_only: false,
+            };
+            let here_only = LogoutRequest {
+                discard_room_keys: true,
+                this_computer_only: true,
+            };
             assert_eq!(
-                submit_logout(&mut state, false),
+                submit_logout(&mut state, keep),
                 Err("core command sender is not available".to_owned())
             );
 
@@ -1173,8 +1176,8 @@ mod tests {
             assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
 
             submit_start_sync(&mut state).unwrap();
-            submit_logout(&mut state, false).unwrap();
-            submit_logout(&mut state, true).unwrap();
+            submit_logout(&mut state, keep).unwrap();
+            submit_logout(&mut state, here_only).unwrap();
             assert_eq!(
                 commands.try_recv().map(|(_, command)| command),
                 Ok(Command::RestoreSession(RestoreSessionRequest {
@@ -1189,15 +1192,11 @@ mod tests {
             );
             assert_eq!(
                 commands.try_recv().map(|(_, command)| command),
-                Ok(Command::Logout(LogoutRequest {
-                    discard_room_keys: false
-                }))
+                Ok(Command::Logout(keep))
             );
             assert_eq!(
                 commands.try_recv().map(|(_, command)| command),
-                Ok(Command::Logout(LogoutRequest {
-                    discard_room_keys: true
-                }))
+                Ok(Command::Logout(here_only))
             );
         });
     }

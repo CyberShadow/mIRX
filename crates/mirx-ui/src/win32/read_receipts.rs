@@ -640,7 +640,9 @@ mod tests {
         .unwrap();
         assert!(state.sent_receipts.is_sent("!ops:example", "$a"));
         assert!(!state.sent_receipts.is_sent("!gone:example", "$g"));
-        with_local_app_data(|_| apply_core_event(&mut state, Event::LoggedOut).unwrap());
+        with_local_app_data(|_| {
+            apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere)).unwrap()
+        });
         assert!(!state.sent_receipts.is_sent("!ops:example", "$a"));
     }
 

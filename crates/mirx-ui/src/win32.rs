@@ -25,9 +25,9 @@ use mirx_core::{
     E2eeStatus, EditMessageRequest, Event, ExportRoomKeysRequest, FetchRoomEventRequest,
     FetchRoomMediaRequest, HighlightWord, HistoryFrom, ImportRoomKeysRequest,
     InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, LoginMethod,
-    LoginRequest, LogoutRequest, MarkRoomReadRequest, Operation, PresenceKind, PublicRoomsPage,
-    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
-    RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
+    LoginRequest, LogoutRefusal, LogoutRequest, LogoutScope, MarkRoomReadRequest, Operation,
+    PresenceKind, PublicRoomsPage, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest,
+    RedactEventRequest, RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
     ResetE2eeIdentityRequest, RestoreSessionRequest, RetryDecryptionRequest, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomActivityUpdateTarget, RoomAudioInfo, RoomEventFetch, RoomEventFetchResult,
@@ -930,9 +930,10 @@ struct WindowState {
     /// The session's first room list is still to come: Status counts it
     /// (`* Synced rooms:`); the later ones, every change, it does not.
     room_count_due: bool,
-    /// The core's refusal to log out, waiting for its Log Out dialog: only
-    /// the posted open (`WM_LOG_OUT_WARNING`) takes it.
-    log_out_warning: Option<RoomKeysAtRisk>,
+    /// The core's refusal to log out, with the request it refused, waiting
+    /// for its Log Out dialog: only the posted open (`WM_LOG_OUT_WARNING`)
+    /// takes it.
+    log_out_warning: Option<(LogoutRequest, LogoutRefusal)>,
     /// The `model.presence` revision the nick lists were last painted at;
     /// they draw presence at paint time, so a change only repaints them.
     painted_presence_revision: u64,

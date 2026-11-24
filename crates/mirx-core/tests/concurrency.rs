@@ -16,7 +16,7 @@ use matrix_sdk_test::{InvitedRoomBuilder, JoinedRoomBuilder};
 use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, ComposeFormat,
     CreateDirectRoomRequest, EditMessageRequest, Event, HistoryFrom, ListPublicRoomsRequest,
-    LoginMethod, LoginRequest, MemberPowerLevelChange, MemberPowerRole, Operation,
+    LoginMethod, LoginRequest, LogoutScope, MemberPowerLevelChange, MemberPowerRole, Operation,
     RestoreSessionRequest, RoomMessagePresentationKind, SendFileRequest, SendMessageRequest,
     SessionAuth, StoredSession, UpdateRoomSettingsRequest,
 };
@@ -848,19 +848,21 @@ fn logout_cancels_hung_work_and_acks_it() {
     let backfill = harness.send(backfill(ROOM));
     harness.wait_for_requests("GET", "/messages", 1);
     let logout = harness.send(common::log_out_anyway());
-    seen.until("LoggedOut", |event| *event == Event::LoggedOut);
+    seen.until("LoggedOut", |event| {
+        *event == Event::LoggedOut(LogoutScope::Everywhere)
+    });
     seen.until_acks(2);
     let shape: Vec<_> = seen
         .events
         .iter()
-        .filter(|event| matches!(event, Event::CommandHandled(_) | Event::LoggedOut))
+        .filter(|event| matches!(event, Event::CommandHandled(_) | Event::LoggedOut(_)))
         .collect();
     // The backfill's ack, then the logout and its ack.
     assert_eq!(
         shape,
         [
             &Event::CommandHandled(backfill),
-            &Event::LoggedOut,
+            &Event::LoggedOut(LogoutScope::Everywhere),
             &Event::CommandHandled(logout)
         ]
     );
@@ -909,7 +911,9 @@ fn a_logout_drops_the_commands_that_came_for_its_session() {
         event_id: "$alice-join".to_owned(),
     }));
     harness.send(Command::StartSync);
-    seen.until("LoggedOut", |event| *event == Event::LoggedOut);
+    seen.until("LoggedOut", |event| {
+        *event == Event::LoggedOut(LogoutScope::Everywhere)
+    });
     seen.until_acks(3);
 
     let events = seen.shut_down();
@@ -948,7 +952,9 @@ fn a_sign_in_sent_during_a_logout_runs_after_it() {
     harness.send(common::log_out_anyway());
     harness.wait_for_requests("POST", "/logout", 1);
     harness.send(password_login(&harness));
-    seen.until("LoggedOut", |event| *event == Event::LoggedOut);
+    seen.until("LoggedOut", |event| {
+        *event == Event::LoggedOut(LogoutScope::Everywhere)
+    });
     seen.until("the sign-in's error", |event| {
         is_error_of(event, Operation::Login)
     });
@@ -1138,8 +1144,14 @@ fn a_failed_logout_keeps_the_session_whole() {
 
     harness.send(common::log_out_anyway());
     seen.until("LoggingOut", |event| *event == Event::LoggingOut);
-    seen.until("the logout error", |event| {
-        is_error_of(event, Operation::Logout)
+    seen.until("the logout's refusal", |event| {
+        matches!(
+            event,
+            Event::LogoutRefused {
+                reason: mirx_core::LogoutRefusal::ServerKeepsSession { .. },
+                ..
+            }
+        )
     });
     seen.until_acks(2);
     let syncs = harness.requests("GET", "/sync").len();
@@ -1161,7 +1173,7 @@ fn a_failed_logout_keeps_the_session_whole() {
     assert!(
         !events
             .iter()
-            .any(|event| matches!(event, Event::LoggedOut | Event::SyncStopped(_))),
+            .any(|event| matches!(event, Event::LoggedOut(_) | Event::SyncStopped(_))),
         "{events:#?}"
     );
     harness.join_stopped();
@@ -1220,7 +1232,7 @@ fn disconnecting_stops_a_logout_under_way() {
     assert!(
         !seen.events[from..]
             .iter()
-            .any(|event| matches!(event, Event::SyncStarted | Event::LoggedOut)),
+            .any(|event| matches!(event, Event::SyncStarted | Event::LoggedOut(_))),
         "{:#?}",
         seen.events
     );
@@ -1231,7 +1243,10 @@ fn disconnecting_stops_a_logout_under_way() {
     });
 
     let events = seen.shut_down();
-    assert!(!events.contains(&Event::LoggedOut), "{events:#?}");
+    assert!(
+        !events.contains(&Event::LoggedOut(LogoutScope::Everywhere)),
+        "{events:#?}"
+    );
     harness.join_stopped();
 }
 

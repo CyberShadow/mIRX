@@ -32,6 +32,7 @@ pub const EVENT_TIMEOUT: Duration = Duration::from_secs(20);
 pub fn log_out_anyway() -> Command {
     Command::Logout(LogoutRequest {
         discard_room_keys: true,
+        this_computer_only: false,
     })
 }
 
@@ -369,6 +370,11 @@ impl Harness {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// Whether the session's store is on disk.
+    pub fn has_store(&self) -> bool {
+        self.profile.path().join("profile/matrix-store").is_dir()
     }
 
     pub fn shut_down(self) {

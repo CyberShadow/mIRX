@@ -141,21 +141,27 @@ pub enum Command {
     /// `RoomEventsDecrypted` too.
     RetryDecryption(RetryDecryptionRequest),
     /// Ends the session on the server and removes its data from this
-    /// computer. Answered by `LogoutWouldLoseRoomKeys` at once (the
-    /// session stays, as it was), or by `LoggingOut` and then `LoggedOut`,
-    /// `LogoutWouldLoseRoomKeys` or a `Logout` error (the session stays),
-    /// or `LogoutCancelled` when a `StopSync` stops it.
+    /// computer. Answered by `LogoutRefused` at once (the session stays,
+    /// as it was), or by `LoggingOut` and then `LoggedOut` or
+    /// `LogoutRefused` (the session stays), or `LogoutCancelled` when a
+    /// `StopSync` stops it.
     Logout(LogoutRequest),
     Shutdown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What a `Logout` may do; each refusal (`LogoutRefusal`) names the
+/// permission that lets it go on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LogoutRequest {
     /// Log out even when room keys would be lost: when no key backup a
     /// new session can open holds them all. Without it the core first
     /// waits for the key backup to hold every key, and refuses when it
     /// cannot.
     pub discard_room_keys: bool,
+    /// Remove the session from this computer only, without asking the
+    /// server to end it: the server goes on listing it until another
+    /// session signs it out. The room keys are checked all the same.
+    pub this_computer_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2418,6 +2424,29 @@ pub enum RoomKeysAtRisk {
     BackupFailed(String),
 }
 
+/// Why a `Logout` did not log out.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogoutRefusal {
+    /// Logging out now would lose room keys; `discard_room_keys` lets it.
+    RoomKeysAtRisk(RoomKeysAtRisk),
+    /// The server did not end the session (device `device_id`), for
+    /// `reason`: it could not be reached, or it answered with an error.
+    /// `this_computer_only` removes it from this computer all the same.
+    ServerKeepsSession { device_id: String, reason: String },
+}
+
+/// Where a logout ended the session.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogoutScope {
+    /// The server ended it (or had already).
+    Everywhere,
+    /// Only this computer forgot it: the server still lists the session,
+    /// device `device_id`, until another session signs it out.
+    ThisComputerOnly { device_id: String },
+}
+
 /// A command's number, from 1, in the order the UI sent it
 /// (`CommandSender::send`); the core's ack names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -2547,21 +2576,25 @@ pub enum Event {
     },
     VerificationRequest(VerificationRequest),
     VerificationState(VerificationStateEvent),
-    /// The answer to `Logout` without `discard_room_keys`: logging out now
-    /// would lose room keys, for this reason. The session stays signed in,
-    /// syncing as before.
-    LogoutWouldLoseRoomKeys(RoomKeysAtRisk),
+    /// The answer to a `Logout` that did not log out, for `reason`: the
+    /// session stays signed in, syncing again if it was. `request` is the
+    /// refused one; sent again with the reason's permission, it goes on.
+    LogoutRefused {
+        request: LogoutRequest,
+        reason: LogoutRefusal,
+    },
     /// A `Logout` went past its checks: the core waits for the key backup
-    /// and then the server, with sync stopped. `LoggedOut`,
-    /// `LogoutWouldLoseRoomKeys` or a `Logout` error follows. Commands
-    /// sent meanwhile wait for its end, but `StopSync`, which stops it:
-    /// then `LogoutCancelled` follows.
+    /// and then the server, with sync stopped. `LoggedOut` or
+    /// `LogoutRefused` follows. Commands sent meanwhile wait for its end,
+    /// but `StopSync`, which stops it: then `LogoutCancelled` follows.
     LoggingOut,
     /// The answer to a `StopSync` during a logout: the logout stopped, and
     /// the session stays signed in with sync stopped. The server may have
     /// ended the session already, if its answer was on its way.
     LogoutCancelled,
-    LoggedOut,
+    /// The session's data left this computer: its store here, and the UI
+    /// forgets its saved login.
+    LoggedOut(LogoutScope),
     Stopped,
     Error(CoreErrorEvent),
 }
@@ -2629,12 +2662,37 @@ mod tests {
             (Event::LoggingOut, r#""LoggingOut""#),
             (Event::LogoutCancelled, r#""LogoutCancelled""#),
             (
-                Event::LogoutWouldLoseRoomKeys(RoomKeysAtRisk::RecoveryOff),
-                r#"{"LogoutWouldLoseRoomKeys":"recovery_off"}"#,
+                Event::LogoutRefused {
+                    request: LogoutRequest {
+                        discard_room_keys: false,
+                        this_computer_only: true,
+                    },
+                    reason: LogoutRefusal::RoomKeysAtRisk(RoomKeysAtRisk::RecoveryOff),
+                },
+                r#"{"LogoutRefused":{"request":{"discard_room_keys":false,"this_computer_only":true},"reason":{"room_keys_at_risk":"recovery_off"}}}"#,
             ),
             (
-                Event::LogoutWouldLoseRoomKeys(RoomKeysAtRisk::BackupFailed("why".to_owned())),
-                r#"{"LogoutWouldLoseRoomKeys":{"backup_failed":"why"}}"#,
+                Event::LogoutRefused {
+                    request: LogoutRequest {
+                        discard_room_keys: true,
+                        this_computer_only: false,
+                    },
+                    reason: LogoutRefusal::ServerKeepsSession {
+                        device_id: "MIRX".to_owned(),
+                        reason: "why".to_owned(),
+                    },
+                },
+                r#"{"LogoutRefused":{"request":{"discard_room_keys":true,"this_computer_only":false},"reason":{"server_keeps_session":{"device_id":"MIRX","reason":"why"}}}}"#,
+            ),
+            (
+                Event::LoggedOut(LogoutScope::Everywhere),
+                r#"{"LoggedOut":"everywhere"}"#,
+            ),
+            (
+                Event::LoggedOut(LogoutScope::ThisComputerOnly {
+                    device_id: "MIRX".to_owned(),
+                }),
+                r#"{"LoggedOut":{"this_computer_only":{"device_id":"MIRX"}}}"#,
             ),
         ] {
             assert_eq!(serde_json::to_string(&event).unwrap(), wire);

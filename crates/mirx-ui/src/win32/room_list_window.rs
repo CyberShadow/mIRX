@@ -511,7 +511,7 @@ mod tests {
         state.hwnd_views.insert(20, ViewId::RoomList);
 
         with_local_app_data(|_| {
-            apply_core_event(&mut state, Event::LoggedOut).unwrap();
+            apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere)).unwrap();
         });
         let removed = take_stale_room_views(&mut state);
 

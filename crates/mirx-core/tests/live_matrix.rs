@@ -156,7 +156,7 @@ fn wait_for_live_logged_out(handle: &CoreHandle, context: &str) {
             .recv_timeout(Duration::from_secs(2))
             .expect("logout event")
         {
-            Event::LoggedOut => {
+            Event::LoggedOut(_) => {
                 saw_logged_out = true;
                 break;
             }
@@ -558,6 +558,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
         .command_sender()
         .send(Command::Logout(mirx_core::LogoutRequest {
             discard_room_keys: true,
+            this_computer_only: false,
         }))
         .expect("send logout");
 
@@ -614,6 +615,7 @@ fn live_matrix_set_read_marker_updates_fully_read_marker_is_env_gated() {
         .command_sender()
         .send(Command::Logout(mirx_core::LogoutRequest {
             discard_room_keys: true,
+            this_computer_only: false,
         }))
         .expect("send logout");
 

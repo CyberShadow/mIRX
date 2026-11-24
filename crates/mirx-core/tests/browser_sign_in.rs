@@ -323,16 +323,24 @@ fn logging_out_of_an_oauth_session_goes_to_the_authorization_server() {
     harness.wait_for("RestoredSession", |event| *event == Event::RestoredSession);
     harness.send(Command::Logout(mirx_core::LogoutRequest {
         discard_room_keys: true,
+        this_computer_only: false,
     }));
-    let Event::Error(error) = harness.wait_for(
-        "the logout error",
-        |event| matches!(event, Event::Error(error) if error.operation == Operation::Logout),
-    ) else {
-        unreachable!()
-    };
+    let refusal = harness.wait_for("the logout's refusal", |event| {
+        matches!(event, Event::LogoutRefused { .. })
+    });
     assert_eq!(
-        error.message,
-        "failed to log out of Matrix: failed to log out: Scheme for revocation endpoint URL must be HTTPS"
+        refusal,
+        Event::LogoutRefused {
+            request: mirx_core::LogoutRequest {
+                discard_room_keys: true,
+                this_computer_only: false,
+            },
+            reason: mirx_core::LogoutRefusal::ServerKeepsSession {
+                device_id: "DEVICE".to_owned(),
+                reason: "failed to log out: Scheme for revocation endpoint URL must be HTTPS"
+                    .to_owned(),
+            },
+        }
     );
     harness.shut_down();
 }

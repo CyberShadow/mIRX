@@ -1111,32 +1111,54 @@ pub(super) unsafe fn disconnect(hwnd: HWND) -> Result<(), String> {
     enqueue_command(state_mut(hwnd), command)
 }
 
-/// File > Log Out. The core may answer that room keys would be lost:
-/// then `log_out_warning` asks.
+/// File > Log Out. The core may refuse, because room keys would be lost
+/// or because the server did not end the session: then `log_out_warning`
+/// asks.
 pub(super) unsafe fn log_out(hwnd: HWND) -> Result<(), String> {
-    submit_logout_after_any_retry(hwnd, false)
+    submit_logout_after_any_retry(
+        hwnd,
+        LogoutRequest {
+            discard_room_keys: false,
+            this_computer_only: false,
+        },
+    )
 }
 
 /// A due retry goes first: it would start sync again.
-unsafe fn submit_logout_after_any_retry(hwnd: HWND, discard_room_keys: bool) -> Result<(), String> {
+unsafe fn submit_logout_after_any_retry(hwnd: HWND, request: LogoutRequest) -> Result<(), String> {
     if state_ref(hwnd).model.connection == ConnectionState::WaitingToReconnect {
         reconnect::cancel(hwnd);
     }
-    submit_logout(state_mut(hwnd), discard_room_keys)
+    submit_logout(state_mut(hwnd), request)
 }
 
 /// The Log Out dialog of the core's refusal (`WM_LOG_OUT_WARNING`): its
-/// Log Out logs out all the same, its Cancel leaves the session as it is.
+/// confirm sends the refused request again with what the refusal asked
+/// for allowed, its Cancel leaves the session as it is.
 pub(super) unsafe fn log_out_warning(hwnd: HWND) -> Result<(), String> {
     // Posted once a refusal came; a Log Out that went on to log out before
     // this message's turn took the session, and the warning, with it.
-    let Some(risk) = state_mut(hwnd).log_out_warning.take() else {
+    let Some((request, reason)) = state_mut(hwnd).log_out_warning.take() else {
         return Ok(());
     };
-    if show_log_out_dialog(hwnd, &risk)? {
-        submit_logout_after_any_retry(hwnd, true)?;
+    if show_log_out_dialog(hwnd, &reason)? {
+        submit_logout_after_any_retry(hwnd, allowed(request, &reason))?;
     }
     Ok(())
+}
+
+/// `request`, allowed to go past `reason`.
+fn allowed(request: LogoutRequest, reason: &LogoutRefusal) -> LogoutRequest {
+    match reason {
+        LogoutRefusal::RoomKeysAtRisk(_) => LogoutRequest {
+            discard_room_keys: true,
+            ..request
+        },
+        LogoutRefusal::ServerKeepsSession { .. } => LogoutRequest {
+            this_computer_only: true,
+            ..request
+        },
+    }
 }
 
 /// A Commands item runs the slash command it stands for, prompting first
@@ -1517,6 +1539,29 @@ mod tests {
     use super::super::test_fixtures::*;
     use super::automation::*;
     use super::*;
+
+    /// The answer to a refusal allows what it asked for, and keeps what the
+    /// refused request allowed already: room keys discarded before the
+    /// server kept the session stay discarded, and the other way round.
+    #[test]
+    fn a_refusals_answer_keeps_what_the_request_allowed() {
+        let server = LogoutRefusal::ServerKeepsSession {
+            device_id: "MIRXDEVICE".to_owned(),
+            reason: "unreachable".to_owned(),
+        };
+        let keys = LogoutRefusal::RoomKeysAtRisk(RoomKeysAtRisk::RecoveryOff);
+        let request = |discard_room_keys, this_computer_only| LogoutRequest {
+            discard_room_keys,
+            this_computer_only,
+        };
+        assert_eq!(allowed(request(false, false), &keys), request(true, false));
+        assert_eq!(allowed(request(false, true), &keys), request(true, true));
+        assert_eq!(
+            allowed(request(false, false), &server),
+            request(false, true)
+        );
+        assert_eq!(allowed(request(true, false), &server), request(true, true));
+    }
 
     #[test]
     fn each_dialog_opens_from_its_menu_item_or_the_close_box() {

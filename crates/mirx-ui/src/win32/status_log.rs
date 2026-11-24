@@ -142,6 +142,14 @@ pub(super) const SYNC_STARTED: &str = "Syncing with the homeserver";
 pub(super) const LOGGING_OUT: &str = "Logging out; File > Disconnect stops it";
 pub(super) const LOG_OUT_CANCELLED: &str = "Log Out cancelled; still signed in";
 pub(super) const LOGGED_OUT: &str = "Logged out";
+
+/// A Log Out from this computer only, after the server could not end the
+/// session: it still lists it, and another session signs it out.
+pub(super) fn logged_out_on_this_computer_only(server: &str, device_id: &str) -> String {
+    format!(
+        "Logged out on this computer only: {server} still lists this session ({device_id}) until you sign it out from another session (Tools > Sessions... there)"
+    )
+}
 pub(super) const STOPPED: &str = "Disconnected";
 pub(super) const E2EE_RECOVERY_SET_UP: &str =
     "E2EE recovery set up; the recovery key was shown in a dialog";
