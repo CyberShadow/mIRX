@@ -5125,8 +5125,10 @@ fn session_ended(err: &matrix_sdk::Error) -> bool {
 
 /// Whether the server ended the session a request failed in: it no longer
 /// knows the access token, and the session had no refresh token, or the
-/// server refused the refresh too (a native session's refresh answering
-/// `M_UNKNOWN_TOKEN`, an OAuth 2.0 one's `invalid_grant`).
+/// server refused the refresh too: a native session's refresh answering
+/// `M_UNKNOWN_TOKEN` (the spec's code for an unknown or used refresh
+/// token) or `M_FORBIDDEN` (Synapse's, for a used or expired refresh token
+/// and an expired session), an OAuth 2.0 one's `invalid_grant`.
 ///
 /// The cases are those for which the SDK broadcasts
 /// `SessionChange::UnknownToken` (matrix-sdk 0.18 `client/futures.rs`), but
@@ -5134,9 +5136,10 @@ fn session_ended(err: &matrix_sdk::Error) -> bool {
 /// one, says nothing about the session.
 fn server_ended_session(err: &HttpError) -> bool {
     match err {
-        HttpError::RefreshToken(RefreshTokenError::MatrixAuth(refresh)) => {
-            server_ended_session(refresh)
-        }
+        HttpError::RefreshToken(RefreshTokenError::MatrixAuth(refresh)) => matches!(
+            refresh.client_api_error_kind(),
+            Some(ErrorKind::UnknownToken(_) | ErrorKind::Forbidden)
+        ),
         HttpError::RefreshToken(RefreshTokenError::OAuth(refresh)) => matches!(
             &**refresh,
             OAuthError::RefreshToken(RequestTokenError::ServerResponse(response))
@@ -20267,6 +20270,13 @@ mod tests {
         #[test]
         fn a_refresh_the_server_refused_ended_the_session() {
             assert!(server_ended_session(&refresh_failed(unknown_token())));
+        }
+
+        /// Synapse's answer to a used or expired refresh token.
+        #[test]
+        fn a_refresh_the_server_forbade_ended_the_session() {
+            let forbidden = server_error(StatusCode::FORBIDDEN, ErrorKind::Forbidden);
+            assert!(server_ended_session(&refresh_failed(forbidden)));
         }
 
         #[test]
