@@ -124,4 +124,25 @@ if [[ -n $trademark_hits ]]; then
   exit 1
 fi
 
-printf 'dll-gate ok: %s; subsystem GUI; resources: icon, group icon, version, manifest; no "mIRC"\n' "${imported_dlls[*]}"
+# The shipped exe has no automation harness (the mirx-ui `automation`
+# feature): nothing names it, in any case, and neither its launch flags nor
+# its protocol's version field are there. ASCII, then UTF-16LE.
+harness_words=('(?i:automation)' --render-state --self-test --frame-size protocol_version)
+utf16le() { sed 's/./&\\x00/g' <<<"$1"; }
+ascii_pattern=$(IFS='|'; echo "${harness_words[*]}")
+utf16_pattern='(?i:a\x00u\x00t\x00o\x00m\x00a\x00t\x00i\x00o\x00n\x00)'
+for word in "${harness_words[@]:1}"; do
+  utf16_pattern+="|$(utf16le "$word")"
+done
+harness_hits=$(
+  LC_ALL=C grep -a -o -b -P "[[:print:]]{0,40}(?:$ascii_pattern)[[:print:]]{0,40}" "$exe_path" || true
+  LC_ALL=C grep -a -o -b -P "(?:[[:print:]]\x00){0,40}(?:$utf16_pattern)(?:[[:print:]]\x00){0,40}" "$exe_path" \
+    | tr -d '\0' || true
+)
+if [[ -n $harness_hits ]]; then
+  echo "dll-gate failed: $exe_path has the automation harness (offset:text):" >&2
+  echo "$harness_hits" >&2
+  exit 1
+fi
+
+printf 'dll-gate ok: %s; subsystem GUI; resources: icon, group icon, version, manifest; no "mIRC"; no automation harness\n' "${imported_dlls[*]}"
