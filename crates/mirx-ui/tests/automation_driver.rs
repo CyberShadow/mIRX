@@ -74,18 +74,18 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_X,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BM_CLICK, BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, DM_GETDEFID, ES_READONLY,
-    EnumThreadWindows, FindWindowExW, FindWindowW, GCL_STYLE, GUITHREADINFO, GW_CHILD, GW_HWNDNEXT,
-    GW_OWNER, GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect, GetDlgCtrlID, GetDlgItem,
-    GetForegroundWindow, GetGUIThreadInfo, GetLastActivePopup, GetScrollInfo, GetWindow,
-    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES,
-    IsIconic, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETITEMRECT,
+    BM_CLICK, BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, DM_GETDEFID, ENDSESSION_LOGOFF,
+    ES_READONLY, EnumThreadWindows, FindWindowExW, FindWindowW, GCL_STYLE, GUITHREADINFO, GW_CHILD,
+    GW_HWNDNEXT, GW_OWNER, GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect, GetDlgCtrlID,
+    GetDlgItem, GetForegroundWindow, GetGUIThreadInfo, GetLastActivePopup, GetScrollInfo,
+    GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK,
+    IDYES, IsIconic, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETITEMRECT,
     LB_GETSELCOUNT, LB_GETSELITEMS, LB_GETTEXT, LB_GETTEXTLEN, LB_GETTOPINDEX, LB_SETTOPINDEX,
     LBS_EXTENDEDSEL, LBS_NOTIFY, LBS_OWNERDRAWFIXED, PostMessageW, RegisterWindowMessageW,
     SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE, SC_RESTORE, SCROLLINFO, SIF_ALL,
     SMTO_NORMAL, SPI_GETWHEELSCROLLLINES, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW,
     SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, SystemParametersInfoW,
-    WM_CHAR, WM_COMMAND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_CHAR, WM_COMMAND, WM_ENDSESSION, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL, WM_PASTE, WM_SETTEXT,
     WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
@@ -4478,6 +4478,91 @@ fn automation_driver_leaving_a_room_moves_the_read_marker() -> Result<(), Box<dy
     assert_eq!(app.dump_model()?.last_error, None);
 
     drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Launches mirx connected to a read-marker mock whose Beta has its marker
+/// on `$bob-2` and four lines, and activates Beta, which sends its read
+/// receipt; the marker is on screen there.
+fn launch_in_beta_with_its_marker_seen()
+-> Result<(GuiTestApp, MockBackfillHomeserver, PathBuf), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let server = spawn_mock_homeserver_with_read_marker(bob_lines(4), "$bob-2")?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    wait_for_line_marker(&app)?;
+    app.select_navigation_view(&room_identity("!beta:example"))?;
+    assert_eq!(
+        server.wait_for_read_markers(1)?,
+        [serde_json::json!({ "m.read": "$bob-4" })]
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.dump_model()?.last_error, None);
+    Ok((app, server, local_app_data))
+}
+
+/// Exiting leaves the active window: its read marker moves to its last
+/// line, and mirx waits for the server before the process ends.
+#[test]
+fn automation_driver_exiting_moves_the_active_windows_read_marker()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, server, local_app_data) = launch_in_beta_with_its_marker_seen()?;
+
+    assert!(app.close(Duration::from_secs(30))?.success());
+    assert_eq!(
+        *server.read_markers.lock().unwrap(),
+        [
+            serde_json::json!({ "m.read": "$bob-4" }),
+            serde_json::json!({ "m.fully_read": "$bob-4" })
+        ]
+    );
+
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Windows ending the session ends mirx as Exit does, and the marker has
+/// reached the server before mirx answers: Windows may end the process
+/// once it has.
+#[test]
+fn automation_driver_the_session_ending_moves_the_marker_before_it_answers()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, server, local_app_data) = launch_in_beta_with_its_marker_seen()?;
+    let frame = app.automation_frame_hwnd() as HWND;
+
+    let mut result = 0;
+    assert_ne!(
+        unsafe {
+            SendMessageTimeoutW(
+                frame,
+                WM_ENDSESSION,
+                1,
+                ENDSESSION_LOGOFF as isize,
+                SMTO_NORMAL,
+                10_000,
+                &mut result,
+            )
+        },
+        0
+    );
+    assert_eq!(unsafe { IsWindow(frame) }, 0);
+    assert_eq!(
+        server.read_markers.lock().unwrap()[1..],
+        [serde_json::json!({ "m.fully_read": "$bob-4" })]
+    );
+    assert!(
+        app.end(|app| app.wait_for_exit(Duration::from_secs(30)))?
+            .success()
+    );
+
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
