@@ -355,6 +355,9 @@ struct MockFaults {
     /// Every `/logout` request is held while this is set; it still counts
     /// in `logouts`.
     hold_logout: AtomicBool,
+    /// Every `/logout` request fails while this is set, as on a network
+    /// that went away; it still counts in `logouts`.
+    drop_logout: AtomicBool,
     /// Every `/sync` request is answered `503 Service Unavailable`, with
     /// a page of HTML, while this is set: a proxy in front of a stopped
     /// homeserver.
@@ -747,6 +750,9 @@ fn spawn_mock_homeserver_with_auth(
                         .lock()
                         .expect("the held requests")
                         .push(stream);
+                    continue;
+                }
+                if mock_faults.drop_logout.load(Ordering::SeqCst) {
                     continue;
                 }
             }
@@ -5847,6 +5853,77 @@ fn log_out_asks_before_it_loses_the_room_keys() -> Result<(), Box<dyn std::error
 
     log_out_anyway_with_the_menu(&app, &local_app_data)?;
     assert_eq!(server.logouts.load(Ordering::SeqCst), 1);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The server cannot be reached: Log Out, past the room-key warning, says
+/// the server did not end the session and offers to remove it from this
+/// computer only. Cancel keeps it; Remove removes it without asking the
+/// server again, and Status says the server still lists it.
+#[test]
+fn log_out_offers_this_computer_only_when_the_server_cannot_be_reached()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    server.faults.drop_logout.store(true, Ordering::SeqCst);
+    let app = launch_automation_app(&mirx_ui_exe_path()?, &local_app_data)?;
+    sign_in_with_select_server(&app, &server.base_url, "alice", "secret")?;
+
+    // The room keys come first.
+    start_log_out_anyway_with_the_menu(&app)?;
+    let dialog = app.wait_for_modal_dialog(Duration::from_secs(30))?;
+    assert_eq!(
+        (dialog.class.as_str(), dialog.title.as_str()),
+        (LOG_OUT_DIALOG_CLASS, "Log Out")
+    );
+    let dialog = dialog.hwnd as HWND;
+    let texts = unsafe { dialog_control_texts(dialog) };
+    assert!(
+        texts.iter().any(
+            |text| text.starts_with("Your server did not end this session: ")
+                && text.contains("Remove it from this computer only?")
+                && text.contains("still lists the session (DEVICE)")
+                && text.contains("Tools > Sessions...")
+        ),
+        "{texts:?}"
+    );
+    assert!(texts.iter().any(|text| text == "&Remove"), "{texts:?}");
+    assert_eq!(server.logouts.load(Ordering::SeqCst), 1);
+    unsafe { SetForegroundWindow(dialog) };
+    wait_for_dialog_focus(&app, dialog, LOG_OUT_DIALOG_CANCEL_ID)?;
+    press_keys(&[VK_ESCAPE]);
+    wait_for_window_gone(dialog, "Log Out dialog")?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let model = app.dump_model()?;
+    assert_eq!(model.last_error, None);
+    assert!(session_file_path(&local_app_data).is_file());
+    assert!(store_dir_path(&local_app_data).is_dir());
+
+    start_log_out_anyway_with_the_menu(&app)?;
+    let dialog = app.wait_for_modal_dialog(Duration::from_secs(30))?;
+    assert_eq!(dialog.class, LOG_OUT_DIALOG_CLASS);
+    let dialog = dialog.hwnd as HWND;
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, LOG_OUT_DIALOG_LOG_OUT_ID as WPARAM, 0) },
+        0
+    );
+    wait_for_window_gone(dialog, "Log Out dialog")?;
+    app.wait_for_connection("signed_out", Duration::from_secs(30))?;
+    wait_for_status_line(
+        &app,
+        "* Logged out on this computer only: example still lists this session (DEVICE) until you sign it out from another session (Tools > Sessions... there)",
+        Duration::from_secs(10),
+    )?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.dump_model()?.last_error, None);
+    assert!(!session_file_path(&local_app_data).exists());
+    assert!(!store_dir_path(&local_app_data).exists());
+    // Remove asked the server nothing.
+    assert_eq!(server.logouts.load(Ordering::SeqCst), 2);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
