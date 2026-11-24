@@ -846,6 +846,10 @@ struct WindowState {
     controls: Controls,
     event_queue: Arc<Mutex<VecDeque<Event>>>,
     command_sender: Option<CommandSender>,
+    /// The thread that brings the core's events, which ends once the core
+    /// has stopped. The frame's end waits for it (`WM_NCDESTROY`): mirx
+    /// exits only after the core shut down.
+    core_thread: Option<thread::JoinHandle<()>>,
     /// The automation harness's transport, switches and record.
     harness: Harness,
     clock: UiClock,
@@ -1119,6 +1123,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         controls: Controls::default(),
         event_queue: Arc::clone(&event_queue),
         command_sender: None,
+        core_thread: None,
         harness,
         clock: if render_state {
             UiClock::Fixed(RENDER_STATE_CLOCK_MS)
@@ -1172,13 +1177,18 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
 
     let hwnd = create_main_window(instance, state, frame_size_for_command(&command))?;
 
-    let startup = (|| -> Result<Option<CoreBridge>, String> {
+    let startup = (|| -> Result<(), String> {
         unsafe { harness::attach(hwnd, &command)? };
 
-        let bridge = if should_start_core_bridge(&command) {
-            let bridge = start_core_bridge(hwnd, Arc::clone(&event_queue))?;
+        if should_start_core_bridge(&command) {
+            let CoreBridge {
+                command_sender,
+                join_handle,
+            } = start_core_bridge(hwnd, Arc::clone(&event_queue))?;
             unsafe {
-                state_mut(hwnd).command_sender = Some(bridge.command_sender.clone());
+                let state = state_mut(hwnd);
+                state.command_sender = Some(command_sender);
+                state.core_thread = Some(join_handle);
                 let session_saved = session_path()?.is_file();
                 if session_saved {
                     let on_startup = state_ref(hwnd).settings.settings().connect.on_startup;
@@ -1204,10 +1214,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
                     return Err(last_os_error("PostMessageW WM_CONNECT_AT_STARTUP"));
                 }
             }
-            Some(bridge)
-        } else {
-            None
-        };
+        }
 
         unsafe {
             if state_ref(hwnd).settings.settings().tray.startup {
@@ -1226,18 +1233,15 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
             harness::load(hwnd)?;
         }
 
-        Ok(bridge)
+        Ok(())
     })();
 
-    let bridge = match startup {
-        Ok(bridge) => bridge,
-        Err(message) => {
-            unsafe {
-                DestroyWindow(hwnd);
-            }
-            return Err(message);
+    if let Err(message) = startup {
+        unsafe {
+            DestroyWindow(hwnd);
         }
-    };
+        return Err(message);
+    }
 
     unsafe {
         match command {
@@ -1254,11 +1258,8 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         }
     }
 
+    // The frame's end waited for the core.
     message_loop();
-
-    if let Some(bridge) = bridge {
-        let _ = bridge.join_handle.join();
-    }
 
     Ok(ExitCode::from(
         exit_code.load(Ordering::Relaxed).clamp(0, 255) as u8,

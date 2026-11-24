@@ -7,7 +7,7 @@ use windows_sys::Win32::UI::Controls::{
     TBSTYLE_LIST, TVM_SETIMAGELIST, TVSIL_NORMAL,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    WM_CAPTURECHANGED, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR,
+    WM_CAPTURECHANGED, WM_ENDSESSION, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR,
 };
 
 use super::nick_colors::NickColorSetting;
@@ -301,8 +301,28 @@ unsafe extern "system" fn window_proc(
             DestroyWindow(hwnd);
             0
         }
+        // Windows is ending the session, and ends mirx once this returns:
+        // mirx exits as on File > Exit, before it returns (the frame's
+        // end waits for the core). Asked first (`WM_QUERYENDSESSION`),
+        // mirx never objects. Another program may have cancelled the end
+        // (`wparam` 0): mirx goes on.
+        WM_ENDSESSION => {
+            if wparam != 0 {
+                DestroyWindow(hwnd);
+            }
+            0
+        }
+        // Every exit: File > Exit and `/exit` close the frame, as its
+        // caption's X and Alt+F4 do, and closing destroys it. DestroyWindow
+        // has hidden it already, so mirx is gone for the user at once; the
+        // process ends once the core stopped (`WM_NCDESTROY`).
         WM_DESTROY => {
             remove_tray_icon(hwnd);
+            // Exiting leaves the active window, as activating another one
+            // does: the core gets its read marker before its `Shutdown`.
+            let active_view = state_ref(hwnd).active_view.clone();
+            line_marker::leave_window(hwnd, &active_view)
+                .expect("the core takes commands until its Shutdown");
             let controls = &mut state_mut(hwnd).controls;
             // The menubar goes with the window; these hang in no menubar.
             for menu in [
@@ -323,12 +343,19 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_NCDESTROY => {
-            if let Some(state) = window_data::get::<WindowState>(hwnd) {
+            let core_thread = window_data::get::<WindowState>(hwnd).and_then(|state| {
                 // The bars went with the other children.
                 app_icon::destroy_image_list(state.controls.toolbar_images);
                 app_icon::destroy_image_list(state.controls.window_icons);
-            }
+                state.core_thread.take()
+            });
             window_data::drop_owned::<WindowState>(hwnd);
+            // The window is gone; mirx ends once the core has stopped,
+            // after the read receipts and markers it was sent (a few
+            // seconds at most, `SHUTDOWN_GRACE`).
+            if let Some(core_thread) = core_thread {
+                core_thread.join().expect("the core's event thread ends");
+            }
             0
         }
         _ => default_window_proc(hwnd, message, wparam, lparam),

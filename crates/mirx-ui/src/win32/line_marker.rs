@@ -199,7 +199,9 @@ pub(super) unsafe fn go_to_line_marker(hwnd: HWND) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use windows_sys::Win32::UI::WindowsAndMessaging::SIZE_RESTORED;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        ENDSESSION_LOGOFF, SIZE_RESTORED, WM_ENDSESSION,
+    };
 
     use super::super::test_fixtures::*;
     use super::*;
@@ -683,5 +685,70 @@ mod tests {
             None
         );
         assert_eq!(read_marker_move(None, last, false, MarkerSight::Away), None);
+    }
+
+    /// Ends the frame by `end`, which must destroy it, and returns the
+    /// commands its core got meanwhile, in order.
+    unsafe fn commands_at_the_end(hwnd: HWND, end: impl FnOnce(HWND)) -> Vec<Command> {
+        let (sender, mut commands) = inert_command_sender();
+        state_mut(hwnd).command_sender = Some(sender);
+        end(hwnd);
+        assert_eq!(IsWindow(hwnd), 0, "the frame is gone");
+        std::iter::from_fn(|| commands.try_recv().ok())
+            .map(|(_, command)| command)
+            .collect()
+    }
+
+    fn marker_then_shutdown(event_id: &str) -> Vec<Command> {
+        vec![
+            Command::SetReadMarker(SetReadMarkerRequest {
+                room_id: "!ops:example".to_owned(),
+                event_id: event_id.to_owned(),
+            }),
+            Command::Shutdown,
+        ]
+    }
+
+    #[test]
+    fn exiting_leaves_the_active_window_before_the_core_stops() {
+        unsafe {
+            with_marker_frame(None, |hwnd| {
+                let commands = commands_at_the_end(hwnd, |hwnd| {
+                    DestroyWindow(hwnd);
+                });
+                assert_eq!(commands, marker_then_shutdown("$m39"));
+            });
+            // Offline the marker stays.
+            with_marker_frame(None, |hwnd| {
+                state_mut(hwnd).model.connection = ConnectionState::SignedIn;
+                let commands = commands_at_the_end(hwnd, |hwnd| {
+                    DestroyWindow(hwnd);
+                });
+                assert_eq!(commands, [Command::Shutdown]);
+            });
+            // Minimized, mirx left the window already.
+            with_marker_frame(None, |hwnd| {
+                SendMessageW(hwnd, WM_SIZE, SIZE_MINIMIZED as WPARAM, 0);
+                let commands = commands_at_the_end(hwnd, |hwnd| {
+                    DestroyWindow(hwnd);
+                });
+                assert_eq!(commands, [Command::Shutdown]);
+            });
+        }
+    }
+
+    #[test]
+    fn the_session_ending_exits_as_exit_does() {
+        unsafe {
+            with_marker_frame(None, |hwnd| {
+                // Another program cancelled it.
+                SendMessageW(hwnd, WM_ENDSESSION, 0, 0);
+                assert_ne!(IsWindow(hwnd), 0);
+                let commands = commands_at_the_end(hwnd, |hwnd| {
+                    SendMessageW(hwnd, WM_ENDSESSION, 1, ENDSESSION_LOGOFF as LPARAM);
+                });
+                assert_eq!(commands, marker_then_shutdown("$m39"));
+            });
+        }
     }
 }

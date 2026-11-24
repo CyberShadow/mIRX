@@ -955,6 +955,7 @@ pub(super) fn test_state() -> WindowState {
         controls: Controls::default(),
         event_queue: Arc::new(Mutex::new(VecDeque::new())),
         command_sender: None,
+        core_thread: None,
         harness: Harness::default(),
         clock: UiClock::Fixed(RENDER_STATE_CLOCK_MS),
         settings: SettingsStore::in_memory(),
