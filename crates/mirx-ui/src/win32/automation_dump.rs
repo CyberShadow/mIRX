@@ -272,7 +272,7 @@ unsafe fn dump_switchbar_state(hwnd: HWND) -> Result<SwitchbarState, String> {
     Ok(SwitchbarState { rows, items })
 }
 
-fn ui_rect(rect: RECT) -> UiRect {
+pub(super) fn ui_rect(rect: RECT) -> UiRect {
     UiRect {
         x: rect.left,
         y: rect.top,
@@ -281,26 +281,14 @@ fn ui_rect(rect: RECT) -> UiRect {
     }
 }
 
-/// A child window's rectangle in the frame's client coordinates, or `None`
-/// while it is hidden.
-pub(super) unsafe fn frame_child_rect(hwnd: HWND, child: HWND) -> Option<UiRect> {
-    // Its own style: `IsWindowVisible` also asks whether the frame is shown.
-    if GetWindowLongPtrW(child, GWL_STYLE) as u32 & WS_VISIBLE == 0 {
-        return None;
-    }
-    let mut rect = RECT::default();
-    GetWindowRect(child, &mut rect);
-    MapWindowPoints(null_mut(), hwnd, (&mut rect as *mut RECT).cast(), 2);
-    Some(ui_rect(rect))
-}
-
 pub(super) unsafe fn dump_frame_layout(hwnd: HWND) -> UiFrameLayout {
     let controls = &state_ref(hwnd).controls;
     UiFrameLayout {
-        toolbar: frame_child_rect(hwnd, controls.toolbar),
-        switchbar: frame_child_rect(hwnd, controls.switchbar),
-        treebar: frame_child_rect(hwnd, controls.tree),
+        toolbar: frame_child_rect(hwnd, controls.toolbar).map(ui_rect),
+        switchbar: frame_child_rect(hwnd, controls.switchbar).map(ui_rect),
+        treebar: frame_child_rect(hwnd, controls.tree).map(ui_rect),
         mdi_client: frame_child_rect(hwnd, controls.mdi_client)
+            .map(ui_rect)
             .expect("the MDI client is always shown"),
     }
 }
@@ -1563,7 +1551,7 @@ mod tests {
         );
         assert_eq!(
             dumps[0].reactions,
-            vec![DumpRoomReactionSummary {
+            vec![ReactionSummary {
                 key: "heart".to_owned(),
                 count: 2,
                 senders: vec![

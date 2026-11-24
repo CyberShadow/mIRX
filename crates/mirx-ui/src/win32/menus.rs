@@ -13,7 +13,7 @@ use super::commands::{RankChange, SlashCommand, VerificationAction, rank_change_
 use super::ignore::{check_ignore, check_unignore};
 use super::navigation::WindowCycle;
 use super::settings::{Bar, Settings};
-use crate::automation::ConnectionState;
+use crate::shared::ConnectionState;
 
 pub(super) const MENU_ID_LOGOUT: usize = 40004;
 pub(super) const MENU_ID_RECOVER_E2EE: usize = 40005;

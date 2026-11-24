@@ -4,7 +4,7 @@
 //!
 //! Pure code: the row's text from the message's reaction groups.
 
-use crate::automation::DumpRoomReactionSummary;
+use crate::shared::ReactionSummary;
 
 /// How many reactors a group names before it counts the rest as
 /// `and N more` (`+N` would read as a reaction key).
@@ -14,10 +14,7 @@ pub(super) const REACTORS_SHOWN: usize = 3;
 /// [`REACTORS_SHOWN`] reactors' nicks, in the order the summaries give
 /// (reaction time); groups are separated by two spaces. `nick` names a
 /// reactor by user ID.
-pub(super) fn summary_line(
-    summaries: &[DumpRoomReactionSummary],
-    nick: impl Fn(&str) -> String,
-) -> String {
+pub(super) fn summary_line(summaries: &[ReactionSummary], nick: impl Fn(&str) -> String) -> String {
     assert!(
         !summaries.is_empty(),
         "a message without reactions has no reaction row"
@@ -44,10 +41,10 @@ pub(super) fn summary_line(
 #[cfg(test)]
 mod tests {
     use super::summary_line;
-    use crate::automation::DumpRoomReactionSummary;
+    use crate::shared::ReactionSummary;
 
-    fn summary(key: &str, senders: &[&str]) -> DumpRoomReactionSummary {
-        DumpRoomReactionSummary {
+    fn summary(key: &str, senders: &[&str]) -> ReactionSummary {
+        ReactionSummary {
             key: key.to_owned(),
             count: senders.len() as u64,
             senders: senders.iter().map(|sender| (*sender).to_owned()).collect(),

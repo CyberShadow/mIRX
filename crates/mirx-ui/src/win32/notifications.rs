@@ -9,7 +9,7 @@
 use mirx_core::RoomNotificationMode;
 
 use super::settings::TipsSetting;
-use crate::automation::ViewActivityLevel;
+use crate::shared::ViewActivityLevel;
 
 /// The colour a room's activity may reach: a muted room only ever shows that
 /// something happened, whatever the line or the server's counts say.
@@ -70,7 +70,7 @@ mod tests {
 
     use super::super::settings::TipsSetting;
     use super::{activity_wants_attention, activity_wants_tip, room_activity_level};
-    use crate::automation::ViewActivityLevel::{Event, Highlight, Message};
+    use crate::shared::ViewActivityLevel::{Event, Highlight, Message};
 
     #[test]
     fn mute_caps_activity_at_event_and_other_modes_keep_it() {

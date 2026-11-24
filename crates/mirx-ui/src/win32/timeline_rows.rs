@@ -2015,7 +2015,7 @@ mod tests {
             .expect("room view must exist");
         assert_eq!(
             room_view.reaction_summaries_for_event("$!ops:example:hello"),
-            vec![DumpRoomReactionSummary {
+            vec![ReactionSummary {
                 key: "+1".to_owned(),
                 count: 1,
                 senders: vec!["@bob:example.org".to_owned()],
@@ -2062,7 +2062,7 @@ mod tests {
             .expect("room view must exist");
         assert_eq!(
             room_view.reaction_summaries_for_event("$!ops:example:hello"),
-            vec![DumpRoomReactionSummary {
+            vec![ReactionSummary {
                 key: "+1".to_owned(),
                 count: 2,
                 senders: vec!["@bob:example.org".to_owned(), "@bob:example.org".to_owned(),],

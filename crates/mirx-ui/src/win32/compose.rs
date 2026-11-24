@@ -6,7 +6,7 @@ use std::ops::Range;
 use super::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, WM_MOUSEWHEEL};
 
-use crate::automation::FormatKey;
+use crate::shared::FormatKey;
 
 const VK_DELETE_KEY: WPARAM = 46;
 const VK_TAB_KEY: WPARAM = 9;

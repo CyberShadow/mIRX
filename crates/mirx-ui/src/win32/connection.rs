@@ -9,7 +9,7 @@ use std::time::Duration;
 use mirx_core::{Event, Operation};
 
 use super::settings::ConnectSetting;
-use crate::automation::ConnectionState;
+use crate::shared::ConnectionState;
 
 /// The connection after `event`. Submitting a login or restore moves it to
 /// `SigningIn` before any event.

@@ -829,6 +829,19 @@ pub(super) unsafe fn default_window_proc(
     }
 }
 
+/// A child window's rectangle in the frame's client coordinates, or `None`
+/// while it is hidden.
+pub(super) unsafe fn frame_child_rect(hwnd: HWND, child: HWND) -> Option<RECT> {
+    // Its own style: `IsWindowVisible` also asks whether the frame is shown.
+    if GetWindowLongPtrW(child, GWL_STYLE) as u32 & WS_VISIBLE == 0 {
+        return None;
+    }
+    let mut rect = RECT::default();
+    GetWindowRect(child, &mut rect);
+    MapWindowPoints(null_mut(), hwnd, (&mut rect as *mut RECT).cast(), 2);
+    Some(rect)
+}
+
 #[cfg(test)]
 mod tests {
     use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
@@ -1016,7 +1029,7 @@ mod tests {
 
     /// A frame child's rectangle in the frame's client coordinates.
     unsafe fn frame_child_layout(hwnd: HWND, child: HWND) -> UiRect {
-        frame_child_rect(hwnd, child).expect("the child window is shown")
+        ui_rect(frame_child_rect(hwnd, child).expect("the child window is shown"))
     }
 
     unsafe fn switchbar_button_height(switchbar: HWND) -> i32 {

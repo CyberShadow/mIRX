@@ -16,6 +16,10 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::shared::{
+    ConnectionState, FormatKey, LifecycleState, MdiArrangement, ReactionSummary, ViewActivityLevel,
+};
+
 pub(crate) const PROTOCOL_VERSION: u32 = 93;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
@@ -669,16 +673,6 @@ pub(crate) struct OpenMemberContextMenuArgs {
 #[serde(deny_unknown_fields)]
 pub(crate) struct OpenSelectedMemberContextMenuArgs {
     pub(crate) command: ContextMenuCommand,
-}
-
-/// The Window menu's arrangements of the MDI windows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum MdiArrangement {
-    Cascade,
-    TileHorizontal,
-    TileVertical,
-    ArrangeIcons,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1653,19 +1647,6 @@ pub(crate) enum UiFindHistorySearchState {
     Failed { message: String },
 }
 
-/// What happened in a view the user is not looking at, in mIRC's
-/// switchbar/treebar colour precedence: a higher level replaces a lower one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ViewActivityLevel {
-    /// Joins, parts, topic and power-level changes.
-    Event,
-    /// Someone talked.
-    Message,
-    /// A line the user's push rules highlight, e.g. one mentioning them.
-    Highlight,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UiRoomState {
@@ -1857,15 +1838,6 @@ pub(crate) enum ComposeKey {
     },
 }
 
-/// The formatting chords: Ctrl+B (`**`), Ctrl+I (`*`) and Ctrl+E (`~~`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum FormatKey {
-    Bold,
-    Italic,
-    Strikethrough,
-}
-
 impl<'de> Deserialize<'de> for ComposeKey {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -1968,45 +1940,6 @@ pub(crate) struct FindActiveViewResponse {
     pub(crate) current_match_index: Option<usize>,
     pub(crate) selected_text: Option<String>,
     pub(crate) history_search: UiFindHistorySearchState,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum LifecycleState {
-    #[default]
-    Offline,
-    CoreStarted,
-    LoggingIn,
-    Restoring,
-    Authenticated,
-    Syncing,
-    Ready,
-    LoggedOut,
-    Stopped,
-    Error,
-}
-
-/// Where the account is on mIRC's connect/disconnect axis: File > Connect
-/// and Disconnect move it, and the File menu greys what does not apply.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ConnectionState {
-    #[default]
-    SignedOut,
-    /// A login or session restore is in flight.
-    SigningIn,
-    /// A browser sign-in waits for the user to finish on the homeserver's
-    /// page.
-    WaitingForBrowser,
-    /// Signed in, not syncing: offline, with the session kept.
-    SignedIn,
-    /// Signed in, not syncing, and a connect retry is due: mIRC's
-    /// `Retry...` delay between attempts.
-    WaitingToReconnect,
-    Syncing,
-    /// A Log Out is under way: the core waits for the key backup and the
-    /// server, with sync stopped.
-    LoggingOut,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2470,17 +2403,8 @@ pub(crate) struct DumpRoomActivity {
     pub(crate) timestamp_ms: u64,
     pub(crate) highlight: bool,
     pub(crate) relation: Option<DumpRoomActivityRelation>,
-    pub(crate) reactions: Vec<DumpRoomReactionSummary>,
+    pub(crate) reactions: Vec<ReactionSummary>,
     pub(crate) kind: DumpRoomActivityKind,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct DumpRoomReactionSummary {
-    pub(crate) key: String,
-    pub(crate) count: u64,
-    pub(crate) senders: Vec<String>,
-    pub(crate) reaction_event_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3715,30 +3639,30 @@ mod tests {
         DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey, DumpRoomFileActivity,
         DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomMediaSource,
         DumpRoomMessageActivity, DumpRoomMessageActivityLine, DumpRoomMessageSendState,
-        DumpRoomPreviewMediaState, DumpRoomReactionSummary, DumpRoomRedactedActivity,
-        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent, DumpRoomVideoActivity,
-        DumpRoomVideoInfo, DumpSubmittedAwayCommand, DumpSubmittedEditCommand,
-        DumpSubmittedHistoryCommand, DumpSubmittedMemberModerationCommand,
-        DumpSubmittedProfileCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
-        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
-        DumpSubmittedRoomSettingsCommand, DumpSubmittedRoomTopicCommand,
-        DumpSubmittedSetupRecoveryCommand, DumpSubmittedTypingCommand, DumpSubmittedUserCommand,
-        DumpSubmittedVerificationRequest, DumpUnsupportedRoomMessageActivity,
-        DumpUserCommandAction, FindActiveViewArgs, FindActiveViewResponse, FormatKey,
-        GetVersionResponse, IdleProbe, LifecycleState, ListRoomsResponse, LoadEventsArgs,
-        LoginArgs, MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState,
-        NavigationNode, NavigationNodeKey, NavigationPathSegment, NoArgs, OpenDialogArgs,
-        OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs, PROTOCOL_VERSION,
-        ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
-        RoomMemberView, SelectMemberArgs, SelectNavigationPathArgs, SelectOptionsPageArgs,
-        SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs, SelectViewArgs,
-        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendFileArgs,
-        SendTextArgs, SendTextResponse, SetComposeTextArgs, SetNavigationExpandedArgs,
-        SetViewWindowStateArgs, SetupE2eeRecoveryArgs, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiFindHistorySearchState, UiFindState, UiFrameLayout, UiRect,
-        UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiToolbarButton,
-        VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
-        failure_response, parse_command_request, success_response,
+        DumpRoomPreviewMediaState, DumpRoomRedactedActivity, DumpRoomStateNoticeActivity,
+        DumpRoomStateNoticeContent, DumpRoomVideoActivity, DumpRoomVideoInfo,
+        DumpSubmittedAwayCommand, DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
+        DumpSubmittedMemberModerationCommand, DumpSubmittedProfileCommand,
+        DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
+        DumpSubmittedReplyThreadTarget, DumpSubmittedRoomSettingsCommand,
+        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand,
+        DumpSubmittedTypingCommand, DumpSubmittedUserCommand, DumpSubmittedVerificationRequest,
+        DumpUnsupportedRoomMessageActivity, DumpUserCommandAction, FindActiveViewArgs,
+        FindActiveViewResponse, FormatKey, GetVersionResponse, IdleProbe, LifecycleState,
+        ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiArrangement, MdiState, MdiView,
+        MdiWindowPlacement, MdiWindowState, NavigationNode, NavigationNodeKey,
+        NavigationPathSegment, NoArgs, OpenDialogArgs, OpenMemberContextMenuArgs,
+        OpenSelectedMemberContextMenuArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse,
+        ReactionSummary, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView,
+        SelectMemberArgs, SelectNavigationPathArgs, SelectOptionsPageArgs, SelectRoomArgs,
+        SelectRoomResponse, SelectTimelineEventArgs, SelectViewArgs, SelectViewResponse,
+        SelectedNavigationPathResponse, SendComposeKeyArgs, SendFileArgs, SendTextArgs,
+        SendTextResponse, SetComposeTextArgs, SetNavigationExpandedArgs, SetViewWindowStateArgs,
+        SetupE2eeRecoveryArgs, StatusBarState, SwitchbarItem, SwitchbarState,
+        UiFindHistorySearchState, UiFindState, UiFrameLayout, UiRect, UiRoomHistoryBackfillState,
+        UiRoomReadState, UiRoomState, UiState, UiToolbarButton, VerificationActionArgs,
+        ViewActivityLevel, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
+        parse_command_request, success_response,
     };
 
     fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -8595,7 +8519,7 @@ mod tests {
             highlight: false,
             relation: None,
             reactions: vec![
-                DumpRoomReactionSummary {
+                ReactionSummary {
                     key: "fire".to_owned(),
                     count: 2,
                     senders: vec!["@alice:example".to_owned(), "@bob:example".to_owned()],
@@ -8604,7 +8528,7 @@ mod tests {
                         "$reaction-3:example".to_owned(),
                     ],
                 },
-                DumpRoomReactionSummary {
+                ReactionSummary {
                     key: "+1".to_owned(),
                     count: 1,
                     senders: vec!["@carol:example".to_owned()],
@@ -8661,7 +8585,7 @@ mod tests {
             reaction_dump
         );
         assert!(
-            serde_json::from_value::<DumpRoomReactionSummary>(json!({
+            serde_json::from_value::<ReactionSummary>(json!({
                 "key":"+1",
                 "count":1u64,
                 "senders":["@alice:example"],

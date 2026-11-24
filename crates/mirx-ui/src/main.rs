@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod automation;
+mod shared;
 
 #[cfg(windows)]
 mod dpapi;

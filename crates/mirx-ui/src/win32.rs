@@ -151,22 +151,25 @@ use self::command_acks::AnsweredCommands;
 use self::dpi::Dpi;
 use self::glyph_fonts::GlyphFonts;
 use self::script::ScriptRuns;
+use crate::shared::{
+    ConnectionState, LifecycleState, MdiArrangement, ReactionSummary, ViewActivityLevel,
+};
 use crate::{
     AppCommand, FrameSize, HELP, RunOptions,
     automation::{
         AcceptedResponse, AutomationDialog, COMMAND_ID_DUMP_COMPOSE_TEXT,
         COMMAND_ID_DUMP_ROOM_ACTIVITY, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING,
-        COMMAND_ID_WAIT_IDLE, ComposeKey, ComposeTextResponse, ConnectionState, ContextMenuCommand,
+        COMMAND_ID_WAIT_IDLE, ComposeKey, ComposeTextResponse, ContextMenuCommand,
         DumpE2eeRecoverySetupResult, DumpIdentityWarning, DumpIdentityWarningKind,
         DumpMemberMenuState, DumpMemberModerationAction, DumpMemberPowerRole,
         DumpMembershipCommandAction, DumpMessageMenuState, DumpModel, DumpPowerLevelChange,
         DumpRoomActivity, DumpRoomActivityKind, DumpRoomActivityResponse,
         DumpRoomKeyTransferDirection, DumpRoomMenuState, DumpRoomMessageActivityLine,
-        DumpRoomPreviewMediaState, DumpRoomReactionSummary, DumpSubmittedAwayCommand,
-        DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand, DumpSubmittedFileCommand,
-        DumpSubmittedHistoryCommand, DumpSubmittedIdentityReset,
-        DumpSubmittedMemberModerationCommand, DumpSubmittedMembershipCommand,
-        DumpSubmittedMessageCommand, DumpSubmittedNotificationCommand, DumpSubmittedProfileCommand,
+        DumpRoomPreviewMediaState, DumpSubmittedAwayCommand, DumpSubmittedDirectRoomCommand,
+        DumpSubmittedEditCommand, DumpSubmittedFileCommand, DumpSubmittedHistoryCommand,
+        DumpSubmittedIdentityReset, DumpSubmittedMemberModerationCommand,
+        DumpSubmittedMembershipCommand, DumpSubmittedMessageCommand,
+        DumpSubmittedNotificationCommand, DumpSubmittedProfileCommand,
         DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand,
         DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomKeyTransfer,
         DumpSubmittedRoomListRequest, DumpSubmittedRoomSettingsCommand,
@@ -174,17 +177,16 @@ use crate::{
         DumpSubmittedSetupRecoveryCommand, DumpSubmittedTypingCommand, DumpSubmittedUserCommand,
         DumpSubmittedVerificationAction, DumpSubmittedVerificationRequest, DumpUserCommandAction,
         DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
-        FindActiveViewResponse, GetVersionResponse, IdleProbe, LifecycleState, ListRoomsResponse,
-        LoadEventsResponse, MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState,
-        NavigationNode, NavigationNodeKey, NavigationPathSegment, ParsedCommand, PongResponse,
-        ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
-        SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind,
-        UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiPoint, UiRect,
-        UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState, UiTextFont, UiTimelineLine,
-        UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiToolbarButton, VerificationActionArgs,
-        ViewActivityLevel, ViewIdentity, WaitIdleResponse, dump_error_from_core,
-        dump_room_activity_from_activity, dump_room_from_summary,
+        FindActiveViewResponse, GetVersionResponse, IdleProbe, ListRoomsResponse,
+        LoadEventsResponse, MdiState, MdiView, MdiWindowPlacement, MdiWindowState, NavigationNode,
+        NavigationNodeKey, NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope,
+        RoomMemberView, SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse,
+        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiActiveTimeline,
+        UiComposeTarget, UiComposeTargetKind, UiFindHistorySearchState, UiFindState, UiFrameLayout,
+        UiMenu, UiMenuItem, UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomState,
+        UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
+        UiToolbarButton, VerificationActionArgs, ViewIdentity, WaitIdleResponse,
+        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
         dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
         dump_verification_from_state_event, failure_response, parse_command_request,
         success_response,
@@ -306,7 +308,7 @@ use automation_dump::{
     dump_verification_menu_state,
 };
 #[cfg(test)]
-use automation_dump::{dump_frame_layout, frame_child_rect};
+use automation_dump::{dump_frame_layout, ui_rect};
 use automation_host::{
     AutomationState, destroy_automation_state, enable_automation, handle_copydata,
     send_automation_request,
@@ -379,9 +381,9 @@ use fonts::{
 use frame::window_class_is;
 use frame::{
     apply_color_scheme, apply_nick_colors, create_main_window, default_window_proc,
-    frame_status_text, frame_window_for, init_common_controls, layout_controls, message_loop,
-    redraw_every_window, refresh_status_bar, register_frame_class, set_switchbar_button_width,
-    show_nick_colors,
+    frame_child_rect, frame_status_text, frame_window_for, init_common_controls, layout_controls,
+    message_loop, redraw_every_window, refresh_status_bar, register_frame_class,
+    set_switchbar_button_width, show_nick_colors,
 };
 #[cfg(test)]
 use frame_menus::active_message_action_state;

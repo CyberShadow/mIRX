@@ -996,7 +996,7 @@ impl RoomViewModel {
     pub(super) fn reaction_summaries_for_event(
         &self,
         target_event_id: &str,
-    ) -> Vec<DumpRoomReactionSummary> {
+    ) -> Vec<ReactionSummary> {
         let Some(reactions) = self.reactions_by_target.get(target_event_id) else {
             return Vec::new();
         };
@@ -1018,7 +1018,7 @@ impl RoomViewModel {
 
         grouped
             .into_iter()
-            .map(|(key, entries)| DumpRoomReactionSummary {
+            .map(|(key, entries)| ReactionSummary {
                 key,
                 count: entries.len() as u64,
                 senders: entries.iter().map(|entry| entry.sender.clone()).collect(),

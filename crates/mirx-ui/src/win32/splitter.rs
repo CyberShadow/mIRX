@@ -9,7 +9,6 @@
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, HTCLIENT, IDC_SIZEWE, SetCursor};
 
-use super::automation_dump::frame_child_rect;
 use super::dpi::Dpi;
 use super::settings::TreebarWidth;
 use super::*;
@@ -96,10 +95,10 @@ unsafe fn band(hwnd: HWND) -> Option<Band> {
     let mdi_client =
         frame_child_rect(hwnd, controls.mdi_client).expect("the MDI client is always shown");
     Some(Band {
-        left: tree.x + tree.width,
-        right: mdi_client.x,
-        top: tree.y,
-        bottom: tree.y + tree.height,
+        left: tree.right,
+        right: mdi_client.left,
+        top: tree.top,
+        bottom: tree.bottom,
     })
 }
 
