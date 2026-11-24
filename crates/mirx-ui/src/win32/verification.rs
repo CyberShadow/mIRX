@@ -45,6 +45,17 @@ impl Verification {
         }
     }
 
+    /// Its state and the other side, as the status bar says them:
+    /// `requested by @bob:example (session B0B)`.
+    pub(super) fn summary(&self, own_user_id: Option<&str>) -> String {
+        let label = self.label(own_user_id);
+        match &self.state {
+            VerificationState::Requested => format!("requested by {label}"),
+            VerificationState::Sent => format!("request sent to {label}"),
+            state => format!("{} with {label}", verification_state_label(state)),
+        }
+    }
+
     /// `name (state)`, as the lists of flows under way say it.
     fn listed(&self) -> String {
         format!(
@@ -393,11 +404,7 @@ pub(super) fn e2ee_cross_signing_label(status: Option<&E2eeCrossSigningStatus>) 
 }
 
 fn verification_status_message(verification: &Verification, own_user_id: Option<&str>) -> String {
-    format!(
-        "verification {} with {}",
-        verification_state_label(&verification.state),
-        verification.label(own_user_id)
-    )
+    format!("verification {}", verification.summary(own_user_id))
 }
 
 pub(super) fn format_verification_emojis(emojis: &[VerificationEmoji]) -> String {

@@ -3107,7 +3107,7 @@ mod tests {
         assert_eq!(flows(&state), [("flow-out".to_owned(), "sent")]);
         assert_eq!(
             state.model.status,
-            "verification sent with your other sessions"
+            "verification request sent to your other sessions"
         );
         assert_eq!(
             status_log_lines(&state),

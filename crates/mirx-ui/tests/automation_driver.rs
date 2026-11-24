@@ -6911,7 +6911,7 @@ fn automation_driver_concurrent_verifications_answer_the_latest_or_the_named()
         ui_state
             .status_bar
             .text
-            .contains("verification: requested with @carol:example (session C4R0L) (+1 more)"),
+            .contains("verification: requested by @carol:example (session C4R0L) (+1 more)"),
         "{}",
         ui_state.status_bar.text
     );
@@ -16352,7 +16352,7 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
         ui_state
             .status_bar
             .text
-            .contains("verification: requested with @alice:example (session ALICEDEVICE)")
+            .contains("verification: requested by @alice:example (session ALICEDEVICE)")
     );
     assert!(ui_state.status_bar.text.contains("message send failed"));
     assert_eq!(

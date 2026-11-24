@@ -728,9 +728,7 @@ pub(super) fn frame_status_text(state: &WindowState) -> String {
     // The latest verification, which the Tools items answer.
     if let Some(latest) = model.verifications.latest() {
         text.push_str(" | verification: ");
-        text.push_str(verification_state_label(&latest.state));
-        text.push_str(" with ");
-        text.push_str(&latest.label(model.own_user_id()));
+        text.push_str(&latest.summary(model.own_user_id()));
         let others = model.verifications.len() - 1;
         if others > 0 {
             text.push_str(&format!(" (+{others} more)"));
@@ -954,7 +952,7 @@ mod tests {
         );
         assert_eq!(
             frame_status_text(&state),
-            "verification sent with @alice:example | verification: sent with @alice:example"
+            "verification request sent to @alice:example | verification: request sent to @alice:example"
         );
 
         start(
@@ -969,7 +967,7 @@ mod tests {
         );
         assert_eq!(
             frame_status_text(&state),
-            "verification requested with @bob:example (session B0B) | verification: requested with @bob:example (session B0B) (+1 more)"
+            "verification requested by @bob:example (session B0B) | verification: requested by @bob:example (session B0B) (+1 more)"
         );
     }
 
@@ -1039,7 +1037,7 @@ mod tests {
 
         assert_eq!(
             frame_status_text(&state),
-            "verification requested with @alice:example (session PH0NE) | verification: requested with @alice:example (session PH0NE) | error: send text: message send failed"
+            "verification requested by @alice:example (session PH0NE) | verification: requested by @alice:example (session PH0NE) | error: send text: message send failed"
         );
     }
 
