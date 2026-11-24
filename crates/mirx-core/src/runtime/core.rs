@@ -373,6 +373,7 @@ impl Core {
                         flow,
                         redirect,
                         self.events.clone(),
+                        self.config.save_session.clone(),
                         start_sync,
                     )),
                     owes: Owes::Nothing,
@@ -717,5 +718,8 @@ fn test_config() -> CoreConfig {
     CoreConfig {
         profile_dir: std::env::temp_dir().join("mirx-core-test-unused-profile"),
         store_passphrase: String::new(),
+        save_session: std::sync::Arc::new(|_, _| {
+            unreachable!("a test core of a client signs in nothing")
+        }),
     }
 }

@@ -8,7 +8,9 @@ use matrix_sdk::Client;
 
 use super::session::EnteredSession;
 use super::{E2eeStatusWatch, EventSender, FirstE2eeStatus, RoomSnapshot, RoomSnapshots};
-use crate::api::{CoreConfig, Event, LoginMethod, LoginRequest, Operation, RestoreSessionRequest};
+use crate::api::{
+    CoreConfig, Event, LoginMethod, LoginRequest, Operation, RestoreSessionRequest, SaveSession,
+};
 use crate::loopback::{self, LoopbackListener, LoopbackRedirect};
 use crate::matrix::{
     self, BrowserFlow, ErrorChain, HomeserverSpec, MatrixCoreError, NewVerificationFlows,
@@ -77,7 +79,9 @@ pub(super) async fn log_in(
         );
     }
     let client =
-        match matrix::build_client(&config, HomeserverSpec::Discover(&request.server)).await {
+        match matrix::build_client(&config, &events, HomeserverSpec::Discover(&request.server))
+            .await
+        {
             Ok(client) => client,
             Err(err) => return SignInEnd::Failed(Operation::Login, err.to_string()),
         };
@@ -88,6 +92,7 @@ pub(super) async fn log_in(
         LoginMethod::Password { username, password } => {
             match matrix::login(&client, &username, &password, &request.device_display_name).await {
                 Ok(session) => {
+                    matrix::save_session(&config.save_session, &events, &client);
                     let signed_in = Event::LoggedIn {
                         session,
                         homeserver_url: client.homeserver().to_string(),
@@ -170,6 +175,7 @@ pub(super) async fn finish_browser_login(
     flow: BrowserFlow,
     redirect: LoopbackRedirect,
     events: EventSender,
+    save_session: SaveSession,
     start_sync: bool,
 ) -> SignInEnd {
     let LoopbackRedirect { mut stream, query } = redirect;
@@ -189,6 +195,7 @@ pub(super) async fn finish_browser_login(
     drop(stream);
     match signed_in {
         Ok(session) => {
+            matrix::save_session(&save_session, &events, &client);
             let signed_in = Event::LoggedIn {
                 session,
                 homeserver_url: client.homeserver().to_string(),
@@ -213,11 +220,16 @@ pub(super) async fn restore(
     events: EventSender,
     request: RestoreSessionRequest,
 ) -> SignInEnd {
-    let client =
-        match matrix::build_client(&config, HomeserverSpec::Url(&request.homeserver_url)).await {
-            Ok(client) => client,
-            Err(err) => return SignInEnd::Failed(Operation::RestoreSession, err.to_string()),
-        };
+    let client = match matrix::build_client(
+        &config,
+        &events,
+        HomeserverSpec::Url(&request.homeserver_url),
+    )
+    .await
+    {
+        Ok(client) => client,
+        Err(err) => return SignInEnd::Failed(Operation::RestoreSession, err.to_string()),
+    };
     let handlers = register_event_handlers(&client, &events);
     if let Err(err) = matrix::restore_session(&client, request.session).await {
         return SignInEnd::Failed(Operation::RestoreSession, err.to_string());
@@ -269,7 +281,6 @@ async fn read_session(
     let paused_sends = PausedSendRooms::default();
     let e2ee_status_watch = E2eeStatusWatch::default();
     let mut tasks: Vec<LocalBoxFuture<'static, ()>> = vec![
-        Box::pin(matrix::session_update_task(client.clone(), events.clone())),
         // Before any sync: the requests it hands over wait for it.
         Box::pin(matrix::verification_task(new_flows, events.clone())),
         Box::pin(matrix::send_queue_update_task(

@@ -369,7 +369,6 @@ pub(super) fn submit_restore_session(
         status_log::restoring(&homeserver_url, &user_id),
     );
     state.model.own_account = Some(account);
-    state.current_session_homeserver_url = Some(homeserver_url);
     state.model.connection = ConnectionState::SigningIn;
     state.model.status = "restoring saved session".to_owned();
     state.model.lifecycle_state = LifecycleState::Restoring;
@@ -1034,10 +1033,6 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(
-            state.current_session_homeserver_url,
-            Some("https://matrix.example".to_owned())
-        );
         assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
         assert_eq!(state.model.connection, ConnectionState::SigningIn);
         assert_eq!(state.model.own_user_id(), Some("@alice:example"));

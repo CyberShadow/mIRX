@@ -414,9 +414,10 @@ pub(super) fn apply_core_event(
                 state.model.lifecycle_state = LifecycleState::CoreStarted;
             }
         }
+        // The core saved the session (`CoreConfig.save_session`).
         Event::LoggedIn {
             session,
-            homeserver_url,
+            homeserver_url: _,
         } => {
             if let Some(own_user_id) = state.model.own_user_id()
                 && own_user_id != session.user_id
@@ -425,11 +426,6 @@ pub(super) fn apply_core_event(
                     "received LoggedIn for {} while signed in as {own_user_id}",
                     session.user_id
                 ));
-            }
-            // A replayed event load must not overwrite the saved session.
-            if !state.harness.synthetic_load() {
-                save_session(&homeserver_url, &session)?;
-                state.current_session_homeserver_url = Some(homeserver_url);
             }
             log_status(
                 state,
@@ -465,13 +461,6 @@ pub(super) fn apply_core_event(
             );
             state.model.status = "sign-in cancelled".to_owned();
             state.model.lifecycle_state = LifecycleState::LoggedOut;
-        }
-        Event::SessionUpdated { session } => {
-            let homeserver_url = state
-                .current_session_homeserver_url
-                .as_ref()
-                .expect("session updates require an active homeserver URL");
-            save_session(homeserver_url, &session)?;
         }
         Event::RestoredSession => {
             log_status(
@@ -769,7 +758,6 @@ pub(super) fn apply_core_event(
             // A warning not shown yet was about this session.
             state.log_out_warning = None;
             delete_saved_session()?;
-            state.current_session_homeserver_url = None;
             state.model.own_account = None;
             state.room_count_due = false;
             state.model.status = "logged out".to_owned();
@@ -1332,7 +1320,6 @@ pub(super) mod automation {
     ) -> Result<(usize, usize), String> {
         {
             let state = state_mut(hwnd);
-            state.current_session_homeserver_url = None;
             state.room_activity.clear();
             state.closed_queries.clear();
             state.quiet_joins.clear();
@@ -1392,7 +1379,6 @@ pub(super) mod automation {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use std::time::Duration;
 
     use mirx_core::{PresenceChange, PresenceKind};
@@ -5894,7 +5880,7 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_events_update_model_and_persist_login_session() {
+    fn lifecycle_events_update_model_and_log_out_deletes_the_saved_session() {
         with_local_app_data(|root| {
             let mut state = test_state();
 
@@ -5911,19 +5897,10 @@ mod tests {
             .unwrap();
             assert_eq!(state.model.lifecycle_state, LifecycleState::Authenticated);
             assert_eq!(state.model.own_user_id(), Some("@alice:example"));
-            assert_eq!(
-                state.current_session_homeserver_url,
-                Some("https://matrix.example".to_owned())
-            );
-
+            // The core saves the session it signed in (`CoreConfig.save_session`).
             let session_path = session_file_path(&root);
-            let session_bytes = fs::read(&session_path).expect("saved session file must exist");
-            assert_eq!(load_saved_session().unwrap(), saved_session_payload());
-            assert_bytes_do_not_contain(&session_bytes, "secret-token");
-            assert_bytes_do_not_contain(&session_bytes, "refresh-token");
-            assert_bytes_do_not_contain(&session_bytes, "@alice:example");
-            assert_bytes_do_not_contain(&session_bytes, "DEVICE");
-            assert_bytes_do_not_contain(&session_bytes, "\"access_token\"");
+            assert!(!session_path.exists());
+            save_session("https://matrix.example", &stored_session()).unwrap();
 
             apply_core_event(&mut state, Event::SyncStarted).unwrap();
             assert_eq!(state.model.lifecycle_state, LifecycleState::Syncing);
@@ -5960,7 +5937,6 @@ mod tests {
             apply_core_event(&mut state, Event::LoggedOut(LogoutScope::Everywhere)).unwrap();
             assert_eq!(state.model.lifecycle_state, LifecycleState::LoggedOut);
             assert_eq!(state.model.own_account, None);
-            assert_eq!(state.current_session_homeserver_url, None);
             assert!(!session_path.exists());
 
             apply_core_event(&mut state, Event::Stopped).unwrap();
@@ -6234,72 +6210,6 @@ mod tests {
             Err("received LoggedIn for @alice:example while signed in as @me:example".to_owned())
         );
         assert_eq!(state.model.own_user_id(), Some("@me:example"));
-    }
-
-    #[test]
-    fn synthetic_logged_in_event_updates_model_without_persisting_session() {
-        with_local_app_data(|root| {
-            let mut state = test_state();
-            state.harness.synthetic_load = true;
-
-            apply_core_event(
-                &mut state,
-                Event::LoggedIn {
-                    session: stored_session(),
-                    homeserver_url: "https://matrix.example".to_owned(),
-                },
-            )
-            .unwrap();
-
-            assert_eq!(state.model.status, "authenticated");
-            assert_eq!(state.model.lifecycle_state, LifecycleState::Authenticated);
-            assert_eq!(state.current_session_homeserver_url, None);
-            assert!(!root.join(PROFILE_SUBDIR).join(SESSION_FILE_NAME).exists());
-        });
-    }
-
-    #[test]
-    fn session_updated_event_persists_refreshed_tokens_without_leaking_them() {
-        with_local_app_data(|root| {
-            save_session("https://matrix.example", &stored_session()).unwrap();
-            let mut state = test_state();
-            state.current_session_homeserver_url = Some("https://matrix.example".to_owned());
-
-            let updated_session = StoredSession {
-                access_token: "updated-access-token".to_owned(),
-                refresh_token: Some("updated-refresh-token".to_owned()),
-                ..stored_session()
-            };
-
-            apply_core_event(
-                &mut state,
-                Event::SessionUpdated {
-                    session: updated_session.clone(),
-                },
-            )
-            .unwrap();
-
-            assert_eq!(
-                load_saved_session().unwrap(),
-                SavedSession {
-                    session: updated_session.clone(),
-                    ..saved_session_payload()
-                }
-            );
-            let session_bytes = fs::read(session_file_path(&root)).unwrap();
-            assert_bytes_do_not_contain(&session_bytes, "updated-access-token");
-            assert_bytes_do_not_contain(&session_bytes, "updated-refresh-token");
-            assert!(
-                !serde_json::to_string(&dump_model_from_state(&state))
-                    .unwrap()
-                    .contains("updated-access-token")
-            );
-            assert!(
-                !serde_json::to_string(&state.model.status)
-                    .unwrap()
-                    .contains("updated-access-token")
-            );
-        });
     }
 
     #[test]

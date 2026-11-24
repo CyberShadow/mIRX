@@ -321,7 +321,7 @@ use account::{
     submit_setup_e2ee_recovery, submit_start_sync,
 };
 #[cfg(test)]
-use account::{SAVED_SESSION_VERSION, SESSION_FILE_NAME, SavedSession, load_saved_session};
+use account::{SAVED_SESSION_VERSION, SESSION_FILE_NAME, SavedSession};
 use address_book::AddressBookTab;
 use aliases::{ALIASES_FILE_NAME, AliasStore};
 use attachments::{
@@ -890,7 +890,6 @@ struct WindowState {
     core_answers: AnsweredCommands,
     /// The alias calls, `//lines` and perform runs waiting for the core.
     script_runs: ScriptRuns,
-    current_session_homeserver_url: Option<String>,
     tree_items: BTreeMap<isize, TreeItem>,
     primary_tree_items: BTreeMap<ViewId, isize>,
     views: BTreeMap<ViewId, MdiViewState>,
@@ -1166,7 +1165,6 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         event_generation: 0,
         core_answers: AnsweredCommands::default(),
         script_runs: ScriptRuns::default(),
-        current_session_homeserver_url: None,
         tree_items: BTreeMap::new(),
         primary_tree_items: BTreeMap::new(),
         views: BTreeMap::new(),
@@ -1318,6 +1316,7 @@ fn start_core_bridge(hwnd: HWND, queue: Arc<Mutex<VecDeque<Event>>>) -> Result<C
     let handle = start(CoreConfig {
         profile_dir,
         store_passphrase,
+        save_session: Arc::new(save_session),
     })
     .map_err(|err| format!("failed to start mirx-core: {err}"))?;
 

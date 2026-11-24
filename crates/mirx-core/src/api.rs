@@ -1,14 +1,25 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::{fmt, fmt::Formatter};
 
 pub const ROOM_HISTORY_BACKFILL_LIMIT_MAX: u32 = 50;
 pub const ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT: u32 = 50;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct CoreConfig {
     pub profile_dir: PathBuf,
     pub store_passphrase: String,
+    pub save_session: SaveSession,
 }
+
+/// Keeps the signed-in session, with the homeserver URL it was signed in
+/// on, for the next start's `RestoreSessionRequest`; an `Err` says why it
+/// could not. The core calls it on its own thread whenever that session
+/// changes: when a sign-in made it, and when the server rotated its tokens,
+/// before the new ones are used. A refresh token is single-use, so a
+/// rotation the next start does not know of ends the session. A failure
+/// is an `Operation::SessionUpdate` error.
+pub type SaveSession = Arc<dyn Fn(&str, &StoredSession) -> Result<(), String> + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -2480,12 +2491,10 @@ pub enum Event {
     LoginCancelled,
     /// `homeserver_url` is the client URL discovered from
     /// `LoginRequest.server`, which a later `RestoreSessionRequest` uses.
+    /// The core has saved both (`CoreConfig.save_session`).
     LoggedIn {
         session: StoredSession,
         homeserver_url: String,
-    },
-    SessionUpdated {
-        session: StoredSession,
     },
     RestoredSession,
     SyncStarted,

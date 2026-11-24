@@ -967,7 +967,6 @@ pub(super) fn test_state() -> WindowState {
         event_generation: 0,
         core_answers: AnsweredCommands::default(),
         script_runs: ScriptRuns::default(),
-        current_session_homeserver_url: None,
         tree_items: BTreeMap::new(),
         primary_tree_items: BTreeMap::new(),
         views: BTreeMap::new(),
@@ -1182,6 +1181,7 @@ pub(super) fn start_test_core() -> CoreHandle {
     start(CoreConfig {
         profile_dir,
         store_passphrase: "mirx-ui-win32-tests".to_owned(),
+        save_session: Arc::new(save_session),
     })
     .expect("test core must start")
 }

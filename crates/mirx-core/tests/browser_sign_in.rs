@@ -5,6 +5,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use matrix_sdk::test_utils::mocks::MatrixMockServer;
@@ -25,6 +26,8 @@ struct Harness {
     runtime: tokio::runtime::Runtime,
     server: MatrixMockServer,
     core: CoreHandle,
+    /// What the core saved, with the homeserver URL, in order.
+    saved: Arc<Mutex<Vec<(String, StoredSession)>>>,
     _profile: TempDir,
 }
 
@@ -40,9 +43,20 @@ impl Harness {
             server
         });
         let profile = TempDir::new().expect("temporary profile directory");
+        let saved = Arc::new(Mutex::new(Vec::new()));
         let core = start(CoreConfig {
             profile_dir: profile.path().join("profile"),
             store_passphrase: "test-store-passphrase".to_owned(),
+            save_session: Arc::new({
+                let saved = Arc::clone(&saved);
+                move |homeserver_url, session| {
+                    saved
+                        .lock()
+                        .unwrap()
+                        .push((homeserver_url.to_owned(), session.clone()));
+                    Ok(())
+                }
+            }),
         })
         .expect("start core");
         assert_eq!(next_event(core.events()), Event::Started);
@@ -50,6 +64,7 @@ impl Harness {
             runtime,
             server,
             core,
+            saved,
             _profile: profile,
         }
     }
@@ -258,18 +273,15 @@ fn a_restored_oauth_session_saves_its_refreshed_tokens() {
 
     restore(&harness, oauth_session("AT1", "RT1"));
 
-    // The refresh happened during the restore's sync; the session's update
-    // task reports it once the session has started, so it supersedes the
-    // tokens the UI saved before.
+    // The refresh happened during the restore's sync, which needs the
+    // new tokens: they were saved first.
     harness.wait_for("RestoredSession", |event| *event == Event::RestoredSession);
     assert_eq!(
-        harness.wait_for("SessionUpdated", |event| matches!(
-            event,
-            Event::SessionUpdated { .. }
-        )),
-        Event::SessionUpdated {
-            session: oauth_session("AT2", "RT2"),
-        }
+        *harness.saved.lock().unwrap(),
+        [(
+            format!("{}/", harness.server.uri()),
+            oauth_session("AT2", "RT2")
+        )]
     );
     harness.shut_down();
 }
@@ -403,6 +415,8 @@ fn oauth_sign_in_registers_mirx_and_signs_in_through_the_redirect() {
             },
         }
     );
+    // Saved before the session's first request.
+    assert_eq!(*harness.saved.lock().unwrap(), [(homeserver_url, session)]);
     harness.wait_for("SyncedRooms", |event| {
         matches!(event, Event::SyncedRooms(_))
     });
@@ -502,8 +516,10 @@ fn without_oauth_the_browser_signs_in_through_legacy_sso() {
         "{page}"
     );
 
-    let Event::LoggedIn { session, .. } =
-        harness.wait_for("LoggedIn", |event| matches!(event, Event::LoggedIn { .. }))
+    let Event::LoggedIn {
+        session,
+        homeserver_url,
+    } = harness.wait_for("LoggedIn", |event| matches!(event, Event::LoggedIn { .. }))
     else {
         unreachable!()
     };
@@ -517,6 +533,7 @@ fn without_oauth_the_browser_signs_in_through_legacy_sso() {
             auth: SessionAuth::Matrix,
         }
     );
+    assert_eq!(*harness.saved.lock().unwrap(), [(homeserver_url, session)]);
     harness.shut_down();
 }
 

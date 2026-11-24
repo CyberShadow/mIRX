@@ -41,6 +41,11 @@ struct Ledger {
     refreshes: usize,
     /// The access tokens expire as the next `/sync` arrives.
     expire_at_next_sync: bool,
+    /// What mirx saved, in order: its saved session is the last.
+    saved: Vec<StoredSession>,
+    /// Each access token as the server first saw it used, and whether
+    /// mirx had saved it then.
+    first_uses: Vec<(String, bool)>,
 }
 
 impl Ledger {
@@ -64,7 +69,14 @@ impl Ledger {
             generation.access_token == access_token && !generation.deleted && !generation.expired
         }) {
             Some(generation) => {
-                generation.used = true;
+                if !generation.used {
+                    generation.used = true;
+                    let saved = self
+                        .saved
+                        .last()
+                        .is_some_and(|saved| saved.access_token == access_token);
+                    self.first_uses.push((access_token.to_owned(), saved));
+                }
                 true
             }
             None => false,
@@ -279,22 +291,32 @@ impl Drop for Synapse {
 
 struct Mirx {
     core: CoreHandle,
-    _profile: TempDir,
+    profile: TempDir,
 }
 
 impl Mirx {
     /// A core on a new profile, restored into `session` and syncing.
     fn restored(server: &Synapse, session: StoredSession) -> Self {
-        let profile = TempDir::new().expect("temporary profile directory");
+        Self::restored_on(
+            server,
+            TempDir::new().expect("temporary profile directory"),
+            session,
+        )
+    }
+
+    /// The same on `profile`; the core saves into the server's ledger.
+    fn restored_on(server: &Synapse, profile: TempDir, session: StoredSession) -> Self {
+        let ledger = server.ledger.clone();
         let core = start(CoreConfig {
             profile_dir: profile.path().join("profile"),
             store_passphrase: "test-store-passphrase".to_owned(),
+            save_session: Arc::new(move |_, session| {
+                ledger.0.lock().unwrap().saved.push(session.clone());
+                Ok(())
+            }),
         })
         .expect("start core");
-        let mirx = Self {
-            core,
-            _profile: profile,
-        };
+        let mirx = Self { core, profile };
         mirx.wait_for("Started", |event| *event == Event::Started);
         let _ = mirx.send(Command::RestoreSession(RestoreSessionRequest {
             homeserver_url: server.server.uri(),
@@ -335,10 +357,11 @@ impl Mirx {
             .expect("the matching event")
     }
 
-    fn shut_down(self) {
+    fn shut_down(self) -> TempDir {
         self.send(Command::Shutdown);
         self.wait_for("Stopped", |event| *event == Event::Stopped);
         self.core.join().expect("join core");
+        self.profile
     }
 }
 
@@ -367,7 +390,7 @@ fn a_used_refresh_token_ends_the_session() {
                 .to_owned()
         ))
     );
-    mirx.shut_down();
+    let _ = mirx.shut_down();
 }
 
 /// Two requests with the access token that expired: the first one's 401
@@ -401,5 +424,48 @@ fn concurrent_rejections_of_one_token_refresh_it_once() {
 
     let refreshes = server.ledger().refreshes;
     assert_eq!(refreshes, 1);
-    mirx.shut_down();
+    let _ = mirx.shut_down();
+}
+
+/// Waits until `done` holds of the ledger.
+fn wait_for_ledger(server: &Synapse, what: &str, done: impl Fn(&Ledger) -> bool) {
+    let deadline = Instant::now() + EVENT_TIMEOUT;
+    while !done(&server.ledger()) {
+        assert!(Instant::now() < deadline, "never {what}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The access token expires; the next request refreshes it and goes again
+/// with the new one, which ends the saved refresh token: mirx has saved
+/// the new tokens before the server sees the new access token, and a
+/// restart restores them. Before, the save was an event the UI applied
+/// later, if at all: the next start of a run whose save was lost (at
+/// exit, by a lagged notification) was refused.
+#[test]
+fn a_refresh_is_saved_before_its_access_token_is_used() {
+    let server = Synapse::new(Duration::ZERO);
+    let mirx = Mirx::restored(&server, server.session(0));
+    mirx.wait_for("SyncConnected", |event| *event == Event::SyncConnected);
+
+    server.ledger().expire_at_next_sync = true;
+    wait_for_ledger(&server, "a use of the refreshed token", |ledger| {
+        ledger.first_uses.iter().any(|(token, _)| token == "AT1")
+    });
+    let (first_uses, saved) = {
+        let ledger = server.ledger();
+        (ledger.first_uses.clone(), ledger.saved.clone())
+    };
+    assert_eq!(
+        first_uses,
+        [("AT0".to_owned(), false), ("AT1".to_owned(), true)]
+    );
+    assert_eq!(saved, [server.session(1)]);
+
+    let profile = mirx.shut_down();
+    let restarted = Mirx::restored_on(&server, profile, server.session(1));
+    restarted.wait_for("SyncConnected", |event| *event == Event::SyncConnected);
+    let refreshes = server.ledger().refreshes;
+    assert_eq!(refreshes, 1);
+    let _ = restarted.shut_down();
 }

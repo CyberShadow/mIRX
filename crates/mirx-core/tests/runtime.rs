@@ -54,6 +54,7 @@ fn test_config() -> (TempDir, CoreConfig) {
     let config = CoreConfig {
         profile_dir: temp_dir.path().join("profile"),
         store_passphrase: "test-store-passphrase".to_owned(),
+        save_session: std::sync::Arc::new(|_, _| Ok(())),
     };
 
     (temp_dir, config)
@@ -1107,6 +1108,7 @@ fn login_store_initialization_failure_emits_typed_error_event() {
     let config = CoreConfig {
         profile_dir: profile_file,
         store_passphrase: "test-store-passphrase".to_owned(),
+        save_session: std::sync::Arc::new(|_, _| Ok(())),
     };
     let handle = start(config).expect("start core");
 
@@ -1813,29 +1815,6 @@ fn logged_in_event_serializes_and_deserializes_session_payload() {
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize logged-in event");
-    assert_eq!(restored, event);
-}
-
-#[test]
-fn session_updated_event_serializes_and_deserializes_session_payload() {
-    let session = StoredSession {
-        user_id: "@user:example.org".to_owned(),
-        device_id: "DEVICE".to_owned(),
-        access_token: "updated-access-token".to_owned(),
-        refresh_token: Some("updated-refresh-token".to_owned()),
-        auth: SessionAuth::Matrix,
-    };
-    let event = Event::SessionUpdated {
-        session: session.clone(),
-    };
-
-    let json = serde_json::to_string(&event).expect("serialize session-updated event");
-    assert_eq!(
-        json,
-        r#"{"SessionUpdated":{"session":{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"updated-access-token","refresh_token":"updated-refresh-token","auth":"Matrix"}}}"#
-    );
-
-    let restored: Event = serde_json::from_str(&json).expect("deserialize session-updated event");
     assert_eq!(restored, event);
 }
 

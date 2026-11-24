@@ -403,6 +403,8 @@ fn start_core(profile: &TempDir) -> CoreHandle {
     start(CoreConfig {
         profile_dir: profile.path().join("profile"),
         store_passphrase: "test-store-passphrase".to_owned(),
+        // The harness restores the session it was made with.
+        save_session: std::sync::Arc::new(|_, _| Ok(())),
     })
     .expect("start core")
 }

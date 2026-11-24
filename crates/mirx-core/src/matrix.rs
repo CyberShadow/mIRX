@@ -13,8 +13,7 @@ use std::pin::Pin;
 
 use futures_util::{Stream, StreamExt};
 use matrix_sdk::{
-    Client, HttpError, RefreshTokenError, Room, RoomMemberships, SessionChange, SessionMeta,
-    SessionTokens,
+    Client, HttpError, RefreshTokenError, Room, RoomMemberships, SessionMeta, SessionTokens,
     attachment::{
         AttachmentConfig, AttachmentInfo, BaseAudioInfo, BaseFileInfo, BaseImageInfo, BaseVideoInfo,
     },
@@ -166,7 +165,9 @@ use crate::api::{
     UserPresence, UserProfile, VerificationDecimals, VerificationDirection, VerificationEmoji,
     VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
 };
-use crate::api::{PresenceChange, PresenceKind, UserLinkSpan, validate_highlight_word};
+use crate::api::{
+    PresenceChange, PresenceKind, SaveSession, UserLinkSpan, validate_highlight_word,
+};
 use crate::mentions::body_mentions;
 use crate::rich_text::{
     StyledText, html_from_markdown, html_from_plain_text, styled_text_from_html,
@@ -311,8 +312,11 @@ pub(crate) fn request_config() -> RequestConfig {
     RequestConfig::new().max_retry_time(SERVER_ERROR_RETRY_TIME)
 }
 
+/// Builds the client of a session that `config.save_session` keeps, which
+/// the SDK calls as a refresh rotates the tokens (`save_session`).
 pub(crate) async fn build_client(
     config: &CoreConfig,
+    events: &EventSender,
     homeserver: HomeserverSpec<'_>,
 ) -> Result<Client, MatrixCoreError> {
     let store_path = store_path(config);
@@ -327,7 +331,7 @@ pub(crate) async fn build_client(
         HomeserverSpec::Discover(server) => Client::builder().server_name_or_homeserver_url(server),
         HomeserverSpec::Url(url) => Client::builder().homeserver_url(url),
     };
-    builder
+    let client = builder
         .sqlite_store(&store_path, Some(config.store_passphrase.as_str()))
         .with_encryption_settings(encryption_settings())
         .request_config(request_config())
@@ -339,7 +343,39 @@ pub(crate) async fn build_client(
                 "failed to build Matrix client: {}",
                 ErrorChain(&err)
             ))
-        })
+        })?;
+    let (save, events) = (config.save_session.clone(), events.clone());
+    client
+        .set_session_callbacks(
+            Box::new(|_| {
+                unreachable!("only the OAuth 2.0 cross-process refresh lock reloads a session")
+            }),
+            // Inside the refresh, under its lock, before the request that
+            // was refused is sent again with the new access token.
+            Box::new(move |client| {
+                save_session(&save, &events, &client);
+                Ok(())
+            }),
+        )
+        .expect("a new client has no session callbacks");
+    Ok(client)
+}
+
+/// Saves the signed-in `client`'s session through `save`; a failure is a
+/// `SessionUpdate` error. Called whenever the session changes, before
+/// its new tokens are used: a refresh token works once.
+pub(crate) fn save_session(save: &SaveSession, events: &EventSender, client: &Client) {
+    let homeserver_url = client.homeserver().to_string();
+    if let Err(err) = save(&homeserver_url, &stored_session(client)) {
+        emit_event(
+            events,
+            Event::Error(CoreErrorEvent {
+                operation: Operation::SessionUpdate,
+                room_id: None,
+                message: format!("failed to save the session: {err}"),
+            }),
+        );
+    }
 }
 
 pub(crate) fn encryption_settings() -> EncryptionSettings {
@@ -5221,33 +5257,6 @@ pub(crate) fn room_list_update_task(
             }
             if relist {
                 emit_room_snapshot_or_room_list_error(&client, &snapshots, &events).await;
-            }
-        }
-    }
-}
-
-pub(crate) fn session_update_task(client: Client, events: EventSender) -> impl Future<Output = ()> {
-    let mut session_changes = client.subscribe_to_session_changes();
-
-    async move {
-        loop {
-            match session_changes.recv().await {
-                Ok(SessionChange::TokensRefreshed) => emit_event(
-                    &events,
-                    Event::SessionUpdated {
-                        session: stored_session(&client),
-                    },
-                ),
-                Ok(SessionChange::UnknownToken { .. }) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => emit_event(
-                    &events,
-                    Event::Error(CoreErrorEvent {
-                        operation: Operation::SessionUpdate,
-                        room_id: None,
-                        message: "missed Matrix session change notification".to_owned(),
-                    }),
-                ),
             }
         }
     }

@@ -1,6 +1,7 @@
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::sync::Arc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -75,6 +76,7 @@ fn live_start_core() -> (TempDir, CoreHandle) {
     let handle = start(CoreConfig {
         profile_dir: temp_dir.path().join("profile"),
         store_passphrase: "live-test-store-passphrase".to_owned(),
+        save_session: Arc::new(|_, _| Ok(())),
     })
     .expect("start core");
 
@@ -122,9 +124,6 @@ fn wait_for_live_login_and_synced_rooms(handle: &CoreHandle) {
                 assert_non_empty_session(&session, "session");
                 saw_logged_in = true;
             }
-            Event::SessionUpdated { session } => {
-                assert_non_empty_session(&session, "session update");
-            }
             Event::SyncedRooms(_) => saw_rooms = true,
             Event::CommandHandled(_)
             | Event::RoomActivity(_)
@@ -160,9 +159,6 @@ fn wait_for_live_logged_out(handle: &CoreHandle, context: &str) {
                 saw_logged_out = true;
                 break;
             }
-            Event::SessionUpdated { session } => {
-                assert_non_empty_session(&session, "session update");
-            }
             Event::CommandHandled(_)
             | Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
@@ -194,9 +190,6 @@ fn wait_for_live_synced_rooms(handle: &CoreHandle, context: &str) -> Vec<RoomSum
             .expect("synced rooms event")
         {
             Event::SyncedRooms(rooms) => return rooms,
-            Event::SessionUpdated { session } => {
-                assert_non_empty_session(&session, "session update");
-            }
             Event::CommandHandled(_)
             | Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
@@ -239,9 +232,6 @@ fn wait_for_live_room_topic(handle: &CoreHandle, room_id: &str, expected_topic: 
                 return;
             }
             Event::SyncedRooms(_) => {}
-            Event::SessionUpdated { session } => {
-                assert_non_empty_session(&session, "session update");
-            }
             Event::CommandHandled(_)
             | Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
@@ -279,9 +269,6 @@ fn live_shutdown_and_join(handle: CoreHandle) {
             Event::Stopped => {
                 handle.join().expect("join worker");
                 return;
-            }
-            Event::SessionUpdated { session } => {
-                assert_non_empty_session(&session, "session update");
             }
             Event::CommandHandled(_)
             | Event::RoomActivity(_)
@@ -480,9 +467,6 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                 saw_sync_started = true;
                 break;
             }
-            Event::SessionUpdated { session } => {
-                assert_non_empty_session(&session, "session update");
-            }
             Event::CommandHandled(_)
             | Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
@@ -518,9 +502,6 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                 assert_eq!(err.message, "continuous sync is already running");
                 saw_duplicate_sync_error = true;
                 break;
-            }
-            Event::SessionUpdated { session } => {
-                assert_non_empty_session(&session, "session update");
             }
             Event::CommandHandled(_)
             | Event::RoomActivity(_)

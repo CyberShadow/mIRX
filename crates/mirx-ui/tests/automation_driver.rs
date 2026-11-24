@@ -368,6 +368,152 @@ struct MockFaults {
     /// The requests held unanswered, their connections open, while the
     /// mock goes on answering the others.
     held: Mutex<Vec<std::net::TcpStream>>,
+    /// Synapse's access and refresh tokens, once set: the mock refuses
+    /// every token they do not accept, and serves `/refresh`.
+    tokens: Mutex<Option<MockTokens>>,
+}
+
+/// One refresh's tokens, and what happened to them since.
+struct MockTokenGeneration {
+    access_token: String,
+    refresh_token: String,
+    /// The generation its refresh made, if it was refreshed.
+    next: Option<usize>,
+    /// Whether a request used the access token.
+    used: bool,
+    /// The access token's lifetime is over.
+    expired: bool,
+    /// Gone from the server: a predecessor of the last two.
+    deleted: bool,
+}
+
+/// The tokens' history as Synapse keeps it (synapse/handlers/auth.py
+/// `refresh_token`, storage/databases/main/registration.py
+/// `lookup_refresh_token` and `replace_refresh_token`): refreshing a
+/// refresh token gives the next generation, and the old one is refused
+/// (403 `M_FORBIDDEN`) once the new access token was used; an access token
+/// lives minutes (401 `M_UNKNOWN_TOKEN`, soft logout, when expired). The
+/// first generation is the saved session's (`stored_session`).
+struct MockTokens {
+    generations: Vec<MockTokenGeneration>,
+    /// The `/refresh` requests answered so far.
+    refreshes: usize,
+    /// The `/sync` requests let through so far.
+    accepted_syncs: usize,
+    /// The access tokens expire as the next `read_markers` arrives.
+    expire_at_read_marker: bool,
+}
+
+impl MockTokens {
+    fn synapse() -> Self {
+        let mut tokens = Self {
+            generations: Vec::new(),
+            refreshes: 0,
+            accepted_syncs: 0,
+            expire_at_read_marker: false,
+        };
+        tokens.issue("secret-token".to_owned(), "refresh-token".to_owned());
+        tokens
+    }
+
+    fn issue(&mut self, access_token: String, refresh_token: String) -> usize {
+        self.generations.push(MockTokenGeneration {
+            access_token,
+            refresh_token,
+            next: None,
+            used: false,
+            expired: false,
+            deleted: false,
+        });
+        self.generations.len() - 1
+    }
+
+    /// Whether a request to `path` with `access_token` is let through; one
+    /// that is marks the token used.
+    fn accepts(&mut self, path: &str, access_token: &str) -> bool {
+        if self.expire_at_read_marker && path.ends_with("/read_markers") {
+            self.expire_at_read_marker = false;
+            self.expire();
+        }
+        let Some(generation) = self.generations.iter_mut().find(|generation| {
+            generation.access_token == access_token && !generation.deleted && !generation.expired
+        }) else {
+            return false;
+        };
+        generation.used = true;
+        if path.contains("/sync") {
+            self.accepted_syncs += 1;
+        }
+        true
+    }
+
+    /// Every access token there is has lived its minutes.
+    fn expire(&mut self) {
+        for generation in &mut self.generations {
+            generation.expired = true;
+        }
+    }
+
+    /// The answer to `/refresh` with `refresh_token`.
+    fn refresh(&mut self, refresh_token: &str) -> (u16, serde_json::Value) {
+        self.refreshes += 1;
+        let Some(index) = self.generations.iter().position(|generation| {
+            generation.refresh_token == refresh_token && !generation.deleted
+        }) else {
+            return (
+                401,
+                serde_json::json!({
+                    "errcode": "M_UNKNOWN_TOKEN",
+                    "error": "refresh token does not exist"
+                }),
+            );
+        };
+        if let Some(next) = self.generations[index].next {
+            let next = &mut self.generations[next];
+            if next.used || next.next.is_some() {
+                return (
+                    403,
+                    serde_json::json!({
+                        "errcode": "M_FORBIDDEN",
+                        "error": "refresh token isn't valid anymore"
+                    }),
+                );
+            }
+            // The refresh was interrupted: its tokens are replaced.
+            next.deleted = true;
+        }
+        let count = self.generations.len();
+        let new = self.issue(format!("access-{count}"), format!("refresh-{count}"));
+        self.generations[index].next = Some(new);
+        for generation in &mut self.generations {
+            if generation.next == Some(index) {
+                generation.deleted = true;
+            }
+        }
+        let generation = &self.generations[new];
+        (
+            200,
+            serde_json::json!({
+                "access_token": generation.access_token,
+                "refresh_token": generation.refresh_token,
+                "expires_in_ms": 300_000
+            }),
+        )
+    }
+}
+
+/// A request's bearer token.
+fn request_access_token(request: &str) -> Option<&str> {
+    request.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("authorization")
+            .then(|| value.trim().strip_prefix("Bearer "))?
+    })
+}
+
+/// A request's body, after its headers.
+fn request_body(request: &str) -> &str {
+    request.split_once("\r\n\r\n").map_or("", |(_, body)| body)
 }
 
 impl MockBackfillHomeserver {
@@ -727,6 +873,34 @@ fn spawn_mock_homeserver_with_auth(
                 request_line.split_whitespace().next().unwrap_or_default(),
                 path.split_once('?').map_or(path, |(path, _)| path)
             ));
+
+            if let Some(tokens) = mock_faults.tokens.lock().expect("the tokens").as_mut() {
+                // The versions the mock serves pick the unstable path.
+                if path == "/_matrix/client/unstable/org.matrix.msc2918/refresh" {
+                    let body: serde_json::Value = serde_json::from_str(request_body(&request))
+                        .expect("a refresh request's JSON body");
+                    let (status, answer) = tokens.refresh(
+                        body["refresh_token"]
+                            .as_str()
+                            .expect("a refresh request names its refresh token"),
+                    );
+                    respond_json(&mut stream, status, &answer);
+                    continue;
+                }
+                if request_access_token(&request).is_some_and(|token| !tokens.accepts(path, token))
+                {
+                    respond_json(
+                        &mut stream,
+                        401,
+                        &serde_json::json!({
+                            "errcode": "M_UNKNOWN_TOKEN",
+                            "error": "Access token has expired",
+                            "soft_logout": true
+                        }),
+                    );
+                    continue;
+                }
+            }
 
             // The request was read: closing now is a connection the
             // network dropped, not a reset of unread bytes.
@@ -4553,10 +4727,19 @@ fn automation_driver_leaving_a_room_moves_the_read_marker() -> Result<(), Box<dy
 /// receipt; the marker is on screen there.
 fn launch_in_beta_with_its_marker_seen()
 -> Result<(GuiTestApp, MockBackfillHomeserver, PathBuf), Box<dyn std::error::Error>> {
+    launch_in_beta_with_its_marker_seen_on(spawn_mock_homeserver_with_read_marker(
+        bob_lines(4),
+        "$bob-2",
+    )?)
+}
+
+/// The same, on `server`.
+fn launch_in_beta_with_its_marker_seen_on(
+    server: MockBackfillHomeserver,
+) -> Result<(GuiTestApp, MockBackfillHomeserver, PathBuf), Box<dyn std::error::Error>> {
     let local_app_data = unique_local_app_data_path();
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
-    let server = spawn_mock_homeserver_with_read_marker(bob_lines(4), "$bob-2")?;
     write_saved_session(&local_app_data, &server.base_url)?;
     let app = launch_app_with_options(
         &exe_path,
@@ -4591,6 +4774,142 @@ fn automation_driver_exiting_moves_the_active_windows_read_marker()
         ]
     );
 
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Synapse's access tokens live minutes, and each refresh token works once:
+/// exiting with the access token expired, the exit's read marker refreshes
+/// it and goes again with the new token, which ends the saved refresh
+/// token. mirx saves the new tokens before it uses them, so the next start
+/// restores them. Before, the save was an event the exiting frame never
+/// applied: the next start's refresh was refused (403 `M_FORBIDDEN`
+/// "refresh token isn't valid anymore") and mirx retried forever.
+#[test]
+fn automation_driver_a_refresh_while_exiting_is_saved_for_the_next_start()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = spawn_mock_homeserver_with_read_marker(bob_lines(4), "$bob-2")?;
+    *server.faults.tokens.lock().unwrap() = Some(MockTokens::synapse());
+    let (app, server, local_app_data) = launch_in_beta_with_its_marker_seen_on(server)?;
+    server
+        .faults
+        .tokens
+        .lock()
+        .unwrap()
+        .as_mut()
+        .expect("the tokens")
+        .expire_at_read_marker = true;
+
+    assert!(app.close(Duration::from_secs(30))?.success());
+    assert_eq!(
+        server.read_markers.lock().unwrap()[1..],
+        [serde_json::json!({ "m.fully_read": "$bob-4" })]
+    );
+    let saved = read_saved_session(&local_app_data)?;
+    assert_eq!(
+        (
+            &saved["session"]["access_token"],
+            &saved["session"]["refresh_token"]
+        ),
+        (
+            &serde_json::json!("access-1"),
+            &serde_json::json!("refresh-1")
+        )
+    );
+
+    let syncs = server
+        .faults
+        .tokens
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .accepted_syncs;
+    let app = launch_app_with_options(
+        &mirx_ui_exe_path()?,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while server
+        .faults
+        .tokens
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .accepted_syncs
+        < syncs + 2
+    {
+        assert!(Instant::now() < deadline, "{:?}", status_view_lines(&app)?);
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    let lines = status_view_lines(&app)?;
+    assert!(
+        !lines.iter().any(|line| line.contains("Disconnected")),
+        "{lines:?}"
+    );
+    assert_eq!(
+        server
+            .faults
+            .tokens
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .refreshes,
+        1
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The saved refresh token was used, and the access token it gave too (a
+/// run whose save was lost, or another copy of the profile): Synapse
+/// refuses it with 403 `M_FORBIDDEN`. mirx says the server signed the
+/// session out and does not retry. Before, it retried forever.
+#[test]
+fn automation_driver_a_used_refresh_token_signs_the_session_out_without_retrying()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    write_connect_settings(&local_app_data, "retry_delay=1\r\n")?;
+    let server = spawn_mock_backfill_homeserver()?;
+    {
+        let mut tokens = MockTokens::synapse();
+        let (status, _) = tokens.refresh("refresh-token");
+        assert_eq!(status, 200);
+        assert!(tokens.accepts("/_matrix/client/v3/sync", "access-1"));
+        tokens.expire();
+        tokens.refreshes = 0;
+        *server.faults.tokens.lock().unwrap() = Some(tokens);
+    }
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_app_with_options(
+        &mirx_ui_exe_path()?,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+
+    wait_for_status_line(
+        &app,
+        "signed this session out (the server returned an error: [403 / M_FORBIDDEN] refresh token isn't valid anymore). /e2ee export saves its room keys; File > Log Out ends it, then sign in again.",
+        Duration::from_secs(30),
+    )?;
+    // Twice the retry delay: a retry, had one been armed, would have run.
+    std::thread::sleep(Duration::from_secs(2));
+    app.wait_idle(Duration::from_secs(5))?;
+    let lines = status_view_lines(&app)?;
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("Reconnect") || line.contains("Connect retry")),
+        "{lines:?}"
+    );
+
+    drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }

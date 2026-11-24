@@ -276,10 +276,16 @@ fn ready_ban_rejection_emits_error_without_snapshot_or_optimistic_removal() {
     });
 }
 
+/// For the tests that do not read the saved session.
+fn unsaved() -> crate::api::SaveSession {
+    std::sync::Arc::new(|_, _| Ok(()))
+}
+
 fn test_config() -> CoreConfig {
     CoreConfig {
         profile_dir: std::env::temp_dir().join("mirx-core-runtime-test"),
         store_passphrase: "test-store-passphrase".to_owned(),
+        save_session: unsaved(),
     }
 }
 
@@ -991,6 +997,7 @@ fn worker_stops_when_command_channel_closes() {
         let config = CoreConfig {
             profile_dir: std::env::temp_dir().join("mirx-core-runtime-test"),
             store_passphrase: "test-store-passphrase".to_owned(),
+            save_session: unsaved(),
         };
 
         drop(command_tx);
@@ -1684,6 +1691,7 @@ async fn login_events(
     let config = CoreConfig {
         profile_dir: profile.path().join("profile"),
         store_passphrase: "test-store-passphrase".to_owned(),
+        save_session: unsaved(),
     };
     let (event_tx, event_rx) = mpsc::channel::<Event>();
     let mut core = Core::new(config.clone(), event_tx.clone());
@@ -1746,6 +1754,7 @@ fn a_session_that_starts_online_gets_its_rooms_once() {
         let config = CoreConfig {
             profile_dir: profile.path().join("profile"),
             store_passphrase: "test-store-passphrase".to_owned(),
+            save_session: unsaved(),
         };
         let (event_tx, event_rx) = mpsc::channel::<Event>();
         let mut core = Core::new(config.clone(), event_tx.clone());
@@ -1856,6 +1865,7 @@ fn profile_config(profile: &tempfile::TempDir) -> CoreConfig {
     CoreConfig {
         profile_dir: profile.path().join("profile"),
         store_passphrase: "test-store-passphrase".to_owned(),
+        save_session: unsaved(),
     }
 }
 
@@ -1907,6 +1917,54 @@ async fn signed_in_core_with(
 
 fn logged_out() -> wiremock::ResponseTemplate {
     wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({}))
+}
+
+/// A password sign-in saves its session, with the homeserver URL it
+/// reports, before the session's first request: a refresh then would
+/// supersede it.
+#[test]
+fn a_password_sign_in_saves_its_session() {
+    run_local(async {
+        let mock_server = MatrixMockServer::new().await;
+        mount_sign_in(&mock_server, "GHTYAJCE", true, |_| {}).await;
+        let profile = tempfile::TempDir::new().expect("temporary profile directory");
+        let saved = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let config = CoreConfig {
+            save_session: std::sync::Arc::new({
+                let saved = std::sync::Arc::clone(&saved);
+                move |homeserver_url: &str, session: &crate::api::StoredSession| {
+                    saved
+                        .lock()
+                        .unwrap()
+                        .push((homeserver_url.to_owned(), session.clone()));
+                    Ok(())
+                }
+            }),
+            ..profile_config(&profile)
+        };
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut core = Core::new(config, event_tx);
+
+        run(
+            &mut core,
+            Command::Login(login_request(&mock_server, false)),
+        )
+        .await;
+
+        let logged_in = drain_events(&event_rx)
+            .into_iter()
+            .find_map(|event| match event {
+                Event::LoggedIn {
+                    session,
+                    homeserver_url,
+                } => Some((homeserver_url, session)),
+                _ => None,
+            })
+            .expect("LoggedIn");
+        assert_eq!(logged_in.1.refresh_token.as_deref(), Some("RT1"));
+        assert_eq!(*saved.lock().unwrap(), [logged_in]);
+        core.stop().await;
+    });
 }
 
 /// Log Out removes the session's messages, room keys and sync state.
@@ -2248,6 +2306,7 @@ fn a_session_that_starts_offline_gets_its_rooms_at_the_first_sync_that_connects(
         let config = CoreConfig {
             profile_dir: profile.path().join("profile"),
             store_passphrase: "test-store-passphrase".to_owned(),
+            save_session: unsaved(),
         };
         let (event_tx, event_rx) = mpsc::channel::<Event>();
         let mut core = Core::new(config.clone(), event_tx.clone());
@@ -2440,6 +2499,7 @@ fn a_send_the_network_stopped_goes_after_the_next_sync_response() {
         let config = CoreConfig {
             profile_dir: profile.path().join("profile"),
             store_passphrase: "test-store-passphrase".to_owned(),
+            save_session: unsaved(),
         };
         let (event_tx, event_rx) = mpsc::channel::<Event>();
         let mut core = session_in_a_room(&mock_server, &config, &event_tx).await;
@@ -2512,6 +2572,7 @@ fn a_refused_send_fails_and_the_next_line_goes() {
         let config = CoreConfig {
             profile_dir: profile.path().join("profile"),
             store_passphrase: "test-store-passphrase".to_owned(),
+            save_session: unsaved(),
         };
         let (event_tx, event_rx) = mpsc::channel::<Event>();
         let mut core = session_in_a_room(&mock_server, &config, &event_tx).await;
@@ -2613,6 +2674,7 @@ fn restore_reports_stored_unread_counts_without_new_events() {
         let config = CoreConfig {
             profile_dir: profile.path().join("profile"),
             store_passphrase: "test-store-passphrase".to_owned(),
+            save_session: unsaved(),
         };
         let (event_tx, event_rx) = mpsc::channel::<Event>();
         let mut core = Core::new(config.clone(), event_tx.clone());
