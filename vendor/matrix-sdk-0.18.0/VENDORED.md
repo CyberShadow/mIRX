@@ -99,10 +99,33 @@ members it may ask the server for are read before taking the lock.
 Another client writing `m.direct` between the read and the write can
 still be lost (account data has no compare-and-swap).
 
+## 5. A sync's request timeout cannot be set
+
+### Why
+
+`Client::sync_once` bounds the `/sync` request to the client's request
+timeout (30 s by default) plus the long poll's `timeout`, and nothing
+else sets it: a first sync with the default 30 s long poll gives up after
+60 s, and a `timeout=0` request after 30 s. A homeserver computes a big
+account's first sync, or the catching up after a long absence, for
+minutes (Synapse keeps computing after the client hangs up and caches the
+answer). mirx's first run against a real account timed out its first
+syncs twice ("error sending request for url (...)") before an attempt
+got the cached answer. Raising the client's request timeout would bound
+every other request by minutes too. Upstream `main` (as of 2025-09) has
+the same code.
+
+### The fix
+
+mirx's own: `SyncSettings::request_timeout`, the bound of the whole
+`/sync` request, which replaces "request timeout + long poll" when set
+(`src/config/sync.rs`, `src/client/mod.rs` `sync_once`). Unset, nothing
+changes.
+
 ## When to remove
 
-When upgrading to a matrix-sdk release that contains all four fixes
-(check the second, third and fourth against upstream; they are not
+When upgrading to a matrix-sdk release that contains all five fixes
+(check the second to the fifth against upstream; they are not
 reported there yet): delete this directory and its line in `[patch.crates-io]` (and,
 with the last vendored crate, the section and the workspace's
 `exclude = ["vendor"]`).

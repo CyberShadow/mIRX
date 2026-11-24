@@ -59,6 +59,7 @@ pub struct SyncSettings {
     // Filter is pretty big at 1000 bytes, box it to reduce stack size
     pub(crate) filter: Option<Box<sync_events::v3::Filter>>,
     pub(crate) timeout: Option<Duration>,
+    pub(crate) request_timeout: Option<Duration>,
     pub(crate) ignore_timeout_on_first_sync: bool,
     pub(crate) token: SyncToken,
     pub(crate) full_state: bool,
@@ -77,6 +78,7 @@ impl fmt::Debug for SyncSettings {
         let Self {
             filter,
             timeout,
+            request_timeout,
             ignore_timeout_on_first_sync,
             token: _,
             full_state,
@@ -85,6 +87,7 @@ impl fmt::Debug for SyncSettings {
         f.debug_struct("SyncSettings")
             .maybe_field("filter", filter)
             .maybe_field("timeout", timeout)
+            .maybe_field("request_timeout", request_timeout)
             .field("ignore_timeout_on_first_sync", ignore_timeout_on_first_sync)
             .field("full_state", full_state)
             .field("set_presence", set_presence)
@@ -99,6 +102,7 @@ impl SyncSettings {
         Self {
             filter: None,
             timeout: Some(DEFAULT_SYNC_TIMEOUT),
+            request_timeout: None,
             ignore_timeout_on_first_sync: false,
             token: SyncToken::default(),
             full_state: false,
@@ -126,6 +130,22 @@ impl SyncSettings {
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Set how long the client waits for the whole `/sync` request.
+    ///
+    /// By default that is the client's request timeout plus the `timeout`
+    /// the server may wait: too short for a server that takes minutes to
+    /// compute a sync (a big account's first one, or the catching up after
+    /// a long time away).
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - The time the client waits for the server's response.
+    #[must_use]
+    pub fn request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = Some(timeout);
         self
     }
 

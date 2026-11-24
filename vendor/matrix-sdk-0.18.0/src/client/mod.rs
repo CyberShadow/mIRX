@@ -2862,7 +2862,9 @@ impl Client {
             use_state_after: true,
         });
         let mut request_config = self.request_config();
-        if let Some(timeout) = sync_settings.timeout {
+        if let Some(request_timeout) = sync_settings.request_timeout {
+            request_config.timeout = Some(request_timeout);
+        } else if let Some(timeout) = sync_settings.timeout {
             let base_timeout = request_config.timeout.unwrap_or(Duration::from_secs(30));
             request_config.timeout = Some(base_timeout + timeout);
         }
