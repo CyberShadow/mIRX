@@ -1,0 +1,29 @@
+Software in mirx-ui.exe and its licences
+========================================
+
+mirx-ui.exe is built from the Rust crates below, each under the licence it
+is listed under. The source code of every crate is published on crates.io,
+at https://crates.io/crates/<name>/<version>, except for mirx's own
+(mirx-core, mirx-ui) and for matrix-sdk and matrix-sdk-common, which are
+those crates' published versions with fixes: their source, and what was
+changed, is in mirx's source repository (vendor/, see VENDORED.md there).
+
+The MinGW-w64 runtime it is linked with has its notices in
+COPYING.MinGW-w64-runtime.txt.
+
+Licences:
+{{#each overview}}
+  {{{name}}} ({{count}})
+{{/each}}
+{{#each licenses}}
+
+--------------------------------------------------------------------------------
+{{{name}}}
+
+Used by:
+{{#each used_by}}
+  {{{crate.name}}} {{{crate.version}}}
+{{/each}}
+
+{{{text}}}
+{{/each}}

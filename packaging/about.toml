@@ -1,0 +1,18 @@
+# cargo-about's configuration for THIRD-PARTY-LICENSES.txt in the release zip
+# (scripts/package.sh): the crates linked into the shipped mirx-ui.exe.
+# A crate under a licence missing here fails packaging until someone has
+# read that licence's terms for binary distribution and added it.
+accepted = [
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Zlib",
+]
+targets = ["x86_64-pc-windows-gnu"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
