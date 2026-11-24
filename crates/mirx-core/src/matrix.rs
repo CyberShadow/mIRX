@@ -2638,15 +2638,20 @@ async fn summarize_space_children(
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to read space child state: {err}")))?;
 
+    // The spec: a child whose `via` is missing or invalid is ignored. A
+    // child removed from a space keeps an `m.space.child` with content `{}`
+    // (and a redacted one has none), so that is no child, not an error;
+    // nor is an empty `via`. Such content does not decode as
+    // `SpaceChildEventContent`, whose `via` is required: as the SDK's own
+    // `Room::parent_spaces`, an event that does not decode is no child.
     let mut child_events = Vec::new();
     for raw_event in raw_events {
-        let event = raw_event.deserialize().map_err(|err| {
-            MatrixCoreError::new(format!("failed to deserialize space child state: {err}"))
-        })?;
-        let SyncOrStrippedState::Sync(SyncStateEvent::Original(event)) = event else {
+        let Ok(SyncOrStrippedState::Sync(SyncStateEvent::Original(event))) =
+            raw_event.deserialize()
+        else {
             continue;
         };
-        if joined_room_ids.contains(event.state_key.as_str()) {
+        if !event.content.via.is_empty() && joined_room_ids.contains(event.state_key.as_str()) {
             child_events.push(event);
         }
     }
@@ -14877,6 +14882,97 @@ mod tests {
             highlight_words_from_ruleset(&Ruleset::server_default(&user_id)),
             Vec::new()
         );
+    }
+
+    fn space_create_state() -> Raw<AnySyncStateEvent> {
+        Raw::from_json_string(
+            serde_json::json!({
+                "type": "m.room.create",
+                "state_key": "",
+                "sender": "@example:localhost",
+                "event_id": "$space-create:localhost",
+                "origin_server_ts": 1u64,
+                "content": { "room_version": "11", "type": "m.space" },
+            })
+            .to_string(),
+        )
+        .expect("space create state event")
+    }
+
+    fn space_child_state(child: &RoomId, content: serde_json::Value) -> Raw<AnySyncStateEvent> {
+        Raw::from_json_string(
+            serde_json::json!({
+                "type": "m.space.child",
+                "state_key": child,
+                "sender": "@example:localhost",
+                "event_id": format!("$child-{}", &child.as_str()[1..]),
+                "origin_server_ts": 2u64,
+                "content": content,
+            })
+            .to_string(),
+        )
+        .expect("space child state event")
+    }
+
+    /// The spec: an `m.space.child` without a valid `via` is no child. A
+    /// child removed from a space is left with the content `{}`; it and an
+    /// empty `via` are ignored, and the space lists its other children.
+    #[test]
+    fn space_children_without_via_are_not_children() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_room_state_encryption()
+                .plain()
+                .mount()
+                .await;
+            let space = OwnedRoomId::try_from("!space:example.org").expect("room id");
+            let kept = OwnedRoomId::try_from("!kept:example.org").expect("room id");
+            let removed = OwnedRoomId::try_from("!removed:example.org").expect("room id");
+            let no_servers = OwnedRoomId::try_from("!noservers:example.org").expect("room id");
+            mock_server
+                .mock_sync()
+                .ok_and_run(&client, |builder| {
+                    builder.add_joined_room(
+                        JoinedRoomBuilder::new(&space)
+                            .add_state_event(space_create_state())
+                            .add_state_event(space_child_state(
+                                &kept,
+                                serde_json::json!({ "via": ["example.org"] }),
+                            ))
+                            .add_state_event(space_child_state(&removed, serde_json::json!({})))
+                            .add_state_event(space_child_state(
+                                &no_servers,
+                                serde_json::json!({ "via": [] }),
+                            )),
+                    );
+                    for room in [&kept, &removed, &no_servers] {
+                        builder.add_joined_room(JoinedRoomBuilder::new(room));
+                    }
+                })
+                .await;
+
+            let rooms = summarize_rooms(&client).await.expect("the room list");
+            let space = rooms
+                .iter()
+                .find(|room| room.room_id == space.as_str())
+                .expect("the space is listed");
+            assert!(space.is_space);
+            assert_eq!(
+                space.space_children,
+                vec![crate::SpaceChildSummary {
+                    room_id: kept.to_string(),
+                    suggested: false,
+                    order: None,
+                }]
+            );
+        });
     }
 
     fn canonical_alias_state(alias: Option<&str>, alt_aliases: &[&str]) -> Raw<AnySyncStateEvent> {
