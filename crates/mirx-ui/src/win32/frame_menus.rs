@@ -257,15 +257,6 @@ pub(super) unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn window_menu_command_id(arrangement: MdiArrangement) -> usize {
-    match arrangement {
-        MdiArrangement::Cascade => MENU_ID_WINDOW_CASCADE,
-        MdiArrangement::TileHorizontal => MENU_ID_WINDOW_TILE_HORIZONTAL,
-        MdiArrangement::TileVertical => MENU_ID_WINDOW_TILE_VERTICAL,
-        MdiArrangement::ArrangeIcons => MENU_ID_WINDOW_ARRANGE_ICONS,
-    }
-}
-
 /// Arranges the MDI windows. MDI itself restores a maximized window before
 /// cascading or tiling.
 unsafe fn arrange_mdi_windows(hwnd: HWND, arrangement: MdiArrangement) {
@@ -707,35 +698,6 @@ pub(super) unsafe fn refresh_tools_menu_state(hwnd: HWND, popup_menu: HMENU) -> 
     )
 }
 
-pub(super) unsafe fn select_timeline_event_for_automation(
-    hwnd: HWND,
-    event_id: &str,
-) -> Result<(), String> {
-    let active_view = state_ref(hwnd).active_view.clone();
-    if !matches!(active_view, ViewId::Room(_) | ViewId::Thread { .. }) {
-        return Err("selected_message_unavailable: active view is not a room or thread".to_owned());
-    }
-    let content = state_ref(hwnd)
-        .views
-        .get(&active_view)
-        .ok_or_else(|| "selected_message_unavailable: active view is unavailable".to_owned())?
-        .content;
-    let timeline = room_content_timeline(content);
-    if !timeline_state_ref(timeline)
-        .source_rows
-        .iter()
-        .any(|row| row.event_id.as_deref() == Some(event_id))
-    {
-        return Err(format!("unknown_event: {event_id}"));
-    }
-    state_mut(hwnd).selected_timeline_event = Some(SelectedTimelineEvent {
-        view_id: active_view,
-        event_id: event_id.to_owned(),
-    });
-    InvalidateRect(timeline, null(), 1);
-    Ok(())
-}
-
 unsafe fn window_menu_command(
     hwnd: HWND,
     arrangement: MdiArrangement,
@@ -967,227 +929,6 @@ pub(super) unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> Option<R
         result
             .and_then(|handled| handled.ok_or_else(|| "menu action was not performed".to_owned())),
     )
-}
-
-pub(super) unsafe fn invoke_menu_command_for_automation(
-    hwnd: HWND,
-    command_id: usize,
-) -> Result<(), String> {
-    let room_action_enabled = match command_id {
-        MENU_ID_ROOM_ACCEPT_INVITE => {
-            active_room_action_state(state_ref(hwnd)).accept_invite_enabled
-        }
-        MENU_ID_ROOM_REJECT_INVITE => {
-            active_room_action_state(state_ref(hwnd)).reject_invite_enabled
-        }
-        MENU_ID_ROOM_PART => active_room_action_state(state_ref(hwnd)).part_room_enabled,
-        MENU_ID_ROOM_NOTIFY_ALL | MENU_ID_ROOM_NOTIFY_MENTIONS | MENU_ID_ROOM_NOTIFY_MUTE => {
-            active_room_action_state(state_ref(hwnd))
-                .notification_mode
-                .is_some()
-        }
-        _ => true,
-    };
-    if !room_action_enabled {
-        return Err("room menu action is disabled".to_owned());
-    }
-    let Some((_, result)) = menu_command_result(hwnd, command_id) else {
-        return Err(format!("unknown menu command {command_id}"));
-    };
-    result.and_then(|handled| handled.ok_or_else(|| "menu action was not performed".to_owned()))
-}
-
-/// The user's gesture that opens a dialog automation asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DialogGesture {
-    /// A menu bar item, by command id.
-    MenuCommand(usize),
-    /// The active window's close box.
-    CloseActiveView,
-    /// Return in the active window's editbox.
-    ComposeReturn,
-}
-
-pub(super) fn dialog_gesture(dialog: AutomationDialog) -> DialogGesture {
-    match dialog {
-        AutomationDialog::Options => DialogGesture::MenuCommand(MENU_ID_TOOLS_OPTIONS),
-        AutomationDialog::Colors => DialogGesture::MenuCommand(MENU_ID_TOOLS_COLORS),
-        AutomationDialog::Aliases => DialogGesture::MenuCommand(MENU_ID_TOOLS_ALIASES),
-        AutomationDialog::AddressBook => DialogGesture::MenuCommand(MENU_ID_TOOLS_ADDRESS_BOOK),
-        AutomationDialog::ChannelCentral => {
-            DialogGesture::MenuCommand(MENU_ID_ROOM_CHANNEL_CENTRAL)
-        }
-        AutomationDialog::Sessions => DialogGesture::MenuCommand(MENU_ID_TOOLS_SESSIONS),
-        AutomationDialog::SelectServer => DialogGesture::MenuCommand(MENU_ID_FILE_SELECT_SERVER),
-        AutomationDialog::About => DialogGesture::MenuCommand(MENU_ID_HELP_ABOUT),
-        AutomationDialog::CommandsJoin => DialogGesture::MenuCommand(MENU_ID_COMMANDS_JOIN),
-        AutomationDialog::RecoverE2ee => DialogGesture::MenuCommand(MENU_ID_RECOVER_E2EE),
-        AutomationDialog::SetupE2eeRecovery => {
-            DialogGesture::MenuCommand(MENU_ID_SETUP_E2EE_RECOVERY)
-        }
-        AutomationDialog::ResetE2ee => DialogGesture::MenuCommand(MENU_ID_RESET_E2EE),
-        AutomationDialog::CloseActiveView => DialogGesture::CloseActiveView,
-        AutomationDialog::ComposeReturn => DialogGesture::ComposeReturn,
-    }
-}
-
-/// Opens `dialog` as the user's gesture does. The gesture is posted, not
-/// run: the dialog's modal loop must not block the automation request.
-/// Fails, as `(code, message)`, where the gesture would not open it: a
-/// greyed item, or a window that closes without asking.
-pub(super) unsafe fn open_dialog_for_automation(
-    hwnd: HWND,
-    dialog: AutomationDialog,
-) -> Result<(), (&'static str, String)> {
-    let (target, message, wparam) = match dialog_gesture(dialog) {
-        DialogGesture::MenuCommand(command_id) => {
-            if !frame_menu_item_enabled(state_ref(hwnd), command_id) {
-                return Err((
-                    "menu_item_disabled",
-                    format!("the menu item for {dialog:?} is greyed"),
-                ));
-            }
-            (hwnd, WM_COMMAND, command_id)
-        }
-        DialogGesture::CloseActiveView => {
-            let state = state_ref(hwnd);
-            let action = close_action(&state.model, &state.active_view);
-            if !matches!(action, CloseAction::Confirm { .. }) {
-                return Err((
-                    "no_close_confirmation",
-                    format!("closing the active window does not ask: {action:?}"),
-                ));
-            }
-            let child = state
-                .views
-                .get(&state.active_view)
-                .expect("the active view has a window")
-                .child;
-            (child, WM_SYSCOMMAND, SC_CLOSE as usize)
-        }
-        DialogGesture::ComposeReturn => {
-            let edit = compose_edit(hwnd);
-            if read_window_text(edit).is_empty() {
-                return Err((
-                    "empty_compose",
-                    "the active window's editbox is empty".to_owned(),
-                ));
-            }
-            (edit, WM_KEYDOWN, VK_RETURN_KEY)
-        }
-    };
-    if PostMessageW(target, message, wparam, 0) == 0 {
-        return Err(("post_failed", last_os_error("PostMessageW")));
-    }
-    Ok(())
-}
-
-pub(super) fn context_menu_command_id(command: &ContextMenuCommand) -> Option<usize> {
-    Some(match command {
-        ContextMenuCommand::AcceptInvite => MENU_ID_ROOM_ACCEPT_INVITE,
-        ContextMenuCommand::RejectInvite => MENU_ID_ROOM_REJECT_INVITE,
-        ContextMenuCommand::PartRoom => MENU_ID_ROOM_PART,
-        ContextMenuCommand::NotifyAllMessages => MENU_ID_ROOM_NOTIFY_ALL,
-        ContextMenuCommand::NotifyMentionsAndKeywords => MENU_ID_ROOM_NOTIFY_MENTIONS,
-        ContextMenuCommand::NotifyMute => MENU_ID_ROOM_NOTIFY_MUTE,
-        ContextMenuCommand::ReplyMessage => MENU_ID_MESSAGE_REPLY,
-        ContextMenuCommand::GoToOriginal => MENU_ID_MESSAGE_GO_TO_ORIGINAL,
-        ContextMenuCommand::EditMessage => MENU_ID_MESSAGE_EDIT,
-        ContextMenuCommand::ReactMessage => MENU_ID_MESSAGE_REACT,
-        ContextMenuCommand::RedactMessage => MENU_ID_MESSAGE_REDACT,
-        ContextMenuCommand::SaveAttachment => MENU_ID_MESSAGE_SAVE_ATTACHMENT,
-        ContextMenuCommand::WhoisMember => MENU_ID_MEMBER_WHOIS,
-        ContextMenuCommand::DevicesMember => MENU_ID_MEMBER_DEVICES,
-        ContextMenuCommand::VerifyMember => MENU_ID_MEMBER_VERIFY,
-        ContextMenuCommand::AcceptIdentityMember => MENU_ID_MEMBER_ACCEPT_IDENTITY,
-        ContextMenuCommand::QueryMember => MENU_ID_MEMBER_QUERY,
-        ContextMenuCommand::MentionMember => MENU_ID_MEMBER_MENTION,
-        ContextMenuCommand::IgnoreMember => MENU_ID_MEMBER_IGNORE,
-        ContextMenuCommand::UnignoreMember => MENU_ID_MEMBER_UNIGNORE,
-        ContextMenuCommand::OpMember => MENU_ID_MEMBER_OP,
-        ContextMenuCommand::DeopMember => MENU_ID_MEMBER_DEOP,
-        ContextMenuCommand::VoiceMember => MENU_ID_MEMBER_VOICE,
-        ContextMenuCommand::DevoiceMember => MENU_ID_MEMBER_DEVOICE,
-        ContextMenuCommand::KickMember => MENU_ID_MEMBER_KICK,
-        ContextMenuCommand::BanMember => MENU_ID_MEMBER_BAN,
-    })
-}
-
-pub(super) unsafe fn invoke_navigation_context_menu_for_automation(
-    hwnd: HWND,
-    command: &ContextMenuCommand,
-) -> Result<(), String> {
-    let command_id = context_menu_command_id(command)
-        .ok_or_else(|| "room context menu command is unavailable".to_owned())?;
-    if !matches!(
-        command_id,
-        MENU_ID_ROOM_ACCEPT_INVITE
-            | MENU_ID_ROOM_REJECT_INVITE
-            | MENU_ID_ROOM_PART
-            | MENU_ID_ROOM_NOTIFY_ALL
-            | MENU_ID_ROOM_NOTIFY_MENTIONS
-            | MENU_ID_ROOM_NOTIFY_MUTE
-    ) {
-        return Err("room context menu command is unavailable".to_owned());
-    }
-    show_navigation_room_context_menu(hwnd, -1, Some(command_id))
-}
-
-pub(super) unsafe fn invoke_timeline_context_menu_for_automation(
-    hwnd: HWND,
-    command: &ContextMenuCommand,
-    event_id: Option<&str>,
-) -> Result<(), String> {
-    let command_id = context_menu_command_id(command)
-        .ok_or_else(|| "message context menu command is unavailable".to_owned())?;
-    if !matches!(
-        command_id,
-        MENU_ID_MESSAGE_REPLY
-            | MENU_ID_MESSAGE_GO_TO_ORIGINAL
-            | MENU_ID_MESSAGE_EDIT
-            | MENU_ID_MESSAGE_REACT
-            | MENU_ID_MESSAGE_REDACT
-            | MENU_ID_MESSAGE_SAVE_ATTACHMENT
-    ) {
-        return Err("message context menu command is unavailable".to_owned());
-    }
-    let active_view = state_ref(hwnd).active_view.clone();
-    let content = state_ref(hwnd)
-        .views
-        .get(&active_view)
-        .ok_or_else(|| "message context menu target is unavailable".to_owned())?
-        .content;
-    let timeline = view_timeline(&active_view, content);
-    let lparam = match event_id {
-        Some(event_id) => timeline_event_context_lparam_for_automation(timeline, event_id)?,
-        None => -1,
-    };
-    show_timeline_message_context_menu(timeline, lparam, Some(command_id))
-}
-
-unsafe fn timeline_event_context_lparam_for_automation(
-    timeline: HWND,
-    event_id: &str,
-) -> Result<LPARAM, String> {
-    let state = timeline_state_ref(timeline);
-    let line_index = state
-        .paint_lines
-        .iter()
-        .position(|line| {
-            line.source_row_index
-                .and_then(|index| state.source_rows.get(index))
-                .and_then(|row| row.event_id.as_deref())
-                == Some(event_id)
-        })
-        .ok_or_else(|| format!("unknown_event: {event_id}"))?;
-    let y = state.metrics.vertical_padding
-        + (line_index.saturating_sub(state.top_line) as i32 * state.line_height)
-        + state.line_height / 2;
-    let mut point = POINT { x: 1, y };
-    if ClientToScreen(timeline, &mut point) == 0 {
-        return Err(last_os_error("ClientToScreen"));
-    }
-    Ok(((point.y as u32 as usize) << 16 | (point.x as u16 as usize)) as LPARAM)
 }
 
 unsafe fn submit_room_menu_action(
@@ -1501,9 +1242,280 @@ unsafe fn show_setup_e2ee_menu_dialog(hwnd: HWND) -> Result<bool, String> {
     Ok(true)
 }
 
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+
+    /// The user's gesture that opens a dialog automation asks for.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(in crate::win32) enum DialogGesture {
+        /// A menu bar item, by command id.
+        MenuCommand(usize),
+        /// The active window's close box.
+        CloseActiveView,
+        /// Return in the active window's editbox.
+        ComposeReturn,
+    }
+
+    pub(in crate::win32) fn dialog_gesture(dialog: AutomationDialog) -> DialogGesture {
+        match dialog {
+            AutomationDialog::Options => DialogGesture::MenuCommand(MENU_ID_TOOLS_OPTIONS),
+            AutomationDialog::Colors => DialogGesture::MenuCommand(MENU_ID_TOOLS_COLORS),
+            AutomationDialog::Aliases => DialogGesture::MenuCommand(MENU_ID_TOOLS_ALIASES),
+            AutomationDialog::AddressBook => DialogGesture::MenuCommand(MENU_ID_TOOLS_ADDRESS_BOOK),
+            AutomationDialog::ChannelCentral => {
+                DialogGesture::MenuCommand(MENU_ID_ROOM_CHANNEL_CENTRAL)
+            }
+            AutomationDialog::Sessions => DialogGesture::MenuCommand(MENU_ID_TOOLS_SESSIONS),
+            AutomationDialog::SelectServer => {
+                DialogGesture::MenuCommand(MENU_ID_FILE_SELECT_SERVER)
+            }
+            AutomationDialog::About => DialogGesture::MenuCommand(MENU_ID_HELP_ABOUT),
+            AutomationDialog::CommandsJoin => DialogGesture::MenuCommand(MENU_ID_COMMANDS_JOIN),
+            AutomationDialog::RecoverE2ee => DialogGesture::MenuCommand(MENU_ID_RECOVER_E2EE),
+            AutomationDialog::SetupE2eeRecovery => {
+                DialogGesture::MenuCommand(MENU_ID_SETUP_E2EE_RECOVERY)
+            }
+            AutomationDialog::ResetE2ee => DialogGesture::MenuCommand(MENU_ID_RESET_E2EE),
+            AutomationDialog::CloseActiveView => DialogGesture::CloseActiveView,
+            AutomationDialog::ComposeReturn => DialogGesture::ComposeReturn,
+        }
+    }
+
+    /// Opens `dialog` as the user's gesture does. The gesture is posted, not
+    /// run: the dialog's modal loop must not block the automation request.
+    /// Fails, as `(code, message)`, where the gesture would not open it: a
+    /// greyed item, or a window that closes without asking.
+    pub(in crate::win32) unsafe fn open_dialog_for_automation(
+        hwnd: HWND,
+        dialog: AutomationDialog,
+    ) -> Result<(), (&'static str, String)> {
+        let (target, message, wparam) = match dialog_gesture(dialog) {
+            DialogGesture::MenuCommand(command_id) => {
+                if !frame_menu_item_enabled(state_ref(hwnd), command_id) {
+                    return Err((
+                        "menu_item_disabled",
+                        format!("the menu item for {dialog:?} is greyed"),
+                    ));
+                }
+                (hwnd, WM_COMMAND, command_id)
+            }
+            DialogGesture::CloseActiveView => {
+                let state = state_ref(hwnd);
+                let action = close_action(&state.model, &state.active_view);
+                if !matches!(action, CloseAction::Confirm { .. }) {
+                    return Err((
+                        "no_close_confirmation",
+                        format!("closing the active window does not ask: {action:?}"),
+                    ));
+                }
+                let child = state
+                    .views
+                    .get(&state.active_view)
+                    .expect("the active view has a window")
+                    .child;
+                (child, WM_SYSCOMMAND, SC_CLOSE as usize)
+            }
+            DialogGesture::ComposeReturn => {
+                let edit = compose_edit(hwnd);
+                if read_window_text(edit).is_empty() {
+                    return Err((
+                        "empty_compose",
+                        "the active window's editbox is empty".to_owned(),
+                    ));
+                }
+                (edit, WM_KEYDOWN, VK_RETURN_KEY)
+            }
+        };
+        if PostMessageW(target, message, wparam, 0) == 0 {
+            return Err(("post_failed", last_os_error("PostMessageW")));
+        }
+        Ok(())
+    }
+
+    pub(in crate::win32) fn context_menu_command_id(command: &ContextMenuCommand) -> Option<usize> {
+        Some(match command {
+            ContextMenuCommand::AcceptInvite => MENU_ID_ROOM_ACCEPT_INVITE,
+            ContextMenuCommand::RejectInvite => MENU_ID_ROOM_REJECT_INVITE,
+            ContextMenuCommand::PartRoom => MENU_ID_ROOM_PART,
+            ContextMenuCommand::NotifyAllMessages => MENU_ID_ROOM_NOTIFY_ALL,
+            ContextMenuCommand::NotifyMentionsAndKeywords => MENU_ID_ROOM_NOTIFY_MENTIONS,
+            ContextMenuCommand::NotifyMute => MENU_ID_ROOM_NOTIFY_MUTE,
+            ContextMenuCommand::ReplyMessage => MENU_ID_MESSAGE_REPLY,
+            ContextMenuCommand::GoToOriginal => MENU_ID_MESSAGE_GO_TO_ORIGINAL,
+            ContextMenuCommand::EditMessage => MENU_ID_MESSAGE_EDIT,
+            ContextMenuCommand::ReactMessage => MENU_ID_MESSAGE_REACT,
+            ContextMenuCommand::RedactMessage => MENU_ID_MESSAGE_REDACT,
+            ContextMenuCommand::SaveAttachment => MENU_ID_MESSAGE_SAVE_ATTACHMENT,
+            ContextMenuCommand::WhoisMember => MENU_ID_MEMBER_WHOIS,
+            ContextMenuCommand::DevicesMember => MENU_ID_MEMBER_DEVICES,
+            ContextMenuCommand::VerifyMember => MENU_ID_MEMBER_VERIFY,
+            ContextMenuCommand::AcceptIdentityMember => MENU_ID_MEMBER_ACCEPT_IDENTITY,
+            ContextMenuCommand::QueryMember => MENU_ID_MEMBER_QUERY,
+            ContextMenuCommand::MentionMember => MENU_ID_MEMBER_MENTION,
+            ContextMenuCommand::IgnoreMember => MENU_ID_MEMBER_IGNORE,
+            ContextMenuCommand::UnignoreMember => MENU_ID_MEMBER_UNIGNORE,
+            ContextMenuCommand::OpMember => MENU_ID_MEMBER_OP,
+            ContextMenuCommand::DeopMember => MENU_ID_MEMBER_DEOP,
+            ContextMenuCommand::VoiceMember => MENU_ID_MEMBER_VOICE,
+            ContextMenuCommand::DevoiceMember => MENU_ID_MEMBER_DEVOICE,
+            ContextMenuCommand::KickMember => MENU_ID_MEMBER_KICK,
+            ContextMenuCommand::BanMember => MENU_ID_MEMBER_BAN,
+        })
+    }
+
+    pub(in crate::win32) unsafe fn invoke_navigation_context_menu_for_automation(
+        hwnd: HWND,
+        command: &ContextMenuCommand,
+    ) -> Result<(), String> {
+        let command_id = context_menu_command_id(command)
+            .ok_or_else(|| "room context menu command is unavailable".to_owned())?;
+        if !matches!(
+            command_id,
+            MENU_ID_ROOM_ACCEPT_INVITE
+                | MENU_ID_ROOM_REJECT_INVITE
+                | MENU_ID_ROOM_PART
+                | MENU_ID_ROOM_NOTIFY_ALL
+                | MENU_ID_ROOM_NOTIFY_MENTIONS
+                | MENU_ID_ROOM_NOTIFY_MUTE
+        ) {
+            return Err("room context menu command is unavailable".to_owned());
+        }
+        show_navigation_room_context_menu(hwnd, -1, Some(command_id))
+    }
+
+    pub(in crate::win32) unsafe fn invoke_timeline_context_menu_for_automation(
+        hwnd: HWND,
+        command: &ContextMenuCommand,
+        event_id: Option<&str>,
+    ) -> Result<(), String> {
+        let command_id = context_menu_command_id(command)
+            .ok_or_else(|| "message context menu command is unavailable".to_owned())?;
+        if !matches!(
+            command_id,
+            MENU_ID_MESSAGE_REPLY
+                | MENU_ID_MESSAGE_GO_TO_ORIGINAL
+                | MENU_ID_MESSAGE_EDIT
+                | MENU_ID_MESSAGE_REACT
+                | MENU_ID_MESSAGE_REDACT
+                | MENU_ID_MESSAGE_SAVE_ATTACHMENT
+        ) {
+            return Err("message context menu command is unavailable".to_owned());
+        }
+        let active_view = state_ref(hwnd).active_view.clone();
+        let content = state_ref(hwnd)
+            .views
+            .get(&active_view)
+            .ok_or_else(|| "message context menu target is unavailable".to_owned())?
+            .content;
+        let timeline = view_timeline(&active_view, content);
+        let lparam = match event_id {
+            Some(event_id) => timeline_event_context_lparam_for_automation(timeline, event_id)?,
+            None => -1,
+        };
+        show_timeline_message_context_menu(timeline, lparam, Some(command_id))
+    }
+
+    unsafe fn timeline_event_context_lparam_for_automation(
+        timeline: HWND,
+        event_id: &str,
+    ) -> Result<LPARAM, String> {
+        let state = timeline_state_ref(timeline);
+        let line_index = state
+            .paint_lines
+            .iter()
+            .position(|line| {
+                line.source_row_index
+                    .and_then(|index| state.source_rows.get(index))
+                    .and_then(|row| row.event_id.as_deref())
+                    == Some(event_id)
+            })
+            .ok_or_else(|| format!("unknown_event: {event_id}"))?;
+        let y = state.metrics.vertical_padding
+            + (line_index.saturating_sub(state.top_line) as i32 * state.line_height)
+            + state.line_height / 2;
+        let mut point = POINT { x: 1, y };
+        if ClientToScreen(timeline, &mut point) == 0 {
+            return Err(last_os_error("ClientToScreen"));
+        }
+        Ok(((point.y as u32 as usize) << 16 | (point.x as u16 as usize)) as LPARAM)
+    }
+
+    pub(in crate::win32) fn window_menu_command_id(arrangement: MdiArrangement) -> usize {
+        match arrangement {
+            MdiArrangement::Cascade => MENU_ID_WINDOW_CASCADE,
+            MdiArrangement::TileHorizontal => MENU_ID_WINDOW_TILE_HORIZONTAL,
+            MdiArrangement::TileVertical => MENU_ID_WINDOW_TILE_VERTICAL,
+            MdiArrangement::ArrangeIcons => MENU_ID_WINDOW_ARRANGE_ICONS,
+        }
+    }
+
+    pub(in crate::win32) unsafe fn select_timeline_event_for_automation(
+        hwnd: HWND,
+        event_id: &str,
+    ) -> Result<(), String> {
+        let active_view = state_ref(hwnd).active_view.clone();
+        if !matches!(active_view, ViewId::Room(_) | ViewId::Thread { .. }) {
+            return Err(
+                "selected_message_unavailable: active view is not a room or thread".to_owned(),
+            );
+        }
+        let content = state_ref(hwnd)
+            .views
+            .get(&active_view)
+            .ok_or_else(|| "selected_message_unavailable: active view is unavailable".to_owned())?
+            .content;
+        let timeline = room_content_timeline(content);
+        if !timeline_state_ref(timeline)
+            .source_rows
+            .iter()
+            .any(|row| row.event_id.as_deref() == Some(event_id))
+        {
+            return Err(format!("unknown_event: {event_id}"));
+        }
+        state_mut(hwnd).selected_timeline_event = Some(SelectedTimelineEvent {
+            view_id: active_view,
+            event_id: event_id.to_owned(),
+        });
+        InvalidateRect(timeline, null(), 1);
+        Ok(())
+    }
+
+    pub(in crate::win32) unsafe fn invoke_menu_command_for_automation(
+        hwnd: HWND,
+        command_id: usize,
+    ) -> Result<(), String> {
+        let room_action_enabled = match command_id {
+            MENU_ID_ROOM_ACCEPT_INVITE => {
+                active_room_action_state(state_ref(hwnd)).accept_invite_enabled
+            }
+            MENU_ID_ROOM_REJECT_INVITE => {
+                active_room_action_state(state_ref(hwnd)).reject_invite_enabled
+            }
+            MENU_ID_ROOM_PART => active_room_action_state(state_ref(hwnd)).part_room_enabled,
+            MENU_ID_ROOM_NOTIFY_ALL | MENU_ID_ROOM_NOTIFY_MENTIONS | MENU_ID_ROOM_NOTIFY_MUTE => {
+                active_room_action_state(state_ref(hwnd))
+                    .notification_mode
+                    .is_some()
+            }
+            _ => true,
+        };
+        if !room_action_enabled {
+            return Err("room menu action is disabled".to_owned());
+        }
+        let Some((_, result)) = menu_command_result(hwnd, command_id) else {
+            return Err(format!("unknown menu command {command_id}"));
+        };
+        result.and_then(|handled| handled.ok_or_else(|| "menu action was not performed".to_owned()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_fixtures::*;
+    use super::automation::*;
     use super::*;
 
     #[test]

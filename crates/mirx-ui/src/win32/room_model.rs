@@ -1424,29 +1424,6 @@ fn shown_activity_in<'a>(
     }
 }
 
-pub(super) fn validate_synthetic_room_activity_events(
-    room_views: &RoomViews,
-    events: &[Event],
-) -> Result<(), String> {
-    let mut room_views = room_views.clone();
-
-    for event in events {
-        match event {
-            Event::RoomActivity(activity) => room_views
-                .entry_or_default(activity.room_id.clone())
-                .apply_activity(activity.as_ref().clone()),
-            Event::RoomActivityUpdate(update) => {
-                let room_view = room_views.entry_or_default(update.room_id.clone());
-                room_view.validate_update(update)?;
-                room_view.apply_update(update);
-            }
-            _ => {}
-        }
-    }
-
-    Ok(())
-}
-
 pub(super) fn last_activity_from_room_activity(
     activity: &RoomActivity,
 ) -> Option<LastMessageActivity> {
@@ -1957,6 +1934,36 @@ pub(super) fn view_id_is_valid(model: &UiModel, view_id: &ViewId) -> bool {
             room_id,
             thread_root_event_id,
         } => projected_thread_by_id(model, room_id, thread_root_event_id).is_some(),
+    }
+}
+
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+
+    pub(in crate::win32) fn validate_synthetic_room_activity_events(
+        room_views: &RoomViews,
+        events: &[Event],
+    ) -> Result<(), String> {
+        let mut room_views = room_views.clone();
+
+        for event in events {
+            match event {
+                Event::RoomActivity(activity) => room_views
+                    .entry_or_default(activity.room_id.clone())
+                    .apply_activity(activity.as_ref().clone()),
+                Event::RoomActivityUpdate(update) => {
+                    let room_view = room_views.entry_or_default(update.room_id.clone());
+                    room_view.validate_update(update)?;
+                    room_view.apply_update(update);
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
     }
 }
 

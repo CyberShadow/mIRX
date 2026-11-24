@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Runs the live lane: the release mirx-ui.exe, driven through its GUI by the
+# Runs the live lane: a release-built mirx-ui.exe with the automation harness
+# (the `release-automation` profile and the `automation` feature, so it never
+# replaces the shipped exe of cross-build.sh), driven through its GUI by the
 # `live` test suite (crates/mirx-ui/tests/live.rs) under Wine, against a
 # real Conduit homeserver, in a NixOS VM (nix/live-lane.nix).
 #
@@ -48,17 +50,18 @@ require_command x86_64-w64-mingw32-strip
 
 cd "$root_dir"
 
-# One run at a time per target dir: the runs share the release build.
+# One run at a time per target dir: the runs share the release-automation build.
 mkdir -p "$target_dir"
 exec 9>"$target_dir/live-lane.lock"
 flock 9
 started=$SECONDS
 
-scripts/cross-build.sh
-app_exe="$target_dir/x86_64-pc-windows-gnu/release/mirx-ui.exe"
-[[ -f $app_exe ]] || die "cross-build.sh built no $app_exe"
-build_json=$(cargo test --target x86_64-pc-windows-gnu -p mirx-ui --test live --no-run \
-  --message-format=json)
+cargo build --profile release-automation --features automation \
+  --target x86_64-pc-windows-gnu -p mirx-ui
+app_exe="$target_dir/x86_64-pc-windows-gnu/release-automation/mirx-ui.exe"
+[[ -f $app_exe ]] || die "cargo built no $app_exe"
+build_json=$(cargo test --target x86_64-pc-windows-gnu -p mirx-ui --features automation \
+  --test live --no-run --message-format=json)
 live_exe=$(grep -F '"kind":["test"]' <<<"$build_json" | grep -F '"name":"live"' |
   grep -o '"executable":"[^"]*"' | sed 's/^"executable":"//; s/"$//')
 [[ -f $live_exe ]] || die "cargo built no executable for test suite live"

@@ -76,8 +76,6 @@ struct GlyphFace {
     /// `font` in italic: GDI's simulated slant for faces without one, which
     /// keeps the advances, or the face's own italic.
     italic: OwnedFont,
-    /// The face name GDI reports for `font`.
-    face: String,
     coverage: Coverage,
 }
 
@@ -114,7 +112,6 @@ impl GlyphFonts {
     unsafe fn create_on(screen: HDC, primary: OwnedFont, bold: bool) -> Result<Self, String> {
         let previous = SelectObject(screen, primary.0);
         let metrics = text_metrics(screen);
-        let face = text_face(screen);
         let coverage = if metrics.tmPitchAndFamily & TMPF_TRUETYPE != 0 {
             font_cmap(screen).map(Coverage::Cmap)
         } else {
@@ -124,7 +121,6 @@ impl GlyphFonts {
         let mut faces = vec![GlyphFace {
             italic: italic_font(&primary),
             font: primary,
-            face,
             coverage: coverage.map_err(|error| format!("text font {error}"))?,
         }];
 
@@ -146,7 +142,6 @@ impl GlyphFonts {
                 faces.push(GlyphFace {
                     italic: italic_font(&font),
                     font,
-                    face,
                     coverage: Coverage::Cmap(cmap),
                 });
             }
@@ -164,13 +159,8 @@ impl GlyphFonts {
         &self.metrics
     }
 
-    /// The face names of the chain, the text font first.
-    pub(super) fn faces(&self) -> impl Iterator<Item = &str> {
-        self.faces.iter().map(|face| face.face.as_str())
-    }
-
     /// `text` split into runs by the font that draws them; a run's `slot`
-    /// indexes `faces()`.
+    /// indexes the chain, the text font first.
     pub(super) fn runs<'a>(&self, text: &'a str) -> Vec<GlyphRun<'a>> {
         split_runs(text, self.faces.len(), |slot, c| {
             self.faces[slot].coverage.contains(c)
@@ -358,6 +348,35 @@ unsafe fn gdi_covered_chars(hdc: HDC, metrics: &TEXTMETRICW) -> Vec<u16> {
         .collect()
 }
 
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+
+    impl GlyphFonts {
+        /// The face names GDI reports for the chain's fonts, the text font
+        /// first.
+        pub(in crate::win32) fn faces(&self) -> Vec<String> {
+            unsafe {
+                let screen = GetDC(null_mut());
+                assert!(!screen.is_null(), "GetDC must succeed for the screen");
+                let names = self
+                    .faces
+                    .iter()
+                    .map(|face| {
+                        let previous = SelectObject(screen, face.font.0);
+                        let name = text_face(screen);
+                        SelectObject(screen, previous);
+                        name
+                    })
+                    .collect();
+                ReleaseDC(null_mut(), screen);
+                names
+            }
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::super::TextFont;
@@ -375,16 +394,17 @@ mod tests {
         }
     }
 
-    fn faces(glyphs: &GlyphFonts) -> Vec<&str> {
-        glyphs.faces().collect()
+    fn faces(glyphs: &GlyphFonts) -> Vec<String> {
+        glyphs.faces()
     }
 
     /// `text`'s runs as `(text, face)`.
-    fn runs<'a>(glyphs: &'a GlyphFonts, text: &str) -> Vec<(String, &'a str)> {
+    fn runs(glyphs: &GlyphFonts, text: &str) -> Vec<(String, String)> {
+        let faces = glyphs.faces();
         glyphs
             .runs(text)
             .into_iter()
-            .map(|run| (run.text.into_owned(), glyphs.faces[run.slot].face.as_str()))
+            .map(|run| (run.text.into_owned(), faces[run.slot].clone()))
             .collect()
     }
 
@@ -433,10 +453,10 @@ mod tests {
         assert_eq!(
             runs(&font.glyphs, "it’s — ok 👍\u{FE0F} 🐶"),
             [
-                ("it’s — ok ".to_owned(), "Fixedsys"),
-                ("👍".to_owned(), "Noto Emoji"),
-                (" ".to_owned(), "Fixedsys"),
-                ("🐶".to_owned(), "Noto Emoji"),
+                ("it’s — ok ".to_owned(), "Fixedsys".to_owned()),
+                ("👍".to_owned(), "Noto Emoji".to_owned()),
+                (" ".to_owned(), "Fixedsys".to_owned()),
+                ("🐶".to_owned(), "Noto Emoji".to_owned()),
             ]
         );
         // Wine's Tahoma has Cyrillic but no Greek, and no harness font has
@@ -444,13 +464,13 @@ mod tests {
         assert_eq!(
             runs(&font.glyphs, "Привет, ελληνικά"),
             [
-                ("Привет".to_owned(), "Tahoma"),
-                (", ελληνικά".to_owned(), "Fixedsys"),
+                ("Привет".to_owned(), "Tahoma".to_owned()),
+                (", ελληνικά".to_owned(), "Fixedsys".to_owned()),
             ]
         );
         assert_eq!(
             runs(&font.glyphs, "日本"),
-            [("日本".to_owned(), "Fixedsys")]
+            [("日本".to_owned(), "Fixedsys".to_owned())]
         );
     }
 
@@ -459,7 +479,10 @@ mod tests {
         let font = text_font("Courier", 12);
         assert_eq!(faces(&font.glyphs), ["Courier", "Tahoma", "Noto Emoji"]);
         assert_eq!(font.glyphs.metrics().tmHeight, 13);
-        assert_eq!(runs(&font.glyphs, "Ж"), [("Ж".to_owned(), "Tahoma")]);
+        assert_eq!(
+            runs(&font.glyphs, "Ж"),
+            [("Ж".to_owned(), "Tahoma".to_owned())]
+        );
     }
 
     #[test]
@@ -510,12 +533,12 @@ mod tests {
     #[test]
     fn fallback_fonts_share_the_text_font_baseline_cell() {
         let font = text_font("Fixedsys", 9);
-        for face in &font.glyphs.faces[1..] {
+        let names = faces(&font.glyphs);
+        for (face, name) in font.glyphs.faces.iter().zip(names).skip(1) {
             let metrics = with_screen_dc(face.font.0, |hdc| unsafe { text_metrics(hdc) });
             assert!(
                 (metrics.tmHeight - font.glyphs.metrics().tmHeight).abs() <= 1,
-                "{} is {} px tall",
-                face.face,
+                "{name} is {} px tall",
                 metrics.tmHeight
             );
         }
@@ -524,8 +547,8 @@ mod tests {
     #[test]
     fn cmap_parser_matches_gdi_for_tahoma() {
         let font = text_font("Fixedsys", 9);
+        assert_eq!(faces(&font.glyphs)[1], "Tahoma");
         let tahoma = &font.glyphs.faces[1];
-        assert_eq!(tahoma.face, "Tahoma");
         let Coverage::Cmap(cmap) = &tahoma.coverage else {
             panic!("Tahoma is TrueType");
         };

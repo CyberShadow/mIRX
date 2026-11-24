@@ -16,13 +16,13 @@ use windows_sys::Win32::UI::Controls::{
     BST_CHECKED, BST_INDETERMINATE, BST_UNCHECKED, LVN_ITEMCHANGED, LVS_REPORT, LVS_SHOWSELALWAYS,
     LVS_SINGLESEL, NMHDR,
 };
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BM_SETSTYLE, BS_AUTO3STATE, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON,
-    BS_PUSHBUTTON, CB_ADDSTRING, CB_GETCOUNT, CB_GETLBTEXT, CB_GETLBTEXTLEN, CB_RESETCONTENT,
-    CBS_AUTOHSCROLL, CBS_DROPDOWN, DefWindowProcW, ES_AUTOHSCROLL, IDCANCEL, IDOK, MoveWindow,
-    SendMessageW, SetWindowTextW, WM_CLOSE, WM_COMMAND, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY,
-    WNDPROC, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    BS_PUSHBUTTON, CB_ADDSTRING, CB_RESETCONTENT, CBS_AUTOHSCROLL, CBS_DROPDOWN, DefWindowProcW,
+    ES_AUTOHSCROLL, IDCANCEL, IDOK, MoveWindow, SendMessageW, SetWindowTextW, WM_CLOSE, WM_COMMAND,
+    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WNDPROC, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP,
+    WS_VISIBLE, WS_VSCROLL,
 };
 
 use mirx_core::{
@@ -35,9 +35,7 @@ use super::channel_central::{
 };
 use super::dialogs::{DialogMetrics, create_modal_dialog, dialog_text_size, end_modal_dialog};
 use super::dpi::Dpi;
-use super::list_view::{
-    LIST_VIEW_CLASS_NAME, dump_list, fill_list, selected_row, set_up_report_list,
-};
+use super::list_view::{LIST_VIEW_CLASS_NAME, fill_list, selected_row, set_up_report_list};
 use super::room_model::room_by_id;
 use super::timestamp::LocalTimeFn;
 use super::window_data::{self, WindowData};
@@ -46,7 +44,6 @@ use super::{
     create_child_window, enqueue_command, read_window_text, run_modal_dialog,
     set_local_command_status, state_mut, state_ref, wide_null,
 };
-use crate::automation::{UiChannelCentral, UiCheckBox, UiCheckState};
 
 pub(super) const CHANNEL_CENTRAL_DIALOG_CLASS_NAME: &str = "mirxWin32ChannelCentralDialog";
 
@@ -616,53 +613,64 @@ unsafe extern "system" fn window_proc(
     }
 }
 
-/// Channel Central as automation sees it, read back from its controls.
-pub(super) unsafe fn dump(dialog: HWND) -> UiChannelCentral {
-    let state = dialog_state(dialog);
-    let controls = &state.controls;
-    let enabled = |control| IsWindowEnabled(control) != 0;
-    let checkbox = |control| UiCheckBox {
-        state: match check_state(control) {
-            Some(true) => UiCheckState::Checked,
-            Some(false) => UiCheckState::Unchecked,
-            None => UiCheckState::Indeterminate,
-        },
-        enabled: enabled(control),
-    };
-    let topic_items = (0..SendMessageW(controls.topic, CB_GETCOUNT, 0, 0) as usize)
-        .map(|index| {
-            let length = SendMessageW(controls.topic, CB_GETLBTEXTLEN, index, 0) as usize;
-            let mut buffer = vec![0u16; length + 1];
-            SendMessageW(
-                controls.topic,
-                CB_GETLBTEXT,
-                index,
-                buffer.as_mut_ptr() as LPARAM,
-            );
-            String::from_utf16_lossy(&buffer[..length])
-        })
-        .collect();
-    let (ban_rows, ban_row_click_points) = dump_list(controls.bans, 4);
-    UiChannelCentral {
-        caption: read_window_text(dialog),
-        room_id: state.room_id.clone(),
-        status: read_window_text(controls.status),
-        name: read_window_text(controls.name),
-        name_enabled: enabled(controls.name),
-        topic: read_window_text(controls.topic),
-        topic_items,
-        topic_enabled: enabled(controls.topic),
-        ban_rows,
-        ban_row_click_points,
-        remove_enabled: enabled(controls.remove),
-        topic_by_operators: checkbox(controls.topic_by_operators),
-        invite_only: checkbox(controls.invite_only),
-        moderated: checkbox(controls.moderated),
-        private: checkbox(controls.private),
-        ok_enabled: enabled(controls.ok),
-    }
-}
-
 /// The dialog's class and procedure, registered with the other dialogs'.
 pub(super) const DIALOG_CLASS: (&str, WNDPROC) =
     (CHANNEL_CENTRAL_DIALOG_CLASS_NAME, Some(window_proc));
+
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+    use crate::automation::{UiChannelCentral, UiCheckBox, UiCheckState};
+    use crate::win32::list_view::automation::dump_list;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CB_GETCOUNT, CB_GETLBTEXT, CB_GETLBTEXTLEN};
+
+    /// Channel Central as automation sees it, read back from its controls.
+    pub(in crate::win32) unsafe fn dump(dialog: HWND) -> UiChannelCentral {
+        let state = dialog_state(dialog);
+        let controls = &state.controls;
+        let enabled = |control| IsWindowEnabled(control) != 0;
+        let checkbox = |control| UiCheckBox {
+            state: match check_state(control) {
+                Some(true) => UiCheckState::Checked,
+                Some(false) => UiCheckState::Unchecked,
+                None => UiCheckState::Indeterminate,
+            },
+            enabled: enabled(control),
+        };
+        let topic_items = (0..SendMessageW(controls.topic, CB_GETCOUNT, 0, 0) as usize)
+            .map(|index| {
+                let length = SendMessageW(controls.topic, CB_GETLBTEXTLEN, index, 0) as usize;
+                let mut buffer = vec![0u16; length + 1];
+                SendMessageW(
+                    controls.topic,
+                    CB_GETLBTEXT,
+                    index,
+                    buffer.as_mut_ptr() as LPARAM,
+                );
+                String::from_utf16_lossy(&buffer[..length])
+            })
+            .collect();
+        let (ban_rows, ban_row_click_points) = dump_list(controls.bans, 4);
+        UiChannelCentral {
+            caption: read_window_text(dialog),
+            room_id: state.room_id.clone(),
+            status: read_window_text(controls.status),
+            name: read_window_text(controls.name),
+            name_enabled: enabled(controls.name),
+            topic: read_window_text(controls.topic),
+            topic_items,
+            topic_enabled: enabled(controls.topic),
+            ban_rows,
+            ban_row_click_points,
+            remove_enabled: enabled(controls.remove),
+            topic_by_operators: checkbox(controls.topic_by_operators),
+            invite_only: checkbox(controls.invite_only),
+            moderated: checkbox(controls.moderated),
+            private: checkbox(controls.private),
+            ok_enabled: enabled(controls.ok),
+        }
+    }
+}

@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use mirx_core::MatrixLink;
 
-use super::colors::colorref_hex;
+use super::colors::automation::colorref_hex;
 use super::hotlinks::LinkKind;
 use super::settings::{ActivityColors, Settings};
 use super::timeline_layout::{line_nick_color, timeline_row_color};
@@ -320,13 +320,7 @@ unsafe fn dump_text_font(state: &WindowState, view_id: &ViewId, view: &MdiViewSt
         line_height: timeline_state.line_height,
         edit_height: edit_rect.bottom - edit_rect.top,
         average_char_width: state.text_font.glyphs.metrics().tmAveCharWidth,
-        fallback_faces: state
-            .text_font
-            .glyphs
-            .faces()
-            .skip(1)
-            .map(str::to_owned)
-            .collect(),
+        fallback_faces: state.text_font.glyphs.faces().into_iter().skip(1).collect(),
     }
 }
 
@@ -563,7 +557,7 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
     let mdi = dump_mdi_state(hwnd)?;
     let status_bar = dump_status_bar_state(hwnd)?;
     let switchbar = dump_switchbar_state(hwnd)?;
-    let toolbar = toolbar::dump_toolbar(hwnd);
+    let toolbar = toolbar::automation::dump_toolbar(hwnd);
     let frame_layout = dump_frame_layout(hwnd);
     let state = state_ref(hwnd);
     let active_view = state
@@ -617,22 +611,22 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         options_dialog: state
             .harness
             .options_dialog
-            .map(|dialog| options_dialog::dump(dialog))
+            .map(|dialog| options_dialog::automation::dump(dialog))
             .transpose()?,
         colors_dialog: state
             .harness
             .colors_dialog
-            .map(|dialog| colors_dialog::dump(dialog)),
+            .map(|dialog| colors_dialog::automation::dump(dialog)),
         address_book: state
             .harness
             .address_book_dialog
-            .map(|dialog| address_book_dialog::dump(dialog)),
+            .map(|dialog| address_book_dialog::automation::dump(dialog)),
         channel_central: state
             .channel_central_dialog
-            .map(|dialog| channel_central_dialog::dump(dialog)),
+            .map(|dialog| channel_central_dialog::automation::dump(dialog)),
         sessions: state
             .sessions_dialog
-            .map(|dialog| sessions_dialog::dump(dialog)),
+            .map(|dialog| sessions_dialog::automation::dump(dialog)),
         tray: dump_tray(hwnd),
         ignored_users: state.model.ignored_users.clone(),
         aliases: state.aliases.aliases().source().to_vec(),

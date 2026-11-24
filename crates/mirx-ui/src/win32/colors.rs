@@ -35,12 +35,6 @@ pub(super) const fn colorref(color: TextColor) -> u32 {
     rgb(color.red, color.green, color.blue)
 }
 
-/// A GDI colour as `#rrggbb`, as the automation dump shows colours.
-pub(super) fn colorref_hex(colorref: u32) -> String {
-    let [red, green, blue, _] = colorref.to_le_bytes();
-    format!("#{red:02x}{green:02x}{blue:02x}")
-}
-
 /// One of the 16 colours of [`PALETTE`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct PaletteIndex(u8);
@@ -484,8 +478,20 @@ impl Drop for SchemeBrushes {
     }
 }
 
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    /// A GDI colour as `#rrggbb`, as the automation dump shows colours.
+    pub(in crate::win32) fn colorref_hex(colorref: u32) -> String {
+        let [red, green, blue, _] = colorref.to_le_bytes();
+        format!("#{red:02x}{green:02x}{blue:02x}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::automation::*;
     use super::*;
 
     #[test]

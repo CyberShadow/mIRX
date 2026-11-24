@@ -180,60 +180,68 @@ pub(super) unsafe fn refresh_toolbar(hwnd: HWND) {
     }
 }
 
-/// The toolbar's buttons as the control holds them, separators omitted;
-/// their places in the frame's client coordinates.
-pub(super) unsafe fn dump_toolbar(hwnd: HWND) -> Vec<UiToolbarButton> {
-    use windows_sys::Win32::UI::Controls::{TB_GETBUTTON, TB_GETBUTTONTEXTW, TBSTATE_HIDDEN};
-    let toolbar = state_ref(hwnd).controls.toolbar;
-    let count = SendMessageW(toolbar, TB_BUTTONCOUNT, 0, 0) as usize;
-    (0..count)
-        .filter_map(|index| {
-            let mut button = TBBUTTON::default();
-            SendMessageW(
-                toolbar,
-                TB_GETBUTTON,
-                index,
-                &mut button as *mut TBBUTTON as LPARAM,
-            );
-            if u32::from(button.fsStyle) & BTNS_SEP != 0 {
-                return None;
-            }
-            let mut text = [0u16; 64];
-            let len = SendMessageW(
-                toolbar,
-                TB_GETBUTTONTEXTW,
-                button.idCommand as usize,
-                text.as_mut_ptr() as LPARAM,
-            );
-            let mut rect = RECT::default();
-            SendMessageW(
-                toolbar,
-                TB_GETITEMRECT,
-                index,
-                &mut rect as *mut RECT as LPARAM,
-            );
-            MapWindowPoints(toolbar, hwnd, (&mut rect as *mut RECT).cast(), 2);
-            let state = u32::from(button.fsState);
-            Some(UiToolbarButton {
-                command_id: u32::try_from(button.idCommand).expect("command ids are positive"),
-                label: String::from_utf16_lossy(&text[..len as usize]),
-                hidden: state & TBSTATE_HIDDEN != 0,
-                enabled: state & TBSTATE_ENABLED != 0,
-                rect: UiRect {
-                    x: rect.left,
-                    y: rect.top,
-                    width: rect.right - rect.left,
-                    height: rect.bottom - rect.top,
-                },
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+
+    /// The toolbar's buttons as the control holds them, separators omitted;
+    /// their places in the frame's client coordinates.
+    pub(in crate::win32) unsafe fn dump_toolbar(hwnd: HWND) -> Vec<UiToolbarButton> {
+        use windows_sys::Win32::UI::Controls::{TB_GETBUTTON, TB_GETBUTTONTEXTW, TBSTATE_HIDDEN};
+        let toolbar = state_ref(hwnd).controls.toolbar;
+        let count = SendMessageW(toolbar, TB_BUTTONCOUNT, 0, 0) as usize;
+        (0..count)
+            .filter_map(|index| {
+                let mut button = TBBUTTON::default();
+                SendMessageW(
+                    toolbar,
+                    TB_GETBUTTON,
+                    index,
+                    &mut button as *mut TBBUTTON as LPARAM,
+                );
+                if u32::from(button.fsStyle) & BTNS_SEP != 0 {
+                    return None;
+                }
+                let mut text = [0u16; 64];
+                let len = SendMessageW(
+                    toolbar,
+                    TB_GETBUTTONTEXTW,
+                    button.idCommand as usize,
+                    text.as_mut_ptr() as LPARAM,
+                );
+                let mut rect = RECT::default();
+                SendMessageW(
+                    toolbar,
+                    TB_GETITEMRECT,
+                    index,
+                    &mut rect as *mut RECT as LPARAM,
+                );
+                MapWindowPoints(toolbar, hwnd, (&mut rect as *mut RECT).cast(), 2);
+                let state = u32::from(button.fsState);
+                Some(UiToolbarButton {
+                    command_id: u32::try_from(button.idCommand).expect("command ids are positive"),
+                    label: String::from_utf16_lossy(&text[..len as usize]),
+                    hidden: state & TBSTATE_HIDDEN != 0,
+                    enabled: state & TBSTATE_ENABLED != 0,
+                    rect: UiRect {
+                        x: rect.left,
+                        y: rect.top,
+                        width: rect.right - rect.left,
+                        height: rect.bottom - rect.top,
+                    },
+                })
             })
-        })
-        .collect()
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::app_icon::TOOLBAR_ICON_IDS;
     use super::super::test_fixtures::*;
+    use super::automation::*;
     use super::*;
 
     #[test]

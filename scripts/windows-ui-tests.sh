@@ -71,8 +71,9 @@ flock 9
 started=$SECONDS
 
 # Build once; take each suite's test executable (and the app the tests launch,
-# for the prefix warm-up) from cargo's JSON messages.
-build_json=$(cargo test --target x86_64-pc-windows-gnu -p mirx-ui \
+# for the prefix warm-up) from cargo's JSON messages. The suites drive the app
+# through the automation harness, which only the `automation` feature builds.
+build_json=$(cargo test --target x86_64-pc-windows-gnu -p mirx-ui --features automation \
   "${suites[@]/#/--test=}" --no-run --message-format=json)
 artifact_executable() {
   local kind=$1 name=$2

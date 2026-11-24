@@ -4,10 +4,16 @@ use crate::{AppCommand, HELP};
 
 pub(crate) fn run(command: AppCommand) -> ExitCode {
     match command {
-        AppCommand::Run(_) => {
+        AppCommand::Run => {
             println!("mirx-ui non-windows stub");
             ExitCode::SUCCESS
         }
+        #[cfg(any(test, feature = "automation"))]
+        AppCommand::Automation(_) => {
+            println!("mirx-ui non-windows stub");
+            ExitCode::SUCCESS
+        }
+        #[cfg(any(test, feature = "automation"))]
         AppCommand::SelfTest => {
             println!("{}", mirx_core::ui_self_test_line());
             ExitCode::SUCCESS

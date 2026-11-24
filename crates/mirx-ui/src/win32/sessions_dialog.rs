@@ -14,7 +14,7 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
     LVN_ITEMCHANGED, LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, NMHDR,
 };
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BS_DEFPUSHBUTTON, BS_PUSHBUTTON, DM_GETDEFID, DefWindowProcW, IDCANCEL, MoveWindow,
     SetWindowTextW, WM_CLOSE, WM_COMMAND, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WNDPROC, WS_CHILD,
@@ -30,7 +30,7 @@ use super::dialogs::{
 };
 use super::dpi::Dpi;
 use super::list_view::{
-    LIST_VIEW_CLASS_NAME, dump_list, fill_list, select_row, selected_row, set_up_report_list,
+    LIST_VIEW_CLASS_NAME, fill_list, select_row, selected_row, set_up_report_list,
 };
 use super::sessions::{
     EMPTY_NAME_TEXT, READING_TEXT, RenameOutcome, rename_outcome, session_actions, session_rows,
@@ -39,11 +39,10 @@ use super::sessions::{
 use super::timestamp::LocalTimeFn;
 use super::window_data::{self, WindowData};
 use super::{
-    BUTTON_CLASS_NAME, STATIC_CLASS_NAME, create_child_window, enqueue_command, read_window_text,
-    run_local_command, run_modal_dialog, show_single_field_dialog, state_mut, state_ref,
-    submit_device_rename, wide_null,
+    BUTTON_CLASS_NAME, STATIC_CLASS_NAME, create_child_window, enqueue_command, run_local_command,
+    run_modal_dialog, show_single_field_dialog, state_mut, state_ref, submit_device_rename,
+    wide_null,
 };
-use crate::automation::UiSessions;
 
 pub(super) const SESSIONS_DIALOG_CLASS_NAME: &str = "mirxWin32SessionsDialog";
 
@@ -447,24 +446,35 @@ unsafe extern "system" fn window_proc(
     }
 }
 
-/// The Sessions dialog as automation sees it, read back from its controls.
-pub(super) unsafe fn dump(dialog: HWND) -> UiSessions {
-    let state = dialog_state(dialog);
-    let controls = &state.controls;
-    let enabled = |control| IsWindowEnabled(control) != 0;
-    let (rows, row_click_points) = dump_list(controls.list, 4);
-    UiSessions {
-        caption: read_window_text(dialog),
-        status: read_window_text(controls.status),
-        rows,
-        row_click_points,
-        selected: selected_row(controls.list),
-        verify_enabled: enabled(controls.verify),
-        rename_enabled: enabled(controls.rename),
-        sign_out_enabled: enabled(controls.sign_out),
-        refresh_enabled: enabled(controls.refresh),
-    }
-}
-
 /// The dialog's class and procedure, registered with the other dialogs'.
 pub(super) const DIALOG_CLASS: (&str, WNDPROC) = (SESSIONS_DIALOG_CLASS_NAME, Some(window_proc));
+
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+    use crate::automation::UiSessions;
+    use crate::win32::list_view::automation::dump_list;
+    use crate::win32::read_window_text;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+
+    /// The Sessions dialog as automation sees it, read back from its controls.
+    pub(in crate::win32) unsafe fn dump(dialog: HWND) -> UiSessions {
+        let state = dialog_state(dialog);
+        let controls = &state.controls;
+        let enabled = |control| IsWindowEnabled(control) != 0;
+        let (rows, row_click_points) = dump_list(controls.list, 4);
+        UiSessions {
+            caption: read_window_text(dialog),
+            status: read_window_text(controls.status),
+            rows,
+            row_click_points,
+            selected: selected_row(controls.list),
+            verify_enabled: enabled(controls.verify),
+            rename_enabled: enabled(controls.rename),
+            sign_out_enabled: enabled(controls.sign_out),
+            refresh_enabled: enabled(controls.refresh),
+        }
+    }
+}

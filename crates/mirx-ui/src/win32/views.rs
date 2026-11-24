@@ -689,58 +689,6 @@ unsafe fn new_child_should_maximize(mdi_client: HWND) -> bool {
     active == 0 || active_maximized != 0
 }
 
-/// Shows a view's window maximized, normal or minimized.
-pub(super) unsafe fn set_view_window_state(
-    hwnd: HWND,
-    view_id: &ViewId,
-    window_state: MdiWindowState,
-) -> Result<(), String> {
-    let state = state_ref(hwnd);
-    let child = state
-        .views
-        .get(view_id)
-        .ok_or_else(|| format!("view has no window: {view_id:?}"))?
-        .child;
-    let mdi_client = state.controls.mdi_client;
-    match window_state {
-        MdiWindowState::Maximized => {
-            SendMessageW(mdi_client, WM_MDIMAXIMIZE, child as WPARAM, 0);
-        }
-        MdiWindowState::Normal => {
-            SendMessageW(mdi_client, WM_MDIRESTORE, child as WPARAM, 0);
-        }
-        MdiWindowState::Minimized => {
-            ShowWindow(child, SW_MINIMIZE);
-        }
-    }
-    Ok(())
-}
-
-pub(super) unsafe fn mdi_window_placement(mdi_client: HWND, child: HWND) -> MdiWindowPlacement {
-    let state = if IsZoomed(child) != 0 {
-        MdiWindowState::Maximized
-    } else if IsIconic(child) != 0 {
-        MdiWindowState::Minimized
-    } else {
-        MdiWindowState::Normal
-    };
-    let mut rect = RECT::default();
-    GetWindowRect(child, &mut rect);
-    MapWindowPoints(
-        null_mut(),
-        mdi_client,
-        (&mut rect as *mut RECT).cast::<POINT>(),
-        2,
-    );
-    MdiWindowPlacement {
-        state,
-        x: rect.left,
-        y: rect.top,
-        width: rect.right - rect.left,
-        height: rect.bottom - rect.top,
-    }
-}
-
 /// Creates the child's content window for its view and its editbox, and
 /// lays them out.
 unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(), String> {
@@ -1567,6 +1515,68 @@ unsafe fn handle_native_mdi_child_activation(child: HWND) -> Result<(), String> 
     finish_view_activation_chrome(frame)?;
     SetFocus(mdi_child_focus(child));
     Ok(())
+}
+
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+
+    /// Shows a view's window maximized, normal or minimized.
+    pub(in crate::win32) unsafe fn set_view_window_state(
+        hwnd: HWND,
+        view_id: &ViewId,
+        window_state: MdiWindowState,
+    ) -> Result<(), String> {
+        let state = state_ref(hwnd);
+        let child = state
+            .views
+            .get(view_id)
+            .ok_or_else(|| format!("view has no window: {view_id:?}"))?
+            .child;
+        let mdi_client = state.controls.mdi_client;
+        match window_state {
+            MdiWindowState::Maximized => {
+                SendMessageW(mdi_client, WM_MDIMAXIMIZE, child as WPARAM, 0);
+            }
+            MdiWindowState::Normal => {
+                SendMessageW(mdi_client, WM_MDIRESTORE, child as WPARAM, 0);
+            }
+            MdiWindowState::Minimized => {
+                ShowWindow(child, SW_MINIMIZE);
+            }
+        }
+        Ok(())
+    }
+
+    pub(in crate::win32) unsafe fn mdi_window_placement(
+        mdi_client: HWND,
+        child: HWND,
+    ) -> MdiWindowPlacement {
+        let state = if IsZoomed(child) != 0 {
+            MdiWindowState::Maximized
+        } else if IsIconic(child) != 0 {
+            MdiWindowState::Minimized
+        } else {
+            MdiWindowState::Normal
+        };
+        let mut rect = RECT::default();
+        GetWindowRect(child, &mut rect);
+        MapWindowPoints(
+            null_mut(),
+            mdi_client,
+            (&mut rect as *mut RECT).cast::<POINT>(),
+            2,
+        );
+        MdiWindowPlacement {
+            state,
+            x: rect.left,
+            y: rect.top,
+            width: rect.right - rect.left,
+            height: rect.bottom - rect.top,
+        }
+    }
 }
 
 #[cfg(test)]

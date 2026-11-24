@@ -30,10 +30,19 @@ impl AnsweredCommands {
     pub(super) fn is_answered(&self, id: CommandId) -> bool {
         id.get() <= self.below || self.above.contains(&id.get())
     }
+}
 
-    /// How many were answered: `sent()` minus this is what the core owes.
-    pub(super) fn count(&self) -> u64 {
-        self.below + self.above.len() as u64
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+
+    impl AnsweredCommands {
+        /// How many were answered: `sent()` minus this is what the core owes.
+        pub(in crate::win32) fn count(&self) -> u64 {
+            self.below + self.above.len() as u64
+        }
     }
 }
 

@@ -475,9 +475,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             serialize_success_json(&id, SelectViewResponse { active })
         }
         ParsedCommand::FindActiveView { id, args } => {
-            let window = state_ref(hwnd).active_view.clone();
-            let response = execute_view_find(hwnd, &window, &args.query)
-                .map(find_active_view_response)
+            let response = find_in_active_view(hwnd, &args.query)
                 .map_err(|message| failure_response(Some(id.clone()), "find_failed", message))?;
             serialize_success_json(&id, response)
         }
@@ -509,7 +507,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                     "the Options dialog is not open",
                 )
             })?;
-            options_dialog::select_path(dialog, &args.path).map_err(|message| {
+            options_dialog::automation::select_path(dialog, &args.path).map_err(|message| {
                 failure_response(Some(id.clone()), "unknown_options_page", message)
             })?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })

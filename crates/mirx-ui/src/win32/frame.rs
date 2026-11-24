@@ -257,6 +257,7 @@ unsafe extern "system" fn window_proc(
             }
             0
         }
+        #[cfg(any(test, feature = "automation"))]
         WM_COPYDATA => handle_copydata(hwnd, lparam),
         WM_NOTIFY => {
             let header = &*(lparam as *const NMHDR);
@@ -280,6 +281,7 @@ unsafe extern "system" fn window_proc(
                 _ => default_window_proc(hwnd, message, wparam, lparam),
             }
         }
+        #[cfg(any(test, feature = "automation"))]
         WM_SELF_TEST => {
             if let Err(message) = run_self_test(hwnd) {
                 state_mut(hwnd).exit_code.store(1, Ordering::Relaxed);

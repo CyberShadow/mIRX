@@ -58,27 +58,6 @@ pub(super) fn page_tree_index(page: OptionsPage) -> usize {
         .expect("every page is in the tree")
 }
 
-/// Each tree item's path: `Connect/Options`.
-pub(super) fn tree_paths() -> Vec<String> {
-    let mut category = "";
-    OPTIONS_TREE
-        .iter()
-        .map(|(label, depth, _)| match depth {
-            0 => {
-                category = label;
-                (*label).to_owned()
-            }
-            1 => format!("{category}/{label}"),
-            _ => unreachable!("the tree is two levels deep"),
-        })
-        .collect()
-}
-
-/// The tree item whose path (`Chat/Messages`) is `path`.
-pub(super) fn tree_index(path: &str) -> Option<usize> {
-    tree_paths().iter().position(|item_path| item_path == path)
-}
-
 /// The fields of the form, for pointing at the one that is wrong.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OptionsField {
@@ -308,10 +287,39 @@ impl HighlightList {
     }
 }
 
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+
+    /// Each tree item's path: `Connect/Options`.
+    pub(in crate::win32) fn tree_paths() -> Vec<String> {
+        let mut category = "";
+        OPTIONS_TREE
+            .iter()
+            .map(|(label, depth, _)| match depth {
+                0 => {
+                    category = label;
+                    (*label).to_owned()
+                }
+                1 => format!("{category}/{label}"),
+                _ => unreachable!("the tree is two levels deep"),
+            })
+            .collect()
+    }
+
+    /// The tree item whose path (`Chat/Messages`) is `path`.
+    pub(in crate::win32) fn tree_index(path: &str) -> Option<usize> {
+        tree_paths().iter().position(|item_path| item_path == path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::colors::PaletteIndex;
     use super::super::settings::{ButtonWidth, FontSetting, RetryDelay, RetryTimes, WindowBuffer};
+    use super::automation::*;
     use super::*;
 
     fn custom_settings() -> Settings {

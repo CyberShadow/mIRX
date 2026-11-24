@@ -15,6 +15,8 @@ use std::sync::{Arc, Mutex, mpsc::RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(any(test, feature = "automation"))]
+use mirx_core::MemberPowerRole;
 use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CommandId,
     CommandSender, ComposeFormat, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
@@ -23,8 +25,8 @@ use mirx_core::{
     E2eeStatus, EditMessageRequest, Event, ExportRoomKeysRequest, FetchRoomEventRequest,
     FetchRoomMediaRequest, HighlightWord, HistoryFrom, ImportRoomKeysRequest,
     InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, LoginMethod,
-    LoginRequest, LogoutRequest, MarkRoomReadRequest, MemberPowerRole, Operation, PresenceKind,
-    PublicRoomsPage, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
+    LoginRequest, LogoutRequest, MarkRoomReadRequest, Operation, PresenceKind, PublicRoomsPage,
+    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RenameDeviceRequest, RequestVerificationRequest,
     ResetE2eeIdentityRequest, RestoreSessionRequest, RetryDecryptionRequest, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
@@ -42,21 +44,26 @@ use mirx_core::{
     UserProfile, VerificationDirection, VerificationEmoji, VerificationFlowId, VerificationRequest,
     VerificationState, VerificationStateEvent, login_method, login_server, start,
 };
+#[cfg(any(test, feature = "automation"))]
 use serde::Serialize;
+#[cfg(any(test, feature = "automation"))]
 use serde_json::{Value, json};
+#[cfg(test)]
 use tokio::sync::mpsc::unbounded_channel;
 use windows_sys::Win32::Foundation::S_OK;
+#[cfg(any(test, feature = "automation"))]
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, FILETIME, GetLastError, GlobalFree, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM,
-    LRESULT, POINT, RECT, SYSTEMTIME, WPARAM,
+    FILETIME, GetLastError, GlobalFree, HWND, LPARAM, LRESULT, POINT, RECT, SYSTEMTIME, WPARAM,
 };
+#[cfg(any(test, feature = "automation"))]
+use windows_sys::Win32::Graphics::Gdi::GetTextFaceW;
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, ClientToScreen,
     CreateFontIndirectW, CreateSolidBrush, DEFAULT_CHARSET, DeleteObject, DrawFocusRect, EndPaint,
-    FW_BOLD, FW_NORMAL, FillRect, FrameRect, GetDC, GetSysColor, GetSysColorBrush, GetTextFaceW,
-    GetTextMetricsW, HBRUSH, HFONT, InvalidateRect, LOGFONTW, MapWindowPoints, PAINTSTRUCT,
-    ReleaseDC, ScreenToClient, SelectObject, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT,
-    TextOutW,
+    FW_BOLD, FW_NORMAL, FillRect, FrameRect, GetDC, GetSysColor, GetSysColorBrush, GetTextMetricsW,
+    HBRUSH, HFONT, InvalidateRect, LOGFONTW, MapWindowPoints, PAINTSTRUCT, ReleaseDC,
+    ScreenToClient, SelectObject, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
     GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectI,
@@ -67,12 +74,15 @@ use windows_sys::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
 use windows_sys::Win32::System::Com::{
     COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx,
 };
+#[cfg(any(test, feature = "automation"))]
 use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(any(test, feature = "automation"))]
 use windows_sys::Win32::System::Memory::{
-    CreateFileMappingW, FILE_MAP_ALL_ACCESS, GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock,
-    MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile, PAGE_READWRITE, UnmapViewOfFile,
+    CreateFileMappingW, FILE_MAP_ALL_ACCESS, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile,
+    PAGE_READWRITE, UnmapViewOfFile,
 };
+use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
 use windows_sys::Win32::UI::Controls::Dialogs::{
@@ -81,35 +91,37 @@ use windows_sys::Win32::UI::Controls::Dialogs::{
 };
 use windows_sys::Win32::UI::Controls::{
     BTNS_CHECK, BTNS_SHOWTEXT, CCS_NOPARENTALIGN, CCS_NORESIZE, CDDS_ITEMPREPAINT, CDDS_PREPAINT,
-    CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL, EM_SETSEL, HDM_GETITEMCOUNT,
-    HDM_GETITEMRECT, ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, ICC_TREEVIEW_CLASSES,
-    INITCOMMONCONTROLSEX, InitCommonControlsEx, LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCFMT_LEFT,
-    LVCFMT_RIGHT, LVCOLUMNW, LVIF_TEXT, LVIR_LABEL, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW,
-    LVM_GETCOLUMNW, LVM_GETCOUNTPERPAGE, LVM_GETHEADER, LVM_GETITEMCOUNT, LVM_GETITEMRECT,
-    LVM_GETITEMTEXTW, LVM_GETNEXTITEM, LVM_GETTOPINDEX, LVM_INSERTCOLUMNW,
+    CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL, EM_SETSEL, ICC_BAR_CLASSES,
+    ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX,
+    InitCommonControlsEx, LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCFMT_LEFT, LVCFMT_RIGHT, LVCOLUMNW,
+    LVIF_TEXT, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVM_GETNEXTITEM, LVM_INSERTCOLUMNW,
     LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMCOUNT, LVM_SETITEMSTATE, LVN_COLUMNCLICK,
     LVN_GETDISPINFOW, LVNI_SELECTED, LVS_EX_FULLROWSELECT, LVS_OWNERDATA, LVS_REPORT,
     LVS_SHOWSELALWAYS, LVS_SINGLESEL, LVSICF_NOSCROLL, MEASUREITEMSTRUCT, NM_CUSTOMDRAW, NM_DBLCLK,
     NM_RETURN, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NMLVDISPINFOW, NMTBCUSTOMDRAW, NMTREEVIEWW,
     NMTVCUSTOMDRAW, ODS_FOCUS, ODS_SELECTED, SB_SETTEXTW, SBARS_SIZEGRIP, STATUSCLASSNAMEW,
     SetScrollInfo, TB_ADDBUTTONSW, TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE, TB_CHECKBUTTON,
-    TB_DELETEBUTTON, TB_GETBUTTONSIZE, TB_GETITEMRECT, TB_GETROWS, TB_SETBITMAPSIZE,
-    TB_SETBUTTONWIDTH, TB_SETEXTENDEDSTYLE, TB_SETMAXTEXTROWS, TBBUTTON, TBSTATE_CHECKED,
-    TBSTATE_ENABLED, TBSTYLE_EX_MIXEDBUTTONS, TBSTYLE_FLAT, TBSTYLE_WRAPABLE, TOOLBARCLASSNAMEW,
-    TVC_BYKEYBOARD, TVC_BYMOUSE, TVE_COLLAPSE, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT,
-    TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_IMAGE, TVIF_SELECTEDIMAGE,
-    TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_EXPANDED, TVITEMEXW, TVM_DELETEITEM,
-    TVM_EXPAND, TVM_GETITEMRECT, TVM_GETITEMSTATE, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST,
-    TVM_INSERTITEMW, TVM_SELECTITEM, TVN_ITEMEXPANDEDW, TVN_SELCHANGEDW, TVS_HASBUTTONS,
-    TVS_HASLINES, TVS_LINESATROOT,
+    TB_DELETEBUTTON, TB_GETBUTTONSIZE, TB_GETROWS, TB_SETBITMAPSIZE, TB_SETBUTTONWIDTH,
+    TB_SETEXTENDEDSTYLE, TB_SETMAXTEXTROWS, TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED,
+    TBSTYLE_EX_MIXEDBUTTONS, TBSTYLE_FLAT, TBSTYLE_WRAPABLE, TOOLBARCLASSNAMEW, TVC_BYKEYBOARD,
+    TVC_BYMOUSE, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_PARENT, TVGN_ROOT,
+    TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_IMAGE, TVIF_SELECTEDIMAGE, TVIF_TEXT, TVINSERTSTRUCTW,
+    TVINSERTSTRUCTW_0, TVIS_EXPANDED, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMRECT,
+    TVM_GETITEMSTATE, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM,
+    TVN_ITEMEXPANDEDW, TVN_SELCHANGEDW, TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT,
+};
+#[cfg(any(test, feature = "automation"))]
+use windows_sys::Win32::UI::Controls::{
+    HDM_GETITEMCOUNT, HDM_GETITEMRECT, LVIR_LABEL, LVM_GETCOLUMNW, LVM_GETCOUNTPERPAGE,
+    LVM_GETHEADER, LVM_GETITEMCOUNT, LVM_GETITEMRECT, LVM_GETITEMTEXTW, LVM_GETTOPINDEX,
+    TB_GETITEMRECT, TVE_COLLAPSE, TVM_GETITEMW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetFocus, GetKeyState, SetFocus, VK_CONTROL, VK_MENU, VK_SHIFT, VK_TAB,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     ACCEL, CreateAcceleratorTableW, DestroyAcceleratorTable, FALT, FCONTROL, FSHIFT, FVIRTKEY,
-    GetMenu, GetMenuItemInfoW, HACCEL, MENUITEMINFOW, MFS_CHECKED, MFS_DISABLED, MFT_BITMAP,
-    MFT_SEPARATOR, MIIM_FTYPE, MIIM_STATE, MIIM_STRING, MIIM_SUBMENU, TranslateAcceleratorW,
+    HACCEL, TranslateAcceleratorW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, BM_GETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON,
@@ -118,32 +130,40 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DefMDIChildProcW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, DrawMenuBar,
     ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_READONLY, EnableMenuItem,
     FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx, GA_ROOT, GWL_STYLE, GWLP_WNDPROC,
-    GetAncestor, GetClassNameW, GetClientRect, GetDlgItem, GetForegroundWindow, GetMenuItemCount,
-    GetMenuState, GetMessageW, GetParent, GetQueueStatus, GetScrollInfo, GetSystemMenu,
-    GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret, IDC_ARROW, IDYES, IsIconic, IsWindow,
-    IsWindowVisible, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCARETINDEX, LB_GETITEMRECT,
-    LB_GETSEL, LB_GETSELCOUNT, LB_GETSELITEMS, LB_GETTEXT, LB_GETTEXTLEN, LB_GETTOPINDEX,
-    LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCARETINDEX, LB_SETITEMHEIGHT, LB_SETSEL,
-    LB_SETTOPINDEX, LBN_DBLCLK, LBS_EXTENDEDSEL, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY,
-    LBS_OWNERDRAWFIXED, LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION, MB_OK,
-    MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL, MESSAGEBOX_STYLE,
+    GetAncestor, GetClassNameW, GetClientRect, GetDlgItem, GetForegroundWindow, GetMessageW,
+    GetParent, GetScrollInfo, GetSystemMenu, GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret,
+    IDC_ARROW, IDYES, IsIconic, IsWindow, IsWindowVisible, IsZoomed, KillTimer, LB_ADDSTRING,
+    LB_ERR, LB_GETCARETINDEX, LB_GETSEL, LB_GETSELCOUNT, LB_GETSELITEMS, LB_GETTEXT, LB_GETTEXTLEN,
+    LB_GETTOPINDEX, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCARETINDEX, LB_SETITEMHEIGHT,
+    LB_SETSEL, LB_SETTOPINDEX, LBN_DBLCLK, LBS_EXTENDEDSEL, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT,
+    LBS_NOTIFY, LBS_OWNERDRAWFIXED, LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION,
+    MB_OK, MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL, MESSAGEBOX_STYLE,
     MF_BYCOMMAND, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    MF_UNCHECKED, MSG, MessageBoxW, MoveWindow, PM_QS_POSTMESSAGE, PM_REMOVE, PeekMessageW,
-    PostMessageW, PostQuitMessage, QS_ALLPOSTMESSAGE, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN,
-    SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE,
-    SC_MINIMIZE, SCROLLINFO, SHOW_WINDOW_CMD, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
-    SIZE_MINIMIZED, SW_HIDE, SW_MINIMIZE, SW_SHOW, SW_SHOWMINNOACTIVE, SendMessageW,
-    SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_ACTIVATEAPP, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
-    WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
+    MF_UNCHECKED, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
+    SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK,
+    SB_TOP, SB_VERT, SC_CLOSE, SC_MINIMIZE, SCROLLINFO, SHOW_WINDOW_CMD, SIF_ALL, SIF_PAGE,
+    SIF_POS, SIF_RANGE, SIF_TRACKPOS, SIZE_MINIMIZED, SW_HIDE, SW_SHOW, SW_SHOWMINNOACTIVE,
+    SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATEAPP, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND,
+    WM_CONTEXTMENU, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
     WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE,
     WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE,
-    WM_MDITILE, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_QUIT,
+    WM_MDITILE, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE,
     WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTEXT, WM_SIZE, WM_SYSCOMMAND, WM_TIMER,
     WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
     WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP,
     WS_VISIBLE, WS_VSCROLL,
+};
+#[cfg(any(test, feature = "automation"))]
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetMenu, GetMenuItemInfoW, MENUITEMINFOW, MFS_CHECKED, MFS_DISABLED, MFT_BITMAP, MFT_SEPARATOR,
+    MIIM_FTYPE, MIIM_STATE, MIIM_STRING, MIIM_SUBMENU,
+};
+#[cfg(any(test, feature = "automation"))]
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetMenuItemCount, GetMenuState, GetQueueStatus, LB_GETITEMRECT, PM_QS_POSTMESSAGE, PM_REMOVE,
+    PeekMessageW, QS_ALLPOSTMESSAGE, SW_MINIMIZE, WM_COPYDATA, WM_QUIT,
 };
 
 use self::app_icon::{IconSize, app_icon};
@@ -155,40 +175,38 @@ use self::script::ScriptRuns;
 use crate::shared::{
     ConnectionState, LifecycleState, MdiArrangement, ReactionSummary, ViewActivityLevel,
 };
-use crate::{
-    AppCommand, FrameSize, HELP, RunOptions,
-    automation::{
-        AcceptedResponse, AutomationDialog, COMMAND_ID_DUMP_COMPOSE_TEXT,
-        COMMAND_ID_DUMP_ROOM_ACTIVITY, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING,
-        COMMAND_ID_WAIT_IDLE, ComposeKey, ComposeTextResponse, ContextMenuCommand,
-        DumpE2eeRecoverySetupResult, DumpIdentityWarning, DumpIdentityWarningKind,
-        DumpMemberMenuState, DumpMemberModerationAction, DumpMemberPowerRole,
-        DumpMembershipCommandAction, DumpMessageMenuState, DumpModel, DumpPowerLevelChange,
-        DumpRoomActivity, DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMenuState,
-        DumpRoomMessageActivityLine, DumpRoomPreviewMediaState, DumpSubmittedAwayCommand,
-        DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand, DumpSubmittedFileCommand,
-        DumpSubmittedHistoryCommand, DumpSubmittedMemberModerationCommand,
-        DumpSubmittedMembershipCommand, DumpSubmittedMessageCommand,
-        DumpSubmittedNotificationCommand, DumpSubmittedProfileCommand,
-        DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand,
-        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomListRequest,
-        DumpSubmittedRoomSettingsCommand, DumpSubmittedRoomTopicCommand,
-        DumpSubmittedTypingCommand, DumpSubmittedUserCommand, DumpSubmittedVerificationAction,
-        DumpSubmittedVerificationRequest, DumpUserCommandAction, DumpVerificationActionKind,
-        DumpVerificationMenuState, FailureEnvelope, FindActiveViewResponse, GetVersionResponse,
-        IdleProbe, ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, MdiWindowPlacement,
-        MdiWindowState, NavigationNode, NavigationNodeKey, NavigationPathSegment, ParsedCommand,
-        PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
-        SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind,
-        UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiPoint, UiRect,
-        UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState, UiTextFont, UiTimelineLine,
-        UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiToolbarButton, VerificationActionArgs,
-        ViewIdentity, WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
-        dump_room_from_summary, dump_room_message_send_state_from_core,
-        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
-        parse_command_request, success_response,
-    },
+use crate::{AppCommand, FrameSize, HELP};
+// The automation harness: its protocol, transport, dump and self-test.
+#[cfg(any(test, feature = "automation"))]
+use crate::automation::{
+    AcceptedResponse, AutomationDialog, COMMAND_ID_DUMP_COMPOSE_TEXT,
+    COMMAND_ID_DUMP_ROOM_ACTIVITY, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING,
+    COMMAND_ID_WAIT_IDLE, ComposeKey, ComposeTextResponse, ContextMenuCommand,
+    DumpE2eeRecoverySetupResult, DumpIdentityWarning, DumpIdentityWarningKind, DumpMemberMenuState,
+    DumpMemberModerationAction, DumpMemberPowerRole, DumpMembershipCommandAction,
+    DumpMessageMenuState, DumpModel, DumpPowerLevelChange, DumpRoomActivity, DumpRoomActivityKind,
+    DumpRoomActivityResponse, DumpRoomMenuState, DumpRoomMessageActivityLine,
+    DumpRoomPreviewMediaState, DumpSubmittedAwayCommand, DumpSubmittedDirectRoomCommand,
+    DumpSubmittedEditCommand, DumpSubmittedFileCommand, DumpSubmittedHistoryCommand,
+    DumpSubmittedMemberModerationCommand, DumpSubmittedMembershipCommand,
+    DumpSubmittedMessageCommand, DumpSubmittedNotificationCommand, DumpSubmittedProfileCommand,
+    DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand,
+    DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomListRequest,
+    DumpSubmittedRoomSettingsCommand, DumpSubmittedRoomTopicCommand, DumpSubmittedTypingCommand,
+    DumpSubmittedUserCommand, DumpSubmittedVerificationAction, DumpSubmittedVerificationRequest,
+    DumpUserCommandAction, DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
+    FindActiveViewResponse, GetVersionResponse, IdleProbe, ListRoomsResponse, LoadEventsResponse,
+    MdiState, MdiView, MdiWindowPlacement, MdiWindowState, NavigationNode, NavigationNodeKey,
+    NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView,
+    SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse,
+    StatusBarState, SwitchbarItem, SwitchbarState, UiActiveTimeline, UiComposeTarget,
+    UiComposeTargetKind, UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu, UiMenuItem,
+    UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState, UiTextFont,
+    UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiToolbarButton,
+    VerificationActionArgs, ViewIdentity, WaitIdleResponse, dump_error_from_core,
+    dump_room_activity_from_activity, dump_room_from_summary,
+    dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
+    dump_verification_from_state_event, failure_response, parse_command_request, success_response,
 };
 
 mod account;
@@ -200,7 +218,9 @@ mod app_icon;
 #[cfg(test)]
 mod app_resources;
 mod attachments;
+#[cfg(any(test, feature = "automation"))]
 mod automation_dump;
+#[cfg(any(test, feature = "automation"))]
 mod automation_host;
 mod channel_central;
 mod channel_central_dialog;
@@ -227,6 +247,10 @@ mod frame;
 mod frame_menus;
 mod glyph_fonts;
 mod glyph_runs;
+#[cfg(any(test, feature = "automation"))]
+mod harness;
+#[cfg(not(any(test, feature = "automation")))]
+#[path = "win32/no_harness.rs"]
 mod harness;
 mod hotlinks;
 mod identity;
@@ -260,6 +284,7 @@ mod room_model;
 mod room_targets;
 mod save_buffer;
 mod script;
+#[cfg(any(test, feature = "automation"))]
 mod self_test;
 mod send_file;
 mod sessions;
@@ -285,12 +310,14 @@ mod window_buffer;
 mod window_data;
 mod window_icons;
 
+#[cfg(any(test, feature = "automation"))]
+use account::submit_restore_session;
 use account::{
     CRASH_LOG_FILE_NAME, PROFILE_SUBDIR, delete_saved_session, load_or_create_store_passphrase,
     profile_dir, save_session, session_path, submit_cancel_identity_reset, submit_device_rename,
     submit_device_sign_out, submit_identity_reset, submit_login, submit_logout,
-    submit_recover_e2ee, submit_restore_saved_session, submit_restore_session,
-    submit_room_key_transfer, submit_setup_e2ee_recovery, submit_start_sync,
+    submit_recover_e2ee, submit_restore_saved_session, submit_room_key_transfer,
+    submit_setup_e2ee_recovery, submit_start_sync,
 };
 #[cfg(test)]
 use account::{SAVED_SESSION_VERSION, SESSION_FILE_NAME, SavedSession, load_saved_session};
@@ -299,6 +326,7 @@ use aliases::{ALIASES_FILE_NAME, AliasStore};
 use attachments::{
     PendingAttachmentSave, apply_attachment_save_media_event, save_selected_message_attachment,
 };
+#[cfg(any(test, feature = "automation"))]
 use automation_dump::{
     active_view_identity, dump_member_menu_state, dump_message_menu_state, dump_model_from_state,
     dump_room_activity_entry_from_room_entry, dump_room_menu_state, dump_ui_state,
@@ -306,7 +334,8 @@ use automation_dump::{
 };
 #[cfg(test)]
 use automation_dump::{dump_frame_layout, ui_rect};
-use automation_host::{enable_automation, handle_copydata, send_automation_request};
+#[cfg(any(test, feature = "automation"))]
+use automation_host::{handle_copydata, send_automation_request};
 use colors::{ColorItem, ColorScheme, EventItem, SchemeBrushes};
 use command_runner::clear_window;
 #[cfg(test)]
@@ -326,25 +355,31 @@ use commands::{
     NickColorTarget, NotifyCommand, RoomKeyTransfer, SlashCommand, TimestampCommand,
     VerificationAction, classify_input, local_command_history_entry,
 };
+#[cfg(any(test, feature = "automation"))]
+use compose::automation::{dump_compose_text, send_compose_key, submit_compose_from_control};
+#[cfg(any(test, feature = "automation"))]
+use compose::set_compose_text;
 #[cfg(test)]
 use compose::submit_compose_from_edit;
 use compose::{
     ComposeHistory, ComposeNickCompletion, active_compose_history, arm_compose_target,
     arm_compose_target_on_selected_message, armed_compose_target_row, away_notice, away_view,
-    compose_edit, disarm_vanished_compose_target, dump_compose_text, enqueue_send_message,
-    message_text_from_input, prefill_react_to_selected_message, replace_edit_selection,
-    resolve_compose_destination, run_send_file_dialog, send_compose_key, send_file_room_id,
-    send_room_message, set_compose_text, subclass_compose_edit, submit_compose_from_control,
+    compose_edit, disarm_vanished_compose_target, enqueue_send_message, message_text_from_input,
+    prefill_react_to_selected_message, replace_edit_selection, resolve_compose_destination,
+    run_send_file_dialog, send_file_room_id, send_room_message, subclass_compose_edit,
     submit_redact_selected_message, submit_send_file,
 };
 use connection::{ConnectAction, DisconnectAction};
 #[cfg(test)]
 use core_events::apply_core_event;
+#[cfg(any(test, feature = "automation"))]
+use core_events::automation::{apply_event_load, resolve_timeline_room_id};
 use core_events::{
-    announce_notify_changes, apply_event_load, apply_events_and_refresh,
-    drain_core_events_and_refresh, handle_core_events, handle_view_activation, operation_name,
-    resolve_timeline_room_id, submit_mark_room_read, submit_set_read_marker,
+    announce_notify_changes, handle_core_events, handle_view_activation, operation_name,
+    submit_mark_room_read, submit_set_read_marker,
 };
+#[cfg(any(test, feature = "automation"))]
+use core_events::{apply_events_and_refresh, drain_core_events_and_refresh};
 #[cfg(test)]
 use dialogs::{
     ABOUT_DIALOG_OK_ID, SINGLE_FIELD_DIALOG_CLASS_NAME, SingleFieldDialogState, create_about_dialog,
@@ -359,42 +394,52 @@ use dialogs::{
 use echo::{EchoLine, EchoLog};
 use errors::{ErrorDestination, error_destination};
 use file_dialogs::FileDialog;
+#[cfg(any(test, feature = "automation"))]
+use find::automation::{dump_active_find_state, find_in_active_view};
 #[cfg(test)]
 use find::build_view_find_state;
 use find::{
     ViewFindState, active_view_find_feedback, apply_find_to_active_view, begin_find_dialog,
-    continue_timeline_find_history_search_after_refresh, dump_active_find_state, execute_view_find,
-    find_active_view_response, pending_timeline_find_history_views, recompute_find_for_view,
+    continue_timeline_find_history_search_after_refresh, execute_view_find,
+    pending_timeline_find_history_views, recompute_find_for_view,
     scroll_timeline_to_source_row_index,
 };
 use fonts::{
     OwnedFont, TextFont, apply_font_setting, font_line_height, run_font_dialog, set_timeline_font,
     set_view_text_font,
 };
+#[cfg(any(test, feature = "automation"))]
+use frame::frame_status_text;
 #[cfg(test)]
 use frame::window_class_is;
 use frame::{
     apply_color_scheme, apply_nick_colors, create_main_window, default_window_proc,
-    frame_child_rect, frame_status_text, frame_window_for, init_common_controls, layout_controls,
-    message_loop, redraw_every_window, refresh_status_bar, register_frame_class,
-    set_switchbar_button_width, show_nick_colors,
+    frame_child_rect, frame_window_for, init_common_controls, layout_controls, message_loop,
+    redraw_every_window, refresh_status_bar, register_frame_class, set_switchbar_button_width,
+    show_nick_colors,
 };
 #[cfg(test)]
 use frame_menus::active_message_action_state;
-use frame_menus::{
-    DoubleClick, active_message_action_state_for_automation, active_room_action_state,
-    append_menu_text, connect, context_menu_command_id, context_menu_screen_point_for_lparam,
-    create_frame_menu, default_context_point_for_window, disconnect, double_click_action,
-    frame_menu_item_enabled, handle_menu_command, handle_switchbar_command,
-    handle_window_key_command, invoke_menu_command_for_automation,
+#[cfg(any(test, feature = "automation"))]
+use frame_menus::automation::{
+    context_menu_command_id, invoke_menu_command_for_automation,
     invoke_navigation_context_menu_for_automation, invoke_timeline_context_menu_for_automation,
-    log_out, log_out_warning, open_dialog_for_automation, refresh_menu_popup,
-    refresh_message_menu_state, refresh_room_menu_state, refresh_tools_menu_state,
-    run_room_keys_dialogs, select_timeline_event_for_automation, selected_message_quote_target,
+    open_dialog_for_automation, select_timeline_event_for_automation, window_menu_command_id,
+};
+use frame_menus::{
+    DoubleClick, active_room_action_state, append_menu_text, connect,
+    context_menu_screen_point_for_lparam, create_frame_menu, default_context_point_for_window,
+    disconnect, double_click_action, frame_menu_item_enabled, handle_menu_command,
+    handle_switchbar_command, handle_window_key_command, log_out_warning, refresh_menu_popup,
+    refresh_room_menu_state, run_room_keys_dialogs, selected_message_quote_target,
     selected_timeline_event_id, selected_timeline_event_id_for_automation,
     selected_timeline_media_attachment, show_context_menu, show_recover_e2ee_menu_dialog,
     show_reset_e2ee_menu_dialog, show_timeline_message_context_menu, timeline_row_is_selected,
-    window_menu_command_id,
+};
+#[cfg(any(test, feature = "automation"))]
+use frame_menus::{
+    active_message_action_state_for_automation, log_out, refresh_message_menu_state,
+    refresh_tools_menu_state,
 };
 use identity::IdentityWarning;
 #[cfg(test)]
@@ -437,33 +482,45 @@ use menus::{
     notification_menu_mode, notification_mode_label, verification_menu_action_enabled,
     view_menu_bar, view_menu_checks, window_key,
 };
+#[cfg(any(test, feature = "automation"))]
+use navigation::automation::{
+    dump_navigation_tree, dump_selected_navigation_path, read_tree_item_text,
+    select_navigation_path, select_navigation_view, set_navigation_expanded, view_id_from_identity,
+    view_identity_from_view_id,
+};
 #[cfg(test)]
 use navigation::navigation_layout;
 use navigation::{
-    NavItem, NavNode, ROOM_LIST_TITLE, SwitchbarFace, TreeItem, cycled_window,
-    dump_navigation_tree, dump_selected_navigation_path, expand_tree_item, handle_tree_selection,
-    insert_tree_item, nth_window, ordered_view_ids, read_tree_item_text,
-    refresh_tree_activity_colors, select_navigation_path, select_navigation_view, select_room,
-    select_tree_item, selected_tree_item, set_navigation_expanded,
+    NavItem, NavNode, ROOM_LIST_TITLE, SwitchbarFace, TreeItem, cycled_window, expand_tree_item,
+    handle_tree_selection, insert_tree_item, nth_window, ordered_view_ids,
+    refresh_tree_activity_colors, select_room, select_tree_item, selected_tree_item,
     show_navigation_room_context_menu, switchbar_custom_draw, sync_switchbar, sync_views_and_tree,
-    tree_custom_draw, tree_expansion_changed, view_caption, view_id_from_identity,
-    view_identity_from_view_id, view_short_title,
+    tree_custom_draw, tree_expansion_changed, view_caption, view_short_title,
 };
 use nick_completion::NickCompletion;
-use nick_list::{
-    ListedMember, active_member_action_state, active_view_members, draw_nick_list_item,
+#[cfg(any(test, feature = "automation"))]
+use nick_list::automation::{
     invoke_member_context_menu_for_automation, invoke_selected_member_context_menu_for_automation,
-    nick_list_items, query_double_clicked_member, refresh_member_menu_state, room_member_nick,
-    room_member_view_rows, run_member_menu_item, select_member_for_automation,
-    show_member_context_menu, sync_nick_list, text_font_item_height,
+    room_member_view_rows, select_member_for_automation,
 };
+use nick_list::{
+    ListedMember, active_view_members, draw_nick_list_item, nick_list_items,
+    query_double_clicked_member, room_member_nick, run_member_menu_item, show_member_context_menu,
+    sync_nick_list, text_font_item_height,
+};
+#[cfg(any(test, feature = "automation"))]
+use nick_list::{active_member_action_state, refresh_member_menu_state};
 use presence::PresenceBook;
 use replies::ComposeTarget;
 use room_list::{PageApplied, RoomListColumn, RoomListQuery, RoomListState};
+#[cfg(any(test, feature = "automation"))]
+use room_list_window::automation::dump_room_list;
 use room_list_window::{
-    add_room_list_columns, apply_public_rooms_page, dump_room_list, ensure_room_list_view,
-    handle_room_list_notify, refresh_room_list_rows, start_room_list,
+    add_room_list_columns, apply_public_rooms_page, ensure_room_list_view, handle_room_list_notify,
+    refresh_room_list_rows, start_room_list,
 };
+#[cfg(any(test, feature = "automation"))]
+use room_model::automation::validate_synthetic_room_activity_events;
 use room_model::{
     BufferTrim, LastMessageActivity, ReplyTarget, ReplyTargetState, RoomHistoryBackfillState,
     RoomPreviewMediaState, RoomViewModel, RoomViews, RoomWindowKind, activity_level_for,
@@ -473,19 +530,21 @@ use room_model::{
     raise_view_activity, read_target_for_room_activity, room_activity_belongs_to_thread,
     room_activity_event_id, room_activity_sender_user_id, room_activity_target_view_id,
     room_activity_update_marks_inactive_room, room_by_id, room_window_kind, rooms_in_window_order,
-    sendable_room_by_id, validate_synthetic_room_activity_events, view_id_is_valid,
-    view_id_is_valid_for_rooms, window_message,
+    sendable_room_by_id, view_id_is_valid, view_id_is_valid_for_rooms, window_message,
 };
 #[cfg(test)]
 use room_model::{RoomArrivals, ThreadViewModel};
 use room_targets::{RoomTargetError, resolve_room};
 use save_buffer::{run_save_buffer_dialog, save_window_buffer};
+#[cfg(any(test, feature = "automation"))]
 use self_test::run_self_test;
 use settings::{Bar, FontSetting, SETTINGS_FILE_NAME, SettingsStore};
 use status_log::{StatusLineKind, StatusLog};
+#[cfg(any(test, feature = "automation"))]
+use timeline_layout::TimelinePaintLineVisual;
 use timeline_layout::{
-    TimelineMetrics, TimelinePaintLine, TimelinePaintLineVisual, WrapCache, activity_level_color,
-    paint_timeline, plain_timeline_paint_lines, rendered_line_ranges, timeline_row_paint_lines,
+    TimelineMetrics, TimelinePaintLine, WrapCache, activity_level_color, paint_timeline,
+    plain_timeline_paint_lines, rendered_line_ranges, timeline_row_paint_lines,
 };
 use timeline_rows::{
     TimelineImageState, TimelineMessageSendState, TimelineRow, TimelineRowIdentity,
@@ -503,38 +562,45 @@ use timeline_text::{
 };
 #[cfg(test)]
 use timeline_window::clamped_timeline_top_line;
+#[cfg(any(test, feature = "automation"))]
+use timeline_window::split_rendered_lines;
 use timeline_window::{
     ScrollGesture, cancel_jump_for_view, capture_room_history_backfill_anchor, continue_event_jump,
     go_to_original_of_selected_message, loading_room_history_room_id, register_timeline_class,
     relayout_timeline, restore_room_history_backfill_anchor, scroll_timeline_by,
-    select_timeline_event_at_client_y, set_timeline_rows, split_rendered_lines, start_event_jump,
+    select_timeline_event_at_client_y, set_timeline_rows, start_event_jump,
     submit_backfill_room_history_for_room, timeline_max_top_line, timeline_shows_end,
     timeline_source_row_index_for_top_line, timeline_state_mut, timeline_state_ref,
     timeline_top_line_for_source_row_index, timeline_visible_rows, update_timeline_scrollbar,
     validate_selected_timeline_event,
 };
 use timestamp::{LocalTime, LocalTimeFn, TimestampSetting, TimestampStyle};
+#[cfg(any(test, feature = "automation"))]
+use tray::automation::{choose_tray_menu_item, dump_tray};
 use tray::{
-    TipCandidate, TrayState, choose_tray_menu_item, dump_tray, hide_to_tray, minimize_frame,
-    mirx_is_foreground, on_taskbar_created, on_tray_icon, remove_tray_icon, show_tip,
-    sync_tray_icon, taskbar_created_message,
+    TipCandidate, TrayState, hide_to_tray, minimize_frame, mirx_is_foreground, on_taskbar_created,
+    on_tray_icon, remove_tray_icon, show_tip, sync_tray_icon, taskbar_created_message,
 };
+#[cfg(any(test, feature = "automation"))]
+use verification::automation::submit_automation_verification_action;
 use verification::{
     apply_verification_event, apply_verification_request, e2ee_backup_health_summary,
     e2ee_cross_signing_label, e2ee_local_backup_label, e2ee_recovery_state_label,
     e2ee_server_backup_label, e2ee_session_label, format_verification_emojis,
-    submit_accept_verification, submit_automation_verification_action, submit_cancel_verification,
-    submit_confirm_verification_sas, submit_menu_verification_action,
-    submit_reject_verification_sas, verification_action_label,
+    submit_accept_verification, submit_cancel_verification, submit_confirm_verification_sas,
+    submit_menu_verification_action, submit_reject_verification_sas, verification_action_label,
     verification_state_event_from_request, verification_state_label,
 };
+#[cfg(any(test, feature = "automation"))]
+use views::automation::{mdi_window_placement, set_view_window_state};
+#[cfg(any(test, feature = "automation"))]
+use views::cached_view_is_alive;
 use views::{
-    CloseAction, ViewRowsKey, activate_view, cached_view_is_alive, check_window_menu_logging,
-    close_action, destroy_stale_room_views, ensure_room_view, ensure_status_view, ensure_view,
-    layout_mdi_child, mdi_child_content, mdi_child_edit, mdi_window_placement,
-    refresh_every_view_content, refresh_view_content, register_mdi_child_class,
-    register_room_content_class, room_content_member_list, room_content_timeline,
-    set_view_window_state, show_view, sync_view_content, timeline_view, view_timeline,
+    CloseAction, ViewRowsKey, activate_view, check_window_menu_logging, close_action,
+    destroy_stale_room_views, ensure_room_view, ensure_status_view, ensure_view, layout_mdi_child,
+    mdi_child_content, mdi_child_edit, refresh_every_view_content, refresh_view_content,
+    register_mdi_child_class, register_room_content_class, room_content_member_list,
+    room_content_timeline, show_view, sync_view_content, timeline_view, view_timeline,
 };
 #[cfg(test)]
 use views::{ROOM_CONTENT_CLASS_NAME, take_stale_room_views};
@@ -558,6 +624,7 @@ const COMPOSE_EDIT_EX_STYLE: WINDOW_EX_STYLE = WS_EX_CLIENTEDGE;
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
 const SWITCHBAR_COMMAND_LAST: usize = 41999;
 const WM_CORE_EVENT: u32 = WM_APP + 1;
+#[cfg(any(test, feature = "automation"))]
 const WM_SELF_TEST: u32 = WM_APP + 2;
 /// Posted at startup without a saved session, so Select Server opens once
 /// the frame is shown, as mIRC opens its connect options on a first run.
@@ -1011,14 +1078,10 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         profile_dir()?.join(CRASH_LOG_FILE_NAME),
     );
 
-    let render_state_events = match &command {
-        AppCommand::Run(options) => load_render_state(options)?,
-        AppCommand::SelfTest | AppCommand::AutoClose | AppCommand::Help => None,
-    };
-    let render_state_mode = match &command {
-        AppCommand::Run(options) => options.render_state.is_some(),
-        AppCommand::SelfTest | AppCommand::AutoClose | AppCommand::Help => false,
-    };
+    // What the launch asks of the automation harness: a render-state run
+    // reads its events here. A build without the harness has none.
+    let harness = Harness::for_launch(&command)?;
+    let render_state = harness.render_state();
     let automation_enabled = automation_enabled_for_command(&command);
 
     // The shell, which opens web links, needs COM on the thread that calls
@@ -1046,8 +1109,8 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     let exit_code = Arc::new(AtomicI32::new(0));
     let event_queue = Arc::new(Mutex::new(VecDeque::new()));
     let (gdiplus_session, gdiplus_startup_error) = initialize_gdiplus_state();
-    let settings = load_settings(render_state_mode)?;
-    let aliases = load_aliases(render_state_mode)?;
+    let settings = load_settings(render_state)?;
+    let aliases = load_aliases(render_state)?;
     // The frame does not exist yet; it will be laid out at the system DPI.
     let text_font = unsafe { TextFont::create(&settings.settings().text_font, Dpi::system())? };
     let scheme_brushes = unsafe { SchemeBrushes::create(&settings.settings().colors) };
@@ -1056,11 +1119,8 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         controls: Controls::default(),
         event_queue: Arc::clone(&event_queue),
         command_sender: None,
-        harness: Harness {
-            render_state: render_state_mode,
-            ..Harness::default()
-        },
-        clock: if render_state_mode {
+        harness,
+        clock: if render_state {
             UiClock::Fixed(RENDER_STATE_CLOCK_MS)
         } else {
             UiClock::System
@@ -1113,9 +1173,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     let hwnd = create_main_window(instance, state, frame_size_for_command(&command))?;
 
     let startup = (|| -> Result<Option<CoreBridge>, String> {
-        if automation_enabled {
-            unsafe { enable_automation(hwnd)? };
-        }
+        unsafe { harness::attach(hwnd, &command)? };
 
         let bridge = if should_start_core_bridge(&command) {
             let bridge = start_core_bridge(hwnd, Arc::clone(&event_queue))?;
@@ -1148,11 +1206,6 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
             }
             Some(bridge)
         } else {
-            unsafe {
-                if should_install_inert_command_sender(&command) {
-                    install_inert_command_sender(state_mut(hwnd));
-                }
-            }
             None
         };
 
@@ -1170,9 +1223,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
                 // Always show the icon in the tray.
                 sync_tray_icon(hwnd)?;
             }
-            if let Some(events) = render_state_events {
-                apply_event_load(hwnd, events)?;
-            }
+            harness::load(hwnd)?;
         }
 
         Ok(bridge)
@@ -1190,13 +1241,16 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
 
     unsafe {
         match command {
-            AppCommand::SelfTest => {
-                PostMessageW(hwnd, WM_SELF_TEST, 0, 0);
-            }
             AppCommand::AutoClose => {
                 SetTimer(hwnd, AUTO_CLOSE_TIMER_ID, AUTO_CLOSE_DELAY_MS, None);
             }
-            AppCommand::Run(_) | AppCommand::Help => {}
+            AppCommand::Run | AppCommand::Help => {}
+            #[cfg(any(test, feature = "automation"))]
+            AppCommand::Automation(_) => {}
+            #[cfg(any(test, feature = "automation"))]
+            AppCommand::SelfTest => {
+                PostMessageW(hwnd, WM_SELF_TEST, 0, 0);
+            }
         }
     }
 
@@ -1253,26 +1307,30 @@ fn start_core_bridge(hwnd: HWND, queue: Arc<Mutex<VecDeque<Event>>>) -> Result<C
 
 fn automation_enabled_for_command(command: &AppCommand) -> bool {
     match command {
-        AppCommand::Run(options) => options.automation || options.render_state.is_some(),
-        AppCommand::SelfTest => true,
-        AppCommand::AutoClose | AppCommand::Help => false,
+        AppCommand::Run | AppCommand::AutoClose | AppCommand::Help => false,
+        #[cfg(any(test, feature = "automation"))]
+        AppCommand::Automation(_) | AppCommand::SelfTest => true,
     }
 }
 
 fn should_start_core_bridge(command: &AppCommand) -> bool {
     match command {
-        AppCommand::Run(options) => options.render_state.is_none(),
-        AppCommand::AutoClose => true,
-        AppCommand::SelfTest | AppCommand::Help => false,
+        AppCommand::Run | AppCommand::AutoClose => true,
+        AppCommand::Help => false,
+        // A render-state run's core is the harness's inert one.
+        #[cfg(any(test, feature = "automation"))]
+        AppCommand::Automation(launch) => launch.render_state.is_none(),
+        #[cfg(any(test, feature = "automation"))]
+        AppCommand::SelfTest => false,
     }
 }
 
 /// A run for a person at the screen: the only kind that may open a modal on
 /// its own (Select Server at startup, the startup-error and crash boxes).
-/// Automation (which `--render-state` implies), `--auto-close`, `--self-test`
-/// and `--help` never do: nothing would close it.
+/// Automation launches, `--auto-close` and `--help` never do: nothing would
+/// close it.
 fn is_interactive(command: &AppCommand) -> bool {
-    matches!(command, AppCommand::Run(_)) && !automation_enabled_for_command(command)
+    matches!(command, AppCommand::Run)
 }
 
 /// Only an interactive run without a saved session opens Select Server by
@@ -1281,25 +1339,15 @@ fn opens_connect_dialog_at_startup(command: &AppCommand, session_saved: bool) ->
     is_interactive(command) && !session_saved
 }
 
-fn should_install_inert_command_sender(command: &AppCommand) -> bool {
-    match command {
-        AppCommand::Run(options) => options.automation && options.render_state.is_some(),
-        AppCommand::SelfTest | AppCommand::AutoClose | AppCommand::Help => false,
-    }
-}
-
-fn install_inert_command_sender(state: &mut WindowState) {
-    let (sender, receiver) = unbounded_channel();
-    state.command_sender = Some(CommandSender::new(sender));
-    state.harness.inert_commands = Some(receiver);
-}
-
 /// The frame's size: `--frame-size`, an exact geometry in physical pixels,
 /// or the default for the system.
 fn frame_size_for_command(command: &AppCommand) -> FrameSize {
     let explicit = match command {
-        AppCommand::Run(options) => options.frame_size,
-        AppCommand::SelfTest | AppCommand::AutoClose | AppCommand::Help => None,
+        AppCommand::Run | AppCommand::AutoClose | AppCommand::Help => None,
+        #[cfg(any(test, feature = "automation"))]
+        AppCommand::Automation(launch) => launch.frame_size,
+        #[cfg(any(test, feature = "automation"))]
+        AppCommand::SelfTest => None,
     };
     explicit.unwrap_or_else(|| default_frame_size(Dpi::system(), primary_work_area()))
 }
@@ -1332,28 +1380,6 @@ fn initial_model() -> UiModel {
         lifecycle_state: LifecycleState::Offline,
         ..UiModel::default()
     }
-}
-
-fn load_render_state(options: &RunOptions) -> Result<Option<Vec<Event>>, String> {
-    let Some(path) = &options.render_state else {
-        return Ok(None);
-    };
-
-    let file_bytes = fs::read(path)
-        .map_err(|err| format!("failed to read render-state file {}: {err}", path.display()))?;
-    // Through a `Value`, as the automation's `LoadEventsArgs` decodes its
-    // events: a second entry point (`from_slice`) would put a second copy of
-    // the whole `Event` deserializer into the exe (~126 KiB). Type errors
-    // lose their line and column; they still name the field or variant.
-    serde_json::from_slice::<serde_json::Value>(&file_bytes)
-        .and_then(serde_json::from_value::<Vec<Event>>)
-        .map(Some)
-        .map_err(|err| {
-            format!(
-                "failed to parse render-state file {} as JSON event list: {err}",
-                path.display()
-            )
-        })
 }
 
 fn bridge_core_events(hwnd: HWND, queue: Arc<Mutex<VecDeque<Event>>>, handle: CoreHandle) {
@@ -1464,24 +1490,22 @@ mod tests {
 
     use super::test_fixtures::*;
     use super::*;
+    use crate::automation_launch::AutomationLaunch;
+
+    fn automation_launch(render_state: Option<&str>) -> AppCommand {
+        AppCommand::Automation(AutomationLaunch {
+            render_state: render_state.map(PathBuf::from),
+            frame_size: None,
+        })
+    }
 
     #[test]
     fn only_an_interactive_run_without_a_session_opens_select_server_at_startup() {
-        let run = |automation, render_state: Option<&str>| {
-            AppCommand::Run(RunOptions {
-                automation,
-                render_state: render_state.map(PathBuf::from),
-                frame_size: None,
-            })
-        };
-        assert!(opens_connect_dialog_at_startup(&run(false, None), false));
-        assert!(!opens_connect_dialog_at_startup(&run(false, None), true));
-        assert!(!opens_connect_dialog_at_startup(&run(true, None), false));
-        assert!(!opens_connect_dialog_at_startup(
-            &run(false, Some("state.json")),
-            false
-        ));
+        assert!(opens_connect_dialog_at_startup(&AppCommand::Run, false));
+        assert!(!opens_connect_dialog_at_startup(&AppCommand::Run, true));
         for command in [
+            automation_launch(None),
+            automation_launch(Some("state.json")),
             AppCommand::AutoClose,
             AppCommand::SelfTest,
             AppCommand::Help,
@@ -1492,17 +1516,10 @@ mod tests {
 
     #[test]
     fn only_a_plain_run_is_interactive() {
-        let run = |automation, render_state: Option<&str>| {
-            AppCommand::Run(RunOptions {
-                automation,
-                render_state: render_state.map(PathBuf::from),
-                frame_size: None,
-            })
-        };
-        assert!(is_interactive(&run(false, None)));
-        assert!(!is_interactive(&run(true, None)));
-        assert!(!is_interactive(&run(true, Some("state.json"))));
+        assert!(is_interactive(&AppCommand::Run));
         for command in [
+            automation_launch(None),
+            automation_launch(Some("state.json")),
             AppCommand::SelfTest,
             AppCommand::AutoClose,
             AppCommand::Help,
@@ -1518,11 +1535,7 @@ mod tests {
     #[test]
     fn frame_size_defaults_for_run_command() {
         assert_eq!(
-            frame_size_for_command(&AppCommand::Run(RunOptions {
-                automation: false,
-                render_state: None,
-                frame_size: None,
-            })),
+            frame_size_for_command(&AppCommand::Run),
             system_default_frame_size()
         );
     }
@@ -1545,10 +1558,9 @@ mod tests {
     }
 
     #[test]
-    fn frame_size_uses_explicit_run_value() {
+    fn frame_size_uses_explicit_launch_value() {
         assert_eq!(
-            frame_size_for_command(&AppCommand::Run(RunOptions {
-                automation: true,
+            frame_size_for_command(&AppCommand::Automation(AutomationLaunch {
                 render_state: None,
                 frame_size: Some(FrameSize {
                     width: 640,

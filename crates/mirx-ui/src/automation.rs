@@ -1,4 +1,5 @@
-#![allow(dead_code)]
+// The non-Windows stub drives nothing; its unit tests use the protocol.
+#![cfg_attr(not(windows), allow(dead_code))]
 
 use std::fmt;
 
@@ -453,83 +454,6 @@ pub(crate) enum ParsedCommand {
         id: String,
         args: CrashArgs,
     },
-}
-
-impl ParsedCommand {
-    pub(crate) fn kind(&self) -> CommandKind {
-        match self {
-            Self::Ping { .. } => CommandKind::Ping,
-            Self::GetVersion { .. } => CommandKind::GetVersion,
-            Self::WaitIdle { .. } => CommandKind::WaitIdle,
-            Self::DumpModel { .. } => CommandKind::DumpModel,
-            Self::DumpRoomActivity { .. } => CommandKind::DumpRoomActivity,
-            Self::ListRooms { .. } => CommandKind::ListRooms,
-            Self::SelectRoom { .. } => CommandKind::SelectRoom,
-            Self::SendText { .. } => CommandKind::SendText,
-            Self::SendFile { .. } => CommandKind::SendFile,
-            Self::LoadSyntheticState { .. } => CommandKind::LoadSyntheticState,
-            Self::DumpUiState { .. } => CommandKind::DumpUiState,
-            Self::SelectView { .. } => CommandKind::SelectView,
-            Self::Login { .. } => CommandKind::Login,
-            Self::RestoreSession { .. } => CommandKind::RestoreSession,
-            Self::RestoreSavedSession { .. } => CommandKind::RestoreSavedSession,
-            Self::StartSync { .. } => CommandKind::StartSync,
-            Self::Logout { .. } => CommandKind::Logout,
-            Self::DumpComposeText { .. } => CommandKind::DumpComposeText,
-            Self::SetComposeText { .. } => CommandKind::SetComposeText,
-            Self::SendComposeKey { .. } => CommandKind::SendComposeKey,
-            Self::SelectNavigationPath { .. } => CommandKind::SelectNavigationPath,
-            Self::DumpSelectedNavigationPath { .. } => CommandKind::DumpSelectedNavigationPath,
-            Self::AppendSyntheticEvents { .. } => CommandKind::AppendSyntheticEvents,
-            Self::RecoverE2ee { .. } => CommandKind::RecoverE2ee,
-            Self::SetupE2eeRecovery { .. } => CommandKind::SetupE2eeRecovery,
-            Self::AcceptVerification { .. } => CommandKind::AcceptVerification,
-            Self::CancelVerification { .. } => CommandKind::CancelVerification,
-            Self::ConfirmVerificationSas { .. } => CommandKind::ConfirmVerificationSas,
-            Self::RejectVerificationSas { .. } => CommandKind::RejectVerificationSas,
-            Self::FindActiveView { .. } => CommandKind::FindActiveView,
-            Self::DumpVerificationMenuState { .. } => CommandKind::DumpVerificationMenuState,
-            Self::DumpRoomMenuState { .. } => CommandKind::DumpRoomMenuState,
-            Self::DumpMessageMenuState { .. } => CommandKind::DumpMessageMenuState,
-            Self::SelectTimelineEvent { .. } => CommandKind::SelectTimelineEvent,
-            Self::AcceptInviteViaRoomMenu { .. } => CommandKind::AcceptInviteViaRoomMenu,
-            Self::RejectInviteViaRoomMenu { .. } => CommandKind::RejectInviteViaRoomMenu,
-            Self::PartRoomViaRoomMenu { .. } => CommandKind::PartRoomViaRoomMenu,
-            Self::ReplyToSelectedMessageViaMenu { .. } => {
-                CommandKind::ReplyToSelectedMessageViaMenu
-            }
-            Self::EditSelectedMessageViaMenu { .. } => CommandKind::EditSelectedMessageViaMenu,
-            Self::ReactToSelectedMessageViaMenu { .. } => {
-                CommandKind::ReactToSelectedMessageViaMenu
-            }
-            Self::RedactSelectedMessageViaMenu { .. } => CommandKind::RedactSelectedMessageViaMenu,
-            Self::SaveAttachmentViaMessageMenu { .. } => CommandKind::SaveAttachmentViaMessageMenu,
-            Self::OpenNavigationContextMenu { .. } => CommandKind::OpenNavigationContextMenu,
-            Self::OpenSelectedNavigationContextMenu { .. } => {
-                CommandKind::OpenSelectedNavigationContextMenu
-            }
-            Self::OpenTimelineContextMenu { .. } => CommandKind::OpenTimelineContextMenu,
-            Self::OpenSelectedTimelineContextMenu { .. } => {
-                CommandKind::OpenSelectedTimelineContextMenu
-            }
-            Self::DumpMemberMenuState { .. } => CommandKind::DumpMemberMenuState,
-            Self::SelectMember { .. } => CommandKind::SelectMember,
-            Self::QuerySelectedMemberViaMenu { .. } => CommandKind::QuerySelectedMemberViaMenu,
-            Self::MentionSelectedMemberViaMenu { .. } => CommandKind::MentionSelectedMemberViaMenu,
-            Self::OpenMemberContextMenu { .. } => CommandKind::OpenMemberContextMenu,
-            Self::OpenSelectedMemberContextMenu { .. } => {
-                CommandKind::OpenSelectedMemberContextMenu
-            }
-            Self::ArrangeWindowsViaWindowMenu { .. } => CommandKind::ArrangeWindowsViaWindowMenu,
-            Self::SetViewWindowState { .. } => CommandKind::SetViewWindowState,
-            Self::SelectNavigationView { .. } => CommandKind::SelectNavigationView,
-            Self::OpenDialog { .. } => CommandKind::OpenDialog,
-            Self::SelectOptionsPage { .. } => CommandKind::SelectOptionsPage,
-            Self::SetNavigationExpanded { .. } => CommandKind::SetNavigationExpanded,
-            Self::ChooseTrayMenuItem { .. } => CommandKind::ChooseTrayMenuItem,
-            Self::Crash { .. } => CommandKind::Crash,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -2824,25 +2748,6 @@ fn dump_room_activity_relation_from_core(
     }
 }
 
-pub(crate) fn dump_room_message_activity_line_from_activity(
-    activity: &RoomActivity,
-) -> Option<DumpRoomMessageActivityLine> {
-    let RoomActivityKind::Message(message) = &activity.kind else {
-        return None;
-    };
-    Some(DumpRoomMessageActivityLine {
-        room_id: activity.room_id.clone(),
-        activity_id: activity.activity_id.clone(),
-        timestamp_ms: activity.timestamp_ms,
-        event_id: message.event_id.clone(),
-        transaction_id: message.transaction_id.clone(),
-        sender: message.sender.user_id.clone(),
-        presentation: message.presentation,
-        body: message.body.clone(),
-        send_state: dump_room_message_send_state_from_core(&message.send_state),
-    })
-}
-
 pub(crate) fn dump_room_activity_kind_from_core(kind: &RoomActivityKind) -> DumpRoomActivityKind {
     match kind {
         RoomActivityKind::Message(message) => {
@@ -3601,6 +3506,25 @@ mod tests {
         VerificationState, VerificationStateEvent,
     };
     use serde_json::{Value, json};
+
+    fn dump_room_message_activity_line_from_activity(
+        activity: &RoomActivity,
+    ) -> Option<DumpRoomMessageActivityLine> {
+        let RoomActivityKind::Message(message) = &activity.kind else {
+            return None;
+        };
+        Some(DumpRoomMessageActivityLine {
+            room_id: activity.room_id.clone(),
+            activity_id: activity.activity_id.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            event_id: message.event_id.clone(),
+            transaction_id: message.transaction_id.clone(),
+            sender: message.sender.user_id.clone(),
+            presentation: message.presentation,
+            body: message.body.clone(),
+            send_state: super::dump_room_message_send_state_from_core(&message.send_state),
+        })
+    }
 
     use super::{
         AcceptedResponse, ArrangeWindowsArgs, AutomationDialog,
@@ -8499,7 +8423,7 @@ mod tests {
             }
         );
         assert_eq!(
-            super::dump_room_message_activity_line_from_activity(&activity),
+            dump_room_message_activity_line_from_activity(&activity),
             Some(DumpRoomMessageActivityLine {
                 room_id: "!room:example".to_owned(),
                 activity_id: "event:$event:example".to_owned(),
@@ -8648,7 +8572,7 @@ mod tests {
             })
         );
         assert_eq!(
-            super::dump_room_message_activity_line_from_activity(&unsupported_activity),
+            dump_room_message_activity_line_from_activity(&unsupported_activity),
             None
         );
         let image_activity = RoomActivity {
@@ -8764,7 +8688,7 @@ mod tests {
             })
         );
         assert_eq!(
-            super::dump_room_message_activity_line_from_activity(&image_activity),
+            dump_room_message_activity_line_from_activity(&image_activity),
             None
         );
         let file_activity = RoomActivity {
@@ -9095,7 +9019,7 @@ mod tests {
             );
         }
         assert_eq!(
-            super::dump_room_message_activity_line_from_activity(&redacted_activity),
+            dump_room_message_activity_line_from_activity(&redacted_activity),
             None
         );
         assert!(

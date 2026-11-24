@@ -1074,7 +1074,7 @@ pub(super) unsafe fn apply_events_and_refresh(
             Event::SignInUrl { url }
             | Event::E2eeIdentityResetApproval { url }
             | Event::DeviceSignOutApproval { url, .. }
-                if !state.harness.synthetic_load =>
+                if !state.harness.synthetic_load() =>
             {
                 Some(url.clone())
             }
@@ -1142,56 +1142,6 @@ unsafe fn request_frame_attention(hwnd: HWND) {
     };
     // The return value is the window's previous active state, not an error.
     FlashWindowEx(&info);
-}
-
-unsafe fn apply_synthetic_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(), String> {
-    state_mut(hwnd).harness.synthetic_load = true;
-    let result = apply_events_and_refresh(hwnd, events);
-    state_mut(hwnd).harness.synthetic_load = false;
-    result
-}
-
-pub(super) unsafe fn apply_event_load(
-    hwnd: HWND,
-    events: Vec<Event>,
-) -> Result<(usize, usize), String> {
-    {
-        let state = state_mut(hwnd);
-        state.current_session_homeserver_url = None;
-        state.room_activity.clear();
-        state.closed_queries.clear();
-        state.quiet_joins.clear();
-        state.sent_receipts.clear();
-        state.find_states.clear();
-        state.selected_timeline_event = None;
-        state.model = initial_model();
-        state.decoded_images.clear();
-    }
-
-    apply_synthetic_events_and_refresh(hwnd, events)?;
-
-    let (rooms, timeline_events, active_view) = {
-        let state = state_ref(hwnd);
-        let rooms = state.model.rooms.len();
-        let timeline_events = state
-            .model
-            .room_views
-            .values()
-            .map(|room_view| room_view.activities.len())
-            .sum();
-        // The first room's window, as after signing in.
-        let active_view = state
-            .model
-            .rooms
-            .iter()
-            .find(|room| is_navigable_room(room))
-            .map_or(ViewId::Status, |room| ViewId::Room(room.room_id.clone()));
-        (rooms, timeline_events, active_view)
-    };
-
-    activate_view(hwnd, &active_view, None)?;
-
-    Ok((rooms, timeline_events))
 }
 
 pub(super) unsafe fn drain_core_events_and_refresh(hwnd: HWND) -> Result<usize, String> {
@@ -1268,26 +1218,6 @@ pub(super) fn handle_view_activation(
     Ok(had_activity)
 }
 
-pub(super) fn resolve_timeline_room_id(
-    state: &WindowState,
-    explicit_room_id: Option<&str>,
-) -> Result<String, String> {
-    let room_id = match explicit_room_id {
-        Some(room_id) => room_id.to_owned(),
-        None => state
-            .model
-            .selected_room
-            .clone()
-            .ok_or_else(|| "no room selected".to_owned())?,
-    };
-
-    if navigable_room_by_id(&state.model.rooms, &room_id).is_some() {
-        Ok(room_id)
-    } else {
-        Err(format!("unknown room id: {room_id}"))
-    }
-}
-
 pub(super) fn operation_name(operation: Operation) -> &'static str {
     match operation {
         Operation::Login => "login",
@@ -1348,6 +1278,86 @@ pub(super) fn operation_name(operation: Operation) -> &'static str {
         Operation::RequestVerification => "verification request",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",
+    }
+}
+
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+
+    unsafe fn apply_synthetic_events_and_refresh(
+        hwnd: HWND,
+        events: Vec<Event>,
+    ) -> Result<(), String> {
+        state_mut(hwnd).harness.synthetic_load = true;
+        let result = apply_events_and_refresh(hwnd, events);
+        state_mut(hwnd).harness.synthetic_load = false;
+        result
+    }
+
+    pub(in crate::win32) unsafe fn apply_event_load(
+        hwnd: HWND,
+        events: Vec<Event>,
+    ) -> Result<(usize, usize), String> {
+        {
+            let state = state_mut(hwnd);
+            state.current_session_homeserver_url = None;
+            state.room_activity.clear();
+            state.closed_queries.clear();
+            state.quiet_joins.clear();
+            state.sent_receipts.clear();
+            state.find_states.clear();
+            state.selected_timeline_event = None;
+            state.model = initial_model();
+            state.decoded_images.clear();
+        }
+
+        apply_synthetic_events_and_refresh(hwnd, events)?;
+
+        let (rooms, timeline_events, active_view) = {
+            let state = state_ref(hwnd);
+            let rooms = state.model.rooms.len();
+            let timeline_events = state
+                .model
+                .room_views
+                .values()
+                .map(|room_view| room_view.activities.len())
+                .sum();
+            // The first room's window, as after signing in.
+            let active_view = state
+                .model
+                .rooms
+                .iter()
+                .find(|room| is_navigable_room(room))
+                .map_or(ViewId::Status, |room| ViewId::Room(room.room_id.clone()));
+            (rooms, timeline_events, active_view)
+        };
+
+        activate_view(hwnd, &active_view, None)?;
+
+        Ok((rooms, timeline_events))
+    }
+
+    pub(in crate::win32) fn resolve_timeline_room_id(
+        state: &WindowState,
+        explicit_room_id: Option<&str>,
+    ) -> Result<String, String> {
+        let room_id = match explicit_room_id {
+            Some(room_id) => room_id.to_owned(),
+            None => state
+                .model
+                .selected_room
+                .clone()
+                .ok_or_else(|| "no room selected".to_owned())?,
+        };
+
+        if navigable_room_by_id(&state.model.rooms, &room_id).is_some() {
+            Ok(room_id)
+        } else {
+            Err(format!("unknown room id: {room_id}"))
+        }
     }
 }
 

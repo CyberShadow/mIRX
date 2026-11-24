@@ -12,16 +12,13 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, EM_SETSEL, MEASUREITEMSTRUCT, NMHDR, TVGN_CARET,
-    TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVM_GETNEXTITEM, TVM_SELECTITEM, TVN_SELCHANGEDW,
-    TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT, TVS_SHOWSELALWAYS,
+    TVM_SELECTITEM, TVN_SELCHANGEDW, TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT,
+    TVS_SHOWSELALWAYS,
 };
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetFocus, IsWindowEnabled, SetFocus,
-};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetFocus, SetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON,
-    DefWindowProcW, ES_NUMBER, GWL_STYLE, GetDlgCtrlID, GetWindowLongPtrW, IDCANCEL, IDOK,
-    LB_ADDSTRING, LB_ERR, LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT,
+    DefWindowProcW, ES_NUMBER, IDCANCEL, IDOK, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_RESETCONTENT,
     LBN_SELCHANGE, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, MB_ICONERROR, MB_OK, MessageBoxW, MoveWindow,
     SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WM_COMMAND, WM_DRAWITEM, WM_MEASUREITEM,
     WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE,
@@ -30,7 +27,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use mirx_core::HighlightWord;
 
-use super::automation_dump::dump_activity_colors;
 use super::color_drop_down::{
     COLOR_DROP_DOWN_STYLE, COLOR_DROP_DOWN_WIDTH, color_drop_down_height, draw_color_item,
     fill_color_drop_down, measure_color_item, select_color, selected_color,
@@ -44,7 +40,7 @@ use super::dpi::Dpi;
 use super::logging::logs_folder_label;
 use super::options::{
     FIRST_PAGE, HighlightChanges, HighlightList, OPTIONS_TREE, OptionsField, OptionsForm,
-    OptionsPage, page_tree_index, tree_index, tree_paths,
+    OptionsPage, page_tree_index,
 };
 use super::perform::PerformSetting;
 use super::perform_dialog::run_perform_dialog;
@@ -55,12 +51,8 @@ use super::timestamp::format_tokens;
 use super::window_data::{self, WindowData};
 use super::{
     BUTTON_CLASS_NAME, COMBOBOX_CLASS_NAME, EDIT_CLASS_NAME, STATIC_CLASS_NAME, TREE_CLASS_NAME,
-    create_child_window, expand_tree_item, insert_tree_item, read_tree_item_text, read_window_text,
-    run_modal_dialog, selected_tree_item, set_window_text, wide_null,
-};
-use crate::automation::{
-    UiChatOptions, UiConnectOptions, UiLoggingOptions, UiMarkerOptions, UiOptionsDialog,
-    UiTipsOptions, UiTrayOptions,
+    create_child_window, expand_tree_item, insert_tree_item, read_window_text, run_modal_dialog,
+    selected_tree_item, set_window_text, wide_null,
 };
 
 pub(super) const OPTIONS_DIALOG_CLASS_NAME: &str = "mirxWin32OptionsDialog";
@@ -1050,18 +1042,6 @@ unsafe fn select_page(hwnd: HWND, page: OptionsPage) {
     select_tree_index(hwnd, page_tree_index(page));
 }
 
-/// Selects the tree item at `path` (`Chat/Messages`), as a click on it does.
-pub(super) unsafe fn select_path(hwnd: HWND, path: &str) -> Result<(), String> {
-    let index = tree_index(path).ok_or_else(|| {
-        format!(
-            "the Options tree has no {path:?}; its items are {:?}",
-            tree_paths()
-        )
-    })?;
-    select_tree_index(hwnd, index);
-    Ok(())
-}
-
 /// Selecting an item shows its page, through TVN_SELCHANGEDW.
 unsafe fn select_tree_index(hwnd: HWND, index: usize) {
     let state = dialog_state(hwnd);
@@ -1280,131 +1260,162 @@ pub(super) unsafe extern "system" fn window_proc(
     }
 }
 
-/// The dialog as automation sees it, read back from its tree and controls.
-pub(super) unsafe fn dump(hwnd: HWND) -> Result<UiOptionsDialog, String> {
-    let state = dialog_state(hwnd);
-    let tree = state.tree;
-    let next = |relation, item: isize| {
-        SendMessageW(tree, TVM_GETNEXTITEM, relation as WPARAM, item) as isize
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+    use crate::automation::{
+        UiChatOptions, UiConnectOptions, UiLoggingOptions, UiMarkerOptions, UiOptionsDialog,
+        UiTipsOptions, UiTrayOptions,
     };
-    let selected_item = selected_tree_item(tree);
-    let mut paths = Vec::new();
-    let mut selected = None;
-    let mut category = next(TVGN_ROOT, 0);
-    while category != 0 {
-        let category_path = read_tree_item_text(tree, category)?;
-        let mut child = next(TVGN_CHILD, category);
-        if selected_item == Some(category) {
-            selected = Some(category_path.clone());
-        }
-        paths.push(category_path.clone());
-        while child != 0 {
-            let path = format!("{category_path}/{}", read_tree_item_text(tree, child)?);
-            if selected_item == Some(child) {
-                selected = Some(path.clone());
-            }
-            paths.push(path);
-            child = next(TVGN_NEXT, child);
-        }
-        category = next(TVGN_NEXT, category);
-    }
-    let visible_controls = state
-        .page_controls
-        .iter()
-        .filter(|(_, control)| {
-            GetWindowLongPtrW(*control, GWL_STYLE) as u32 & WS_VISIBLE != 0
-                && GetDlgCtrlID(*control) != 0
-        })
-        .map(|(_, control)| GetDlgCtrlID(*control) as u16)
-        .collect();
-    let controls = &state.highlight_controls;
-    let highlight_controls_enabled = match [controls.list, controls.word, controls.add]
-        .map(|control| IsWindowEnabled(control) != 0)
-    {
-        [true, true, true] => true,
-        [false, false, false] => false,
-        enabled => return Err(format!("the Highlight page is half greyed: {enabled:?}")),
+    use crate::win32::automation_dump::dump_activity_colors;
+    use crate::win32::options::automation::{tree_index, tree_paths};
+    use crate::win32::read_tree_item_text;
+    use windows_sys::Win32::UI::Controls::{TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVM_GETNEXTITEM};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GWL_STYLE, GetDlgCtrlID, GetWindowLongPtrW, LB_GETCOUNT, LB_GETTEXT, LB_GETTEXTLEN,
     };
-    let highlight_items = (0..SendMessageW(controls.list, LB_GETCOUNT, 0, 0) as usize)
-        .map(|index| {
-            let length = SendMessageW(controls.list, LB_GETTEXTLEN, index, 0) as usize;
-            let mut text = vec![0u16; length + 1];
-            SendMessageW(
-                controls.list,
-                LB_GETTEXT,
-                index,
-                text.as_mut_ptr() as LPARAM,
-            );
-            String::from_utf16_lossy(&text[..length])
-        })
-        .collect();
-    let retry_rows_enabled: Vec<bool> = state
-        .fields
-        .retry_rows
-        .iter()
-        .map(|control| IsWindowEnabled(*control) != 0)
-        .collect();
-    let retry_fields_enabled = retry_rows_enabled[0];
-    if retry_rows_enabled.contains(&!retry_fields_enabled) {
-        return Err(format!(
-            "the Retry and Delay rows are half greyed: {retry_rows_enabled:?}"
-        ));
-    }
-    let form = state.fields.read(&state.perform);
-    Ok(UiOptionsDialog {
-        connect: UiConnectOptions {
-            startup: form.connect_on_startup,
-            reconnect: form.reconnect,
-            retry: form.retry,
-            retry_times: form.retry_times.clone(),
-            retry_delay: form.retry_delay.clone(),
-            retry_fields_enabled,
-            perform_enabled: form.perform.enabled,
-            perform_lines: form
-                .perform
-                .lines()
-                .iter()
-                .map(|line| line.text().to_owned())
-                .collect(),
-        },
-        tree: paths,
-        selected: selected.ok_or_else(|| "the options tree has no selection".to_owned())?,
-        visible_controls,
-        highlight_items,
-        highlight_controls_enabled,
-        highlight_delete_enabled: IsWindowEnabled(controls.delete) != 0,
-        activity_colors: dump_activity_colors(&form.activity_colors),
-        send_typing: form.send_typing,
-        chat: UiChatOptions {
-            rank_prefix: form.chat.rank_prefix,
-            join_on_invite: form.chat.join_on_invite,
-            active_away: form.chat.active_away,
-            active_invites: form.chat.active_invites,
-            active_whois: form.chat.active_whois,
-        },
-        marker: UiMarkerOptions {
-            show: form.marker.show,
-            color: form.marker.color.get(),
-        },
-        logging: dump_logging_options(&form.logging),
-        tray: UiTrayOptions {
-            always: form.tray.always,
-            startup: form.tray.startup,
-            minimize: form.tray.minimize,
-            single_click: form.tray.single_click,
-        },
-        tips: UiTipsOptions {
-            highlights: form.tips.highlights,
-            direct: form.tips.direct,
-            rooms: form.tips.rooms,
-        },
-    })
-}
 
-fn dump_logging_options(logging: &LoggingSetting) -> UiLoggingOptions {
-    UiLoggingOptions {
-        rooms: logging.rooms,
-        direct: logging.direct,
-        timestamp: logging.timestamp,
+    /// Selects the tree item at `path` (`Chat/Messages`), as a click on it does.
+    pub(in crate::win32) unsafe fn select_path(hwnd: HWND, path: &str) -> Result<(), String> {
+        let index = tree_index(path).ok_or_else(|| {
+            format!(
+                "the Options tree has no {path:?}; its items are {:?}",
+                tree_paths()
+            )
+        })?;
+        select_tree_index(hwnd, index);
+        Ok(())
+    }
+
+    /// The dialog as automation sees it, read back from its tree and controls.
+    pub(in crate::win32) unsafe fn dump(hwnd: HWND) -> Result<UiOptionsDialog, String> {
+        let state = dialog_state(hwnd);
+        let tree = state.tree;
+        let next = |relation, item: isize| {
+            SendMessageW(tree, TVM_GETNEXTITEM, relation as WPARAM, item) as isize
+        };
+        let selected_item = selected_tree_item(tree);
+        let mut paths = Vec::new();
+        let mut selected = None;
+        let mut category = next(TVGN_ROOT, 0);
+        while category != 0 {
+            let category_path = read_tree_item_text(tree, category)?;
+            let mut child = next(TVGN_CHILD, category);
+            if selected_item == Some(category) {
+                selected = Some(category_path.clone());
+            }
+            paths.push(category_path.clone());
+            while child != 0 {
+                let path = format!("{category_path}/{}", read_tree_item_text(tree, child)?);
+                if selected_item == Some(child) {
+                    selected = Some(path.clone());
+                }
+                paths.push(path);
+                child = next(TVGN_NEXT, child);
+            }
+            category = next(TVGN_NEXT, category);
+        }
+        let visible_controls = state
+            .page_controls
+            .iter()
+            .filter(|(_, control)| {
+                GetWindowLongPtrW(*control, GWL_STYLE) as u32 & WS_VISIBLE != 0
+                    && GetDlgCtrlID(*control) != 0
+            })
+            .map(|(_, control)| GetDlgCtrlID(*control) as u16)
+            .collect();
+        let controls = &state.highlight_controls;
+        let highlight_controls_enabled = match [controls.list, controls.word, controls.add]
+            .map(|control| IsWindowEnabled(control) != 0)
+        {
+            [true, true, true] => true,
+            [false, false, false] => false,
+            enabled => return Err(format!("the Highlight page is half greyed: {enabled:?}")),
+        };
+        let highlight_items = (0..SendMessageW(controls.list, LB_GETCOUNT, 0, 0) as usize)
+            .map(|index| {
+                let length = SendMessageW(controls.list, LB_GETTEXTLEN, index, 0) as usize;
+                let mut text = vec![0u16; length + 1];
+                SendMessageW(
+                    controls.list,
+                    LB_GETTEXT,
+                    index,
+                    text.as_mut_ptr() as LPARAM,
+                );
+                String::from_utf16_lossy(&text[..length])
+            })
+            .collect();
+        let retry_rows_enabled: Vec<bool> = state
+            .fields
+            .retry_rows
+            .iter()
+            .map(|control| IsWindowEnabled(*control) != 0)
+            .collect();
+        let retry_fields_enabled = retry_rows_enabled[0];
+        if retry_rows_enabled.contains(&!retry_fields_enabled) {
+            return Err(format!(
+                "the Retry and Delay rows are half greyed: {retry_rows_enabled:?}"
+            ));
+        }
+        let form = state.fields.read(&state.perform);
+        Ok(UiOptionsDialog {
+            connect: UiConnectOptions {
+                startup: form.connect_on_startup,
+                reconnect: form.reconnect,
+                retry: form.retry,
+                retry_times: form.retry_times.clone(),
+                retry_delay: form.retry_delay.clone(),
+                retry_fields_enabled,
+                perform_enabled: form.perform.enabled,
+                perform_lines: form
+                    .perform
+                    .lines()
+                    .iter()
+                    .map(|line| line.text().to_owned())
+                    .collect(),
+            },
+            tree: paths,
+            selected: selected.ok_or_else(|| "the options tree has no selection".to_owned())?,
+            visible_controls,
+            highlight_items,
+            highlight_controls_enabled,
+            highlight_delete_enabled: IsWindowEnabled(controls.delete) != 0,
+            activity_colors: dump_activity_colors(&form.activity_colors),
+            send_typing: form.send_typing,
+            chat: UiChatOptions {
+                rank_prefix: form.chat.rank_prefix,
+                join_on_invite: form.chat.join_on_invite,
+                active_away: form.chat.active_away,
+                active_invites: form.chat.active_invites,
+                active_whois: form.chat.active_whois,
+            },
+            marker: UiMarkerOptions {
+                show: form.marker.show,
+                color: form.marker.color.get(),
+            },
+            logging: dump_logging_options(&form.logging),
+            tray: UiTrayOptions {
+                always: form.tray.always,
+                startup: form.tray.startup,
+                minimize: form.tray.minimize,
+                single_click: form.tray.single_click,
+            },
+            tips: UiTipsOptions {
+                highlights: form.tips.highlights,
+                direct: form.tips.direct,
+                rooms: form.tips.rooms,
+            },
+        })
+    }
+
+    fn dump_logging_options(logging: &LoggingSetting) -> UiLoggingOptions {
+        UiLoggingOptions {
+            rooms: logging.rooms,
+            direct: logging.direct,
+            timestamp: logging.timestamp,
+        }
     }
 }

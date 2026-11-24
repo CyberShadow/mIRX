@@ -169,7 +169,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::RunOptions;
+    use crate::automation_launch::AutomationLaunch;
 
     #[test]
     fn crash_report_has_every_fact_on_crlf_lines() {
@@ -219,20 +219,19 @@ mod tests {
 
     #[test]
     fn only_an_interactive_run_shows_a_crash_box() {
-        let run = |automation, render_state: Option<&str>| {
-            AppCommand::Run(RunOptions {
-                automation,
+        let automation = |render_state: Option<&str>| {
+            AppCommand::Automation(AutomationLaunch {
                 render_state: render_state.map(PathBuf::from),
                 frame_size: None,
             })
         };
         assert_eq!(
-            crash_presentation(&run(false, None)),
+            crash_presentation(&AppCommand::Run),
             CrashPresentation::LogAndMessageBox
         );
         for command in [
-            run(true, None),
-            run(true, Some("state.json")),
+            automation(None),
+            automation(Some("state.json")),
             AppCommand::SelfTest,
             AppCommand::AutoClose,
             AppCommand::Help,

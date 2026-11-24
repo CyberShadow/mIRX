@@ -25,7 +25,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use super::settings::TraySetting;
 use super::*;
-use crate::automation::{UiTray, UiTrayMenuItem};
 
 /// The icon's id among the frame's: it has one.
 const TRAY_ICON_ID: u32 = 1;
@@ -438,28 +437,39 @@ unsafe fn open_tip_view(hwnd: HWND) -> Result<(), String> {
     Ok(())
 }
 
-/// The automation's choice of a popup item by its label, as a click on it.
-pub(super) unsafe fn choose_tray_menu_item(hwnd: HWND, label: &str) -> Result<(), String> {
-    let view = tray_menu_items(state_ref(hwnd))
-        .into_iter()
-        .find(|item| item.label == label)
-        .ok_or_else(|| format!("the tray popup has no item {label}"))?
-        .view;
-    choose_tray_view(hwnd, &view)
-}
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+    use crate::automation::{UiTray, UiTrayMenuItem};
 
-pub(super) unsafe fn dump_tray(hwnd: HWND) -> UiTray {
-    let state = state_ref(hwnd);
-    UiTray {
-        icon: state.tray.icon_added,
-        hidden: frame_in_tray(hwnd),
-        menu: tray_menu_items(state)
+    /// The automation's choice of a popup item by its label, as a click on it.
+    pub(in crate::win32) unsafe fn choose_tray_menu_item(
+        hwnd: HWND,
+        label: &str,
+    ) -> Result<(), String> {
+        let view = tray_menu_items(state_ref(hwnd))
             .into_iter()
-            .map(|item| UiTrayMenuItem {
-                label: item.label,
-                checked: item.checked,
-            })
-            .collect(),
+            .find(|item| item.label == label)
+            .ok_or_else(|| format!("the tray popup has no item {label}"))?
+            .view;
+        choose_tray_view(hwnd, &view)
+    }
+
+    pub(in crate::win32) unsafe fn dump_tray(hwnd: HWND) -> UiTray {
+        let state = state_ref(hwnd);
+        UiTray {
+            icon: state.tray.icon_added,
+            hidden: frame_in_tray(hwnd),
+            menu: tray_menu_items(state)
+                .into_iter()
+                .map(|item| UiTrayMenuItem {
+                    label: item.label,
+                    checked: item.checked,
+                })
+                .collect(),
+        }
     }
 }
 

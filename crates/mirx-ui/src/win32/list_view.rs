@@ -1,18 +1,15 @@
 //! Report-style ListView helpers the dialogs share.
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::Controls::{
-    LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_STATE, LVIF_TEXT, LVIR_LABEL, LVIS_FOCUSED,
-    LVIS_SELECTED, LVITEMW, LVM_DELETEALLITEMS, LVM_ENSUREVISIBLE, LVM_GETITEMCOUNT,
-    LVM_GETITEMRECT, LVM_GETITEMTEXTW, LVM_GETNEXTITEM, LVM_INSERTCOLUMNW, LVM_INSERTITEMW,
+    LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_STATE, LVIF_TEXT, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW,
+    LVM_DELETEALLITEMS, LVM_ENSUREVISIBLE, LVM_GETNEXTITEM, LVM_INSERTCOLUMNW, LVM_INSERTITEMW,
     LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVM_SETITEMTEXTW, LVNI_SELECTED,
     LVS_EX_FULLROWSELECT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW;
 
-use super::room_list_window::{rect_center, wide_buffer_text};
 use super::wide_null;
-use crate::automation::UiPoint;
 
 pub(super) const LIST_VIEW_CLASS_NAME: &str = "SysListView32";
 
@@ -93,36 +90,52 @@ pub(super) unsafe fn select_row(list: HWND, row: usize) {
     SendMessageW(list, LVM_ENSUREVISIBLE, row, 0);
 }
 
-/// A list's rows, `columns` cells each, and where a click selects each, in
-/// the list's client coordinates.
-pub(super) unsafe fn dump_list(list: HWND, columns: usize) -> (Vec<Vec<String>>, Vec<UiPoint>) {
-    let mut buffer = [0u16; 512];
-    let rows = usize::try_from(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0))
-        .expect("LVM_GETITEMCOUNT succeeds");
-    (0..rows)
-        .map(|row| {
-            let cells = (0..columns)
-                .map(|column| {
-                    let mut item = LVITEMW {
-                        iSubItem: column as i32,
-                        pszText: buffer.as_mut_ptr(),
-                        cchTextMax: buffer.len() as i32,
-                        ..LVITEMW::default()
-                    };
-                    SendMessageW(list, LVM_GETITEMTEXTW, row, &mut item as *mut _ as LPARAM);
-                    wide_buffer_text(&buffer)
-                })
-                .collect();
-            let mut rect = RECT {
-                left: LVIR_LABEL as i32,
-                ..RECT::default()
-            };
-            assert_ne!(
-                SendMessageW(list, LVM_GETITEMRECT, row, &mut rect as *mut _ as LPARAM),
-                0,
-                "LVM_GETITEMRECT must place row {row}"
-            );
-            (cells, rect_center(&rect))
-        })
-        .unzip()
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+    use crate::automation::UiPoint;
+    use crate::win32::room_list_window::automation::{rect_center, wide_buffer_text};
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::Controls::{
+        LVIR_LABEL, LVM_GETITEMCOUNT, LVM_GETITEMRECT, LVM_GETITEMTEXTW,
+    };
+
+    /// A list's rows, `columns` cells each, and where a click selects each, in
+    /// the list's client coordinates.
+    pub(in crate::win32) unsafe fn dump_list(
+        list: HWND,
+        columns: usize,
+    ) -> (Vec<Vec<String>>, Vec<UiPoint>) {
+        let mut buffer = [0u16; 512];
+        let rows = usize::try_from(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0))
+            .expect("LVM_GETITEMCOUNT succeeds");
+        (0..rows)
+            .map(|row| {
+                let cells = (0..columns)
+                    .map(|column| {
+                        let mut item = LVITEMW {
+                            iSubItem: column as i32,
+                            pszText: buffer.as_mut_ptr(),
+                            cchTextMax: buffer.len() as i32,
+                            ..LVITEMW::default()
+                        };
+                        SendMessageW(list, LVM_GETITEMTEXTW, row, &mut item as *mut _ as LPARAM);
+                        wide_buffer_text(&buffer)
+                    })
+                    .collect();
+                let mut rect = RECT {
+                    left: LVIR_LABEL as i32,
+                    ..RECT::default()
+                };
+                assert_ne!(
+                    SendMessageW(list, LVM_GETITEMRECT, row, &mut rect as *mut _ as LPARAM),
+                    0,
+                    "LVM_GETITEMRECT must place row {row}"
+                );
+                (cells, rect_center(&rect))
+            })
+            .unzip()
+    }
 }

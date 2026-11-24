@@ -9,6 +9,36 @@ build = "build/main.rs"
 name = "mirx-ui"
 path = "src/main.rs"
 
+[features]
+# The automation harness: the WM_COPYDATA protocol that drives the GUI, its
+# state dump, synthetic event loads, and the `--automation`,
+# `--render-state`, `--frame-size` and `--self-test` launches. The Windows
+# UI suites, the snapshot driver and the live lane need it; the release a
+# user gets (`cargo build --release`, scripts/cross-build.sh) has none of
+# it. The bin's unit tests always have it.
+automation = []
+
+# The suites that drive the GUI through the harness.
+[[test]]
+name = "automation_driver"
+required-features = ["automation"]
+
+[[test]]
+name = "live"
+required-features = ["automation"]
+
+[[test]]
+name = "mdi_child_reactivation"
+required-features = ["automation"]
+
+[[test]]
+name = "scale"
+required-features = ["automation"]
+
+[[test]]
+name = "verify_duplicate_navigation_labels"
+required-features = ["automation"]
+
 [dependencies]
 mirx-core = { path = "../mirx-core" }
 serde = { version = "1", features = ["derive"] }

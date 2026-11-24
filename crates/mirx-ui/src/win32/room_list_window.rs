@@ -207,111 +207,118 @@ pub(super) unsafe fn ensure_room_list_view(hwnd: HWND) -> Result<HWND, String> {
     ensure_view(hwnd, ViewId::RoomList)
 }
 
-/// The Rooms List as its list control shows it: the header's titles and
-/// every row's text as the list asks the listing for it, through
-/// `LVN_GETDISPINFOW`.
-pub(super) unsafe fn dump_room_list(list: HWND) -> UiRoomList {
-    let header = SendMessageW(list, LVM_GETHEADER, 0, 0) as HWND;
-    assert!(!header.is_null(), "a report list has a header");
-    let column_count = SendMessageW(header, HDM_GETITEMCOUNT, 0, 0);
-    let column_count = usize::try_from(column_count).expect("HDM_GETITEMCOUNT succeeds");
-    let mut buffer = [0u16; 512];
-    let mut columns = Vec::new();
-    let mut column_click_points = Vec::new();
-    for column in 0..column_count {
-        let mut lv_column = LVCOLUMNW {
-            mask: LVCF_TEXT,
-            pszText: buffer.as_mut_ptr(),
-            cchTextMax: buffer.len() as i32,
-            ..LVCOLUMNW::default()
-        };
-        assert_ne!(
-            SendMessageW(
-                list,
-                LVM_GETCOLUMNW,
-                column,
-                &mut lv_column as *mut _ as LPARAM
-            ),
-            0,
-            "LVM_GETCOLUMNW must read column {column}"
-        );
-        columns.push(wide_buffer_text(&buffer));
-        let mut rect = RECT::default();
-        assert_ne!(
-            SendMessageW(
-                header,
-                HDM_GETITEMRECT,
-                column,
-                &mut rect as *mut _ as LPARAM
-            ),
-            0,
-            "HDM_GETITEMRECT must place column {column}"
-        );
-        column_click_points.push(rect_center(&rect));
-    }
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
 
-    let row_count = usize::try_from(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0))
-        .expect("LVM_GETITEMCOUNT succeeds");
-    let rows = (0..row_count)
-        .map(|row| {
-            (0..column_count)
-                .map(|column| {
-                    let mut item = LVITEMW {
-                        iSubItem: column as i32,
-                        pszText: buffer.as_mut_ptr(),
-                        cchTextMax: buffer.len() as i32,
-                        ..LVITEMW::default()
-                    };
-                    SendMessageW(list, LVM_GETITEMTEXTW, row, &mut item as *mut _ as LPARAM);
-                    wide_buffer_text(&buffer)
-                })
-                .collect()
-        })
-        .collect();
-
-    let top_row = usize::try_from(SendMessageW(list, LVM_GETTOPINDEX, 0, 0))
-        .expect("LVM_GETTOPINDEX succeeds");
-    let per_page = usize::try_from(SendMessageW(list, LVM_GETCOUNTPERPAGE, 0, 0))
-        .expect("LVM_GETCOUNTPERPAGE succeeds");
-    let visible_row_click_points = (top_row..row_count.min(top_row + per_page))
-        .map(|row| {
-            let mut rect = RECT {
-                left: LVIR_LABEL as i32,
-                ..RECT::default()
+    /// The Rooms List as its list control shows it: the header's titles and
+    /// every row's text as the list asks the listing for it, through
+    /// `LVN_GETDISPINFOW`.
+    pub(in crate::win32) unsafe fn dump_room_list(list: HWND) -> UiRoomList {
+        let header = SendMessageW(list, LVM_GETHEADER, 0, 0) as HWND;
+        assert!(!header.is_null(), "a report list has a header");
+        let column_count = SendMessageW(header, HDM_GETITEMCOUNT, 0, 0);
+        let column_count = usize::try_from(column_count).expect("HDM_GETITEMCOUNT succeeds");
+        let mut buffer = [0u16; 512];
+        let mut columns = Vec::new();
+        let mut column_click_points = Vec::new();
+        for column in 0..column_count {
+            let mut lv_column = LVCOLUMNW {
+                mask: LVCF_TEXT,
+                pszText: buffer.as_mut_ptr(),
+                cchTextMax: buffer.len() as i32,
+                ..LVCOLUMNW::default()
             };
             assert_ne!(
-                SendMessageW(list, LVM_GETITEMRECT, row, &mut rect as *mut _ as LPARAM),
+                SendMessageW(
+                    list,
+                    LVM_GETCOLUMNW,
+                    column,
+                    &mut lv_column as *mut _ as LPARAM
+                ),
                 0,
-                "LVM_GETITEMRECT must place row {row}"
+                "LVM_GETCOLUMNW must read column {column}"
             );
-            rect_center(&rect)
-        })
-        .collect();
-    let selected = SendMessageW(list, LVM_GETNEXTITEM, usize::MAX, LVNI_SELECTED as LPARAM);
+            columns.push(wide_buffer_text(&buffer));
+            let mut rect = RECT::default();
+            assert_ne!(
+                SendMessageW(
+                    header,
+                    HDM_GETITEMRECT,
+                    column,
+                    &mut rect as *mut _ as LPARAM
+                ),
+                0,
+                "HDM_GETITEMRECT must place column {column}"
+            );
+            column_click_points.push(rect_center(&rect));
+        }
 
-    UiRoomList {
-        columns,
-        rows,
-        selected: usize::try_from(selected).ok(),
-        column_click_points,
-        visible_row_click_points,
-        top_row,
+        let row_count = usize::try_from(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0))
+            .expect("LVM_GETITEMCOUNT succeeds");
+        let rows = (0..row_count)
+            .map(|row| {
+                (0..column_count)
+                    .map(|column| {
+                        let mut item = LVITEMW {
+                            iSubItem: column as i32,
+                            pszText: buffer.as_mut_ptr(),
+                            cchTextMax: buffer.len() as i32,
+                            ..LVITEMW::default()
+                        };
+                        SendMessageW(list, LVM_GETITEMTEXTW, row, &mut item as *mut _ as LPARAM);
+                        wide_buffer_text(&buffer)
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let top_row = usize::try_from(SendMessageW(list, LVM_GETTOPINDEX, 0, 0))
+            .expect("LVM_GETTOPINDEX succeeds");
+        let per_page = usize::try_from(SendMessageW(list, LVM_GETCOUNTPERPAGE, 0, 0))
+            .expect("LVM_GETCOUNTPERPAGE succeeds");
+        let visible_row_click_points = (top_row..row_count.min(top_row + per_page))
+            .map(|row| {
+                let mut rect = RECT {
+                    left: LVIR_LABEL as i32,
+                    ..RECT::default()
+                };
+                assert_ne!(
+                    SendMessageW(list, LVM_GETITEMRECT, row, &mut rect as *mut _ as LPARAM),
+                    0,
+                    "LVM_GETITEMRECT must place row {row}"
+                );
+                rect_center(&rect)
+            })
+            .collect();
+        let selected = SendMessageW(list, LVM_GETNEXTITEM, usize::MAX, LVNI_SELECTED as LPARAM);
+
+        UiRoomList {
+            columns,
+            rows,
+            selected: usize::try_from(selected).ok(),
+            column_click_points,
+            visible_row_click_points,
+            top_row,
+        }
     }
-}
 
-/// The text before the NUL a control wrote into `buffer`.
-pub(super) fn wide_buffer_text(buffer: &[u16]) -> String {
-    let len = buffer
-        .iter()
-        .position(|&unit| unit == 0)
-        .expect("the control NUL-terminates its text");
-    String::from_utf16_lossy(&buffer[..len])
-}
+    /// The text before the NUL a control wrote into `buffer`.
+    pub(in crate::win32) fn wide_buffer_text(buffer: &[u16]) -> String {
+        let len = buffer
+            .iter()
+            .position(|&unit| unit == 0)
+            .expect("the control NUL-terminates its text");
+        String::from_utf16_lossy(&buffer[..len])
+    }
 
-pub(super) fn rect_center(rect: &RECT) -> UiPoint {
-    UiPoint {
-        x: (rect.left + rect.right) / 2,
-        y: (rect.top + rect.bottom) / 2,
+    pub(in crate::win32) fn rect_center(rect: &RECT) -> UiPoint {
+        UiPoint {
+            x: (rect.left + rect.right) / 2,
+            y: (rect.top + rect.bottom) / 2,
+        }
     }
 }
 

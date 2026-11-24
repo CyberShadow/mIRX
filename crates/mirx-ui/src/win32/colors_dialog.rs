@@ -20,11 +20,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBN_SELCHANGE,
-    CBS_DROPDOWNLIST, DLGC_WANTARROWS, DefWindowProcW, GetClientRect, GetDlgItem, GetParent,
-    GetSystemMetrics, IDC_ARROW, IDCANCEL, IDOK, LoadCursorW, MoveWindow, RegisterClassExW,
-    SM_CXEDGE, SM_CYEDGE, SendMessageW, WM_COMMAND, WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS,
-    WM_LBUTTONDOWN, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFOCUS, WNDCLASSEXW, WNDPROC,
-    WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    CBS_DROPDOWNLIST, DLGC_WANTARROWS, DefWindowProcW, GetClientRect, GetParent, GetSystemMetrics,
+    IDC_ARROW, IDCANCEL, IDOK, LoadCursorW, MoveWindow, RegisterClassExW, SM_CXEDGE, SM_CYEDGE,
+    SendMessageW, WM_COMMAND, WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_NCCREATE,
+    WM_NCDESTROY, WM_PAINT, WM_SETFOCUS, WNDCLASSEXW, WNDPROC, WS_CHILD, WS_EX_CLIENTEDGE,
+    WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use super::colors::{
@@ -38,7 +38,6 @@ use super::{
     BUTTON_CLASS_NAME, COMBOBOX_CLASS_NAME, STATIC_CLASS_NAME, create_child_window, last_os_error,
     run_modal_dialog, state_ref, wide_null,
 };
-use crate::automation::{UiColorsDialog, UiColorsPreviewItem, UiPoint, UiRect};
 
 pub(super) const COLORS_DIALOG_CLASS_NAME: &str = "mirxWin32ColorsDialog";
 const COLORS_DIALOG_TITLE: &str = "mirx Colors";
@@ -189,20 +188,6 @@ pub(super) fn preview_item_at(areas: &[PreviewArea], x: i32, y: i32) -> Option<C
         .rev()
         .find(|area| contains(&area.rect, x, y))
         .map(|area| area.item)
-}
-
-/// Where a click picks `item`: the middle of its first sample text, or a
-/// background's bottom right corner, which no text reaches.
-fn preview_click_point(areas: &[PreviewArea], item: ColorItem) -> (i32, i32) {
-    let area = areas
-        .iter()
-        .find(|area| area.item == item)
-        .expect("the preview shows every item");
-    let rect = &area.rect;
-    match area.text {
-        Some(_) => ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2),
-        None => (rect.right - 2, rect.bottom - 2),
-    }
 }
 
 /// The dialog's state, owned by `ColorsDialog` and lent to the window
@@ -691,39 +676,66 @@ unsafe extern "system" fn palette_window_proc(
     }
 }
 
-/// The dialog as automation sees it: the picked item, the edited scheme,
-/// and where to click each palette box and each item in the preview.
-pub(super) unsafe fn dump(hwnd: HWND) -> UiColorsDialog {
-    let state = dialog_state(hwnd);
-    let palette = GetDlgItem(hwnd, i32::from(COLORS_PALETTE_ID));
-    assert_eq!(palette, state.palette);
-    UiColorsDialog {
-        selected: state.selected.ini_key().to_owned(),
-        items: super::automation_dump::dump_color_items(&state.scheme),
-        palette_cells: palette_cells(palette)
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+    use crate::automation::{UiColorsDialog, UiColorsPreviewItem, UiPoint, UiRect};
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetDlgItem;
+
+    /// Where a click picks `item`: the middle of its first sample text, or a
+    /// background's bottom right corner, which no text reaches.
+    pub(in crate::win32) fn preview_click_point(
+        areas: &[PreviewArea],
+        item: ColorItem,
+    ) -> (i32, i32) {
+        let area = areas
             .iter()
-            .map(|cell| UiRect {
-                x: cell.left,
-                y: cell.top,
-                width: cell.right - cell.left,
-                height: cell.bottom - cell.top,
-            })
-            .collect(),
-        preview_items: ColorItem::ALL
-            .into_iter()
-            .map(|item| {
-                let (x, y) = preview_click_point(&state.preview_areas, item);
-                UiColorsPreviewItem {
-                    item: item.ini_key().to_owned(),
-                    click_point: UiPoint { x, y },
-                }
-            })
-            .collect(),
+            .find(|area| area.item == item)
+            .expect("the preview shows every item");
+        let rect = &area.rect;
+        match area.text {
+            Some(_) => ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2),
+            None => (rect.right - 2, rect.bottom - 2),
+        }
+    }
+
+    /// The dialog as automation sees it: the picked item, the edited scheme,
+    /// and where to click each palette box and each item in the preview.
+    pub(in crate::win32) unsafe fn dump(hwnd: HWND) -> UiColorsDialog {
+        let state = dialog_state(hwnd);
+        let palette = GetDlgItem(hwnd, i32::from(COLORS_PALETTE_ID));
+        assert_eq!(palette, state.palette);
+        UiColorsDialog {
+            selected: state.selected.ini_key().to_owned(),
+            items: crate::win32::automation_dump::dump_color_items(&state.scheme),
+            palette_cells: palette_cells(palette)
+                .iter()
+                .map(|cell| UiRect {
+                    x: cell.left,
+                    y: cell.top,
+                    width: cell.right - cell.left,
+                    height: cell.bottom - cell.top,
+                })
+                .collect(),
+            preview_items: ColorItem::ALL
+                .into_iter()
+                .map(|item| {
+                    let (x, y) = preview_click_point(&state.preview_areas, item);
+                    UiColorsPreviewItem {
+                        item: item.ini_key().to_owned(),
+                        click_point: UiPoint { x, y },
+                    }
+                })
+                .collect(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::automation::*;
     use super::*;
 
     /// Ten pixels a character.

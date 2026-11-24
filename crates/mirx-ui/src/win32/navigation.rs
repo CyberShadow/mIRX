@@ -179,38 +179,6 @@ unsafe fn tree_item_expanded(tree: HWND, item: isize) -> bool {
     state & TVIS_EXPANDED != 0
 }
 
-pub(super) fn view_identity_from_view_id(view_id: &ViewId) -> ViewIdentity {
-    match view_id {
-        ViewId::Status => ViewIdentity::Status,
-        ViewId::RoomList => ViewIdentity::RoomList,
-        ViewId::Room(room_id) => ViewIdentity::Room {
-            room_id: room_id.clone(),
-        },
-        ViewId::Thread {
-            room_id,
-            thread_root_event_id,
-        } => ViewIdentity::Thread {
-            room_id: room_id.clone(),
-            thread_root_event_id: thread_root_event_id.clone(),
-        },
-    }
-}
-
-pub(super) fn view_id_from_identity(identity: &ViewIdentity) -> ViewId {
-    match identity {
-        ViewIdentity::Status => ViewId::Status,
-        ViewIdentity::RoomList => ViewId::RoomList,
-        ViewIdentity::Room { room_id } => ViewId::Room(room_id.clone()),
-        ViewIdentity::Thread {
-            room_id,
-            thread_root_event_id,
-        } => ViewId::Thread {
-            room_id: room_id.clone(),
-            thread_root_event_id: thread_root_event_id.clone(),
-        },
-    }
-}
-
 pub(super) unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
     ensure_status_view(hwnd)?;
 
@@ -941,253 +909,6 @@ pub(super) unsafe fn refresh_tree_activity_colors(hwnd: HWND) -> Result<(), Stri
     Ok(())
 }
 
-pub(super) unsafe fn read_tree_item_text(tree: HWND, item: isize) -> Result<String, String> {
-    let mut buffer = vec![0u16; 1024];
-    let mut tree_item = TVITEMEXW {
-        mask: TVIF_TEXT,
-        hItem: item as _,
-        pszText: buffer.as_mut_ptr(),
-        cchTextMax: buffer.len() as i32,
-        ..zeroed()
-    };
-
-    if SendMessageW(
-        tree,
-        TVM_GETITEMW,
-        0,
-        (&mut tree_item as *mut TVITEMEXW) as LPARAM,
-    ) == 0
-    {
-        return Err(format!(
-            "failed to read tree item text for handle 0x{item:x}"
-        ));
-    }
-
-    let text_len = buffer
-        .iter()
-        .position(|ch| *ch == 0)
-        .unwrap_or(buffer.len());
-    Ok(String::from_utf16_lossy(&buffer[..text_len]))
-}
-
-/// The item as drawn: its activity is its colour, which a collapsed item
-/// rolls up from under it.
-unsafe fn read_navigation_node(
-    state: &WindowState,
-    tree: HWND,
-    item: isize,
-) -> Result<NavigationNode, String> {
-    let text = read_tree_item_text(tree, item)?;
-    let tree_item = &state.tree_items[&item];
-    let expanded = tree_item
-        .descendant_views
-        .is_some()
-        .then(|| tree_item_expanded(tree, item));
-    let activity = tree_item_activity(state, item, || {
-        expanded.expect("items with children have an expanded state")
-    });
-    let mut children = Vec::new();
-    let mut child =
-        SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CHILD as WPARAM, item as LPARAM) as isize;
-    while child != 0 {
-        children.push(read_navigation_node(state, tree, child)?);
-        child = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_NEXT as WPARAM, child as LPARAM) as isize;
-    }
-
-    Ok(NavigationNode {
-        text,
-        view: tree_item.node.view().map(view_identity_from_view_id),
-        space_id: match &tree_item.node {
-            NavNode::Space { room_id } => Some(room_id.clone()),
-            NavNode::View(_) => None,
-        },
-        expanded,
-        activity,
-        children,
-    })
-}
-
-pub(super) unsafe fn dump_navigation_tree(hwnd: HWND) -> Result<NavigationNode, String> {
-    let tree = state_ref(hwnd).controls.tree;
-    if tree.is_null() {
-        return Err("tree control was not created".to_owned());
-    }
-
-    let root = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_ROOT as WPARAM, 0) as isize;
-    if root == 0 {
-        return Err("navigation tree root was missing".to_owned());
-    }
-
-    read_navigation_node(state_ref(hwnd), tree, root)
-}
-
-fn format_navigation_path(path: &[NavigationPathSegment]) -> String {
-    path.iter()
-        .map(|segment| {
-            if segment.same_text_index == 0 {
-                segment.text.clone()
-            } else {
-                format!("{} [{}]", segment.text, segment.same_text_index)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" > ")
-}
-
-unsafe fn same_text_index_for_tree_item(tree: HWND, item: isize) -> Result<u32, String> {
-    let parent =
-        SendMessageW(tree, TVM_GETNEXTITEM, TVGN_PARENT as WPARAM, item as LPARAM) as isize;
-    let target_text = read_tree_item_text(tree, item)?;
-    let mut current = if parent == 0 {
-        SendMessageW(tree, TVM_GETNEXTITEM, TVGN_ROOT as WPARAM, 0) as isize
-    } else {
-        SendMessageW(
-            tree,
-            TVM_GETNEXTITEM,
-            TVGN_CHILD as WPARAM,
-            parent as LPARAM,
-        ) as isize
-    };
-    let mut same_text_index = 0u32;
-    while current != 0 {
-        if read_tree_item_text(tree, current)? == target_text {
-            if current == item {
-                return Ok(same_text_index);
-            }
-            same_text_index += 1;
-        }
-        current = SendMessageW(
-            tree,
-            TVM_GETNEXTITEM,
-            TVGN_NEXT as WPARAM,
-            current as LPARAM,
-        ) as isize;
-    }
-
-    Err(format!(
-        "tree item 0x{item:x} was not found among its siblings"
-    ))
-}
-
-pub(super) unsafe fn dump_selected_navigation_path(
-    hwnd: HWND,
-) -> Result<SelectedNavigationPathResponse, String> {
-    let tree = state_ref(hwnd).controls.tree;
-    if tree.is_null() {
-        return Err("tree control was not created".to_owned());
-    }
-
-    let mut item = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as WPARAM, 0) as isize;
-    if item == 0 {
-        return Err("navigation tree selection was missing".to_owned());
-    }
-    let view = state_ref(hwnd).tree_items[&item]
-        .node
-        .view()
-        .map(view_identity_from_view_id);
-
-    let mut path = Vec::new();
-    while item != 0 {
-        path.push(NavigationPathSegment {
-            text: read_tree_item_text(tree, item)?,
-            same_text_index: same_text_index_for_tree_item(tree, item)?,
-        });
-        item = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_PARENT as WPARAM, item as LPARAM) as isize;
-    }
-    path.reverse();
-    Ok(SelectedNavigationPathResponse { path, view })
-}
-
-pub(super) unsafe fn select_navigation_path(
-    hwnd: HWND,
-    path: &[NavigationPathSegment],
-) -> Result<(), String> {
-    if path.is_empty() {
-        return Err("navigation path must not be empty".to_owned());
-    }
-
-    let tree = state_ref(hwnd).controls.tree;
-    if tree.is_null() {
-        return Err("tree control was not created".to_owned());
-    }
-
-    let mut current = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_ROOT as WPARAM, 0) as isize;
-    if current == 0 {
-        return Err("navigation tree root was missing".to_owned());
-    }
-
-    let root_text = read_tree_item_text(tree, current)?;
-    let root_same_text_index = same_text_index_for_tree_item(tree, current)?;
-    if root_text != path[0].text || root_same_text_index != path[0].same_text_index {
-        return Err(format!(
-            "unknown navigation path: {}",
-            format_navigation_path(path)
-        ));
-    }
-
-    for segment in &path[1..] {
-        let mut child = SendMessageW(
-            tree,
-            TVM_GETNEXTITEM,
-            TVGN_CHILD as WPARAM,
-            current as LPARAM,
-        ) as isize;
-        let mut matched_child = None;
-        let mut same_text_index = 0u32;
-        while child != 0 {
-            if read_tree_item_text(tree, child)? == segment.text {
-                if same_text_index == segment.same_text_index {
-                    matched_child = Some(child);
-                    break;
-                }
-                same_text_index += 1;
-            }
-            child =
-                SendMessageW(tree, TVM_GETNEXTITEM, TVGN_NEXT as WPARAM, child as LPARAM) as isize;
-        }
-
-        current = matched_child
-            .ok_or_else(|| format!("unknown navigation path: {}", format_navigation_path(path)))?;
-    }
-
-    select_navigation_item(hwnd, tree, current)
-}
-
-/// Selects the view's first tree item: a room listed under two spaces has two
-/// items, and `primary_tree_items` holds the first.
-pub(super) unsafe fn select_navigation_view(
-    hwnd: HWND,
-    identity: &ViewIdentity,
-) -> Result<(), String> {
-    let tree = state_ref(hwnd).controls.tree;
-    let item = *state_ref(hwnd)
-        .primary_tree_items
-        .get(&view_id_from_identity(identity))
-        .ok_or_else(|| format!("unknown navigation view: {identity:?}"))?;
-    select_navigation_item(hwnd, tree, item)
-}
-
-/// Expands or collapses the node's first treebar item, as its button does.
-/// A collapse over the caret moves it to the item (the control does that)
-/// and activates nothing.
-pub(super) unsafe fn set_navigation_expanded(
-    hwnd: HWND,
-    node: &NavNode,
-    expanded: bool,
-) -> Result<(), String> {
-    let tree = state_ref(hwnd).controls.tree;
-    let item = *tree_items_of(state_ref(hwnd), tree, node)
-        .first()
-        .ok_or_else(|| format!("unknown navigation node: {node:?}"))?;
-    if state_ref(hwnd).tree_items[&item].descendant_views.is_none() {
-        return Err(format!("navigation node has no children: {node:?}"));
-    }
-    let action = if expanded { TVE_EXPAND } else { TVE_COLLAPSE };
-    SendMessageW(tree, TVM_EXPAND, action as WPARAM, item as LPARAM);
-    // TVM_EXPAND sends no TVN_ITEMEXPANDEDW.
-    tree_expansion_changed(hwnd)
-}
-
 /// After an item folds or unfolds (`TVN_ITEMEXPANDEDW`): its colour depends
 /// on it, and the caret goes back to the active view's item once a folder
 /// unfolds over it, as it went to the folder when it folded.
@@ -1223,22 +944,6 @@ unsafe fn tree_items_of(state: &WindowState, tree: HWND, node: &NavNode) -> Vec<
         .into_iter()
         .filter(|item| state.tree_items[item].node == *node)
         .collect()
-}
-
-/// Selects a tree item like a click does, and activates its view. Activation
-/// runs here too because a selection that is already the caret sends no
-/// `TVN_SELCHANGEDW`, yet a click on it still brings its window forward.
-unsafe fn select_navigation_item(hwnd: HWND, tree: HWND, item: isize) -> Result<(), String> {
-    let selected = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as WPARAM, 0) as isize;
-    if selected != item {
-        SendMessageW(tree, TVM_SELECTITEM, TVGN_CARET as WPARAM, item as LPARAM);
-    }
-    let view_id = state_ref(hwnd).tree_items[&item].node.view().cloned();
-    if let Some(view_id) = view_id {
-        activate_view(hwnd, &view_id, Some(item))?;
-    }
-
-    Ok(())
 }
 
 unsafe fn tree_item_at_screen_point(tree: HWND, x: i32, y: i32) -> Option<isize> {
@@ -1360,6 +1065,316 @@ pub(super) fn select_room(state: &mut WindowState, room_id: &str) -> Result<(), 
 
     state.model.selected_room = Some(room_id.to_owned());
     Ok(())
+}
+
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+
+    pub(in crate::win32) unsafe fn dump_navigation_tree(
+        hwnd: HWND,
+    ) -> Result<NavigationNode, String> {
+        let tree = state_ref(hwnd).controls.tree;
+        if tree.is_null() {
+            return Err("tree control was not created".to_owned());
+        }
+
+        let root = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_ROOT as WPARAM, 0) as isize;
+        if root == 0 {
+            return Err("navigation tree root was missing".to_owned());
+        }
+
+        read_navigation_node(state_ref(hwnd), tree, root)
+    }
+
+    fn format_navigation_path(path: &[NavigationPathSegment]) -> String {
+        path.iter()
+            .map(|segment| {
+                if segment.same_text_index == 0 {
+                    segment.text.clone()
+                } else {
+                    format!("{} [{}]", segment.text, segment.same_text_index)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" > ")
+    }
+
+    unsafe fn same_text_index_for_tree_item(tree: HWND, item: isize) -> Result<u32, String> {
+        let parent =
+            SendMessageW(tree, TVM_GETNEXTITEM, TVGN_PARENT as WPARAM, item as LPARAM) as isize;
+        let target_text = read_tree_item_text(tree, item)?;
+        let mut current = if parent == 0 {
+            SendMessageW(tree, TVM_GETNEXTITEM, TVGN_ROOT as WPARAM, 0) as isize
+        } else {
+            SendMessageW(
+                tree,
+                TVM_GETNEXTITEM,
+                TVGN_CHILD as WPARAM,
+                parent as LPARAM,
+            ) as isize
+        };
+        let mut same_text_index = 0u32;
+        while current != 0 {
+            if read_tree_item_text(tree, current)? == target_text {
+                if current == item {
+                    return Ok(same_text_index);
+                }
+                same_text_index += 1;
+            }
+            current = SendMessageW(
+                tree,
+                TVM_GETNEXTITEM,
+                TVGN_NEXT as WPARAM,
+                current as LPARAM,
+            ) as isize;
+        }
+
+        Err(format!(
+            "tree item 0x{item:x} was not found among its siblings"
+        ))
+    }
+
+    pub(in crate::win32) unsafe fn dump_selected_navigation_path(
+        hwnd: HWND,
+    ) -> Result<SelectedNavigationPathResponse, String> {
+        let tree = state_ref(hwnd).controls.tree;
+        if tree.is_null() {
+            return Err("tree control was not created".to_owned());
+        }
+
+        let mut item = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as WPARAM, 0) as isize;
+        if item == 0 {
+            return Err("navigation tree selection was missing".to_owned());
+        }
+        let view = state_ref(hwnd).tree_items[&item]
+            .node
+            .view()
+            .map(view_identity_from_view_id);
+
+        let mut path = Vec::new();
+        while item != 0 {
+            path.push(NavigationPathSegment {
+                text: read_tree_item_text(tree, item)?,
+                same_text_index: same_text_index_for_tree_item(tree, item)?,
+            });
+            item =
+                SendMessageW(tree, TVM_GETNEXTITEM, TVGN_PARENT as WPARAM, item as LPARAM) as isize;
+        }
+        path.reverse();
+        Ok(SelectedNavigationPathResponse { path, view })
+    }
+
+    pub(in crate::win32) unsafe fn select_navigation_path(
+        hwnd: HWND,
+        path: &[NavigationPathSegment],
+    ) -> Result<(), String> {
+        if path.is_empty() {
+            return Err("navigation path must not be empty".to_owned());
+        }
+
+        let tree = state_ref(hwnd).controls.tree;
+        if tree.is_null() {
+            return Err("tree control was not created".to_owned());
+        }
+
+        let mut current = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_ROOT as WPARAM, 0) as isize;
+        if current == 0 {
+            return Err("navigation tree root was missing".to_owned());
+        }
+
+        let root_text = read_tree_item_text(tree, current)?;
+        let root_same_text_index = same_text_index_for_tree_item(tree, current)?;
+        if root_text != path[0].text || root_same_text_index != path[0].same_text_index {
+            return Err(format!(
+                "unknown navigation path: {}",
+                format_navigation_path(path)
+            ));
+        }
+
+        for segment in &path[1..] {
+            let mut child = SendMessageW(
+                tree,
+                TVM_GETNEXTITEM,
+                TVGN_CHILD as WPARAM,
+                current as LPARAM,
+            ) as isize;
+            let mut matched_child = None;
+            let mut same_text_index = 0u32;
+            while child != 0 {
+                if read_tree_item_text(tree, child)? == segment.text {
+                    if same_text_index == segment.same_text_index {
+                        matched_child = Some(child);
+                        break;
+                    }
+                    same_text_index += 1;
+                }
+                child = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_NEXT as WPARAM, child as LPARAM)
+                    as isize;
+            }
+
+            current = matched_child.ok_or_else(|| {
+                format!("unknown navigation path: {}", format_navigation_path(path))
+            })?;
+        }
+
+        select_navigation_item(hwnd, tree, current)
+    }
+
+    /// Selects the view's first tree item: a room listed under two spaces has two
+    /// items, and `primary_tree_items` holds the first.
+    pub(in crate::win32) unsafe fn select_navigation_view(
+        hwnd: HWND,
+        identity: &ViewIdentity,
+    ) -> Result<(), String> {
+        let tree = state_ref(hwnd).controls.tree;
+        let item = *state_ref(hwnd)
+            .primary_tree_items
+            .get(&view_id_from_identity(identity))
+            .ok_or_else(|| format!("unknown navigation view: {identity:?}"))?;
+        select_navigation_item(hwnd, tree, item)
+    }
+
+    /// Expands or collapses the node's first treebar item, as its button does.
+    /// A collapse over the caret moves it to the item (the control does that)
+    /// and activates nothing.
+    pub(in crate::win32) unsafe fn set_navigation_expanded(
+        hwnd: HWND,
+        node: &NavNode,
+        expanded: bool,
+    ) -> Result<(), String> {
+        let tree = state_ref(hwnd).controls.tree;
+        let item = *tree_items_of(state_ref(hwnd), tree, node)
+            .first()
+            .ok_or_else(|| format!("unknown navigation node: {node:?}"))?;
+        if state_ref(hwnd).tree_items[&item].descendant_views.is_none() {
+            return Err(format!("navigation node has no children: {node:?}"));
+        }
+        let action = if expanded { TVE_EXPAND } else { TVE_COLLAPSE };
+        SendMessageW(tree, TVM_EXPAND, action as WPARAM, item as LPARAM);
+        // TVM_EXPAND sends no TVN_ITEMEXPANDEDW.
+        tree_expansion_changed(hwnd)
+    }
+
+    /// Selects a tree item like a click does, and activates its view. Activation
+    /// runs here too because a selection that is already the caret sends no
+    /// `TVN_SELCHANGEDW`, yet a click on it still brings its window forward.
+    unsafe fn select_navigation_item(hwnd: HWND, tree: HWND, item: isize) -> Result<(), String> {
+        let selected = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as WPARAM, 0) as isize;
+        if selected != item {
+            SendMessageW(tree, TVM_SELECTITEM, TVGN_CARET as WPARAM, item as LPARAM);
+        }
+        let view_id = state_ref(hwnd).tree_items[&item].node.view().cloned();
+        if let Some(view_id) = view_id {
+            activate_view(hwnd, &view_id, Some(item))?;
+        }
+
+        Ok(())
+    }
+
+    pub(in crate::win32) fn view_identity_from_view_id(view_id: &ViewId) -> ViewIdentity {
+        match view_id {
+            ViewId::Status => ViewIdentity::Status,
+            ViewId::RoomList => ViewIdentity::RoomList,
+            ViewId::Room(room_id) => ViewIdentity::Room {
+                room_id: room_id.clone(),
+            },
+            ViewId::Thread {
+                room_id,
+                thread_root_event_id,
+            } => ViewIdentity::Thread {
+                room_id: room_id.clone(),
+                thread_root_event_id: thread_root_event_id.clone(),
+            },
+        }
+    }
+
+    pub(in crate::win32) fn view_id_from_identity(identity: &ViewIdentity) -> ViewId {
+        match identity {
+            ViewIdentity::Status => ViewId::Status,
+            ViewIdentity::RoomList => ViewId::RoomList,
+            ViewIdentity::Room { room_id } => ViewId::Room(room_id.clone()),
+            ViewIdentity::Thread {
+                room_id,
+                thread_root_event_id,
+            } => ViewId::Thread {
+                room_id: room_id.clone(),
+                thread_root_event_id: thread_root_event_id.clone(),
+            },
+        }
+    }
+
+    pub(in crate::win32) unsafe fn read_tree_item_text(
+        tree: HWND,
+        item: isize,
+    ) -> Result<String, String> {
+        let mut buffer = vec![0u16; 1024];
+        let mut tree_item = TVITEMEXW {
+            mask: TVIF_TEXT,
+            hItem: item as _,
+            pszText: buffer.as_mut_ptr(),
+            cchTextMax: buffer.len() as i32,
+            ..zeroed()
+        };
+
+        if SendMessageW(
+            tree,
+            TVM_GETITEMW,
+            0,
+            (&mut tree_item as *mut TVITEMEXW) as LPARAM,
+        ) == 0
+        {
+            return Err(format!(
+                "failed to read tree item text for handle 0x{item:x}"
+            ));
+        }
+
+        let text_len = buffer
+            .iter()
+            .position(|ch| *ch == 0)
+            .unwrap_or(buffer.len());
+        Ok(String::from_utf16_lossy(&buffer[..text_len]))
+    }
+
+    /// The item as drawn: its activity is its colour, which a collapsed item
+    /// rolls up from under it.
+    unsafe fn read_navigation_node(
+        state: &WindowState,
+        tree: HWND,
+        item: isize,
+    ) -> Result<NavigationNode, String> {
+        let text = read_tree_item_text(tree, item)?;
+        let tree_item = &state.tree_items[&item];
+        let expanded = tree_item
+            .descendant_views
+            .is_some()
+            .then(|| tree_item_expanded(tree, item));
+        let activity = tree_item_activity(state, item, || {
+            expanded.expect("items with children have an expanded state")
+        });
+        let mut children = Vec::new();
+        let mut child =
+            SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CHILD as WPARAM, item as LPARAM) as isize;
+        while child != 0 {
+            children.push(read_navigation_node(state, tree, child)?);
+            child =
+                SendMessageW(tree, TVM_GETNEXTITEM, TVGN_NEXT as WPARAM, child as LPARAM) as isize;
+        }
+
+        Ok(NavigationNode {
+            text,
+            view: tree_item.node.view().map(view_identity_from_view_id),
+            space_id: match &tree_item.node {
+                NavNode::Space { room_id } => Some(room_id.clone()),
+                NavNode::View(_) => None,
+            },
+            expanded,
+            activity,
+            children,
+        })
+    }
 }
 
 #[cfg(test)]

@@ -443,36 +443,10 @@ pub(super) unsafe fn compose_edit(hwnd: HWND) -> HWND {
         .edit
 }
 
-pub(super) unsafe fn dump_compose_text(hwnd: HWND) -> Result<String, String> {
-    let edit = compose_edit(hwnd);
-    Ok(read_window_text(edit))
-}
-
 pub(super) unsafe fn set_compose_text(hwnd: HWND, text: &str) -> Result<(), String> {
     let edit = compose_edit(hwnd);
     active_compose_history(state_mut(hwnd)).reset_navigation();
     set_compose_edit_text(edit, text);
-    Ok(())
-}
-
-pub(super) unsafe fn send_compose_key(hwnd: HWND, key: ComposeKey) -> Result<(), String> {
-    let edit = compose_edit(hwnd);
-    let virtual_key = match key {
-        ComposeKey::Return => VK_RETURN_KEY,
-        ComposeKey::Up => VK_UP_KEY,
-        ComposeKey::Down => VK_DOWN_KEY,
-        ComposeKey::Tab => VK_TAB_KEY,
-        ComposeKey::Escape => VK_ESCAPE_KEY,
-        // A sent key carries no Shift state, so Shift+Tab goes straight to
-        // the completion the edit box runs for it.
-        ComposeKey::ShiftTab => return complete_compose_nick(hwnd, true),
-        // Nor Ctrl state, for the format chords.
-        ComposeKey::Format { key } => {
-            wrap_compose_selection(hwnd, edit, key);
-            return Ok(());
-        }
-    };
-    SendMessageW(edit, WM_KEYDOWN, virtual_key, 0);
     Ok(())
 }
 
@@ -524,26 +498,6 @@ unsafe fn wrap_compose_selection(frame: HWND, edit: HWND, key: FormatKey) {
     // wParam TRUE: the replacement can be undone.
     SendMessageW(edit, EM_REPLACESEL, 1, replacement.as_ptr() as LPARAM);
     SendMessageW(edit, EM_SETSEL, selection.start, selection.end as LPARAM);
-}
-
-pub(super) unsafe fn submit_compose_from_control(
-    hwnd: HWND,
-    explicit_room_id: Option<&str>,
-) -> Result<String, String> {
-    let edit = compose_edit(hwnd);
-    let input = read_window_text(edit);
-    let window = state_ref(hwnd).active_view.clone();
-    let room_id = submit_compose(
-        state_mut(hwnd),
-        &window,
-        RoomMessagePresentationKind::Text,
-        ComposeFormat::Markdown,
-        &input,
-        explicit_room_id,
-    )?;
-    let empty = wide_null("");
-    SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
-    Ok(room_id)
 }
 
 /// The message an editbox line sends: its text as typed, which the core
@@ -957,6 +911,62 @@ unsafe fn set_compose_edit_text(hwnd: HWND, text: &str) {
     set_edit_text(hwnd, text);
     let len = text.encode_utf16().count();
     SendMessageW(hwnd, EM_SETSEL, len, len as LPARAM);
+}
+
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+
+    pub(in crate::win32) unsafe fn dump_compose_text(hwnd: HWND) -> Result<String, String> {
+        let edit = compose_edit(hwnd);
+        Ok(read_window_text(edit))
+    }
+
+    pub(in crate::win32) unsafe fn send_compose_key(
+        hwnd: HWND,
+        key: ComposeKey,
+    ) -> Result<(), String> {
+        let edit = compose_edit(hwnd);
+        let virtual_key = match key {
+            ComposeKey::Return => VK_RETURN_KEY,
+            ComposeKey::Up => VK_UP_KEY,
+            ComposeKey::Down => VK_DOWN_KEY,
+            ComposeKey::Tab => VK_TAB_KEY,
+            ComposeKey::Escape => VK_ESCAPE_KEY,
+            // A sent key carries no Shift state, so Shift+Tab goes straight to
+            // the completion the edit box runs for it.
+            ComposeKey::ShiftTab => return complete_compose_nick(hwnd, true),
+            // Nor Ctrl state, for the format chords.
+            ComposeKey::Format { key } => {
+                wrap_compose_selection(hwnd, edit, key);
+                return Ok(());
+            }
+        };
+        SendMessageW(edit, WM_KEYDOWN, virtual_key, 0);
+        Ok(())
+    }
+
+    pub(in crate::win32) unsafe fn submit_compose_from_control(
+        hwnd: HWND,
+        explicit_room_id: Option<&str>,
+    ) -> Result<String, String> {
+        let edit = compose_edit(hwnd);
+        let input = read_window_text(edit);
+        let window = state_ref(hwnd).active_view.clone();
+        let room_id = submit_compose(
+            state_mut(hwnd),
+            &window,
+            RoomMessagePresentationKind::Text,
+            ComposeFormat::Markdown,
+            &input,
+            explicit_room_id,
+        )?;
+        let empty = wide_null("");
+        SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
+        Ok(room_id)
+    }
 }
 
 #[cfg(test)]

@@ -1,31 +1,10 @@
 //! The nick list: owner draw, the selected member and its menu.
 
-use super::colors::colorref_hex;
 use super::settings::Settings;
 use super::*;
 
 pub(super) fn room_member_nick(member: &RoomMemberSummary) -> String {
     nick_label(&member.user_id, Some(&member.nick), member.nick_ambiguous)
-}
-
-pub(super) fn room_member_view_rows(
-    members: &[RoomMemberSummary],
-    presence: &PresenceBook,
-    settings: &Settings,
-) -> Vec<RoomMemberView> {
-    members
-        .iter()
-        .map(|member| RoomMemberView {
-            user_id: member.user_id.clone(),
-            nick: member.nick.clone(),
-            label: room_member_nick(member),
-            rank: member.rank,
-            can_kick: member.can_kick,
-            can_ban: member.can_ban,
-            presence: presence.kind(&member.user_id),
-            color: colorref_hex(nick_list_color(member, presence, settings)),
-        })
-        .collect()
 }
 
 /// The colour a member's nick is drawn in when not selected: away and
@@ -298,58 +277,6 @@ unsafe fn run_member_action(
     }
 }
 
-pub(super) unsafe fn invoke_member_context_menu_for_automation(
-    hwnd: HWND,
-    user_id: &str,
-    command: &ContextMenuCommand,
-) -> Result<(), String> {
-    let list = active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
-    let lparam = member_context_lparam_for_automation(hwnd, list, user_id)?;
-    let command = member_context_menu_command_id(command)?;
-    show_member_context_menu(hwnd, list, lparam, Some(command))
-}
-
-pub(super) unsafe fn invoke_selected_member_context_menu_for_automation(
-    hwnd: HWND,
-    command: &ContextMenuCommand,
-) -> Result<(), String> {
-    let command = member_context_menu_command_id(command)?;
-    let list = active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
-    show_member_context_menu(hwnd, list, -1, Some(command))
-}
-
-fn member_context_menu_command_id(command: &ContextMenuCommand) -> Result<usize, String> {
-    context_menu_command_id(command)
-        .filter(|id| member_menu_item_ids().any(|member_id| member_id == *id))
-        .ok_or_else(|| "member context menu command is unavailable".to_owned())
-}
-
-unsafe fn member_context_lparam_for_automation(
-    hwnd: HWND,
-    list: HWND,
-    user_id: &str,
-) -> Result<LPARAM, String> {
-    let index = active_listed_index(hwnd, user_id)?;
-    let mut rect = RECT::default();
-    if SendMessageW(
-        list,
-        LB_GETITEMRECT,
-        index,
-        &mut rect as *mut RECT as LPARAM,
-    ) == LB_ERR as isize
-    {
-        return Err("member context menu target is unavailable".to_owned());
-    }
-    let mut point = POINT {
-        x: (rect.left + rect.right) / 2,
-        y: (rect.top + rect.bottom) / 2,
-    };
-    if ClientToScreen(list, &mut point) == 0 {
-        return Err(last_os_error("ClientToScreen"));
-    }
-    Ok(((point.y as u32 as usize) << 16 | (point.x as u16 as usize)) as LPARAM)
-}
-
 /// One item of a nick list: its member, and the text it shows (the rank
 /// prefix and the label). Colours and presence are not here: they are
 /// drawn from the model, so a change of them only repaints the list.
@@ -477,26 +404,6 @@ pub(super) fn active_view_members(state: &WindowState) -> &[RoomMemberSummary] {
         .unwrap_or_default()
 }
 
-/// The index of `user_id`'s item in the active window's nick list.
-unsafe fn active_listed_index(hwnd: HWND, user_id: &str) -> Result<usize, String> {
-    let state = state_ref(hwnd);
-    state.views[&state.active_view]
-        .nick_list
-        .iter()
-        .position(|item| item.user_id == user_id)
-        .ok_or_else(|| format!("unknown_member: {user_id}"))
-}
-
-unsafe fn active_member_list(hwnd: HWND) -> Option<HWND> {
-    match &state_ref(hwnd).active_view {
-        ViewId::Status | ViewId::RoomList => None,
-        ViewId::Room(_) | ViewId::Thread { .. } => state_ref(hwnd)
-            .views
-            .get(&state_ref(hwnd).active_view)
-            .map(|view| room_content_member_list(view.content)),
-    }
-}
-
 /// The members a window's nick list selects, in list order, through its
 /// listing.
 unsafe fn selected_members(state: &WindowState, view_id: &ViewId) -> Vec<RoomMemberSummary> {
@@ -567,16 +474,122 @@ pub(super) unsafe fn refresh_member_menu_state(
     Ok(())
 }
 
-/// Selects only `user_id`'s nick in the active window, with the caret on
-/// it.
-pub(super) unsafe fn select_member_for_automation(hwnd: HWND, user_id: &str) -> Result<(), String> {
-    let index = active_listed_index(hwnd, user_id)?;
-    let list = active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
-    SendMessageW(list, LB_SETSEL, 0, -1);
-    select_list_items(list, &[index]);
-    SendMessageW(list, LB_SETCARETINDEX, index, 0);
-    assert_eq!(list_selection(list), [index], "only {user_id} is selected");
-    Ok(())
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+    use crate::win32::colors::automation::colorref_hex;
+
+    pub(in crate::win32) fn room_member_view_rows(
+        members: &[RoomMemberSummary],
+        presence: &PresenceBook,
+        settings: &Settings,
+    ) -> Vec<RoomMemberView> {
+        members
+            .iter()
+            .map(|member| RoomMemberView {
+                user_id: member.user_id.clone(),
+                nick: member.nick.clone(),
+                label: room_member_nick(member),
+                rank: member.rank,
+                can_kick: member.can_kick,
+                can_ban: member.can_ban,
+                presence: presence.kind(&member.user_id),
+                color: colorref_hex(nick_list_color(member, presence, settings)),
+            })
+            .collect()
+    }
+
+    pub(in crate::win32) unsafe fn invoke_member_context_menu_for_automation(
+        hwnd: HWND,
+        user_id: &str,
+        command: &ContextMenuCommand,
+    ) -> Result<(), String> {
+        let list =
+            active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
+        let lparam = member_context_lparam_for_automation(hwnd, list, user_id)?;
+        let command = member_context_menu_command_id(command)?;
+        show_member_context_menu(hwnd, list, lparam, Some(command))
+    }
+
+    pub(in crate::win32) unsafe fn invoke_selected_member_context_menu_for_automation(
+        hwnd: HWND,
+        command: &ContextMenuCommand,
+    ) -> Result<(), String> {
+        let command = member_context_menu_command_id(command)?;
+        let list =
+            active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
+        show_member_context_menu(hwnd, list, -1, Some(command))
+    }
+
+    fn member_context_menu_command_id(command: &ContextMenuCommand) -> Result<usize, String> {
+        context_menu_command_id(command)
+            .filter(|id| member_menu_item_ids().any(|member_id| member_id == *id))
+            .ok_or_else(|| "member context menu command is unavailable".to_owned())
+    }
+
+    unsafe fn member_context_lparam_for_automation(
+        hwnd: HWND,
+        list: HWND,
+        user_id: &str,
+    ) -> Result<LPARAM, String> {
+        let index = active_listed_index(hwnd, user_id)?;
+        let mut rect = RECT::default();
+        if SendMessageW(
+            list,
+            LB_GETITEMRECT,
+            index,
+            &mut rect as *mut RECT as LPARAM,
+        ) == LB_ERR as isize
+        {
+            return Err("member context menu target is unavailable".to_owned());
+        }
+        let mut point = POINT {
+            x: (rect.left + rect.right) / 2,
+            y: (rect.top + rect.bottom) / 2,
+        };
+        if ClientToScreen(list, &mut point) == 0 {
+            return Err(last_os_error("ClientToScreen"));
+        }
+        Ok(((point.y as u32 as usize) << 16 | (point.x as u16 as usize)) as LPARAM)
+    }
+
+    /// The index of `user_id`'s item in the active window's nick list.
+    unsafe fn active_listed_index(hwnd: HWND, user_id: &str) -> Result<usize, String> {
+        let state = state_ref(hwnd);
+        state.views[&state.active_view]
+            .nick_list
+            .iter()
+            .position(|item| item.user_id == user_id)
+            .ok_or_else(|| format!("unknown_member: {user_id}"))
+    }
+
+    unsafe fn active_member_list(hwnd: HWND) -> Option<HWND> {
+        match &state_ref(hwnd).active_view {
+            ViewId::Status | ViewId::RoomList => None,
+            ViewId::Room(_) | ViewId::Thread { .. } => state_ref(hwnd)
+                .views
+                .get(&state_ref(hwnd).active_view)
+                .map(|view| room_content_member_list(view.content)),
+        }
+    }
+
+    /// Selects only `user_id`'s nick in the active window, with the caret on
+    /// it.
+    pub(in crate::win32) unsafe fn select_member_for_automation(
+        hwnd: HWND,
+        user_id: &str,
+    ) -> Result<(), String> {
+        let index = active_listed_index(hwnd, user_id)?;
+        let list =
+            active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
+        SendMessageW(list, LB_SETSEL, 0, -1);
+        select_list_items(list, &[index]);
+        SendMessageW(list, LB_SETCARETINDEX, index, 0);
+        assert_eq!(list_selection(list), [index], "only {user_id} is selected");
+        Ok(())
+    }
 }
 
 #[cfg(test)]

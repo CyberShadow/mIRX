@@ -178,20 +178,6 @@ pub(super) fn verification_action_label(action: VerificationAction) -> &'static 
     }
 }
 
-fn verification_flow_id_from_action_args(
-    model: &UiModel,
-    args: &VerificationActionArgs,
-) -> Result<VerificationFlowId, String> {
-    match (&args.flow_id, &args.user_id) {
-        (Some(flow_id), Some(user_id)) => Ok(VerificationFlowId {
-            flow_id: flow_id.clone(),
-            user_id: user_id.clone(),
-        }),
-        (None, None) => current_verification_flow_id(model),
-        _ => unreachable!("verification action args must contain both flow_id and user_id"),
-    }
-}
-
 fn current_verification_flow_id(model: &UiModel) -> Result<VerificationFlowId, String> {
     let event = model
         .last_verification
@@ -219,24 +205,6 @@ fn submit_verification_command(
     }
     state.harness.record_command(command);
     Ok(())
-}
-
-pub(super) unsafe fn submit_automation_verification_action(
-    hwnd: HWND,
-    action: VerificationAction,
-    args: VerificationActionArgs,
-) -> Result<(), String> {
-    {
-        let state = state_mut(hwnd);
-        submit_verification_automation_action_to_state(state, action, args)?;
-    }
-    set_local_command_status(
-        hwnd,
-        format!(
-            "verification {} submitted",
-            verification_action_label(action)
-        ),
-    )
 }
 
 pub(super) unsafe fn submit_menu_verification_action(
@@ -269,20 +237,6 @@ fn submit_menu_verification_action_to_state(
         VerificationAction::Cancel => submit_cancel_verification(state),
         VerificationAction::Confirm => submit_confirm_verification_sas(state),
         VerificationAction::Reject => submit_reject_verification_sas(state),
-    }
-}
-
-fn submit_verification_automation_action_to_state(
-    state: &mut WindowState,
-    action: VerificationAction,
-    args: VerificationActionArgs,
-) -> Result<(), String> {
-    let flow = verification_flow_id_from_action_args(&state.model, &args)?;
-    match action {
-        VerificationAction::Accept => submit_accept_verification_flow(state, flow),
-        VerificationAction::Cancel => submit_cancel_verification_flow(state, flow),
-        VerificationAction::Confirm => submit_confirm_verification_sas_flow(state, flow),
-        VerificationAction::Reject => submit_reject_verification_sas_flow(state, flow),
     }
 }
 
@@ -334,9 +288,63 @@ pub(super) fn submit_reject_verification_sas(state: &mut WindowState) -> Result<
     submit_reject_verification_sas_flow(state, flow)
 }
 
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+
+    fn verification_flow_id_from_action_args(
+        model: &UiModel,
+        args: &VerificationActionArgs,
+    ) -> Result<VerificationFlowId, String> {
+        match (&args.flow_id, &args.user_id) {
+            (Some(flow_id), Some(user_id)) => Ok(VerificationFlowId {
+                flow_id: flow_id.clone(),
+                user_id: user_id.clone(),
+            }),
+            (None, None) => current_verification_flow_id(model),
+            _ => unreachable!("verification action args must contain both flow_id and user_id"),
+        }
+    }
+
+    pub(in crate::win32) unsafe fn submit_automation_verification_action(
+        hwnd: HWND,
+        action: VerificationAction,
+        args: VerificationActionArgs,
+    ) -> Result<(), String> {
+        {
+            let state = state_mut(hwnd);
+            submit_verification_automation_action_to_state(state, action, args)?;
+        }
+        set_local_command_status(
+            hwnd,
+            format!(
+                "verification {} submitted",
+                verification_action_label(action)
+            ),
+        )
+    }
+
+    pub(in crate::win32) fn submit_verification_automation_action_to_state(
+        state: &mut WindowState,
+        action: VerificationAction,
+        args: VerificationActionArgs,
+    ) -> Result<(), String> {
+        let flow = verification_flow_id_from_action_args(&state.model, &args)?;
+        match action {
+            VerificationAction::Accept => submit_accept_verification_flow(state, flow),
+            VerificationAction::Cancel => submit_cancel_verification_flow(state, flow),
+            VerificationAction::Confirm => submit_confirm_verification_sas_flow(state, flow),
+            VerificationAction::Reject => submit_reject_verification_sas_flow(state, flow),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::menus::verification_actions_text;
+    use super::automation::*;
 
     use super::super::test_fixtures::*;
     use super::*;

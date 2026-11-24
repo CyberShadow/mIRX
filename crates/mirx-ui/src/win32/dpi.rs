@@ -36,10 +36,6 @@ impl Dpi {
         Self::new(unsafe { GetDpiForSystem() })
     }
 
-    pub(super) fn get(self) -> u32 {
-        self.0
-    }
-
     /// A 96-dpi length at this DPI, rounded to the nearest pixel.
     pub(super) fn px(self, logical: i32) -> i32 {
         assert!(logical >= 0, "layout lengths are not negative");
@@ -61,6 +57,19 @@ impl Dpi {
         assert!(points >= 0, "font sizes are not negative");
         let scaled = (i64::from(points) * i64::from(self.0) + 36) / 72;
         i32::try_from(scaled).expect("a font height fits i32")
+    }
+}
+
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+
+    impl Dpi {
+        pub(in crate::win32) fn get(self) -> u32 {
+            self.0
+        }
     }
 }
 

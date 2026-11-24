@@ -199,8 +199,10 @@ is_dpi144_case() {
 }
 
 # Cargo builds are incremental, so this rebuilds exactly the stale binaries.
+# The driver renders through the automation harness (`--render-state`), which
+# only the `automation` feature builds.
 ensure_binaries() {
-  cargo build --target x86_64-pc-windows-gnu -p mirx-ui
+  cargo build --target x86_64-pc-windows-gnu -p mirx-ui --features automation
   cargo build --target x86_64-pc-windows-gnu -p mirx-testkit --bin mirx-snapshot-driver
 }
 

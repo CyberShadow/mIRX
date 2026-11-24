@@ -26,17 +26,17 @@ use windows_sys::Win32::UI::Controls::{
     CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDDS_SUBITEM, CDRF_NEWFONT, CDRF_NOTIFYITEMDRAW,
     CDRF_NOTIFYSUBITEMDRAW, DRAWITEMSTRUCT, LVN_ITEMCHANGED, LVS_NOCOLUMNHEADER, LVS_REPORT,
     LVS_SHOWSELALWAYS, LVS_SINGLESEL, MEASUREITEMSTRUCT, NM_CUSTOMDRAW, NM_DBLCLK, NM_RETURN,
-    NMHDR, NMLVCUSTOMDRAW, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT, TCM_GETCURSEL, TCM_GETITEMRECT,
-    TCM_INSERTITEMW, TCM_SETCURSEL, TCN_SELCHANGE,
+    NMHDR, NMLVCUSTOMDRAW, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT, TCM_GETCURSEL, TCM_INSERTITEMW,
+    TCM_SETCURSEL, TCN_SELCHANGE,
 };
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled, SetFocus};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, DM_GETDEFID, DefWindowProcW, EN_CHANGE,
-    ES_READONLY, GWL_STYLE, GetDlgCtrlID, GetDlgItem, GetWindowLongPtrW, HWND_BOTTOM, IDCANCEL,
-    IDOK, MB_ICONWARNING, MB_OK, MessageBoxW, MoveWindow, SW_HIDE, SW_SHOW, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetWindowPos, ShowWindow, WM_CLOSE, WM_COMMAND,
-    WM_DRAWITEM, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_SETFONT, WNDPROC,
-    WS_CHILD, WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE,
+    ES_READONLY, GetDlgItem, HWND_BOTTOM, IDCANCEL, IDOK, MB_ICONWARNING, MB_OK, MessageBoxW,
+    MoveWindow, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW,
+    SetWindowPos, ShowWindow, WM_CLOSE, WM_COMMAND, WM_DRAWITEM, WM_MEASUREITEM, WM_NCCREATE,
+    WM_NCDESTROY, WM_NOTIFY, WM_SETFONT, WNDPROC, WS_CHILD, WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE,
+    WS_TABSTOP, WS_VISIBLE,
 };
 
 use mirx_core::Command;
@@ -55,18 +55,17 @@ use super::dialogs::{
 use super::dpi::Dpi;
 use super::ignore::user_label;
 use super::list_view::{
-    LIST_VIEW_CLASS_NAME, dump_list, fill_list, select_row, selected_row, set_up_report_list,
+    LIST_VIEW_CLASS_NAME, fill_list, select_row, selected_row, set_up_report_list,
 };
 use super::nick_colors::{NickColor, NickColorEntry, NickColorSetting};
 use super::notify::NotifySetting;
-use super::room_list_window::rect_center;
+
 use super::window_data::{self, WindowData};
 use super::{
     BUTTON_CLASS_NAME, STATIC_CLASS_NAME, announce_notify_changes, create_child_window, echo_view,
     enqueue_command, read_window_text, refresh_view_content, run_modal_dialog,
     set_local_command_status, show_nick_colors, state_mut, state_ref, wide_null,
 };
-use crate::automation::UiAddressBook;
 
 pub(super) const ADDRESS_BOOK_DIALOG_CLASS_NAME: &str = "mirxWin32AddressBookDialog";
 pub(super) const ADDRESS_ENTRY_DIALOG_CLASS_NAME: &str = "mirxWin32AddressEntryDialog";
@@ -981,68 +980,6 @@ unsafe extern "system" fn window_proc(
     }
 }
 
-/// The Address Book as automation sees it, read back from its controls.
-pub(super) unsafe fn dump(dialog: HWND) -> UiAddressBook {
-    let state = dialog_state(dialog);
-    let tab_click_points = AddressBookTab::ALL
-        .into_iter()
-        .map(|tab| {
-            let mut rect = RECT::default();
-            assert_ne!(
-                SendMessageW(
-                    state.tab_control,
-                    TCM_GETITEMRECT,
-                    tab.index(),
-                    &mut rect as *mut RECT as LPARAM,
-                ),
-                0,
-                "TCM_GETITEMRECT must place the {} tab",
-                tab.label()
-            );
-            rect_center(&rect)
-        })
-        .collect();
-    let visible_controls = state
-        .page_controls()
-        .into_iter()
-        .filter(|(_, control)| GetWindowLongPtrW(*control, GWL_STYLE) as u32 & WS_VISIBLE != 0)
-        .map(|(_, control)| GetDlgCtrlID(control) as u16)
-        .collect();
-    let (notify_rows, notify_row_click_points) = dump_list(state.notify.list, 2);
-    let (control_rows, control_row_click_points) = dump_list(state.control.list, 1);
-    let (color_rows, color_row_click_points) = dump_list(state.colors.list, 3);
-    let control_enabled = match [state.control.list, state.control.add]
-        .map(|control| IsWindowEnabled(control) != 0)
-    {
-        [true, true] => true,
-        [false, false] => false,
-        enabled => panic!("the Control tab is half greyed: {enabled:?}"),
-    };
-    let enabled = |control| IsWindowEnabled(control) != 0;
-    UiAddressBook {
-        tab: selected_tab(state).label().to_owned(),
-        tab_click_points,
-        visible_controls,
-        notify_rows,
-        notify_row_click_points,
-        notify_active: is_checked(state.notify.active),
-        notify_edit_enabled: enabled(state.notify.edit),
-        notify_delete_enabled: enabled(state.notify.delete),
-        control_rows: control_rows.into_iter().flatten().collect(),
-        control_row_click_points,
-        control_enabled,
-        control_delete_enabled: enabled(state.control.delete),
-        control_note: read_window_text(state.control.note),
-        colors_active: is_checked(state.colors.active),
-        color_rows,
-        color_row_click_points,
-        color_edit_enabled: enabled(state.colors.edit),
-        color_delete_enabled: enabled(state.colors.delete),
-        color_up_enabled: enabled(state.colors.up),
-        color_down_enabled: enabled(state.colors.down),
-    }
-}
-
 /// What an entry dialog shows.
 struct EntrySpec {
     title: &'static str,
@@ -1362,6 +1299,81 @@ pub(super) const DIALOG_CLASSES: [(&str, WNDPROC); 3] = [
         Some(color_entry_window_proc),
     ),
 ];
+
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+    use crate::automation::UiAddressBook;
+    use crate::win32::list_view::automation::dump_list;
+    use crate::win32::room_list_window::automation::rect_center;
+    use windows_sys::Win32::UI::Controls::TCM_GETITEMRECT;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GWL_STYLE, GetDlgCtrlID, GetWindowLongPtrW};
+
+    /// The Address Book as automation sees it, read back from its controls.
+    pub(in crate::win32) unsafe fn dump(dialog: HWND) -> UiAddressBook {
+        let state = dialog_state(dialog);
+        let tab_click_points = AddressBookTab::ALL
+            .into_iter()
+            .map(|tab| {
+                let mut rect = RECT::default();
+                assert_ne!(
+                    SendMessageW(
+                        state.tab_control,
+                        TCM_GETITEMRECT,
+                        tab.index(),
+                        &mut rect as *mut RECT as LPARAM,
+                    ),
+                    0,
+                    "TCM_GETITEMRECT must place the {} tab",
+                    tab.label()
+                );
+                rect_center(&rect)
+            })
+            .collect();
+        let visible_controls = state
+            .page_controls()
+            .into_iter()
+            .filter(|(_, control)| GetWindowLongPtrW(*control, GWL_STYLE) as u32 & WS_VISIBLE != 0)
+            .map(|(_, control)| GetDlgCtrlID(control) as u16)
+            .collect();
+        let (notify_rows, notify_row_click_points) = dump_list(state.notify.list, 2);
+        let (control_rows, control_row_click_points) = dump_list(state.control.list, 1);
+        let (color_rows, color_row_click_points) = dump_list(state.colors.list, 3);
+        let control_enabled = match [state.control.list, state.control.add]
+            .map(|control| IsWindowEnabled(control) != 0)
+        {
+            [true, true] => true,
+            [false, false] => false,
+            enabled => panic!("the Control tab is half greyed: {enabled:?}"),
+        };
+        let enabled = |control| IsWindowEnabled(control) != 0;
+        UiAddressBook {
+            tab: selected_tab(state).label().to_owned(),
+            tab_click_points,
+            visible_controls,
+            notify_rows,
+            notify_row_click_points,
+            notify_active: is_checked(state.notify.active),
+            notify_edit_enabled: enabled(state.notify.edit),
+            notify_delete_enabled: enabled(state.notify.delete),
+            control_rows: control_rows.into_iter().flatten().collect(),
+            control_row_click_points,
+            control_enabled,
+            control_delete_enabled: enabled(state.control.delete),
+            control_note: read_window_text(state.control.note),
+            colors_active: is_checked(state.colors.active),
+            color_rows,
+            color_row_click_points,
+            color_edit_enabled: enabled(state.colors.edit),
+            color_delete_enabled: enabled(state.colors.delete),
+            color_up_enabled: enabled(state.colors.up),
+            color_down_enabled: enabled(state.colors.down),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

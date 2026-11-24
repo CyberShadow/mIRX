@@ -30,18 +30,6 @@ pub(super) struct ViewFindState {
     feedback: String,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ActiveViewFindOutcome {
-    active_view: ViewId,
-    raw_query: String,
-    matched: bool,
-    match_count: usize,
-    current_match_index: Option<usize>,
-    selected_text: Option<String>,
-    history_search: UiFindHistorySearchState,
-}
-
 /// Find searches a window's text; the Rooms List has none of its own.
 const FIND_NOT_AVAILABLE: &str = "Find: not available in this window";
 
@@ -201,10 +189,6 @@ fn find_feedback(
     )
 }
 
-fn find_match_selected_text(match_item: &FindMatch) -> String {
-    match_item.logical_text.clone()
-}
-
 pub(super) fn build_view_find_state(
     raw_query: &str,
     folded_query: &str,
@@ -254,71 +238,8 @@ pub(super) fn active_view_find_feedback(state: &WindowState) -> Option<&str> {
         .map(|find_state| find_state.feedback.as_str())
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-fn view_find_outcome(view_id: &ViewId, find_state: &ViewFindState) -> ActiveViewFindOutcome {
-    let selected_text = find_state
-        .selected_match_index
-        .and_then(|index| find_state.matches.get(index))
-        .map(find_match_selected_text);
-    ActiveViewFindOutcome {
-        active_view: view_id.clone(),
-        raw_query: find_state.raw_query.clone(),
-        matched: !find_state.matches.is_empty(),
-        match_count: find_state.matches.len(),
-        current_match_index: find_state.selected_match_index,
-        selected_text,
-        history_search: dump_ui_find_history_search_state(&find_state.history_search),
-    }
-}
-
-fn dump_find_state(view_id: &ViewId, find_state: &ViewFindState) -> UiFindState {
-    let outcome = view_find_outcome(view_id, find_state);
-    UiFindState {
-        active: view_identity_from_view_id(&outcome.active_view),
-        query: outcome.raw_query,
-        matched: outcome.matched,
-        match_count: outcome.match_count,
-        current_match_index: outcome.current_match_index,
-        selected_text: outcome.selected_text,
-        history_search: outcome.history_search,
-    }
-}
-
-pub(super) fn find_active_view_response(outcome: ActiveViewFindOutcome) -> FindActiveViewResponse {
-    FindActiveViewResponse {
-        active: view_identity_from_view_id(&outcome.active_view),
-        query: outcome.raw_query,
-        matched: outcome.matched,
-        match_count: outcome.match_count,
-        current_match_index: outcome.current_match_index,
-        selected_text: outcome.selected_text,
-        history_search: outcome.history_search,
-    }
-}
-
-fn active_view_find_outcome_without_state(view_id: &ViewId, query: &str) -> ActiveViewFindOutcome {
-    ActiveViewFindOutcome {
-        active_view: view_id.clone(),
-        raw_query: query.to_owned(),
-        matched: false,
-        match_count: 0,
-        current_match_index: None,
-        selected_text: None,
-        history_search: UiFindHistorySearchState::LocalOnly,
-    }
-}
-
-unsafe fn handle_invalid_find_query(
-    hwnd: HWND,
-    window: &ViewId,
-    query: &str,
-) -> Result<ActiveViewFindOutcome, String> {
-    set_local_command_status(hwnd, "usage: /find <text>".to_owned())?;
-    Ok(state_ref(hwnd)
-        .find_states
-        .get(window)
-        .map(|find_state| view_find_outcome(window, find_state))
-        .unwrap_or_else(|| active_view_find_outcome_without_state(window, query)))
+unsafe fn handle_invalid_find_query(hwnd: HWND) -> Result<(), String> {
+    set_local_command_status(hwnd, "usage: /find <text>".to_owned())
 }
 
 pub(super) fn recompute_find_for_view(
@@ -460,14 +381,13 @@ fn build_timeline_find_state_and_maybe_submit_history_backfill(
 }
 
 /// Finds `query` in `window`, the window Find or `/find` was given in.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) unsafe fn execute_view_find(
     hwnd: HWND,
     window: &ViewId,
     query: &str,
-) -> Result<ActiveViewFindOutcome, String> {
+) -> Result<(), String> {
     if query.trim().is_empty() {
-        return handle_invalid_find_query(hwnd, window, query);
+        return handle_invalid_find_query(hwnd);
     }
 
     if *window == ViewId::RoomList {
@@ -533,34 +453,7 @@ pub(super) unsafe fn execute_view_find(
         );
     }
 
-    refresh_status_bar(hwnd)?;
-    Ok(view_find_outcome(
-        window,
-        state_ref(hwnd)
-            .find_states
-            .get(window)
-            .expect("the window's find state must be stored"),
-    ))
-}
-
-pub(super) fn dump_active_find_state(state: &WindowState) -> Option<UiFindState> {
-    state
-        .find_states
-        .get(&state.active_view)
-        .map(|find_state| dump_find_state(&state.active_view, find_state))
-}
-
-fn dump_ui_find_history_search_state(
-    history_search: &RoomFindHistorySearch,
-) -> UiFindHistorySearchState {
-    match history_search {
-        RoomFindHistorySearch::LocalOnly => UiFindHistorySearchState::LocalOnly,
-        RoomFindHistorySearch::Loading => UiFindHistorySearchState::Loading,
-        RoomFindHistorySearch::Exhausted => UiFindHistorySearchState::Exhausted,
-        RoomFindHistorySearch::Failed { message } => UiFindHistorySearchState::Failed {
-            message: message.clone(),
-        },
-    }
+    refresh_status_bar(hwnd)
 }
 
 pub(super) fn pending_timeline_find_history_views(state: &WindowState) -> Vec<ViewId> {
@@ -657,6 +550,115 @@ pub(super) unsafe fn continue_timeline_find_history_search_after_refresh(
         );
     }
     refresh_status_bar(hwnd)
+}
+
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+
+    fn find_match_selected_text(match_item: &FindMatch) -> String {
+        match_item.logical_text.clone()
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(in crate::win32) struct ActiveViewFindOutcome {
+        active_view: ViewId,
+        raw_query: String,
+        matched: bool,
+        match_count: usize,
+        current_match_index: Option<usize>,
+        selected_text: Option<String>,
+        history_search: UiFindHistorySearchState,
+    }
+
+    fn view_find_outcome(view_id: &ViewId, find_state: &ViewFindState) -> ActiveViewFindOutcome {
+        let selected_text = find_state
+            .selected_match_index
+            .and_then(|index| find_state.matches.get(index))
+            .map(find_match_selected_text);
+        ActiveViewFindOutcome {
+            active_view: view_id.clone(),
+            raw_query: find_state.raw_query.clone(),
+            matched: !find_state.matches.is_empty(),
+            match_count: find_state.matches.len(),
+            current_match_index: find_state.selected_match_index,
+            selected_text,
+            history_search: dump_ui_find_history_search_state(&find_state.history_search),
+        }
+    }
+
+    fn active_view_find_outcome_without_state(
+        view_id: &ViewId,
+        query: &str,
+    ) -> ActiveViewFindOutcome {
+        ActiveViewFindOutcome {
+            active_view: view_id.clone(),
+            raw_query: query.to_owned(),
+            matched: false,
+            match_count: 0,
+            current_match_index: None,
+            selected_text: None,
+            history_search: UiFindHistorySearchState::LocalOnly,
+        }
+    }
+
+    fn dump_ui_find_history_search_state(
+        history_search: &RoomFindHistorySearch,
+    ) -> UiFindHistorySearchState {
+        match history_search {
+            RoomFindHistorySearch::LocalOnly => UiFindHistorySearchState::LocalOnly,
+            RoomFindHistorySearch::Loading => UiFindHistorySearchState::Loading,
+            RoomFindHistorySearch::Exhausted => UiFindHistorySearchState::Exhausted,
+            RoomFindHistorySearch::Failed { message } => UiFindHistorySearchState::Failed {
+                message: message.clone(),
+            },
+        }
+    }
+
+    fn dump_find_state(view_id: &ViewId, find_state: &ViewFindState) -> UiFindState {
+        let outcome = view_find_outcome(view_id, find_state);
+        UiFindState {
+            active: view_identity_from_view_id(&outcome.active_view),
+            query: outcome.raw_query,
+            matched: outcome.matched,
+            match_count: outcome.match_count,
+            current_match_index: outcome.current_match_index,
+            selected_text: outcome.selected_text,
+            history_search: outcome.history_search,
+        }
+    }
+
+    /// Finds `query` in the active window, as `/find` there does, and
+    /// answers with the window's find state.
+    pub(in crate::win32) unsafe fn find_in_active_view(
+        hwnd: HWND,
+        query: &str,
+    ) -> Result<FindActiveViewResponse, String> {
+        let window = state_ref(hwnd).active_view.clone();
+        execute_view_find(hwnd, &window, query)?;
+        let outcome = match state_ref(hwnd).find_states.get(&window) {
+            Some(find_state) => view_find_outcome(&window, find_state),
+            None => active_view_find_outcome_without_state(&window, query),
+        };
+        Ok(FindActiveViewResponse {
+            active: view_identity_from_view_id(&outcome.active_view),
+            query: outcome.raw_query,
+            matched: outcome.matched,
+            match_count: outcome.match_count,
+            current_match_index: outcome.current_match_index,
+            selected_text: outcome.selected_text,
+            history_search: outcome.history_search,
+        })
+    }
+
+    pub(in crate::win32) fn dump_active_find_state(state: &WindowState) -> Option<UiFindState> {
+        state
+            .find_states
+            .get(&state.active_view)
+            .map(|find_state| dump_find_state(&state.active_view, find_state))
+    }
 }
 
 #[cfg(test)]

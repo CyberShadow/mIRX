@@ -129,10 +129,6 @@ impl Reconnect {
         *self = Self::default();
     }
 
-    pub(super) fn attempts(&self) -> u32 {
-        self.attempts
-    }
-
     /// The connection was lost and is being brought back: the reconnect's
     /// `Reconnecting to` or the retry's `Connect retry #n` said so.
     pub(super) fn reconnecting(&self) -> bool {
@@ -224,6 +220,19 @@ pub(super) fn check_sign_in(connection: ConnectionState) -> Result<(), &'static 
         ConnectionState::SignedIn
         | ConnectionState::WaitingToReconnect
         | ConnectionState::Syncing => Err("already signed in; log out first"),
+    }
+}
+
+/// The automation harness's part of this module: what it reads and does
+/// here for the protocol.
+#[cfg(any(test, feature = "automation"))]
+pub(super) mod automation {
+    use super::*;
+
+    impl Reconnect {
+        pub(in crate::win32) fn attempts(&self) -> u32 {
+            self.attempts
+        }
     }
 }
 

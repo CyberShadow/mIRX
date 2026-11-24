@@ -20,6 +20,12 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+# The release with mirx-ui's `automation` feature, for the live lane: its
+# own directory, so it never takes the place of the release a user gets
+# (target/<triple>/release/mirx-ui.exe).
+[profile.release-automation]
+inherits = "release"
+
 # Room key files derive their key with 500 000 rounds of PBKDF2-SHA512
 # (the SDK fixes the count; Element reads the format). Unoptimized, an
 # export or import takes ~10 s in test builds; optimized, ~0.3 s. The
