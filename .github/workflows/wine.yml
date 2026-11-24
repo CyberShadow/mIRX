@@ -1,0 +1,68 @@
+name: wine
+
+# The Wine lanes, run by hand (Actions > wine > Run workflow): the smoke
+# test of the shipped exe, the Windows UI suites and the UI snapshots. Not
+# on every push: the devshell's patched Wine is built from source (an hour
+# or more the first time; the Nix store is cached afterwards), and the
+# suites want more cores and memory than a hosted runner has. They remain
+# required local gates. The live lane (NixOS VM, Conduit) stays local.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  wine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: cachix/install-nix-action@382a9ed9481c7c1f94f68b72ef105b3417c73877 # v32.1.0
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Keeps the patched Wine (not in cache.nixos.org) between runs.
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: nix-wine-${{ hashFiles('flake.nix', 'flake.lock', 'nix/**') }}
+          restore-prefixes-first-match: nix-wine-
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .rustup
+            .cargo-home/registry/index
+            .cargo-home/registry/cache
+            .cargo-home/git/db
+            target
+          key: rust-wine-${{ hashFiles('rust-toolchain.toml', 'flake.lock', 'Cargo.lock') }}
+          restore-keys: rust-wine-
+
+      - name: Build the devshell
+        run: nix develop -c true
+
+      - name: Release cross-build
+        run: nix develop -c ./scripts/cross-build.sh
+
+      - name: Wine smoke test
+        run: CARGO_TARGET_DIR="$PWD/target" nix develop -c ./scripts/wine-smoke.sh
+
+      - name: Windows UI suites
+        run: MIRX_UI_TEST_SHARDS=4 nix develop -c ./scripts/windows-ui-tests.sh
+
+      - name: UI snapshots
+        run: nix develop -c ./scripts/ui-snapshot.sh
+
+      - name: Keep the suites' logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wine-logs-${{ github.sha }}
+          path: target/windows-ui-tests/
+          if-no-files-found: ignore
+          retention-days: 14

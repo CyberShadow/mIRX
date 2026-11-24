@@ -1,43 +1,109 @@
 name: ci
 
+# Every push and pull request: the static checks and host tests, and the
+# release zip (an artifact of the run). A pushed `v*` tag also publishes
+# that zip as a GitHub release. The Wine suites run by hand (wine.yml).
 on:
   push:
+    branches: ['**']
+    tags: ['v*']
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_INCREMENTAL: '0'
 
 jobs:
   checks:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # GitHub Actions workflow; keep it self-contained here and tune remote/cache settings later if needed.
-      - uses: cachix/install-nix-action@v31
+      - uses: cachix/install-nix-action@382a9ed9481c7c1f94f68b72ef105b3417c73877 # v32.1.0
         with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check formatting
-        run: nix develop -c cargo fmt --check
+      # The devshell keeps rustup's toolchain and cargo's registry in the
+      # checkout (.rustup, .cargo-home).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .rustup
+            .cargo-home/registry/index
+            .cargo-home/registry/cache
+            .cargo-home/git/db
+            target
+          key: rust-checks-${{ hashFiles('rust-toolchain.toml', 'flake.lock', 'Cargo.lock') }}
+          restore-keys: rust-checks-
 
-      - name: Run clippy
-        run: nix develop -c cargo clippy --workspace --all-targets -- -D warnings
+      - name: Lint
+        run: nix develop .#build -c ./scripts/lint.sh
 
-      - name: Run tests
-        run: nix develop -c cargo test --workspace
+      - name: Host tests
+        run: nix develop .#build -c cargo test --workspace
 
-      - name: Release cross-build
-        run: nix develop -c ./scripts/cross-build.sh
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      zip: ${{ steps.package.outputs.zip }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Wine smoke self-test
-        run: nix develop -c ./scripts/wine-smoke.sh
+      - uses: cachix/install-nix-action@382a9ed9481c7c1f94f68b72ef105b3417c73877 # v32.1.0
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Windows UI integration tests
-        run: nix develop -c ./scripts/windows-ui-tests.sh
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .rustup
+            .cargo-home/registry/index
+            .cargo-home/registry/cache
+            .cargo-home/git/db
+            target
+          key: rust-package-${{ hashFiles('rust-toolchain.toml', 'flake.lock', 'Cargo.lock') }}
+          restore-keys: rust-package-
 
-      - name: UI snapshot harness
-        run: nix develop -c ./scripts/ui-snapshot.sh
+      - name: Build and package the release zip
+        id: package
+        run: |
+          zip=$(nix develop .#build -c ./scripts/package.sh)
+          echo "zip=$(basename "$zip")" >>"$GITHUB_OUTPUT"
 
-      - name: DLL gate
-        run: nix develop -c ./scripts/dll-gate.sh
+      # Uploaded as it is (no zip around the zip): the artifact is named
+      # after the file, mirx-<commit>-windows-x64.zip.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: target/package/${{ steps.package.outputs.zip }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [checks, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.package.outputs.zip }}
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP: ${{ needs.package.outputs.zip }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" "$ZIP"
+          --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+          --title "mirx ${GITHUB_REF_NAME#v}"
