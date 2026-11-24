@@ -3082,7 +3082,8 @@ mod tests {
             status_log_lines(&state)[2..],
             [
                 "[22:12] * Verification requested by @bob:example (session B0B)",
-                "[22:12] * Actions: Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel",
+                // Another is under way: this one is answered by name too.
+                "[22:12] * Actions: /verify accept @bob:example B0B, /verify cancel @bob:example B0B",
                 "[22:12] * Also under way: @alice:example ALICEDEVICE (requested); /verify <action> <user> [session] answers one of them",
                 "[22:12] * Verification ready with @alice:example (session ALICEDEVICE)",
                 "[22:12] * Actions: /verify cancel @alice:example ALICEDEVICE",
