@@ -36,6 +36,7 @@ use matrix_sdk::ruma::api::client::uiaa::{
     AuthData, Dummy, MatrixUserIdentifier, Password, UserIdentifier,
 };
 use matrix_sdk::ruma::events::direct::DirectEventContent;
+use matrix_sdk::ruma::events::fully_read::FullyReadEventContent;
 use matrix_sdk::ruma::events::ignored_user_list::IgnoredUserListEventContent;
 use matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent;
 use matrix_sdk::ruma::events::room::member::MembershipState;
@@ -45,7 +46,7 @@ use matrix_sdk::ruma::events::room::message::{
 use matrix_sdk::ruma::events::room::power_levels::RoomPowerLevelsEventContent;
 use matrix_sdk::ruma::events::{InitialStateEvent, StateEventType};
 use matrix_sdk::ruma::{
-    DeviceId, OwnedDeviceId, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, UserId,
+    DeviceId, EventId, OwnedDeviceId, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, UserId,
 };
 use mirx_core::{E2eeRecoveryState, E2eeStatus, RoomMemberRank, RoomMembership};
 use mirx_testkit::{
@@ -340,6 +341,23 @@ impl Peer<'_> {
                 .find(|text| text.room_id == room_id && matches(&text.content))
                 .cloned()
                 .ok_or_else(|| format!("{texts:?}"))
+        })
+    }
+
+    /// Waits until the user's read marker in the room (`m.fully_read`, which
+    /// all their sessions share) is on `event_id`.
+    fn wait_for_read_marker(&self, room_id: &RoomId, event_id: &EventId) {
+        self.sync_until(&format!("the read marker on {event_id}"), async || {
+            let marker = self
+                .room(room_id)
+                .account_data_static::<FullyReadEventContent>()
+                .await
+                .map_err(|error| error.to_string())?
+                .map(|raw| raw.deserialize().map(|event| event.content.event_id));
+            match marker {
+                Some(Ok(marker)) if marker == event_id => Ok(()),
+                other => Err(format!("{other:?}")),
+            }
         })
     }
 
@@ -907,6 +925,65 @@ fn a_restart_restores_the_session_and_catches_up() -> Result<(), Box<dyn Error>>
     app.wait_for_connection("syncing", TIMEOUT)?;
     wait_for_view_line(&app, &room, "<Bob> while mirx was closed")?;
     assert_eq!(alice_phone.devices(), devices);
+
+    finish(app, &local_app_data)
+}
+
+/// Exiting leaves the active room window: its read marker moves to its
+/// last line on the server, where Alice's other session reads it, and the
+/// next start shows it there.
+#[test]
+fn exiting_moves_the_read_marker_for_the_next_start() -> Result<(), Box<dyn Error>> {
+    let homeserver = homeserver();
+    let bob = homeserver.register("bob", "Bob");
+    let alice_phone = homeserver.register("alice", "Alice");
+    let alias_localpart = unique_name("lobby");
+    let room_id = bob.create_public_room("Lobby", &alias_localpart);
+    let room = room_identity(room_id.as_str());
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_live_app(&local_app_data)?;
+    sign_in(&app, &homeserver, &alice_phone)?;
+    // The join activates the room's window.
+    join_by_address(&app, &format!("#{alias_localpart}:localhost"), &room_id)?;
+    bob.wait_for_member(&room_id, alice_phone.user_id());
+    bob.send_text(&room_id, "read before exiting");
+    wait_for_view_line(&app, &room, "<Bob> read before exiting")?;
+    let last = alice_phone
+        .wait_for_message(&room_id, "Bob's line", |content| {
+            content.body() == "read before exiting"
+        })
+        .event_id;
+    assert_eq!(app.dump_ui_state()?.mdi.active, room);
+    assert!(app.close(Duration::from_secs(30))?.success());
+
+    alice_phone.wait_for_read_marker(&room_id, &last);
+    // Not launch_live_app: see a_restart_restores_the_session_and_catches_up.
+    let app = launch_app_with_options(
+        &mirx_ui_exe(),
+        &["--automation".into()],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", TIMEOUT)?;
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let read_state = app
+            .dump_ui_state()?
+            .rooms
+            .into_iter()
+            .find(|candidate| candidate.room_id == room_id.as_str())
+            .and_then(|room| room.read_state);
+        if read_state.as_ref().is_some_and(|read_state| {
+            read_state.fully_read_event_id.as_deref() == Some(last.as_str())
+        }) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(
+                format!("the next start's read state: {read_state:?}, not on {last}").into(),
+            );
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
 
     finish(app, &local_app_data)
 }
